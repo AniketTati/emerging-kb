@@ -213,3 +213,4 @@ Each phase appends its endpoint contracts here at its G2 gate. Index:
 | Date | Change | By |
 |---|---|---|
 | 2026-05-22 | File created at Phase 0 G2. §0 conventions + §1 Phase 0 contracts (`/health`, `/ready`) drafted. Awaiting sign-off. | Aniket |
+| 2026-05-23 | **Re-validated against re-opened Phase 0 G1.** No contract changes required: `/ready`'s `migrations` check still reads `schema_migrations`; `Idempotency-Key` header is still backed by the `idempotency_keys` table (now workspace-scoped via primary key `(workspace_id, key)` — server-side detail, invisible to clients). `X-Request-Id` header promise in §0.8 is now backed by middleware in G1 plan. | Aniket |
