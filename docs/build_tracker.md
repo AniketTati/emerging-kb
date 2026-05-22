@@ -552,7 +552,7 @@ Phases 15–24 per `architecture.md` §12. Tracked here only as a reminder of in
 
 | Phase | Spec | Tests | G3 status |
 |---|---|---|---|
-| 0 | [tests/specs/phase_0.md](../tests/specs/phase_0.md) | `tests/test_health.py`, `tests/test_ready.py`, `tests/test_migrations.py`, `tests/test_rls.py`, `tests/test_middleware.py` | 🟡 open · spec + red skeletons land at G3 commit |
+| 0 | [tests/specs/phase_0.md](../tests/specs/phase_0.md) | [test_health.py](../tests/test_health.py) · [test_ready.py](../tests/test_ready.py) · [test_migrations.py](../tests/test_migrations.py) · [test_rls.py](../tests/test_rls.py) · [test_middleware.py](../tests/test_middleware.py) | 🟡 drafted · awaiting sign-off (red skeletons; modules land at G4) |
 | 1 | tests/specs/phase_1.md | tests/test_phase_1_*.py | ⬜ |
 | ... | | | |
 
@@ -590,6 +590,7 @@ Phases 15–24 per `architecture.md` §12. Tracked here only as a reminder of in
 | 2026-05-23 | **Gate-transition consistency review (G1+G2) ran before opening G3.** Six drifts surfaced against `docs/architecture.md`: (A) lifecycle tables had no `workspace_id` + RLS — architecture §7 mandates RLS day 1; (B) no FastAPI workspace middleware; (C) no X-Request-Id middleware (G2 §0.8 promised, G1 omitted); (D) `audit_log` shape under-specified vs architecture §6 (partitioning, hash columns, role grants); (E) `processing_status` was a fabrication — canonical name is `file_lifecycle`, belongs to Phase 2+; (F) Phase 0 ↔ Phase 9 split implicit — needed explicit reconciliation. Tech stack, gate discipline, branch+commit conventions all clean. | Aniket |
 | 2026-05-23 | **Phase 0 G1 re-opened** to apply consistency fixes. §5.1 rewritten: lifecycle DDL shrinks to four files (`0001_extensions`, `0002_schema_migrations`, `0003_audit_log` full partitioned shape, `0004_idempotency_keys` workspace-scoped); RLS day-1 added as decision #6; audit-log shape as #7; Phase 0↔9 split as #8; `src/kb/api/middleware.py` added to layout (workspace context + X-Request-Id); G5 acceptance updated to verify partitions + RLS + request-id header. G2 contracts unchanged (re-validated against revised G1). Awaiting second sign-off. | Aniket |
 | 2026-05-23 | **Phase 0 G1 ✅ and G2 ✅ both signed off.** Corrected §5.1 plan locked. G2 contracts in `docs/api_contracts.md` locked. G3 opens: test specs + red skeletons for `/health`, `/ready`, migration runner, RLS isolation, middleware. | Aniket |
+| 2026-05-23 | **Phase 0 G3 drafted.** Created `tests/specs/phase_0.md` (test spec — 5 buckets, 41 test functions, testcontainers fixture strategy) + 6 skeleton files (`conftest.py`, `test_health.py`, `test_ready.py`, `test_migrations.py`, `test_rls.py`, `test_middleware.py`). Skeletons are RED — they import from `kb.*` modules that land at G4. Every G2 contract has a matching test; every G1 decision (RLS day-1, partitioning, middleware) has a matching test. Awaiting sign-off. | Aniket |
 
 ---
 
