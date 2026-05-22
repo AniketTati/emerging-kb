@@ -188,7 +188,8 @@ These exist *before* any phase opens. They define the system as a whole. Each mu
 |---|---|---|
 | **Runtime** | Python 3.12, uv-managed | Modern toolchain, fast resolver, lockfile reproducible |
 | **API framework** | FastAPI | Async, OpenAPI built-in, ecosystem maturity |
-| **DB** | Postgres 17 + pgvector ≥ 0.8 + ParadeDB pg_search | One transactional store; vector + BM25 in same place |
+| **DB** | Postgres 17 + pgvector ≥ 0.8 + ParadeDB pg_search + ltree (built-in) | One transactional store; vector + BM25 + hierarchical labels in same place. Apache AGE deferred (MVP doesn't need Cypher; recursive CTEs cover lineage/chains). |
+| **Test fixtures** | `testcontainers-python[postgres,minio]` ≥ 4.7 + `freezegun` (dev-only) | Hermetic per-session Postgres + MinIO; tests run without a pre-existing docker-compose stack. Freezegun for assertions on timestamps. |
 | **Object store** | MinIO | S3-compatible; runs in docker-compose |
 | **Queue** | Procrastinate | Postgres-backed; one fewer service |
 | **LLM (extraction/plan/gen)** | Gemini 2.5 Flash | Cost/latency target; adapter pattern so swappable |
@@ -344,7 +345,7 @@ emerging-kb/
 ├── migrations/
 │   ├── runner.py               ← applies .sql files in lexical order; tracks in schema_migrations; runs as superuser (bypasses RLS for DDL)
 │   └── sql/
-│       ├── 0001_extensions.sql           ← CREATE EXTENSION vector, pg_search
+│       ├── 0001_extensions.sql           ← CREATE EXTENSION vector, pg_search, ltree + CREATE ROLE kb_app
 │       ├── 0002_schema_migrations.sql    ← bootstrap migration tracker (no workspace_id — infrastructure)
 │       ├── 0003_audit_log.sql            ← partitioned by month on created_at + workspace_id + hash columns + RLS (hash trigger lands Phase 9)
 │       └── 0004_idempotency_keys.sql     ← (workspace_id, key) primary key + RLS
@@ -383,8 +384,13 @@ Phase 0 ships **four** migration files. Three carry `workspace_id` + an RLS poli
 ##### `0001_extensions.sql`
 
 ```sql
-CREATE EXTENSION IF NOT EXISTS vector;     -- pgvector ≥ 0.8
+CREATE EXTENSION IF NOT EXISTS vector;     -- pgvector ≥ 0.8 (HNSW + halfvec)
 CREATE EXTENSION IF NOT EXISTS pg_search;  -- ParadeDB BM25
+CREATE EXTENSION IF NOT EXISTS ltree;      -- hierarchical labels (Phase 3 doc-chains, Phase 7 lineage_path per architecture §7 / Design 7)
+
+CREATE ROLE kb_app NOLOGIN;                -- application role; RLS applies. Login + password set by env at G4.
+GRANT CONNECT ON DATABASE current_database() TO kb_app;
+GRANT USAGE ON SCHEMA public TO kb_app;
 ```
 
 No workspace scope. Runs first; everything else depends on these.
@@ -494,14 +500,15 @@ No rollback DSL — for DDL we write forward fixes. Standard in DDL-heavy system
 1. `cp .env.example .env && docker compose up -d --build`
 2. Wait for `db`, `minio`, `api`, `worker` healthy; `migrate` exited 0.
 3. `psql` into `db` as superuser:
-   - `\dx` includes `vector` and `pg_search`.
+   - `\dx` includes `vector`, `pg_search`, and `ltree`.
    - `\dt` includes `schema_migrations`, `audit_log`, `idempotency_keys` (only these — no `file_lifecycle`, no `processing_status`).
    - `audit_log` is partitioned: `\d+ audit_log` shows partitioned table with `audit_log_2026_05` and `audit_log_2026_06` partitions.
    - RLS enabled on `audit_log` and `idempotency_keys`: `SELECT relname, relrowsecurity FROM pg_class WHERE relname IN ('audit_log', 'idempotency_keys')` shows `relrowsecurity = t` for both.
+   - `\du` includes the `kb_app` role.
 4. As `kb_app` role with `SET app.workspace_id = '<some-uuid>'`: insert into `audit_log` succeeds; SELECT only returns rows matching the set workspace.
-5. `curl http://localhost:8000/openapi.json` returns 200 with an empty `paths` object (routes open at Phase 0 G2).
+5. `curl http://localhost:8000/openapi.json` returns 200; `paths` contains `/health` and `/ready` (G2 contracts implemented by G4); no other paths.
 6. `curl -i http://localhost:8000/openapi.json` response includes an `X-Request-Id` header (middleware proof).
-7. `pytest tests/test_phase_0_*.py` is green.
+7. `pytest tests/` is green (45 tests across health, ready, migrations, RLS, middleware).
 
 #### Sign-off
 
@@ -591,6 +598,7 @@ Phases 15–24 per `architecture.md` §12. Tracked here only as a reminder of in
 | 2026-05-23 | **Phase 0 G1 re-opened** to apply consistency fixes. §5.1 rewritten: lifecycle DDL shrinks to four files (`0001_extensions`, `0002_schema_migrations`, `0003_audit_log` full partitioned shape, `0004_idempotency_keys` workspace-scoped); RLS day-1 added as decision #6; audit-log shape as #7; Phase 0↔9 split as #8; `src/kb/api/middleware.py` added to layout (workspace context + X-Request-Id); G5 acceptance updated to verify partitions + RLS + request-id header. G2 contracts unchanged (re-validated against revised G1). Awaiting second sign-off. | Aniket |
 | 2026-05-23 | **Phase 0 G1 ✅ and G2 ✅ both signed off.** Corrected §5.1 plan locked. G2 contracts in `docs/api_contracts.md` locked. G3 opens: test specs + red skeletons for `/health`, `/ready`, migration runner, RLS isolation, middleware. | Aniket |
 | 2026-05-23 | **Phase 0 G3 drafted.** Created `tests/specs/phase_0.md` (test spec — 5 buckets, 41 test functions, testcontainers fixture strategy) + 6 skeleton files (`conftest.py`, `test_health.py`, `test_ready.py`, `test_migrations.py`, `test_rls.py`, `test_middleware.py`). Skeletons are RED — they import from `kb.*` modules that land at G4. Every G2 contract has a matching test; every G1 decision (RLS day-1, partitioning, middleware) has a matching test. Awaiting sign-off. | Aniket |
+| 2026-05-23 | **Post-G3 cross-gate consistency sweep (G1↔G2↔G3↔architecture).** Five drifts fixed in one commit: (A) G1 plan §5.1 G5 acceptance #5 was stale post-G2 — said `/openapi.json` returns empty paths, but G4 will mount `/health` + `/ready`; corrected. (B) Spec test count was 41 (claimed) vs 45 (actual recount of first draft); corrected. (C) §3 missing `testcontainers-python` + `freezegun` (test fixtures); added as new row. (D) `ltree` extension missing from `0001_extensions.sql` per architecture §7 (required for Phase 3 doc-chains + Phase 7 lineage_path); added, also added `kb_app` role creation in 0001. §3 DB row updated to include ltree. (E) Unused fixtures (`set_workspace`, `frozen_time`) removed from `conftest.py`. Plus 4 new tests landed: `test_health_returns_json_content_type` (api_contracts §0.1) + 3 per-check timeout tests on `/ready` (api_contracts §1.2 check table). Final test count: 49 (was 45 at G3 first draft). | Aniket |
 
 ---
 

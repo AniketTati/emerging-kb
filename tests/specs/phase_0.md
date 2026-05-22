@@ -8,15 +8,15 @@
 
 ## 1. Scope
 
-Every contract from G2 gets test coverage. Every architectural invariant Phase 0 commits to (RLS day-1, X-Request-Id middleware, workspace context) gets test coverage. Five test files cover the surface:
+Every contract from G2 gets test coverage. Every architectural invariant Phase 0 commits to (RLS day-1, X-Request-Id middleware, workspace context) gets test coverage. Five test files cover the surface (**49 tests total** — 45 at G3 first draft + 4 added in the post-G3 consistency sweep):
 
-| File | Covers | Contracts / decisions tested |
-|---|---|---|
-| [`tests/test_health.py`](../test_health.py) | `GET /health` contract | api_contracts §1.1 |
-| [`tests/test_ready.py`](../test_ready.py) | `GET /ready` contract (all variants) | api_contracts §1.2 |
-| [`tests/test_migrations.py`](../test_migrations.py) | Migration runner behaviour | build_tracker §5.1 "Migration runner behaviour" |
-| [`tests/test_rls.py`](../test_rls.py) | RLS isolation on workspace-scoped tables | build_tracker §5.1 decision #6 |
-| [`tests/test_middleware.py`](../test_middleware.py) | Workspace-context + X-Request-Id middleware | build_tracker §5.1 decision #6 + api_contracts §0.8 |
+| File | Tests | Covers | Contracts / decisions tested |
+|---|---|---|---|
+| [`tests/test_health.py`](../test_health.py) | 9 | `GET /health` contract | api_contracts §1.1 |
+| [`tests/test_ready.py`](../test_ready.py) | 14 | `GET /ready` contract (all variants, per-check timeouts) | api_contracts §1.2 |
+| [`tests/test_migrations.py`](../test_migrations.py) | 9 | Migration runner behaviour | build_tracker §5.1 "Migration runner behaviour" |
+| [`tests/test_rls.py`](../test_rls.py) | 8 | RLS isolation on workspace-scoped tables | build_tracker §5.1 decision #6 |
+| [`tests/test_middleware.py`](../test_middleware.py) | 9 | Workspace-context + X-Request-Id middleware | build_tracker §5.1 decision #6 + api_contracts §0.8 |
 
 Plus [`tests/conftest.py`](../conftest.py) — shared fixtures.
 
@@ -70,6 +70,7 @@ Maps to [api_contracts §1.1](../../docs/api_contracts.md).
 | `test_health_ts_is_iso8601_utc_recent` | `ts` parses as ISO-8601 UTC, within 5 seconds of `now()`. |
 | `test_health_does_not_depend_on_db` | With the database container paused, `/health` still returns 200. (Sanity check: liveness ≠ readiness.) |
 | `test_health_does_not_write_access_log` | Hit `/health` 10 times; structlog capture sink shows zero access-log entries. |
+| `test_health_returns_json_content_type` | api_contracts §0.1: response Content-Type starts with `application/json`. |
 | `test_health_responds_under_100ms_p99` | Hit `/health` 100 times; p99 latency < 100ms. (Loose budget; tightens later.) |
 
 ### 4.2 `test_ready.py` — `GET /ready`
@@ -86,6 +87,9 @@ Maps to [api_contracts §1.2](../../docs/api_contracts.md).
 | `test_ready_response_uses_application_problem_json_on_failure` | Failure responses set `Content-Type: application/json` (not `application/problem+json` — `/ready` is intentionally a typed health response, not a generic error). |
 | `test_ready_checks_run_in_parallel` | Slow down each check by 1s (via fixture-injected delay); total response time is ≈ 1s, not 3s — proves `asyncio.gather`. |
 | `test_ready_overall_budget_is_5s` | Slow down one check beyond 5s; that check reports `timeout` error; `/ready` returns within 5.5s. |
+| `test_ready_db_check_times_out_at_2s` | Per-check timeout (api_contracts §1.2 check table): db check at 3s reports `timeout`. Prevents drift to a single overall budget. |
+| `test_ready_minio_check_times_out_at_2s` | Per-check timeout: minio check at 3s reports `timeout`. |
+| `test_ready_migrations_check_times_out_at_1s` | Per-check timeout: migrations check at 1.5s reports `timeout` (migrations has tighter budget than db/minio). |
 | `test_ready_does_not_write_access_log` | Same as `/health`. |
 | `test_ready_no_auth_required` | No Authorization header; still works. |
 
@@ -162,3 +166,4 @@ When Aniket signs off this spec + the skeleton files in `tests/`, the Phase 0 G3
 | Date | Change | By |
 |---|---|---|
 | 2026-05-23 | Spec drafted at Phase 0 G3 open. Five test buckets defined: health, ready, migrations, RLS, middleware. Testcontainers picked as fixture strategy. Awaiting sign-off. | Aniket |
+| 2026-05-23 | **Post-G3 consistency sweep across G1–G3.** Spec test count corrected (G3 first draft had 45 tests, not 41 — original claim was an undercount; recount: health 8 · ready 11 · migrations 9 · rls 8 · middleware 9 = 45). Then added 4 new tests in this sweep: `test_health_returns_json_content_type` (api_contracts §0.1) + 3 per-check timeout tests on `/ready` (api_contracts §1.2 check table — db 2s, minio 2s, migrations 1s). Final: 49 tests (health 9 · ready 14 · migrations 9 · rls 8 · middleware 9). Unused fixtures (`set_workspace`, `frozen_time`) removed from `conftest.py`. Cross-gate fixes also landed in `build_tracker.md` (G1 plan §5.1: ltree extension added per architecture §7, kb_app role bootstrap in 0001, G5 acceptance #5 corrected for non-empty paths) and `build_tracker.md` §3 (testcontainers + freezegun + ltree). | Aniket |

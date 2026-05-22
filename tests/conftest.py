@@ -94,22 +94,6 @@ async def db_superuser(db_url_superuser: str):
             yield conn
 
 
-@pytest_asyncio.fixture
-async def set_workspace(db_session):
-    """Helper that issues SET LOCAL app.workspace_id on the current session.
-
-    Usage:
-        await set_workspace("11111111-1111-1111-1111-111111111111")
-    """
-
-    async def _set(workspace_id: str) -> None:
-        await db_session.execute(
-            "SET LOCAL app.workspace_id = %s", (workspace_id,)
-        )
-
-    return _set
-
-
 # ---------------------------------------------------------------------------
 # FastAPI test client
 # ---------------------------------------------------------------------------
@@ -131,17 +115,3 @@ async def client(db_url_kb_app, minio_container) -> AsyncIterator["AsyncClient"]
         transport=ASGITransport(app=app), base_url="http://test"
     ) as ac:
         yield ac
-
-
-# ---------------------------------------------------------------------------
-# Time freezing
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-def frozen_time():
-    """Freeze time at 2026-05-23T12:00:00Z for tests that assert on timestamps."""
-    from freezegun import freeze_time
-
-    with freeze_time("2026-05-23T12:00:00Z"):
-        yield

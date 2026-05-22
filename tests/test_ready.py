@@ -137,6 +137,59 @@ async def test_ready_overall_budget_is_5s(client, monkeypatch):
     assert "timeout" in resp.json()["checks"]["db"]["error"].lower()
 
 
+async def test_ready_db_check_times_out_at_2s(client, monkeypatch):
+    """api_contracts §1.2 check table: db check timeout = 2s.
+
+    If only the overall 5s budget existed (no per-check timeouts), a 3s-slow
+    db check would silently succeed within the overall budget — drift from the
+    documented contract. This test prevents that.
+    """
+    from kb.api import readiness  # G4
+
+    async def three_second_check(*args, **kwargs):
+        await asyncio.sleep(3.0)
+        return {"status": "ok", "latency_ms": 3000}
+
+    monkeypatch.setattr(readiness, "check_db", three_second_check)
+
+    resp = await client.get("/ready")
+    assert resp.status_code == 503
+    err = resp.json()["checks"]["db"]["error"].lower()
+    assert "timeout" in err, f"per-check 2s timeout not enforced; got error={err!r}"
+
+
+async def test_ready_minio_check_times_out_at_2s(client, monkeypatch):
+    """api_contracts §1.2 check table: minio check timeout = 2s."""
+    from kb.api import readiness  # G4
+
+    async def three_second_check(*args, **kwargs):
+        await asyncio.sleep(3.0)
+        return {"status": "ok", "latency_ms": 3000}
+
+    monkeypatch.setattr(readiness, "check_minio", three_second_check)
+
+    resp = await client.get("/ready")
+    assert resp.status_code == 503
+    err = resp.json()["checks"]["minio"]["error"].lower()
+    assert "timeout" in err
+
+
+async def test_ready_migrations_check_times_out_at_1s(client, monkeypatch):
+    """api_contracts §1.2 check table: migrations check timeout = 1s (tighter than db/minio)."""
+    from kb.api import readiness  # G4
+
+    async def slow_migrations_check(*args, **kwargs):
+        await asyncio.sleep(1.5)
+        return {"status": "ok", "applied_count": 4, "latency_ms": 1500}
+
+    monkeypatch.setattr(readiness, "check_migrations", slow_migrations_check)
+
+    resp = await client.get("/ready")
+    assert resp.status_code == 503
+    err = resp.json()["checks"]["migrations"]["error"].lower()
+    assert "timeout" in err
+
+
 async def test_ready_does_not_write_access_log(client):
     """Probe endpoints skip access logs (api_contracts §0.8)."""
     from kb.logging import capture_access_logs  # G4

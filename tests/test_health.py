@@ -78,6 +78,12 @@ async def test_health_does_not_write_access_log(client, capsys):
     assert len(logs) == 0, "api_contracts §0.8: probes must skip access logs"
 
 
+async def test_health_returns_json_content_type(client):
+    """api_contracts §0.1: all endpoints return application/json."""
+    resp = await client.get("/health")
+    assert resp.headers["content-type"].startswith("application/json")
+
+
 async def test_health_responds_under_100ms_p99(client):
     """Loose p99 latency budget; tightens later."""
     latencies = []
