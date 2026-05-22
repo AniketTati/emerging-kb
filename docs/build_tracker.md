@@ -154,9 +154,9 @@ QA gates this at G1.5b — every prototype page is grep'd for the forbidden voca
 
 ## 1. Now / Next / Blocked
 
-**Now:** Phase 0 G1 — **re-opened 2026-05-23** after gate-transition consistency review. Corrected plan in §5.1; awaiting second sign-off. Branch: `phase-0/repo-skeleton`.
-**Next:** Phase 0 G2 contracts (commit `030503d`) re-validated against revised G1 → Phase 0 G3 (test specs for `/health` + `/ready` + migration runner + RLS isolation).
-**Blocked on:** nothing. G2 contracts unaffected by the G1 corrections (migrations check still works; `Idempotency-Key` header still backed by table — now workspace-scoped server-side).
+**Now:** Phase 0 G3 — test specs + red skeletons for `/health`, `/ready`, migration runner, RLS isolation, middleware. Branch: `phase-0/repo-skeleton`.
+**Next:** Phase 0 G4 — build (fill in the code that turns G3 skeletons green).
+**Blocked on:** nothing. G1 ✅ signed off 2026-05-23 (corrected plan §5.1) · G2 ✅ signed off 2026-05-23 (contracts in `docs/api_contracts.md`).
 
 ---
 
@@ -177,7 +177,7 @@ These exist *before* any phase opens. They define the system as a whole. Each mu
 | Competitive audit (2026 SOTA) | [docs/competitive_audit.md](competitive_audit.md) | ✅ Done | Wave B additions confirmed |
 | Scale/perf audit | [docs/scale_perf_audit.md](scale_perf_audit.md) | ✅ Done | 18 weaknesses named — accepted |
 | **Build Tracker (this file)** | docs/build_tracker.md | 🟡 In review | **You sign off** |
-| API contracts | [docs/api_contracts.md](api_contracts.md) | 🟡 Phase 0 contracts drafted | Awaiting sign-off on Phase 0 §1 (`/health`, `/ready`) |
+| API contracts | [docs/api_contracts.md](api_contracts.md) | ✅ Phase 0 contracts signed off 2026-05-23 | Phase 1 contracts land at Phase 1 G2 |
 | Test specs (per-phase) | tests/specs/ | ⬜ Not started | Created per phase at G3 |
 
 ---
@@ -259,7 +259,7 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
 
 | Phase | Description | G1 Plan | G2 API | G3 Tests | G4 Build | G5 Run | Notes |
 |---|---|---|---|---|---|---|---|
-| **0** | Repo + docker-compose (Postgres+pgvector+pg_search+MinIO+Procrastinate) + lifecycle DDL | 🟡 | 🟡 | ⬜ | ⬜ | ⬜ | G1 re-opened 2026-05-23 after consistency review (see §5.1 and §9). G2 contracts drafted; await G1 second sign-off. |
+| **0** | Repo + docker-compose (Postgres+pgvector+pg_search+MinIO+Procrastinate) + lifecycle DDL | ✅ | ✅ | 🟡 | ⬜ | ⬜ | G1 + G2 signed off 2026-05-23. G3 open: test specs + red skeletons. |
 | **1** | Schema service: CRUD, versioning, NL field descriptions, hierarchy | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | First "real" API phase |
 | **2** | Parse layer: Docling + Mistral OCR + xlsx + email → raw_pages | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | Internal service; API exposed via upload (phase 10a) |
 | **3** | Chunking + Contextual Retrieval + RAPTOR tree build | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | Internal worker |
@@ -279,9 +279,11 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
 | **11** | Public-dataset loader: CUAD + Enron + SEC 10-K subset + scans + xlsx | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | Scripts, not service endpoints |
 | **12** | Eval harness — 45 stratified Q&A (5 × 9 strata) + RAGAS + HHEM + basic Playground sandbox UI | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | `playground.html` (basic single-query + eval matrix) · regression CI |
 
-### 5.1 Phase 0 plan — Repo skeleton + docker-compose (G1 RE-OPENED)
+### 5.1 Phase 0 plan — Repo skeleton + docker-compose (G1 ✅ SIGNED OFF)
 
-> **Status:** G1 ✅ signed off 2026-05-22 → 🟡 **re-opened 2026-05-23** for consistency fixes after gate-transition review against `docs/architecture.md`. Plan below is the **corrected** version; the original is preserved in git history (commit `d50c1c7`). Branch: `phase-0/repo-skeleton`.
+> **Status:** G1 ✅ signed off (corrected version) 2026-05-23 by Aniket. Plan locked. Branch: `phase-0/repo-skeleton`.
+>
+> **History:** initial sign-off 2026-05-22 (commit `d50c1c7`) → re-opened 2026-05-23 after gate-transition consistency review surfaced six drift findings against architecture §6/§7/§12 (commit `1ee9738`) → second sign-off this date. The corrections below are the canonical Phase 0 plan.
 >
 > **What changed in the re-open:** workspace-scoped tables now carry `workspace_id` + RLS policies day 1 per architecture §7; `audit_log` ships in its full partitioned shape per architecture §6 (hash trigger deferred to Phase 9); `processing_status` removed (lands at Phase 2 as `file_lifecycle`); column renames to match architecture's canonical names (`ts` → `created_at`); FastAPI middleware added for workspace context + request-id; Phase 0 ↔ Phase 9 split made explicit.
 
@@ -503,7 +505,9 @@ No rollback DSL — for DDL we write forward fixes. Standard in DDL-heavy system
 
 #### Sign-off
 
-Original G1 signed off 2026-05-22 (commit `d50c1c7`). **Re-opened 2026-05-23** after gate-transition consistency review surfaced six drift findings against architecture §6/§7/§12. This corrected plan is awaiting a second sign-off; when Aniket approves, the Phase 0 G1 cell in §5 flips 🟡 → ✅ and Phase 0 G2 (already drafted at commit `030503d`) is re-validated. Sign-off recorded in §9 (Change log).
+- Initial G1 signed off 2026-05-22 (commit `d50c1c7`).
+- Re-opened 2026-05-23 after gate-transition consistency review; corrections in commit `1ee9738`.
+- Second sign-off 2026-05-23 by Aniket. Plan locked. G2 contracts re-validated and also signed off. G3 opens.
 
 ---
 
@@ -531,7 +535,7 @@ Phases 15–24 per `architecture.md` §12. Tracked here only as a reminder of in
 
 | Phase | Endpoints planned | Contract status |
 |---|---|---|
-| 0 | `GET /health`, `GET /ready` | 🟡 drafted · awaiting sign-off |
+| 0 | `GET /health`, `GET /ready` | ✅ signed off 2026-05-23 |
 | 1 | `GET/POST/PUT/DELETE /schema`, `GET /schema/versions`, hierarchy endpoints | ⬜ |
 | 2–7 | Mostly internal workers; admin endpoints TBD at G1 | ⬜ |
 | 8 | `POST /query`, `POST /chat`, `GET /chat/:id/stream` (SSE) | ⬜ |
@@ -548,7 +552,7 @@ Phases 15–24 per `architecture.md` §12. Tracked here only as a reminder of in
 
 | Phase | Spec | Tests | G3 status |
 |---|---|---|---|
-| 0 | tests/specs/phase_0.md | tests/test_phase_0_*.py | ⬜ |
+| 0 | [tests/specs/phase_0.md](../tests/specs/phase_0.md) | `tests/test_health.py`, `tests/test_ready.py`, `tests/test_migrations.py`, `tests/test_rls.py`, `tests/test_middleware.py` | 🟡 open · spec + red skeletons land at G3 commit |
 | 1 | tests/specs/phase_1.md | tests/test_phase_1_*.py | ⬜ |
 | ... | | | |
 
@@ -585,6 +589,7 @@ Phases 15–24 per `architecture.md` §12. Tracked here only as a reminder of in
 | 2026-05-22 | **Phase 0 G2 drafted.** Created `docs/api_contracts.md` with §0 conventions (RFC 9457 errors, UUIDv7 IDs, ISO-8601 timestamps, idempotency headers, status code map) and §1 Phase 0 contracts: `GET /health` (liveness — process up, no dependency checks) and `GET /ready` (readiness — db + minio + migrations check, 503 with `application/problem+json` on fail, parallel checks with 5s budget). Awaiting sign-off. | Aniket |
 | 2026-05-23 | **Gate-transition consistency review (G1+G2) ran before opening G3.** Six drifts surfaced against `docs/architecture.md`: (A) lifecycle tables had no `workspace_id` + RLS — architecture §7 mandates RLS day 1; (B) no FastAPI workspace middleware; (C) no X-Request-Id middleware (G2 §0.8 promised, G1 omitted); (D) `audit_log` shape under-specified vs architecture §6 (partitioning, hash columns, role grants); (E) `processing_status` was a fabrication — canonical name is `file_lifecycle`, belongs to Phase 2+; (F) Phase 0 ↔ Phase 9 split implicit — needed explicit reconciliation. Tech stack, gate discipline, branch+commit conventions all clean. | Aniket |
 | 2026-05-23 | **Phase 0 G1 re-opened** to apply consistency fixes. §5.1 rewritten: lifecycle DDL shrinks to four files (`0001_extensions`, `0002_schema_migrations`, `0003_audit_log` full partitioned shape, `0004_idempotency_keys` workspace-scoped); RLS day-1 added as decision #6; audit-log shape as #7; Phase 0↔9 split as #8; `src/kb/api/middleware.py` added to layout (workspace context + X-Request-Id); G5 acceptance updated to verify partitions + RLS + request-id header. G2 contracts unchanged (re-validated against revised G1). Awaiting second sign-off. | Aniket |
+| 2026-05-23 | **Phase 0 G1 ✅ and G2 ✅ both signed off.** Corrected §5.1 plan locked. G2 contracts in `docs/api_contracts.md` locked. G3 opens: test specs + red skeletons for `/health`, `/ready`, migration runner, RLS isolation, middleware. | Aniket |
 
 ---
 
