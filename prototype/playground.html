@@ -1,0 +1,586 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>KB · Playground</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/lucide@latest"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  html, body { height: 100%; }
+  body { font-family: 'Inter', system-ui, sans-serif; -webkit-font-smoothing: antialiased; color: #18181b; background: #ffffff; }
+  .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
+  .sidebar { transition: width .2s ease; }
+  .sidebar:hover { width: 220px; }
+  .sidebar:hover .label { opacity: 1; }
+  .label { opacity: 0; transition: opacity .15s; white-space: nowrap; }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #e4e4e7; border-radius: 6px; border: 2px solid #ffffff; }
+  ::-webkit-scrollbar-thumb:hover { background: #d4d4d8; }
+  details > summary { list-style: none; cursor: pointer; }
+  details > summary::-webkit-details-marker { display: none; }
+  details[open] .chev { transform: rotate(90deg); }
+  .chev { transition: transform .15s; display: inline-block; }
+  [data-lucide] { stroke-width: 1.75; }
+  .tab[data-active="true"] { color: #18181b; border-bottom-color: #18181b; }
+  .tab { border-bottom: 2px solid transparent; }
+  .tabpane { display: none; }
+  .tabpane[data-active="true"] { display: flex; }
+  /* eval cells */
+  .eval-cell { width: 28px; height: 28px; border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 500; }
+  .eval-pass { background: #18181b; color: #ffffff; }
+  .eval-fail { background: #fef2f2; color: #991b1b; border: 1px solid #fecaca; }
+  .eval-warn { background: #fafafa; color: #71717a; border: 1px dashed #d4d4d8; }
+  .eval-empty { background: #f4f4f5; }
+  /* channel chips */
+  .channel-on { background: #18181b; color: #fff; }
+  .channel-off { background: #f4f4f5; color: #71717a; }
+  /* slider */
+  input[type="range"] { accent-color: #18181b; }
+  /* trace line */
+  .trace-line { border-left: 2px solid #e4e4e7; padding-left: 12px; }
+</style>
+</head>
+<body class="h-screen overflow-hidden">
+
+<div class="flex h-full">
+
+  <!-- ============== SIDEBAR ============== -->
+  <aside class="sidebar w-[56px] flex-shrink-0 bg-white border-r border-zinc-200 flex flex-col py-2 overflow-hidden">
+    <a href="index.html" class="px-3.5 mb-4 mt-1 flex items-center gap-3">
+      <div class="w-6 h-6 rounded-md bg-zinc-900 flex items-center justify-center text-white text-[11px] font-semibold tracking-tight">K</div>
+      <div class="label text-sm font-medium text-zinc-900">Knowledge Base</div>
+    </a>
+    <div class="px-3 mt-2 mb-1 text-[10px] uppercase tracking-wider text-zinc-400 label">Primary</div>
+    <nav class="px-2 space-y-px">
+      <a href="chat.html" class="flex items-center gap-3 px-2 py-1.5 rounded-md text-sm text-zinc-600 hover:bg-zinc-50"><i data-lucide="message-square" class="w-4 h-4"></i><span class="label">Chat</span></a>
+      <a href="upload.html" class="flex items-center gap-3 px-2 py-1.5 rounded-md text-sm text-zinc-600 hover:bg-zinc-50"><i data-lucide="upload" class="w-4 h-4"></i><span class="label">Upload</span></a>
+      <a href="explore.html" class="flex items-center gap-3 px-2 py-1.5 rounded-md text-sm text-zinc-600 hover:bg-zinc-50"><i data-lucide="search" class="w-4 h-4"></i><span class="label">Explore</span></a>
+    </nav>
+    <div class="px-3 mt-5 mb-1 text-[10px] uppercase tracking-wider text-zinc-400 label">Studio</div>
+    <nav class="px-2 space-y-px">
+      <a href="schema-studio.html" class="flex items-center gap-3 px-2 py-1.5 rounded-md text-sm text-zinc-600 hover:bg-zinc-50"><i data-lucide="layers" class="w-4 h-4"></i><span class="label">Schema</span></a>
+      <a href="extraction-studio.html" class="flex items-center gap-3 px-2 py-1.5 rounded-md text-sm text-zinc-600 hover:bg-zinc-50"><i data-lucide="flask-conical" class="w-4 h-4"></i><span class="label">Extraction</span></a>
+      <a href="playground.html" class="flex items-center gap-3 px-2 py-1.5 rounded-md text-sm bg-zinc-100 text-zinc-900"><i data-lucide="sliders-horizontal" class="w-4 h-4"></i><span class="label">Playground</span></a>
+    </nav>
+    <div class="px-3 mt-5 mb-1 text-[10px] uppercase tracking-wider text-zinc-400 label">Admin</div>
+    <nav class="px-2 space-y-px">
+      <a href="dashboard.html" class="flex items-center gap-3 px-2 py-1.5 rounded-md text-sm text-zinc-600 hover:bg-zinc-50"><i data-lucide="layout-dashboard" class="w-4 h-4"></i><span class="label">Dashboard</span></a>
+      <a href="audit.html" class="flex items-center gap-3 px-2 py-1.5 rounded-md text-sm text-zinc-600 hover:bg-zinc-50"><i data-lucide="scroll-text" class="w-4 h-4"></i><span class="label">Audit</span></a>
+      <a href="settings.html" class="flex items-center gap-3 px-2 py-1.5 rounded-md text-sm text-zinc-600 hover:bg-zinc-50"><i data-lucide="settings" class="w-4 h-4"></i><span class="label">Settings</span></a>
+    </nav>
+    <div class="mt-auto px-2 pt-3 border-t border-zinc-200">
+      <button class="w-full flex items-center gap-3 px-2 py-1.5 rounded-md text-sm text-zinc-600 hover:bg-zinc-50"><i data-lucide="circle-user" class="w-4 h-4"></i><span class="label">aniket@kb</span></button>
+    </div>
+  </aside>
+
+  <!-- ============== MAIN COLUMN ============== -->
+  <main class="flex-1 flex flex-col min-w-0 bg-white">
+
+    <header class="h-12 flex-shrink-0 border-b border-zinc-200 flex items-center px-5 gap-4">
+      <div class="flex items-center gap-2 text-sm">
+        <span class="text-zinc-500">Studio</span>
+        <i data-lucide="chevron-right" class="w-3.5 h-3.5 text-zinc-300"></i>
+        <span class="text-zinc-900">Playground</span>
+        <span class="ml-1 text-[11px] text-zinc-400 mono">sandbox · not saved to chat history</span>
+      </div>
+      <div class="ml-auto flex items-center gap-1">
+        <button class="text-xs px-2 py-1 rounded text-zinc-600 hover:bg-zinc-100 flex items-center gap-1.5"><i data-lucide="save" class="w-3.5 h-3.5"></i> Save preset</button>
+        <button class="text-xs px-2 py-1 rounded text-zinc-600 hover:bg-zinc-100 flex items-center gap-1.5"><i data-lucide="share-2" class="w-3.5 h-3.5"></i> Share</button>
+        <button class="flex items-center gap-1.5 px-2 py-1 rounded text-xs text-zinc-500 hover:bg-zinc-100 mono"><i data-lucide="command" class="w-3.5 h-3.5"></i> K</button>
+        <button class="w-7 h-7 rounded hover:bg-zinc-100 flex items-center justify-center text-zinc-500"><i data-lucide="sun" class="w-4 h-4"></i></button>
+      </div>
+    </header>
+
+    <div class="border-b border-zinc-200 px-5 flex items-center gap-6 text-sm flex-shrink-0 h-10">
+      <button data-tab-trigger="query" data-active="true" class="tab py-2.5 text-zinc-900 hover:text-zinc-900 flex items-center gap-2 font-medium">Single query</button>
+      <button data-tab-trigger="eval" class="tab py-2.5 text-zinc-500 hover:text-zinc-900 flex items-center gap-2">Eval suite <span class="text-[11px] mono text-zinc-400">45</span></button>
+      <button data-tab-trigger="compare" class="tab py-2.5 text-zinc-500 hover:text-zinc-900 flex items-center gap-2">Compare configs</button>
+      <div class="ml-auto text-[11px] text-zinc-400 mono py-2.5">Sandbox · tweak retrieval and answer behavior without affecting production</div>
+    </div>
+
+    <div class="flex-1 min-h-0">
+
+      <!-- ===================== SINGLE QUERY ===================== -->
+      <div data-tab="query" data-active="true" class="tabpane h-full">
+
+        <!-- left: controls -->
+        <aside class="w-[360px] flex-shrink-0 border-r border-zinc-200 overflow-y-auto bg-white">
+          <div class="p-4 space-y-5">
+
+            <!-- query input -->
+            <div>
+              <div class="text-[10px] uppercase tracking-wider text-zinc-400 mb-2">Query</div>
+              <textarea rows="3" class="w-full text-sm px-3 py-2 rounded-md border border-zinc-200 focus:outline-none focus:border-zinc-400 resize-none">We had a party in the last 2–3 years where we needed someone to supply something very fast — who and which party?</textarea>
+            </div>
+
+            <!-- planner mode -->
+            <div>
+              <div class="text-[10px] uppercase tracking-wider text-zinc-400 mb-2">Planner mode</div>
+              <select class="w-full text-sm px-3 py-2 rounded-md border border-zinc-200 bg-white">
+                <option>Auto — let system pick (recommended)</option>
+                <option>Standard retrieval</option>
+                <option>Multi-hop · chain-aware</option>
+                <option>Aggregation · structured answer</option>
+                <option>Deep research · agentic loop (5 hops max)</option>
+              </select>
+              <div class="text-[11px] text-zinc-500 mt-1.5">Auto picked <span class="mono text-zinc-700">multi-hop + standard</span> for this query.</div>
+            </div>
+
+            <!-- channels -->
+            <div>
+              <div class="text-[10px] uppercase tracking-wider text-zinc-400 mb-2 flex items-center justify-between">
+                <span>Retrieval channels</span>
+                <button class="text-zinc-500 hover:text-zinc-900 normal-case text-[11px]">all on</button>
+              </div>
+              <div class="grid grid-cols-2 gap-1.5 text-[11px]">
+                <span class="channel-on px-2 py-1 rounded mono">keyword (BM25)</span>
+                <span class="channel-on px-2 py-1 rounded mono">dense · chunk</span>
+                <span class="channel-on px-2 py-1 rounded mono">dense · summary</span>
+                <span class="channel-on px-2 py-1 rounded mono">atomic unit</span>
+                <span class="channel-on px-2 py-1 rounded mono">anomaly filter</span>
+                <span class="channel-on px-2 py-1 rounded mono">graph (PPR)</span>
+                <span class="channel-on px-2 py-1 rounded mono">entity mention</span>
+                <span class="channel-on px-2 py-1 rounded mono">doc metadata</span>
+                <span class="channel-off px-2 py-1 rounded mono">visual layout</span>
+                <span class="channel-off px-2 py-1 rounded mono">late-chunk</span>
+              </div>
+              <div class="text-[11px] text-zinc-500 mt-1.5">8 of 10 channels active.</div>
+            </div>
+
+            <!-- rerank + faithfulness -->
+            <div>
+              <div class="text-[10px] uppercase tracking-wider text-zinc-400 mb-2">Quality gates</div>
+              <div class="space-y-1.5 text-xs">
+                <label class="flex items-center gap-2 text-zinc-700"><input type="checkbox" class="accent-zinc-900 w-3 h-3" checked /> Cross-encoder rerank</label>
+                <label class="flex items-center gap-2 text-zinc-700"><input type="checkbox" class="accent-zinc-900 w-3 h-3" checked /> Faithfulness judge (refuse if &lt; 0.7)</label>
+                <label class="flex items-center gap-2 text-zinc-700"><input type="checkbox" class="accent-zinc-900 w-3 h-3" checked /> Conflict detection</label>
+                <label class="flex items-center gap-2 text-zinc-700"><input type="checkbox" class="accent-zinc-900 w-3 h-3" /> Hallucination gate (high-stakes only)</label>
+              </div>
+            </div>
+
+            <!-- params -->
+            <div>
+              <div class="text-[10px] uppercase tracking-wider text-zinc-400 mb-2">Parameters</div>
+              <div class="space-y-3 text-xs">
+                <div>
+                  <div class="flex justify-between mb-1 text-zinc-600"><span>Max hops</span><span class="mono">2</span></div>
+                  <input type="range" min="1" max="5" value="2" class="w-full" />
+                </div>
+                <div>
+                  <div class="flex justify-between mb-1 text-zinc-600"><span>Candidates retrieved</span><span class="mono">50</span></div>
+                  <input type="range" min="10" max="200" value="50" class="w-full" />
+                </div>
+                <div>
+                  <div class="flex justify-between mb-1 text-zinc-600"><span>Reranked → cited</span><span class="mono">10 → 5</span></div>
+                  <input type="range" min="3" max="20" value="10" class="w-full" />
+                </div>
+                <div>
+                  <div class="flex justify-between mb-1 text-zinc-600"><span>Temperature</span><span class="mono">0.0</span></div>
+                  <input type="range" min="0" max="100" value="0" class="w-full" />
+                </div>
+              </div>
+            </div>
+
+            <!-- doc scope -->
+            <div>
+              <div class="text-[10px] uppercase tracking-wider text-zinc-400 mb-2">Scope</div>
+              <select class="w-full text-sm px-3 py-2 rounded-md border border-zinc-200 bg-white">
+                <option>All docs (87)</option>
+                <option>Contracts only (24)</option>
+                <option>Last 6 months (38)</option>
+              </select>
+            </div>
+
+            <!-- run -->
+            <button class="w-full mt-2 px-3 py-2 rounded-md bg-zinc-900 text-white hover:bg-zinc-800 text-sm font-medium flex items-center justify-center gap-2">
+              <i data-lucide="play" class="w-4 h-4"></i> Run query
+              <span class="text-[11px] mono text-zinc-300 ml-1">⌘↵</span>
+            </button>
+            <div class="text-[11px] text-zinc-500 text-center mono">est. ~$0.007 · ~2.3s</div>
+          </div>
+        </aside>
+
+        <!-- right: output -->
+        <section class="flex-1 overflow-y-auto bg-zinc-50/40">
+          <div class="max-w-3xl mx-auto p-6 space-y-4">
+
+            <!-- summary row -->
+            <div class="rounded-lg border border-zinc-200 bg-white p-3 flex items-center gap-4 text-xs">
+              <div class="flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-zinc-900"></span><span class="text-zinc-700">grounded · 92%</span></div>
+              <div class="text-zinc-500">·</div>
+              <div class="text-zinc-700 mono">2.31s</div>
+              <div class="text-zinc-500">·</div>
+              <div class="text-zinc-700 mono">$0.0068</div>
+              <div class="text-zinc-500">·</div>
+              <div class="text-zinc-700 mono">47 → 8 → 3</div>
+              <div class="ml-auto flex items-center gap-2 text-[11px] text-zinc-500">
+                <button class="hover:text-zinc-900 flex items-center gap-1"><i data-lucide="copy" class="w-3 h-3"></i> copy answer</button>
+                <button class="hover:text-zinc-900 flex items-center gap-1"><i data-lucide="link" class="w-3 h-3"></i> share trace</button>
+              </div>
+            </div>
+
+            <!-- answer -->
+            <div class="rounded-lg border border-zinc-200 bg-white p-4">
+              <div class="text-[10px] uppercase tracking-wider text-zinc-400 mb-2">Answer</div>
+              <div class="text-[14px] leading-7 text-zinc-800">
+                In November 2024, <span class="text-zinc-900 font-medium">Vertex Logistics Pvt Ltd</span> was the supplier on the Aurangabad warehouse project, contracted via an unusually fast-turnaround clause: concrete materials had to be delivered within <span class="text-zinc-900 font-medium">4 hours of order placement</span>.
+                The clause is rare in your corpus — the median delivery window across 23 supply contracts is 7–30 days.
+              </div>
+            </div>
+
+            <!-- retrieval trace -->
+            <div class="rounded-lg border border-zinc-200 bg-white">
+              <div class="px-4 py-2.5 border-b border-zinc-200 text-[10px] uppercase tracking-wider text-zinc-500">Retrieval trace</div>
+              <div class="p-4 space-y-3 text-xs">
+
+                <div class="trace-line">
+                  <div class="text-zinc-700 mono mb-1">1. Rewrite</div>
+                  <div class="text-zinc-500">Step-back: "which suppliers delivered on tight deadlines?" · HyDE generated 2 hypothetical answers · query expanded with synonyms (turnaround time, TAT, lead time)</div>
+                </div>
+
+                <div class="trace-line">
+                  <div class="text-zinc-700 mono mb-1">2. Parallel retrieval · 47 candidates from 8 channels</div>
+                  <div class="grid grid-cols-2 gap-x-4 gap-y-1 text-zinc-500 mt-1">
+                    <div>keyword (BM25) · 14 hits</div>
+                    <div>dense · chunk · 12 hits</div>
+                    <div>dense · summary · 8 hits</div>
+                    <div>atomic unit (rarity≥0.95) · 3 hits</div>
+                    <div>graph PPR · 6 hits</div>
+                    <div>entity mention · 4 hits</div>
+                    <div>doc metadata · 0 hits</div>
+                    <div>anomaly filter · 1 hit</div>
+                  </div>
+                </div>
+
+                <div class="trace-line">
+                  <div class="text-zinc-700 mono mb-1">3. Fusion · RRF (k=60)</div>
+                  <div class="text-zinc-500">47 → 18 (deduped, reciprocal rank fused) · top candidate: <a href="doc-detail.html" class="hover:text-zinc-900 hover:underline">vertex-aurangabad-2024 §3.2</a></div>
+                </div>
+
+                <div class="trace-line">
+                  <div class="text-zinc-700 mono mb-1">4. Rerank · cross-encoder</div>
+                  <div class="text-zinc-500">18 → 8 reranked · top score 0.94 · margin to 9th = 0.31 (confident gap)</div>
+                </div>
+
+                <div class="trace-line">
+                  <div class="text-zinc-700 mono mb-1">5. Anchor + 1-hop expansion</div>
+                  <div class="text-zinc-500">contract <a href="doc-detail.html" class="mono text-zinc-700 hover:text-zinc-900 hover:underline">vertex-aurangabad-2024.pdf</a> → Event entity → procurer <a href="doc-detail.html" class="hover:text-zinc-900 hover:underline">Aakash Constructions</a></div>
+                </div>
+
+                <div class="trace-line">
+                  <div class="text-zinc-700 mono mb-1">6. Faithfulness check</div>
+                  <div class="text-zinc-500"><span class="text-zinc-900">3 / 3 claims grounded</span> in retrieved evidence · faithfulness 0.94</div>
+                </div>
+
+                <div class="trace-line">
+                  <div class="text-zinc-700 mono mb-1">7. Conflict detection</div>
+                  <div class="text-zinc-500">no contradictions in citation set · all 3 sources mutually consistent</div>
+                </div>
+
+                <div class="trace-line">
+                  <div class="text-zinc-700 mono mb-1">8. Generation</div>
+                  <div class="text-zinc-500">Gemini 2.5 Flash · 416 tokens out · streaming · temperature 0.0</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- candidates table -->
+            <details class="rounded-lg border border-zinc-200 bg-white" open>
+              <summary class="px-4 py-2.5 flex items-center text-xs text-zinc-700 hover:text-zinc-900">
+                <i data-lucide="chevron-right" class="chev w-3.5 h-3.5 text-zinc-400 mr-2"></i>
+                Top 10 candidates · scores
+                <span class="ml-auto text-zinc-400 mono">8 reranked · 3 cited</span>
+              </summary>
+              <div class="border-t border-zinc-100">
+                <div class="grid grid-cols-[1fr_80px_80px_80px_80px] text-[11px] uppercase tracking-wider text-zinc-400 px-4 py-2 border-b border-zinc-100">
+                  <div>Source</div><div>BM25</div><div>dense</div><div>rerank</div><div>cited</div>
+                </div>
+                <ul class="text-xs divide-y divide-zinc-100">
+                  <li class="grid grid-cols-[1fr_80px_80px_80px_80px] px-4 py-2 mono items-center">
+                    <a href="doc-detail.html" class="truncate text-zinc-900 hover:underline">vertex-aurangabad-2024.pdf §3.2</a>
+                    <span class="text-zinc-700">8.21</span><span class="text-zinc-700">0.89</span><span class="text-zinc-900">0.94</span><span class="text-zinc-900">✓ [1]</span>
+                  </li>
+                  <li class="grid grid-cols-[1fr_80px_80px_80px_80px] px-4 py-2 mono items-center">
+                    <a href="schema-studio.html" class="truncate text-zinc-900 hover:underline">contract-aggregate · delivery_window</a>
+                    <span class="text-zinc-700">—</span><span class="text-zinc-700">—</span><span class="text-zinc-900">0.91</span><span class="text-zinc-900">✓ [2]</span>
+                  </li>
+                  <li class="grid grid-cols-[1fr_80px_80px_80px_80px] px-4 py-2 mono items-center">
+                    <a href="doc-detail.html" class="truncate text-zinc-900 hover:underline">vertex-aurangabad-2024.pdf p.12 signatures</a>
+                    <span class="text-zinc-700">5.12</span><span class="text-zinc-700">0.82</span><span class="text-zinc-900">0.86</span><span class="text-zinc-900">✓ [3]</span>
+                  </li>
+                  <li class="grid grid-cols-[1fr_80px_80px_80px_80px] px-4 py-2 mono items-center text-zinc-500">
+                    <a href="doc-detail.html" class="truncate hover:text-zinc-900 hover:underline">steelco-mou-2023.pdf §4 delivery</a>
+                    <span>6.05</span><span>0.78</span><span>0.41</span><span class="text-zinc-400">—</span>
+                  </li>
+                  <li class="grid grid-cols-[1fr_80px_80px_80px_80px] px-4 py-2 mono items-center text-zinc-500">
+                    <a href="doc-detail.html" class="truncate hover:text-zinc-900 hover:underline">quickbuild-emergency-2024.pdf</a>
+                    <span>4.21</span><span>0.68</span><span>0.38</span><span class="text-zinc-400">—</span>
+                  </li>
+                  <li class="grid grid-cols-[1fr_80px_80px_80px_80px] px-4 py-2 mono items-center text-zinc-500">
+                    <a href="doc-detail.html" class="truncate hover:text-zinc-900 hover:underline">contractor-pool-2024.xlsx row 42</a>
+                    <span>3.18</span><span>0.61</span><span>0.34</span><span class="text-zinc-400">—</span>
+                  </li>
+                  <li class="px-4 py-2 text-[11px] text-zinc-400 mono">+ 4 more below 0.30</li>
+                </ul>
+              </div>
+            </details>
+
+          </div>
+        </section>
+      </div>
+
+      <!-- ===================== EVAL SUITE ===================== -->
+      <div data-tab="eval" class="tabpane h-full">
+        <section class="flex-1 overflow-y-auto">
+          <div class="max-w-6xl mx-auto px-8 py-6">
+            <div class="flex items-end justify-between mb-5">
+              <div>
+                <h1 class="text-lg font-semibold text-zinc-900">Eval suite</h1>
+                <p class="text-sm text-zinc-500 mt-0.5">45 questions across 9 strata · last full run 2026-05-22 09:14 · <span class="text-zinc-900 mono">39 / 45 pass</span></p>
+              </div>
+              <div class="flex items-center gap-2">
+                <button class="text-xs px-2.5 py-1.5 rounded-md border border-zinc-200 text-zinc-700 hover:bg-zinc-50 flex items-center gap-1.5"><i data-lucide="filter" class="w-3.5 h-3.5"></i> Filter</button>
+                <button class="text-xs px-3 py-1.5 rounded-md bg-zinc-900 text-white hover:bg-zinc-800 flex items-center gap-1.5"><i data-lucide="play" class="w-3.5 h-3.5"></i> Run all · ~3.2 min · ~$0.34</button>
+              </div>
+            </div>
+
+            <!-- summary row -->
+            <div class="grid grid-cols-5 gap-3 mb-5">
+              <div class="rounded-lg border border-zinc-200 p-3">
+                <div class="text-[10px] uppercase tracking-wider text-zinc-400">Pass rate</div>
+                <div class="text-2xl font-semibold text-zinc-900 mt-1">87%</div>
+                <div class="text-[11px] text-zinc-500 mono">39 / 45</div>
+              </div>
+              <div class="rounded-lg border border-zinc-200 p-3">
+                <div class="text-[10px] uppercase tracking-wider text-zinc-400">Avg latency</div>
+                <div class="text-2xl font-semibold text-zinc-900 mt-1">2.4s</div>
+                <div class="text-[11px] text-zinc-500 mono">p95 3.8s</div>
+              </div>
+              <div class="rounded-lg border border-zinc-200 p-3">
+                <div class="text-[10px] uppercase tracking-wider text-zinc-400">Avg cost</div>
+                <div class="text-2xl font-semibold text-zinc-900 mt-1">$0.008</div>
+                <div class="text-[11px] text-zinc-500 mono">per query</div>
+              </div>
+              <div class="rounded-lg border border-zinc-200 p-3">
+                <div class="text-[10px] uppercase tracking-wider text-zinc-400">Faithfulness</div>
+                <div class="text-2xl font-semibold text-zinc-900 mt-1">0.91</div>
+                <div class="text-[11px] text-zinc-500 mono">avg across 45</div>
+              </div>
+              <div class="rounded-lg border border-zinc-200 p-3">
+                <div class="text-[10px] uppercase tracking-wider text-zinc-400">Regressions</div>
+                <div class="text-2xl font-semibold text-zinc-900 mt-1">0</div>
+                <div class="text-[11px] text-zinc-500 mono">vs last run</div>
+              </div>
+            </div>
+
+            <!-- matrix -->
+            <div class="rounded-lg border border-zinc-200 overflow-hidden">
+              <div class="grid grid-cols-[200px_repeat(5,minmax(0,1fr))_80px] gap-2 px-4 py-2.5 text-[10px] uppercase tracking-wider text-zinc-500 bg-zinc-50 border-b border-zinc-200">
+                <div>Stratum</div>
+                <div class="text-center">Q1</div><div class="text-center">Q2</div><div class="text-center">Q3</div><div class="text-center">Q4</div><div class="text-center">Q5</div>
+                <div class="text-right">Pass</div>
+              </div>
+              <div class="divide-y divide-zinc-100">
+
+                <div class="grid grid-cols-[200px_repeat(5,minmax(0,1fr))_80px] gap-2 px-4 py-3 items-center text-sm">
+                  <div class="text-zinc-900">Single-doc lookup</div>
+                  <div class="flex justify-center"><span class="eval-cell eval-pass">✓</span></div>
+                  <div class="flex justify-center"><span class="eval-cell eval-pass">✓</span></div>
+                  <div class="flex justify-center"><span class="eval-cell eval-pass">✓</span></div>
+                  <div class="flex justify-center"><span class="eval-cell eval-pass">✓</span></div>
+                  <div class="flex justify-center"><span class="eval-cell eval-pass">✓</span></div>
+                  <div class="text-right mono text-zinc-700">5/5</div>
+                </div>
+
+                <div class="grid grid-cols-[200px_repeat(5,minmax(0,1fr))_80px] gap-2 px-4 py-3 items-center text-sm">
+                  <div class="text-zinc-900">Aggregation (Q-mode)</div>
+                  <div class="flex justify-center"><span class="eval-cell eval-pass">✓</span></div>
+                  <div class="flex justify-center"><span class="eval-cell eval-pass">✓</span></div>
+                  <div class="flex justify-center"><span class="eval-cell eval-warn">~</span></div>
+                  <div class="flex justify-center"><span class="eval-cell eval-pass">✓</span></div>
+                  <div class="flex justify-center"><span class="eval-cell eval-pass">✓</span></div>
+                  <div class="text-right mono text-zinc-700">4/5</div>
+                </div>
+
+                <div class="grid grid-cols-[200px_repeat(5,minmax(0,1fr))_80px] gap-2 px-4 py-3 items-center text-sm">
+                  <div class="text-zinc-900">Multi-hop (chain-aware)</div>
+                  <div class="flex justify-center"><span class="eval-cell eval-pass">✓</span></div>
+                  <div class="flex justify-center"><span class="eval-cell eval-pass">✓</span></div>
+                  <div class="flex justify-center"><span class="eval-cell eval-pass">✓</span></div>
+                  <div class="flex justify-center"><span class="eval-cell eval-fail">✗</span></div>
+                  <div class="flex justify-center"><span class="eval-cell eval-pass">✓</span></div>
+                  <div class="text-right mono text-zinc-700">4/5</div>
+                </div>
+
+                <div class="grid grid-cols-[200px_repeat(5,minmax(0,1fr))_80px] gap-2 px-4 py-3 items-center text-sm">
+                  <div class="text-zinc-900">Rare-clause needle</div>
+                  <div class="flex justify-center"><span class="eval-cell eval-pass">✓</span></div>
+                  <div class="flex justify-center"><span class="eval-cell eval-pass">✓</span></div>
+                  <div class="flex justify-center"><span class="eval-cell eval-pass">✓</span></div>
+                  <div class="flex justify-center"><span class="eval-cell eval-pass">✓</span></div>
+                  <div class="flex justify-center"><span class="eval-cell eval-pass">✓</span></div>
+                  <div class="text-right mono text-zinc-700">5/5</div>
+                </div>
+
+                <div class="grid grid-cols-[200px_repeat(5,minmax(0,1fr))_80px] gap-2 px-4 py-3 items-center text-sm">
+                  <div class="text-zinc-900">Vocabulary mismatch</div>
+                  <div class="flex justify-center"><span class="eval-cell eval-pass">✓</span></div>
+                  <div class="flex justify-center"><span class="eval-cell eval-warn">~</span></div>
+                  <div class="flex justify-center"><span class="eval-cell eval-pass">✓</span></div>
+                  <div class="flex justify-center"><span class="eval-cell eval-pass">✓</span></div>
+                  <div class="flex justify-center"><span class="eval-cell eval-pass">✓</span></div>
+                  <div class="text-right mono text-zinc-700">4/5</div>
+                </div>
+
+                <div class="grid grid-cols-[200px_repeat(5,minmax(0,1fr))_80px] gap-2 px-4 py-3 items-center text-sm">
+                  <div class="text-zinc-900">Conflict resolution</div>
+                  <div class="flex justify-center"><span class="eval-cell eval-pass">✓</span></div>
+                  <div class="flex justify-center"><span class="eval-cell eval-pass">✓</span></div>
+                  <div class="flex justify-center"><span class="eval-cell eval-fail">✗</span></div>
+                  <div class="flex justify-center"><span class="eval-cell eval-pass">✓</span></div>
+                  <div class="flex justify-center"><span class="eval-cell eval-pass">✓</span></div>
+                  <div class="text-right mono text-zinc-700">4/5</div>
+                </div>
+
+                <div class="grid grid-cols-[200px_repeat(5,minmax(0,1fr))_80px] gap-2 px-4 py-3 items-center text-sm">
+                  <div class="text-zinc-900">Entity ambiguity</div>
+                  <div class="flex justify-center"><span class="eval-cell eval-pass">✓</span></div>
+                  <div class="flex justify-center"><span class="eval-cell eval-pass">✓</span></div>
+                  <div class="flex justify-center"><span class="eval-cell eval-pass">✓</span></div>
+                  <div class="flex justify-center"><span class="eval-cell eval-pass">✓</span></div>
+                  <div class="flex justify-center"><span class="eval-cell eval-pass">✓</span></div>
+                  <div class="text-right mono text-zinc-700">5/5</div>
+                </div>
+
+                <div class="grid grid-cols-[200px_repeat(5,minmax(0,1fr))_80px] gap-2 px-4 py-3 items-center text-sm">
+                  <div class="text-zinc-900">Refuse / unanswerable</div>
+                  <div class="flex justify-center"><span class="eval-cell eval-pass">✓</span></div>
+                  <div class="flex justify-center"><span class="eval-cell eval-pass">✓</span></div>
+                  <div class="flex justify-center"><span class="eval-cell eval-warn">~</span></div>
+                  <div class="flex justify-center"><span class="eval-cell eval-pass">✓</span></div>
+                  <div class="flex justify-center"><span class="eval-cell eval-pass">✓</span></div>
+                  <div class="text-right mono text-zinc-700">4/5</div>
+                </div>
+
+                <div class="grid grid-cols-[200px_repeat(5,minmax(0,1fr))_80px] gap-2 px-4 py-3 items-center text-sm">
+                  <div class="text-zinc-900">Follow-up / context</div>
+                  <div class="flex justify-center"><span class="eval-cell eval-pass">✓</span></div>
+                  <div class="flex justify-center"><span class="eval-cell eval-pass">✓</span></div>
+                  <div class="flex justify-center"><span class="eval-cell eval-pass">✓</span></div>
+                  <div class="flex justify-center"><span class="eval-cell eval-fail">✗</span></div>
+                  <div class="flex justify-center"><span class="eval-cell eval-pass">✓</span></div>
+                  <div class="text-right mono text-zinc-700">4/5</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="mt-4 flex items-center gap-3 text-xs text-zinc-500">
+              <span class="flex items-center gap-1.5"><span class="eval-cell eval-pass" style="width: 16px; height: 16px;">✓</span> pass</span>
+              <span class="flex items-center gap-1.5"><span class="eval-cell eval-warn" style="width: 16px; height: 16px;">~</span> partial / low confidence</span>
+              <span class="flex items-center gap-1.5"><span class="eval-cell eval-fail" style="width: 16px; height: 16px;">✗</span> fail</span>
+              <span class="ml-auto mono">Click any cell to see the question, expected facts, actual answer, and diff</span>
+            </div>
+
+          </div>
+        </section>
+      </div>
+
+      <!-- ===================== COMPARE ===================== -->
+      <div data-tab="compare" class="tabpane h-full">
+        <section class="flex-1 overflow-y-auto">
+          <div class="max-w-6xl mx-auto px-8 py-6">
+
+            <div class="rounded-lg border border-zinc-200 bg-zinc-50 p-3 mb-5 flex items-start gap-3">
+              <i data-lucide="lightbulb" class="w-4 h-4 text-zinc-700 mt-0.5 flex-shrink-0"></i>
+              <div class="text-xs text-zinc-700">
+                <span class="font-medium">A/B testing.</span> Run the same query with two configurations side-by-side. Useful before promoting a prompt change or before flipping a retrieval channel.
+              </div>
+            </div>
+
+            <div class="mb-5">
+              <div class="text-[10px] uppercase tracking-wider text-zinc-400 mb-2">Query</div>
+              <textarea rows="2" class="w-full text-sm px-3 py-2 rounded-md border border-zinc-200 focus:outline-none focus:border-zinc-400 resize-none">List all suppliers we worked with on emergency / sub-24-hour delivery contracts in the last 3 years.</textarea>
+            </div>
+
+            <div class="grid grid-cols-2 gap-4 mb-4">
+              <div class="rounded-lg border border-zinc-200 bg-white">
+                <div class="px-4 py-2.5 border-b border-zinc-200 flex items-center justify-between bg-zinc-50/40">
+                  <div class="text-sm font-medium text-zinc-900">A · Production</div>
+                  <span class="text-[11px] mono text-zinc-500">standard · 8 channels · rerank on</span>
+                </div>
+                <div class="p-4">
+                  <div class="text-[14px] leading-7 text-zinc-800 mb-3">
+                    Found <span class="font-medium text-zinc-900">1 supplier</span> — Vertex Logistics Pvt Ltd, on the Aurangabad warehouse project (Nov 2024). Delivery window: 4 hours.
+                  </div>
+                  <div class="border-t border-zinc-100 pt-3 grid grid-cols-3 gap-2 text-[11px] mono text-zinc-500">
+                    <div>2.31s</div><div>$0.0068</div><div>3 cited</div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="rounded-lg border border-zinc-300 bg-white">
+                <div class="px-4 py-2.5 border-b border-zinc-200 flex items-center justify-between bg-zinc-50">
+                  <div class="text-sm font-medium text-zinc-900">B · Proposed</div>
+                  <span class="text-[11px] mono text-zinc-500">aggregation · 9 channels · rerank on · max hops 5</span>
+                </div>
+                <div class="p-4">
+                  <div class="text-[14px] leading-7 text-zinc-800 mb-3">
+                    Found <span class="font-medium text-zinc-900">3 suppliers</span> with sub-24-hour delivery clauses (last 3 years):<br />
+                    1. Vertex Logistics — 4 hours · Aurangabad warehouse · Nov 2024<br />
+                    2. QuickBuild Concrete — 18 hours · Pune residential · Mar 2024<br />
+                    3. RapidSteel — 24 hours · Nashik factory · Aug 2023
+                  </div>
+                  <div class="border-t border-zinc-100 pt-3 grid grid-cols-3 gap-2 text-[11px] mono text-zinc-500">
+                    <div>4.82s <span class="text-zinc-700">+2.51s</span></div>
+                    <div>$0.0142 <span class="text-zinc-700">+$0.0074</span></div>
+                    <div>9 cited <span class="text-zinc-700">+6</span></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="rounded-lg border border-zinc-300 bg-zinc-50 p-4">
+              <div class="text-sm font-medium text-zinc-900 mb-2">Diff verdict</div>
+              <div class="text-xs text-zinc-700 leading-relaxed">
+                B finds 2 additional suppliers (QuickBuild, RapidSteel) at the cost of <span class="mono">+2.5s</span> and <span class="mono">+$0.007</span>. The two new sources are both grounded (faithfulness 0.91 and 0.88). Recommended: <span class="text-zinc-900 font-medium">promote B</span> for this query class — the recall gain is worth the cost.
+              </div>
+              <div class="mt-3 flex items-center gap-2">
+                <button class="text-xs px-3 py-1.5 rounded-md bg-zinc-900 text-white hover:bg-zinc-800">Save B as new default</button>
+                <button class="text-xs px-3 py-1.5 rounded-md border border-zinc-200 text-zinc-700 hover:bg-zinc-50">Keep production</button>
+              </div>
+            </div>
+
+          </div>
+        </section>
+      </div>
+
+    </div>
+  </main>
+</div>
+
+<script>
+  lucide.createIcons();
+  document.querySelectorAll('[data-tab-trigger]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const target = btn.getAttribute('data-tab-trigger');
+      document.querySelectorAll('[data-tab-trigger]').forEach((b) => {
+        const on = b.getAttribute('data-tab-trigger') === target;
+        b.setAttribute('data-active', on ? 'true' : 'false');
+        b.classList.toggle('font-medium', on);
+        b.classList.toggle('text-zinc-900', on);
+        b.classList.toggle('text-zinc-500', !on);
+      });
+      document.querySelectorAll('[data-tab]').forEach((p) => {
+        p.setAttribute('data-active', p.getAttribute('data-tab') === target ? 'true' : 'false');
+      });
+    });
+  });
+</script>
+
+</body>
+</html>

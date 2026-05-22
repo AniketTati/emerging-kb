@@ -1,0 +1,707 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>KB · Extraction Studio</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/lucide@latest"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  html, body { height: 100%; }
+  body { font-family: 'Inter', system-ui, sans-serif; -webkit-font-smoothing: antialiased; color: #18181b; background: #ffffff; }
+  .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
+  .sidebar { transition: width .2s ease; }
+  .sidebar:hover { width: 220px; }
+  .sidebar:hover .label { opacity: 1; }
+  .label { opacity: 0; transition: opacity .15s; white-space: nowrap; }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #e4e4e7; border-radius: 6px; border: 2px solid #ffffff; }
+  ::-webkit-scrollbar-thumb:hover { background: #d4d4d8; }
+  details > summary { list-style: none; cursor: pointer; }
+  details > summary::-webkit-details-marker { display: none; }
+  details[open] .chev { transform: rotate(90deg); }
+  .chev { transition: transform .15s; display: inline-block; }
+  [data-lucide] { stroke-width: 1.75; }
+  .tab[data-active="true"] { color: #18181b; border-bottom-color: #18181b; }
+  .tab { border-bottom: 2px solid transparent; }
+  .tabpane { display: none; }
+  .tabpane[data-active="true"] { display: flex; }
+  .pdf-page { background: #ffffff; border: 1px solid #e4e4e7; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
+  .pdf-bbox { position: absolute; border: 1.5px solid #18181b; background: rgba(24,24,27,0.04); border-radius: 2px; cursor: pointer; }
+  .pdf-bbox:hover { background: rgba(24,24,27,0.08); }
+  .pdf-bbox.active { border-color: #18181b; background: rgba(24,24,27,0.12); border-width: 2px; }
+  .pdf-bbox-label { position: absolute; top: -18px; left: 0; font-size: 9px; background: #18181b; color: #fff; padding: 2px 5px; border-radius: 3px; font-family: 'JetBrains Mono', monospace; white-space: nowrap; }
+  .field-card[data-status="approved"] { border-color: #d4d4d8; background: #fafafa; }
+  .field-card[data-status="rejected"] { border-color: #e4e4e7; background: #ffffff; opacity: 0.55; }
+  .field-card[data-status="editing"] { border-color: #18181b; background: #ffffff; }
+  .field-card[data-status="needs-review"] { border-color: #e4e4e7; background: #ffffff; }
+  .doc-row[data-selected="true"] { background: #f4f4f5; }
+  .doc-row { transition: background .12s; }
+  .doc-row:hover { background: #fafafa; }
+</style>
+</head>
+<body class="h-screen overflow-hidden">
+
+<div class="flex h-full">
+
+  <!-- ============== SIDEBAR ============== -->
+  <aside class="sidebar w-[56px] flex-shrink-0 bg-white border-r border-zinc-200 flex flex-col py-2 overflow-hidden">
+    <a href="index.html" class="px-3.5 mb-4 mt-1 flex items-center gap-3">
+      <div class="w-6 h-6 rounded-md bg-zinc-900 flex items-center justify-center text-white text-[11px] font-semibold tracking-tight">K</div>
+      <div class="label text-sm font-medium text-zinc-900">Knowledge Base</div>
+    </a>
+    <div class="px-3 mt-2 mb-1 text-[10px] uppercase tracking-wider text-zinc-400 label">Primary</div>
+    <nav class="px-2 space-y-px">
+      <a href="chat.html" class="flex items-center gap-3 px-2 py-1.5 rounded-md text-sm text-zinc-600 hover:bg-zinc-50"><i data-lucide="message-square" class="w-4 h-4"></i><span class="label">Chat</span></a>
+      <a href="upload.html" class="flex items-center gap-3 px-2 py-1.5 rounded-md text-sm text-zinc-600 hover:bg-zinc-50"><i data-lucide="upload" class="w-4 h-4"></i><span class="label">Upload</span></a>
+      <a href="explore.html" class="flex items-center gap-3 px-2 py-1.5 rounded-md text-sm text-zinc-600 hover:bg-zinc-50"><i data-lucide="search" class="w-4 h-4"></i><span class="label">Explore</span></a>
+    </nav>
+    <div class="px-3 mt-5 mb-1 text-[10px] uppercase tracking-wider text-zinc-400 label">Studio</div>
+    <nav class="px-2 space-y-px">
+      <a href="schema-studio.html" class="flex items-center gap-3 px-2 py-1.5 rounded-md text-sm text-zinc-600 hover:bg-zinc-50"><i data-lucide="layers" class="w-4 h-4"></i><span class="label">Schema</span></a>
+      <a href="extraction-studio.html" class="flex items-center gap-3 px-2 py-1.5 rounded-md text-sm bg-zinc-100 text-zinc-900"><i data-lucide="flask-conical" class="w-4 h-4"></i><span class="label">Extraction</span></a>
+      <a href="playground.html" class="flex items-center gap-3 px-2 py-1.5 rounded-md text-sm text-zinc-600 hover:bg-zinc-50"><i data-lucide="sliders-horizontal" class="w-4 h-4"></i><span class="label">Playground</span></a>
+    </nav>
+    <div class="px-3 mt-5 mb-1 text-[10px] uppercase tracking-wider text-zinc-400 label">Admin</div>
+    <nav class="px-2 space-y-px">
+      <a href="dashboard.html" class="flex items-center gap-3 px-2 py-1.5 rounded-md text-sm text-zinc-600 hover:bg-zinc-50"><i data-lucide="layout-dashboard" class="w-4 h-4"></i><span class="label">Dashboard</span></a>
+      <a href="audit.html" class="flex items-center gap-3 px-2 py-1.5 rounded-md text-sm text-zinc-600 hover:bg-zinc-50"><i data-lucide="scroll-text" class="w-4 h-4"></i><span class="label">Audit</span></a>
+      <a href="settings.html" class="flex items-center gap-3 px-2 py-1.5 rounded-md text-sm text-zinc-600 hover:bg-zinc-50"><i data-lucide="settings" class="w-4 h-4"></i><span class="label">Settings</span></a>
+    </nav>
+    <div class="mt-auto px-2 pt-3 border-t border-zinc-200">
+      <button class="w-full flex items-center gap-3 px-2 py-1.5 rounded-md text-sm text-zinc-600 hover:bg-zinc-50"><i data-lucide="circle-user" class="w-4 h-4"></i><span class="label">aniket@kb</span></button>
+    </div>
+  </aside>
+
+  <!-- ============== MAIN COLUMN ============== -->
+  <main class="flex-1 flex flex-col min-w-0 bg-white">
+
+    <!-- top bar -->
+    <header class="h-12 flex-shrink-0 border-b border-zinc-200 flex items-center px-5 gap-4">
+      <div class="flex items-center gap-2 text-sm">
+        <span class="text-zinc-500">Studio</span>
+        <i data-lucide="chevron-right" class="w-3.5 h-3.5 text-zinc-300"></i>
+        <span class="text-zinc-900">Extraction</span>
+        <span class="ml-1 text-[11px] text-zinc-400 mono">87 docs · 8 needs-review · 23 edited · 56 approved</span>
+      </div>
+      <div class="ml-auto flex items-center gap-1">
+        <button class="flex items-center gap-1.5 px-2 py-1 rounded text-xs text-zinc-500 hover:bg-zinc-100 mono"><i data-lucide="command" class="w-3.5 h-3.5"></i> K</button>
+        <button class="w-7 h-7 rounded hover:bg-zinc-100 flex items-center justify-center text-zinc-500"><i data-lucide="sun" class="w-4 h-4"></i></button>
+      </div>
+    </header>
+
+    <!-- tab bar -->
+    <div class="border-b border-zinc-200 px-5 flex items-center gap-6 text-sm flex-shrink-0 h-10">
+      <button data-tab-trigger="review" data-active="true" class="tab py-2.5 text-zinc-900 hover:text-zinc-900 flex items-center gap-2 font-medium">
+        Per-doc review
+      </button>
+      <button data-tab-trigger="prompt" class="tab py-2.5 text-zinc-500 hover:text-zinc-900 flex items-center gap-2">Prompt editor</button>
+      <button data-tab-trigger="test" class="tab py-2.5 text-zinc-500 hover:text-zinc-900 flex items-center gap-2">Test mode</button>
+      <div class="ml-auto text-[11px] text-zinc-400 mono py-2.5">Per-doc review · Prompt editor · Test mode — chained: review → edit rule → test → save</div>
+    </div>
+
+    <div class="flex-1 min-h-0">
+
+      <!-- ===================== REVIEW (default) ===================== -->
+      <div data-tab="review" data-active="true" class="tabpane h-full">
+
+        <!-- left rail: doc browser (ALL docs, filterable) -->
+        <aside class="w-[300px] flex-shrink-0 border-r border-zinc-200 flex flex-col bg-white">
+          <!-- filter header -->
+          <div class="p-3 border-b border-zinc-200 flex-shrink-0">
+            <div class="relative mb-2">
+              <i data-lucide="search" class="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-400"></i>
+              <input type="text" placeholder="Search docs…" class="w-full text-xs pl-7 pr-2 py-1.5 rounded-md border border-zinc-200 focus:outline-none focus:border-zinc-400" />
+            </div>
+            <div class="flex items-center gap-0.5 rounded-md border border-zinc-200 p-0.5 mb-2 text-[11px]">
+              <button class="flex-1 px-1.5 py-1 rounded bg-zinc-100 text-zinc-900">All <span class="mono text-zinc-500">87</span></button>
+              <button class="flex-1 px-1.5 py-1 rounded text-zinc-500 hover:bg-zinc-50">Needs review <span class="mono text-zinc-400">8</span></button>
+              <button class="flex-1 px-1.5 py-1 rounded text-zinc-500 hover:bg-zinc-50">Edited <span class="mono text-zinc-400">23</span></button>
+            </div>
+            <div class="flex items-center gap-1.5">
+              <select class="flex-1 text-[11px] px-2 py-1 rounded border border-zinc-200 bg-white">
+                <option>All doc types</option>
+                <option>contract (24)</option>
+                <option>bank_statement (12)</option>
+                <option>id_sheet (18)</option>
+                <option>drawing (9)</option>
+                <option>email (14)</option>
+                <option>land_record (6)</option>
+                <option>cardiac_cath_report (5)</option>
+              </select>
+              <select class="text-[11px] px-2 py-1 rounded border border-zinc-200 bg-white">
+                <option>Needs-review first</option>
+                <option>Newest first</option>
+                <option>Lowest conf first</option>
+                <option>A → Z</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- doc list -->
+          <div class="flex-1 overflow-y-auto">
+
+            <!-- group header -->
+            <div class="px-3 py-1.5 text-[10px] uppercase tracking-wider text-zinc-400 bg-zinc-50/60 border-b border-zinc-100 mono flex items-center gap-1">
+              <i data-lucide="alert-circle" class="w-3 h-3"></i> Needs review · 8
+            </div>
+
+            <!-- doc 1 — selected, low-conf field -->
+            <div class="doc-row px-3 py-2.5 border-b border-zinc-100 cursor-pointer" data-selected="true">
+              <div class="flex items-start gap-2">
+                <i data-lucide="file-text" class="w-3.5 h-3.5 text-zinc-500 mt-0.5 flex-shrink-0"></i>
+                <div class="flex-1 min-w-0">
+                  <div class="text-sm font-medium text-zinc-900 truncate">vertex-aurangabad-2024.pdf</div>
+                  <div class="text-[11px] text-zinc-500 mono mt-0.5">contract · 8 fields · 14 Nov 2024</div>
+                  <div class="text-[11px] text-zinc-700 mt-1 flex items-start gap-1">
+                    <i data-lucide="alert-circle" class="w-3 h-3 mt-0.5 flex-shrink-0"></i>
+                    <span><span class="mono">jurisdiction</span> conf 0.65 (below 0.70)</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- doc 2 — correction filed -->
+            <div class="doc-row px-3 py-2.5 border-b border-zinc-100 cursor-pointer">
+              <div class="flex items-start gap-2">
+                <i data-lucide="file-text" class="w-3.5 h-3.5 text-zinc-500 mt-0.5 flex-shrink-0"></i>
+                <div class="flex-1 min-w-0">
+                  <div class="text-sm text-zinc-900 truncate">steelco-mou-2023.pdf</div>
+                  <div class="text-[11px] text-zinc-500 mono mt-0.5">contract · 8 fields · 04 Sep 2023</div>
+                  <div class="text-[11px] text-zinc-700 mt-1 flex items-start gap-1">
+                    <i data-lucide="message-square-warning" class="w-3 h-3 mt-0.5 flex-shrink-0"></i>
+                    <span>correction · <span class="mono">contract_value</span> · by sarah@kb</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- doc 3 — OCR low -->
+            <div class="doc-row px-3 py-2.5 border-b border-zinc-100 cursor-pointer">
+              <div class="flex items-start gap-2">
+                <i data-lucide="image" class="w-3.5 h-3.5 text-zinc-500 mt-0.5 flex-shrink-0"></i>
+                <div class="flex-1 min-w-0">
+                  <div class="text-sm text-zinc-900 truncate">aakash_site_note_mar2024.jpg</div>
+                  <div class="text-[11px] text-zinc-500 mono mt-0.5">note · 3 entities · 18 Mar 2024</div>
+                  <div class="text-[11px] text-zinc-700 mt-1 flex items-start gap-1">
+                    <i data-lucide="alert-circle" class="w-3 h-3 mt-0.5 flex-shrink-0"></i>
+                    <span>OCR 0.72 · handwritten</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- doc 4 — new type -->
+            <div class="doc-row px-3 py-2.5 border-b border-zinc-100 cursor-pointer">
+              <div class="flex items-start gap-2">
+                <i data-lucide="file-text" class="w-3.5 h-3.5 text-zinc-500 mt-0.5 flex-shrink-0"></i>
+                <div class="flex-1 min-w-0">
+                  <div class="text-sm text-zinc-900 truncate flex items-center gap-1.5">cardiac_cath_2024_07.pdf <span class="text-[10px] mono px-1 py-0.5 rounded bg-zinc-100 text-zinc-700">new type</span></div>
+                  <div class="text-[11px] text-zinc-500 mono mt-0.5">cardiac_cath_report · 7 fields · 07 Jul 2024</div>
+                  <div class="text-[11px] text-zinc-700 mt-1 flex items-start gap-1">
+                    <i data-lucide="sparkles" class="w-3 h-3 mt-0.5 flex-shrink-0"></i>
+                    <span>first 5 of new doc-type · auto-flagged</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- doc 5 — anomaly -->
+            <div class="doc-row px-3 py-2.5 border-b border-zinc-100 cursor-pointer">
+              <div class="flex items-start gap-2">
+                <i data-lucide="file-text" class="w-3.5 h-3.5 text-zinc-500 mt-0.5 flex-shrink-0"></i>
+                <div class="flex-1 min-w-0">
+                  <div class="text-sm text-zinc-900 truncate">hdfc_jan_2025.pdf</div>
+                  <div class="text-[11px] text-zinc-500 mono mt-0.5">bank_statement · 87 txns · 31 Jan 2025</div>
+                  <div class="text-[11px] text-zinc-700 mt-1 flex items-start gap-1">
+                    <i data-lucide="alert-circle" class="w-3 h-3 mt-0.5 flex-shrink-0"></i>
+                    <span>1 anomalous txn · rarity 0.93</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="px-3 py-1.5 text-[10px] uppercase tracking-wider text-zinc-400 bg-zinc-50/60 border-b border-zinc-100 border-t mono flex items-center gap-1 mt-1">
+              <i data-lucide="check" class="w-3 h-3"></i> Approved · 56 (showing 5)
+            </div>
+
+            <!-- approved docs (compact) -->
+            <div class="doc-row px-3 py-2 border-b border-zinc-100 cursor-pointer">
+              <div class="flex items-center gap-2">
+                <i data-lucide="file-text" class="w-3.5 h-3.5 text-zinc-400 flex-shrink-0"></i>
+                <div class="flex-1 min-w-0">
+                  <div class="text-sm text-zinc-700 truncate">plant_x_drawing_rev3.pdf</div>
+                  <div class="text-[11px] text-zinc-400 mono">drawing · 4 components</div>
+                </div>
+              </div>
+            </div>
+            <div class="doc-row px-3 py-2 border-b border-zinc-100 cursor-pointer">
+              <div class="flex items-center gap-2">
+                <i data-lucide="file-text" class="w-3.5 h-3.5 text-zinc-400 flex-shrink-0"></i>
+                <div class="flex-1 min-w-0">
+                  <div class="text-sm text-zinc-700 truncate">offer_priya_employment.pdf</div>
+                  <div class="text-[11px] text-zinc-400 mono">employment · 6 fields</div>
+                </div>
+              </div>
+            </div>
+            <div class="doc-row px-3 py-2 border-b border-zinc-100 cursor-pointer">
+              <div class="flex items-center gap-2">
+                <i data-lucide="table" class="w-3.5 h-3.5 text-zinc-400 flex-shrink-0"></i>
+                <div class="flex-1 min-w-0">
+                  <div class="text-sm text-zinc-700 truncate">aurangabad_residents.xlsx</div>
+                  <div class="text-[11px] text-zinc-400 mono">id_sheet · 8.4k rows</div>
+                </div>
+              </div>
+            </div>
+            <div class="doc-row px-3 py-2 border-b border-zinc-100 cursor-pointer">
+              <div class="flex items-center gap-2">
+                <i data-lucide="mail" class="w-3.5 h-3.5 text-zinc-400 flex-shrink-0"></i>
+                <div class="flex-1 min-w-0">
+                  <div class="text-sm text-zinc-700 truncate">vendor_reply_2024-10-14.eml</div>
+                  <div class="text-[11px] text-zinc-400 mono">email · thread of 4</div>
+                </div>
+              </div>
+            </div>
+            <div class="doc-row px-3 py-2 border-b border-zinc-100 cursor-pointer">
+              <div class="flex items-center gap-2">
+                <i data-lucide="file-text" class="w-3.5 h-3.5 text-zinc-400 flex-shrink-0"></i>
+                <div class="flex-1 min-w-0">
+                  <div class="text-sm text-zinc-700 truncate">enron_email_thread_15.pdf</div>
+                  <div class="text-[11px] text-zinc-400 mono">email · 12 msgs</div>
+                </div>
+              </div>
+            </div>
+
+            <button class="w-full text-xs text-zinc-500 hover:text-zinc-900 py-3 mono">+ 51 more approved docs →</button>
+          </div>
+        </aside>
+
+        <!-- center: PDF preview -->
+        <section class="flex-1 flex flex-col min-w-0 bg-zinc-50/40">
+          <div class="px-5 py-2.5 border-b border-zinc-200 flex items-center gap-3 bg-white">
+            <div class="text-sm font-medium text-zinc-900">vertex-aurangabad-2024.pdf</div>
+            <div class="text-[11px] text-zinc-400 mono">page 1 of 12 · contract · signed 2024-11-14</div>
+            <div class="ml-auto flex items-center gap-1">
+              <button class="w-7 h-7 rounded hover:bg-zinc-100 flex items-center justify-center text-zinc-500"><i data-lucide="chevron-left" class="w-4 h-4"></i></button>
+              <span class="text-xs text-zinc-600 mono px-2">1 / 12</span>
+              <button class="w-7 h-7 rounded hover:bg-zinc-100 flex items-center justify-center text-zinc-500"><i data-lucide="chevron-right" class="w-4 h-4"></i></button>
+              <div class="w-px h-4 bg-zinc-200 mx-1"></div>
+              <button class="w-7 h-7 rounded hover:bg-zinc-100 flex items-center justify-center text-zinc-500"><i data-lucide="zoom-out" class="w-4 h-4"></i></button>
+              <button class="w-7 h-7 rounded hover:bg-zinc-100 flex items-center justify-center text-zinc-500"><i data-lucide="zoom-in" class="w-4 h-4"></i></button>
+              <button class="w-7 h-7 rounded hover:bg-zinc-100 flex items-center justify-center text-zinc-500"><i data-lucide="external-link" class="w-4 h-4"></i></button>
+            </div>
+          </div>
+
+          <div class="flex-1 overflow-y-auto p-6">
+            <div class="pdf-page relative max-w-[520px] mx-auto rounded-md" style="aspect-ratio: 8.5/11;">
+              <div class="absolute inset-0 p-8 text-[11px] leading-[1.5] text-zinc-700 mono">
+                <div class="text-center text-zinc-800 font-medium mb-6">SUPPLY AGREEMENT</div>
+                <p class="mb-3">This Supply Agreement ("Agreement") is made and entered into as of this 14<sup>th</sup> day of November, 2024 ("Effective Date"), by and between:</p>
+                <p class="mb-3"><strong>Aakash Constructions Private Limited</strong>, a company incorporated under the Companies Act, 2013, having its registered office at 4 Senapati Marg, Mumbai 400001 ("Procurer"),</p>
+                <p class="text-center text-zinc-500 mb-3">AND</p>
+                <p class="mb-4"><strong>Vertex Logistics Pvt Ltd</strong>, a company incorporated under the Companies Act, 2013, having its registered office at 81 Andheri Industrial Estate, Mumbai 400053 ("Supplier").</p>
+                <p class="text-zinc-800 font-medium mt-5 mb-2">1. SCOPE</p>
+                <p class="mb-3">The Supplier shall deliver concrete materials specified in <em>Annexure A</em> to the Procurer for the Aurangabad warehouse project…</p>
+                <p class="text-zinc-800 font-medium mt-5 mb-2">2. CONSIDERATION</p>
+                <p class="mb-3">Total contract value: <strong>₹4,80,00,000 (Rupees Four Crore Eighty Lakhs only)</strong>, payable per milestone schedule in §6.</p>
+                <p class="text-zinc-800 font-medium mt-5 mb-2">3. DELIVERY</p>
+                <p class="mb-3"><strong>3.2</strong> Supplier shall deliver concrete materials within 4 (four) hours of order placement, failing which a penalty of ₹50,000/hr shall apply.</p>
+                <p class="text-zinc-800 font-medium mt-5 mb-2">4. JURISDICTION</p>
+                <p>This Agreement shall be governed by the laws of Mumbai, India…</p>
+              </div>
+              <div class="pdf-bbox" style="top: 10%; left: 8%; width: 84%; height: 6%;"><div class="pdf-bbox-label">signed_date · 0.91</div></div>
+              <div class="pdf-bbox" style="top: 16%; left: 8%; width: 84%; height: 8%;"><div class="pdf-bbox-label">party_a · 0.96</div></div>
+              <div class="pdf-bbox" style="top: 25%; left: 8%; width: 84%; height: 6%;"><div class="pdf-bbox-label">party_b · 0.94</div></div>
+              <div class="pdf-bbox" style="top: 41%; left: 8%; width: 84%; height: 5%;"><div class="pdf-bbox-label">contract_value · 0.88</div></div>
+              <div class="pdf-bbox" style="top: 51%; left: 8%; width: 84%; height: 6%;"><div class="pdf-bbox-label">delivery_window · 0.92 · penalty_rate · 0.89</div></div>
+              <div class="pdf-bbox active" style="top: 64%; left: 8%; width: 84%; height: 5%;"><div class="pdf-bbox-label">jurisdiction · 0.65 ⓘ low</div></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- right: detected fields -->
+        <aside class="w-[400px] flex-shrink-0 border-l border-zinc-200 flex flex-col bg-white">
+          <div class="px-4 py-3 border-b border-zinc-200 flex items-center justify-between flex-shrink-0">
+            <div>
+              <div class="text-sm font-medium text-zinc-900">8 detected fields</div>
+              <div class="text-[11px] text-zinc-500 mt-0.5">6 typed · 2 inferred · avg 0.89 · 1 low-conf</div>
+            </div>
+            <div class="flex items-center gap-1">
+              <button class="text-xs px-2 py-1 rounded text-zinc-600 hover:bg-zinc-100 flex items-center gap-1"><i data-lucide="refresh-cw" class="w-3 h-3"></i> Re-extract</button>
+              <button class="text-xs px-2 py-1 rounded bg-zinc-900 text-white hover:bg-zinc-800">Approve all</button>
+            </div>
+          </div>
+
+          <!-- "Why is this in review" callout -->
+          <div class="px-4 py-2.5 border-b border-zinc-200 bg-zinc-50/60 text-[11px] text-zinc-700 flex items-start gap-2">
+            <i data-lucide="alert-circle" class="w-3.5 h-3.5 mt-0.5 flex-shrink-0"></i>
+            <div>
+              <span class="font-medium">Why in review:</span> <span class="mono">jurisdiction</span> extracted at 0.65 confidence — below the 0.70 verification threshold.
+            </div>
+          </div>
+
+          <div class="flex-1 overflow-y-auto p-3 space-y-2">
+
+            <!-- field 1: low-conf jurisdiction (the reason this doc is in review) -->
+            <div class="field-card border rounded-lg p-3" data-status="needs-review">
+              <div class="flex items-start gap-2">
+                <i data-lucide="alert-circle" class="w-3.5 h-3.5 text-zinc-700 mt-1"></i>
+                <div class="flex-1 min-w-0">
+                  <div class="flex items-center gap-1.5">
+                    <a href="schema-studio.html" class="text-[11px] mono font-medium text-zinc-900 hover:underline">jurisdiction</a>
+                    <span class="text-[10px] mono px-1 py-0.5 rounded bg-zinc-200 text-zinc-700">typed</span>
+                    <span class="text-[11px] text-zinc-700 mono ml-auto">0.65 low</span>
+                  </div>
+                  <div class="text-sm text-zinc-900 mt-1">Mumbai, India</div>
+                  <div class="text-[11px] text-zinc-500 mt-1">Source clause is implicit ("laws of Mumbai" with no jurisdiction header in §4). The model inferred jurisdiction as a country-city pair.</div>
+                  <div class="text-[11px] text-zinc-500 mt-1 flex items-center gap-2">
+                    <i data-lucide="map-pin" class="w-3 h-3"></i> p.1 · §4 jurisdiction
+                  </div>
+                  <div class="mt-2 flex items-center gap-1.5">
+                    <button class="text-[11px] px-2 py-1 rounded bg-zinc-900 text-white">Approve</button>
+                    <button class="text-[11px] px-2 py-1 rounded border border-zinc-200 text-zinc-700">Edit</button>
+                    <button class="text-[11px] px-2 py-1 rounded border border-zinc-200 text-zinc-500">Reject</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Fix in Schema callout — appears when same field has been edited 3+ times -->
+            <div class="rounded-lg border border-zinc-300 bg-zinc-50 p-3">
+              <div class="flex items-start gap-2">
+                <i data-lucide="lightbulb" class="w-4 h-4 text-zinc-700 mt-0.5 flex-shrink-0"></i>
+                <div class="flex-1">
+                  <div class="text-xs font-medium text-zinc-900"><span class="mono">jurisdiction</span> has been edited on <span class="mono">5 contracts</span> in the last 2 weeks</div>
+                  <div class="text-[11px] text-zinc-600 mt-1">This looks like a schema-level fix — the extraction rule is missing a synonym ("laws of …" pattern). Edit the rule instead of fixing each doc.</div>
+                  <div class="mt-2 flex items-center gap-1.5">
+                    <a href="extraction-studio.html#prompt" class="text-[11px] px-2 py-1 rounded bg-zinc-900 text-white hover:bg-zinc-800 flex items-center gap-1">
+                      <i data-lucide="layers" class="w-3 h-3"></i> Fix in Prompt editor →
+                    </a>
+                    <button class="text-[11px] px-2 py-1 rounded border border-zinc-200 text-zinc-600">Dismiss</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- field 2: party_a approved -->
+            <div class="field-card border rounded-lg p-3" data-status="approved">
+              <div class="flex items-start gap-2">
+                <i data-lucide="check" class="w-3.5 h-3.5 text-zinc-700 mt-1"></i>
+                <div class="flex-1 min-w-0">
+                  <div class="flex items-center gap-1.5">
+                    <a href="schema-studio.html" class="text-[11px] mono font-medium text-zinc-900 hover:underline">party_a</a>
+                    <span class="text-[10px] mono px-1 py-0.5 rounded bg-zinc-200 text-zinc-700">typed</span>
+                    <span class="text-[11px] text-zinc-500 mono ml-auto">0.96</span>
+                  </div>
+                  <div class="text-sm text-zinc-900 mt-1">Aakash Constructions Private Limited</div>
+                  <div class="text-[11px] text-zinc-500 mt-1 flex items-center gap-2">
+                    <i data-lucide="map-pin" class="w-3 h-3"></i> p.1 · preamble
+                    <span class="ml-auto text-zinc-400 mono">entity merged → existing</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- field 3: signed_date -->
+            <div class="field-card border rounded-lg p-3" data-status="approved">
+              <div class="flex items-start gap-2">
+                <i data-lucide="check" class="w-3.5 h-3.5 text-zinc-700 mt-1"></i>
+                <div class="flex-1 min-w-0">
+                  <div class="flex items-center gap-1.5">
+                    <a href="schema-studio.html" class="text-[11px] mono font-medium text-zinc-900 hover:underline">signed_date</a>
+                    <span class="text-[10px] mono px-1 py-0.5 rounded bg-zinc-200 text-zinc-700">typed</span>
+                    <span class="text-[11px] text-zinc-500 mono ml-auto">0.91</span>
+                  </div>
+                  <div class="text-sm text-zinc-900 mt-1 mono">2024-11-14</div>
+                  <div class="text-[11px] text-zinc-500 mt-1 flex items-center gap-2">
+                    <i data-lucide="map-pin" class="w-3 h-3"></i> p.1 · opening
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- field 4: party_b -->
+            <div class="field-card border rounded-lg p-3" data-status="approved">
+              <div class="flex items-start gap-2">
+                <i data-lucide="check" class="w-3.5 h-3.5 text-zinc-700 mt-1"></i>
+                <div class="flex-1 min-w-0">
+                  <div class="flex items-center gap-1.5">
+                    <a href="schema-studio.html" class="text-[11px] mono font-medium text-zinc-900 hover:underline">party_b</a>
+                    <span class="text-[10px] mono px-1 py-0.5 rounded bg-zinc-200 text-zinc-700">typed</span>
+                    <span class="text-[11px] text-zinc-500 mono ml-auto">0.94</span>
+                  </div>
+                  <div class="text-sm text-zinc-900 mt-1">Vertex Logistics Pvt Ltd</div>
+                  <div class="text-[11px] text-zinc-500 mt-1 flex items-center gap-2">
+                    <i data-lucide="map-pin" class="w-3 h-3"></i> p.1 · preamble
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- field 5: contract_value editing -->
+            <div class="field-card border rounded-lg p-3" data-status="editing">
+              <div class="flex items-start gap-2">
+                <i data-lucide="edit-3" class="w-3.5 h-3.5 text-zinc-700 mt-1"></i>
+                <div class="flex-1 min-w-0">
+                  <div class="flex items-center gap-1.5">
+                    <a href="schema-studio.html" class="text-[11px] mono font-medium text-zinc-900 hover:underline">contract_value</a>
+                    <span class="text-[10px] mono px-1 py-0.5 rounded bg-zinc-200 text-zinc-700">typed</span>
+                    <span class="text-[11px] text-zinc-500 mono ml-auto">0.88</span>
+                  </div>
+                  <input type="text" value="₹4,80,00,000" class="mt-2 w-full px-2 py-1.5 text-sm border border-zinc-300 rounded focus:outline-none focus:border-zinc-900 mono" />
+                  <div class="text-[11px] text-zinc-500 mt-1 flex items-center gap-2">
+                    <i data-lucide="map-pin" class="w-3 h-3"></i> p.1 · §2
+                    <span class="ml-auto text-zinc-400 mono">→ 48000000.00 INR</span>
+                  </div>
+                  <div class="mt-2 flex items-center gap-1.5">
+                    <button class="text-[11px] px-2 py-1 rounded bg-zinc-900 text-white">Save edit</button>
+                    <button class="text-[11px] px-2 py-1 rounded border border-zinc-200 text-zinc-600">Cancel</button>
+                    <span class="text-[11px] text-zinc-500 ml-auto">This doc only</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- field 6: delivery_window typed new -->
+            <div class="field-card border rounded-lg p-3" data-status="approved">
+              <div class="flex items-start gap-2">
+                <i data-lucide="check" class="w-3.5 h-3.5 text-zinc-700 mt-1"></i>
+                <div class="flex-1 min-w-0">
+                  <div class="flex items-center gap-1.5">
+                    <a href="schema-studio.html" class="text-[11px] mono font-medium text-zinc-900 hover:underline">delivery_window</a>
+                    <span class="text-[10px] mono px-1 py-0.5 rounded bg-zinc-200 text-zinc-700">typed · new</span>
+                    <span class="text-[11px] text-zinc-500 mono ml-auto">0.92</span>
+                  </div>
+                  <div class="text-sm text-zinc-900 mt-1 mono">PT4H <span class="text-zinc-500">("4 hours")</span></div>
+                  <div class="text-[11px] text-zinc-500 mt-1 flex items-center gap-2">
+                    <i data-lucide="map-pin" class="w-3 h-3"></i> p.1 · §3.2
+                    <span class="ml-auto text-zinc-700 mono">rarity 0.99 ⓘ</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- field 7: penalty_rate inferred -->
+            <div class="field-card border rounded-lg p-3" data-status="approved">
+              <div class="flex items-start gap-2">
+                <i data-lucide="check" class="w-3.5 h-3.5 text-zinc-700 mt-1"></i>
+                <div class="flex-1 min-w-0">
+                  <div class="flex items-center gap-1.5">
+                    <a href="schema-studio.html" class="text-[11px] mono font-medium text-zinc-900 hover:underline">penalty_rate</a>
+                    <span class="text-[10px] mono px-1 py-0.5 rounded bg-zinc-100 text-zinc-700">inferred</span>
+                    <span class="text-[11px] text-zinc-500 mono ml-auto">0.89</span>
+                  </div>
+                  <div class="text-sm text-zinc-900 mt-1 mono">₹50,000/hr</div>
+                  <div class="text-[11px] text-zinc-500 mt-1 flex items-center gap-2">
+                    <i data-lucide="map-pin" class="w-3 h-3"></i> p.1 · §3.2
+                    <a href="schema-studio.html" class="ml-auto text-zinc-700 hover:underline">→ Schema Studio</a>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- field 8: termination rejected -->
+            <div class="field-card border rounded-lg p-3" data-status="rejected">
+              <div class="flex items-start gap-2">
+                <i data-lucide="x" class="w-3.5 h-3.5 text-zinc-500 mt-1"></i>
+                <div class="flex-1 min-w-0">
+                  <div class="flex items-center gap-1.5">
+                    <a href="schema-studio.html" class="text-[11px] mono font-medium text-zinc-700 line-through hover:no-underline">termination_clause_type</a>
+                    <span class="text-[10px] mono px-1 py-0.5 rounded bg-zinc-100 text-zinc-600">inferred</span>
+                    <span class="text-[11px] text-zinc-400 mono ml-auto">0.62</span>
+                  </div>
+                  <div class="text-sm text-zinc-600 mt-1 line-through">for-cause</div>
+                  <div class="text-[11px] text-zinc-500 mt-1">Rejected · contract has no termination clause. Reason logged.</div>
+                  <div class="mt-2"><button class="text-[11px] text-zinc-700 underline">Undo reject</button></div>
+                </div>
+              </div>
+            </div>
+
+          </div>
+
+          <div class="p-3 border-t border-zinc-200 text-[11px] text-zinc-500 leading-relaxed flex-shrink-0">
+            <div class="flex items-center gap-2 text-zinc-700"><i data-lucide="info" class="w-3.5 h-3.5"></i> Per-doc edits affect this doc only. Schema-level changes → <a href="schema-studio.html" class="underline">Schema Studio</a> or <a href="extraction-studio.html#prompt" class="underline">Prompt editor</a>.</div>
+          </div>
+        </aside>
+      </div>
+
+      <!-- ===================== PROMPT EDITOR ===================== -->
+      <div data-tab="prompt" class="tabpane h-full">
+        <aside class="w-[200px] flex-shrink-0 border-r border-zinc-200 overflow-y-auto p-3">
+          <div class="text-[10px] uppercase tracking-wider text-zinc-400 mb-2">Doc types</div>
+          <button class="w-full flex items-center justify-between px-2 py-1.5 rounded text-sm bg-zinc-100 text-zinc-900"><span>contract</span></button>
+          <button class="w-full flex items-center justify-between px-2 py-1.5 rounded text-sm text-zinc-600 hover:bg-zinc-50"><span>bank_statement</span></button>
+          <button class="w-full flex items-center justify-between px-2 py-1.5 rounded text-sm text-zinc-600 hover:bg-zinc-50"><span>id_sheet</span></button>
+          <button class="w-full flex items-center justify-between px-2 py-1.5 rounded text-sm text-zinc-600 hover:bg-zinc-50"><span>drawing</span></button>
+        </aside>
+        <section class="flex-1 overflow-y-auto">
+          <div class="px-8 py-6">
+            <div class="rounded-lg border border-zinc-200 bg-zinc-50 p-3 mb-4 flex items-start gap-3">
+              <i data-lucide="lightbulb" class="w-4 h-4 text-zinc-700 mt-0.5 flex-shrink-0"></i>
+              <div class="flex-1 text-xs text-zinc-700">
+                <span class="font-medium">Coming here from a per-doc edit?</span> The most common reason to edit the prompt is when the same field is wrong across multiple docs. Edit the rule below, then <span class="text-zinc-900">Test mode</span> to verify before saving — saving re-projects all affected docs.
+              </div>
+            </div>
+
+            <div class="flex items-end justify-between mb-4">
+              <div>
+                <h1 class="text-lg font-semibold text-zinc-900">Extraction prompt · <span class="mono">contract</span></h1>
+                <p class="text-sm text-zinc-500 mt-0.5">YAML rules per doc-type. Editing creates a new version; save re-projects affected docs.</p>
+              </div>
+              <div class="flex items-center gap-2">
+                <button data-tab-trigger="test" class="tab text-xs px-2.5 py-1.5 rounded-md border border-zinc-200 text-zinc-700 hover:bg-zinc-50 flex items-center gap-1.5"><i data-lucide="play" class="w-3.5 h-3.5"></i> Test changes →</button>
+                <button class="text-xs px-3 py-1.5 rounded-md bg-zinc-900 text-white hover:bg-zinc-800">Save · v1.4.3</button>
+              </div>
+            </div>
+
+            <div class="rounded-lg border border-zinc-200 bg-white overflow-hidden">
+              <div class="px-4 py-2 border-b border-zinc-200 flex items-center justify-between text-[11px] text-zinc-500 mono bg-zinc-50/40">
+                <span>contract_extraction.yaml</span>
+                <span>v1.4.2 → v1.4.3 (unsaved) · 1 change</span>
+              </div>
+              <pre class="px-4 py-3 mono text-xs leading-relaxed text-zinc-700 overflow-x-auto"><span class="text-zinc-500"># Schema-driven extraction prompt for contract doc-type</span>
+
+doc_type: <span class="text-zinc-900">contract</span>
+parser_hint: <span class="text-zinc-900">"layout"</span>
+
+vocabulary_refs:
+  - <span class="text-zinc-900">global.legal</span>
+  - <span class="text-zinc-900">global.commercial_india</span>
+
+fields:
+  <span class="text-zinc-900">jurisdiction:</span>
+    description: <span class="text-zinc-700">"Governing legal jurisdiction"</span>
+    type: <span class="text-zinc-900">string | enum</span>
+    locator_hint: <span class="text-zinc-700">"explicit jurisdiction section OR implicit 'governed by laws of X' pattern"</span>     <span class="text-zinc-900">← edited</span>
+    fallback_synonyms: <span class="text-zinc-900">["laws of", "governed by", "subject to the jurisdiction of"]</span>     <span class="text-zinc-900">← added</span>
+    on_low_conf: <span class="text-zinc-900">review</span>
+
+  <span class="text-zinc-900">party_a:</span>
+    description: <span class="text-zinc-700">"First named party (procurer / employer / lessor)"</span>
+    type: <span class="text-zinc-900">entity_ref(org)</span>
+    locator_hint: <span class="text-zinc-700">"first paragraph after 'between'"</span>
+    required: <span class="text-zinc-900">true</span></pre>
+            </div>
+
+            <div class="mt-4 text-xs text-zinc-500 flex items-center gap-2">
+              <i data-lucide="info" class="w-3.5 h-3.5"></i>
+              Next step → <button data-tab-trigger="test" class="tab text-zinc-900 underline">Test mode</button> · runs new rule on this doc + 4 others before saving.
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <!-- ===================== TEST MODE ===================== -->
+      <div data-tab="test" class="tabpane h-full">
+        <section class="flex-1 overflow-y-auto">
+          <div class="max-w-5xl mx-auto px-8 py-6">
+            <div class="rounded-lg border border-zinc-200 bg-zinc-50 p-3 mb-4 flex items-start gap-3">
+              <i data-lucide="lightbulb" class="w-4 h-4 text-zinc-700 mt-0.5 flex-shrink-0"></i>
+              <div class="flex-1 text-xs text-zinc-700">
+                <span class="font-medium">Why test before saving?</span> Saving the prompt re-projects every doc of this type — that's <span class="mono">24 contracts · ~$0.78 · ~48s</span>. Verify the diff first to avoid regressions.
+              </div>
+            </div>
+
+            <h1 class="text-lg font-semibold text-zinc-900 mb-1">Test extraction</h1>
+            <p class="text-sm text-zinc-500 mb-5">Run the proposed prompt (v1.4.3) on selected docs and compare against production (v1.4.2).</p>
+
+            <div class="rounded-lg border border-zinc-200 p-4 mb-4">
+              <div class="grid grid-cols-[1fr_140px_140px] gap-3 items-center">
+                <select class="text-sm px-3 py-2 rounded-md border border-zinc-200 bg-white">
+                  <option>vertex-aurangabad-2024.pdf · the doc that flagged this</option>
+                  <option>+ 4 sample contracts for variance</option>
+                  <option>All 24 contracts (slow)</option>
+                </select>
+                <select class="text-sm px-3 py-2 rounded-md border border-zinc-200 bg-white">
+                  <option>vs production (v1.4.2)</option>
+                  <option>vs v1.4.1</option>
+                </select>
+                <button class="text-sm px-3 py-2 rounded-md bg-zinc-900 text-white hover:bg-zinc-800 flex items-center justify-center gap-1.5"><i data-lucide="play" class="w-3.5 h-3.5"></i> Run</button>
+              </div>
+            </div>
+
+            <div class="grid grid-cols-2 gap-4">
+              <div class="rounded-lg border border-zinc-200">
+                <div class="px-4 py-2.5 border-b border-zinc-200 text-xs font-medium text-zinc-700 flex items-center justify-between">
+                  <span>Current production · v1.4.2</span>
+                  <span class="text-[11px] text-zinc-400 mono">8 fields · avg 0.89</span>
+                </div>
+                <ul class="text-xs divide-y divide-zinc-100">
+                  <li class="px-4 py-2 flex justify-between"><span class="mono">party_a</span><span class="text-zinc-700">Aakash Constructions · 0.96</span></li>
+                  <li class="px-4 py-2 flex justify-between"><span class="mono">party_b</span><span class="text-zinc-700">Vertex Logistics Pvt Ltd · 0.94</span></li>
+                  <li class="px-4 py-2 flex justify-between"><span class="mono">signed_date</span><span class="text-zinc-700">2024-11-14 · 0.91</span></li>
+                  <li class="px-4 py-2 flex justify-between"><span class="mono">contract_value</span><span class="text-zinc-700">₹4,80,00,000 · 0.88</span></li>
+                  <li class="px-4 py-2 flex justify-between"><span class="mono">delivery_window</span><span class="text-zinc-700">PT4H · 0.92</span></li>
+                  <li class="px-4 py-2 flex justify-between"><span class="mono">jurisdiction</span><span class="text-zinc-700">Mumbai, India · <span class="text-zinc-900">0.65 low</span></span></li>
+                </ul>
+              </div>
+
+              <div class="rounded-lg border border-zinc-300">
+                <div class="px-4 py-2.5 border-b border-zinc-200 text-xs font-medium text-zinc-900 flex items-center justify-between bg-zinc-50">
+                  <span>Proposed · v1.4.3</span>
+                  <span class="text-[11px] text-zinc-400 mono">9 fields · avg 0.91 · +1 new</span>
+                </div>
+                <ul class="text-xs divide-y divide-zinc-100">
+                  <li class="px-4 py-2 flex justify-between"><span class="mono">party_a</span><span class="text-zinc-700">Aakash Constructions Pvt Ltd · 0.96</span></li>
+                  <li class="px-4 py-2 flex justify-between"><span class="mono">party_b</span><span class="text-zinc-700">Vertex Logistics Pvt Ltd · 0.94</span></li>
+                  <li class="px-4 py-2 flex justify-between"><span class="mono">signed_date</span><span class="text-zinc-700">2024-11-14 · 0.91</span></li>
+                  <li class="px-4 py-2 flex justify-between"><span class="mono">contract_value</span><span class="text-zinc-700">₹4,80,00,000 · 0.88</span></li>
+                  <li class="px-4 py-2 flex justify-between"><span class="mono">delivery_window</span><span class="text-zinc-700">PT4H · 0.92</span></li>
+                  <li class="px-4 py-2 flex justify-between bg-zinc-50"><span class="mono text-zinc-900">jurisdiction</span><span class="text-zinc-900">Mumbai (Bombay HC) · 0.84 <span class="text-[10px] text-zinc-500">↑0.19</span></span></li>
+                  <li class="px-4 py-2 flex justify-between bg-zinc-50"><span class="mono text-zinc-900">jurisdiction_court</span><span class="text-zinc-900">Bombay HC · 0.81 <span class="text-[10px] text-zinc-500">+ new</span></span></li>
+                </ul>
+              </div>
+            </div>
+
+            <div class="mt-4 rounded-lg border border-zinc-300 bg-zinc-50 p-4">
+              <div class="flex items-start gap-3">
+                <i data-lucide="alert-triangle" class="w-4 h-4 text-zinc-700 mt-0.5"></i>
+                <div class="flex-1">
+                  <div class="text-sm font-medium text-zinc-900">If saved as v1.4.3</div>
+                  <div class="grid grid-cols-4 gap-4 mt-3 text-xs">
+                    <div><div class="text-[10px] uppercase tracking-wider text-zinc-400">Docs re-projected</div><div class="text-zinc-900 mt-0.5 mono">24 contracts</div></div>
+                    <div><div class="text-[10px] uppercase tracking-wider text-zinc-400">Cost</div><div class="text-zinc-900 mt-0.5 mono">~$0.78</div></div>
+                    <div><div class="text-[10px] uppercase tracking-wider text-zinc-400">Time</div><div class="text-zinc-900 mt-0.5 mono">~48s</div></div>
+                    <div><div class="text-[10px] uppercase tracking-wider text-zinc-400">Avg conf delta</div><div class="text-zinc-900 mt-0.5 mono">+0.02 · 1 new field</div></div>
+                  </div>
+                  <div class="mt-3 flex items-center gap-2">
+                    <button class="text-xs px-3 py-1.5 rounded-md bg-zinc-900 text-white hover:bg-zinc-800">Save & re-project</button>
+                    <button class="text-xs px-3 py-1.5 rounded-md border border-zinc-200 text-zinc-700 hover:bg-zinc-100">Discard</button>
+                  </div>
+                  <div class="mt-2 text-[11px] text-zinc-500">Past chat answers that cited these contracts will refresh automatically once re-projection completes.</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+
+    </div>
+  </main>
+</div>
+
+<script>
+  lucide.createIcons();
+  document.querySelectorAll('[data-tab-trigger]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const target = btn.getAttribute('data-tab-trigger');
+      document.querySelectorAll('[data-tab-trigger]').forEach((b) => {
+        const on = b.getAttribute('data-tab-trigger') === target;
+        b.setAttribute('data-active', on ? 'true' : 'false');
+        b.classList.toggle('font-medium', on);
+        b.classList.toggle('text-zinc-900', on);
+        b.classList.toggle('text-zinc-500', !on);
+      });
+      document.querySelectorAll('[data-tab]').forEach((p) => {
+        p.setAttribute('data-active', p.getAttribute('data-tab') === target ? 'true' : 'false');
+      });
+    });
+  });
+</script>
+
+</body>
+</html>

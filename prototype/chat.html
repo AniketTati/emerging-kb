@@ -1,0 +1,367 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>KB · Chat</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/lucide@latest"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  html, body { height: 100%; }
+  body { font-family: 'Inter', system-ui, sans-serif; -webkit-font-smoothing: antialiased; color: #18181b; background: #ffffff; }
+  .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
+  .caret::after { content: '▍'; color: #a1a1aa; animation: blink 1s steps(1) infinite; margin-left: 1px; }
+  @keyframes blink { 50% { opacity: 0; } }
+  .sidebar { transition: width .2s ease; }
+  .sidebar:hover { width: 220px; }
+  .sidebar:hover .label { opacity: 1; }
+  .label { opacity: 0; transition: opacity .15s; white-space: nowrap; }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #e4e4e7; border-radius: 6px; border: 2px solid #ffffff; }
+  ::-webkit-scrollbar-thumb:hover { background: #d4d4d8; }
+  sup.cref { color: #52525b; font-weight: 500; cursor: pointer; padding: 0 2px; font-size: 11px; }
+  sup.cref:hover { color: #18181b; text-decoration: underline; }
+  details > summary { list-style: none; cursor: pointer; }
+  details > summary::-webkit-details-marker { display: none; }
+  details[open] .chev { transform: rotate(90deg); }
+  .chev { transition: transform .15s; display: inline-block; }
+  [data-lucide] { stroke-width: 1.75; }
+</style>
+</head>
+<body class="h-screen overflow-hidden">
+
+<div class="flex h-full">
+
+  <!-- ============== SIDEBAR ============== -->
+  <aside class="sidebar w-[56px] flex-shrink-0 bg-white border-r border-zinc-200 flex flex-col py-2 overflow-hidden">
+    <a href="index.html" class="px-3.5 mb-4 mt-1 flex items-center gap-3">
+      <div class="w-6 h-6 rounded-md bg-zinc-900 flex items-center justify-center text-white text-[11px] font-semibold tracking-tight">K</div>
+      <div class="label text-sm font-medium text-zinc-900">Knowledge Base</div>
+    </a>
+
+    <div class="px-3 mt-2 mb-1 text-[10px] uppercase tracking-wider text-zinc-400 label">Primary</div>
+    <nav class="px-2 space-y-px">
+      <a href="chat.html" class="flex items-center gap-3 px-2 py-1.5 rounded-md text-sm bg-zinc-100 text-zinc-900">
+        <i data-lucide="message-square" class="w-4 h-4"></i><span class="label">Chat</span>
+      </a>
+      <a href="upload.html" class="flex items-center gap-3 px-2 py-1.5 rounded-md text-sm text-zinc-600 hover:bg-zinc-50">
+        <i data-lucide="upload" class="w-4 h-4"></i><span class="label">Upload</span>
+      </a>
+      <a href="explore.html" class="flex items-center gap-3 px-2 py-1.5 rounded-md text-sm text-zinc-600 hover:bg-zinc-50">
+        <i data-lucide="search" class="w-4 h-4"></i><span class="label">Explore</span>
+      </a>
+    </nav>
+
+    <div class="px-3 mt-5 mb-1 text-[10px] uppercase tracking-wider text-zinc-400 label">Studio</div>
+    <nav class="px-2 space-y-px">
+      <a href="schema-studio.html" class="flex items-center gap-3 px-2 py-1.5 rounded-md text-sm text-zinc-600 hover:bg-zinc-50">
+        <i data-lucide="layers" class="w-4 h-4"></i><span class="label">Schema</span>
+      </a>
+      <a href="extraction-studio.html" class="flex items-center gap-3 px-2 py-1.5 rounded-md text-sm text-zinc-600 hover:bg-zinc-50">
+        <i data-lucide="flask-conical" class="w-4 h-4"></i><span class="label">Extraction</span>
+      </a>
+      <a href="playground.html" class="flex items-center gap-3 px-2 py-1.5 rounded-md text-sm text-zinc-600 hover:bg-zinc-50">
+        <i data-lucide="sliders-horizontal" class="w-4 h-4"></i><span class="label">Playground</span>
+      </a>
+    </nav>
+
+    <div class="px-3 mt-5 mb-1 text-[10px] uppercase tracking-wider text-zinc-400 label">Admin</div>
+    <nav class="px-2 space-y-px">
+      <a href="dashboard.html" class="flex items-center gap-3 px-2 py-1.5 rounded-md text-sm text-zinc-600 hover:bg-zinc-50">
+        <i data-lucide="layout-dashboard" class="w-4 h-4"></i><span class="label">Dashboard</span>
+      </a>
+      <a href="audit.html" class="flex items-center gap-3 px-2 py-1.5 rounded-md text-sm text-zinc-600 hover:bg-zinc-50">
+        <i data-lucide="scroll-text" class="w-4 h-4"></i><span class="label">Audit</span>
+      </a>
+      <a href="settings.html" class="flex items-center gap-3 px-2 py-1.5 rounded-md text-sm text-zinc-600 hover:bg-zinc-50">
+        <i data-lucide="settings" class="w-4 h-4"></i><span class="label">Settings</span>
+      </a>
+    </nav>
+
+    <div class="mt-auto px-2 pt-3 border-t border-zinc-200">
+      <button class="w-full flex items-center gap-3 px-2 py-1.5 rounded-md text-sm text-zinc-600 hover:bg-zinc-50">
+        <i data-lucide="circle-user" class="w-4 h-4"></i><span class="label">aniket@kb</span>
+      </button>
+    </div>
+  </aside>
+
+  <!-- ============== MAIN COLUMN ============== -->
+  <main class="flex-1 flex flex-col min-w-0 bg-white">
+
+    <!-- top bar -->
+    <header class="h-12 flex-shrink-0 border-b border-zinc-200 flex items-center px-5 gap-4">
+      <div class="flex items-center gap-2 text-sm">
+        <span class="text-zinc-500">Chat</span>
+        <i data-lucide="chevron-right" class="w-3.5 h-3.5 text-zinc-300"></i>
+        <span class="text-zinc-900">Aurangabad supplier inquiry</span>
+        <span class="ml-1 text-[11px] text-zinc-400 mono">3 turns</span>
+      </div>
+
+      <div class="ml-auto flex items-center gap-1">
+        <button class="flex items-center gap-1.5 px-2 py-1 rounded text-xs text-zinc-500 hover:bg-zinc-100 mono">
+          <i data-lucide="command" class="w-3.5 h-3.5"></i> K
+        </button>
+        <button class="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs text-zinc-600 hover:bg-zinc-100">
+          <i data-lucide="plus" class="w-3.5 h-3.5"></i> New chat
+        </button>
+        <button class="w-7 h-7 rounded hover:bg-zinc-100 flex items-center justify-center text-zinc-500">
+          <i data-lucide="sun" class="w-4 h-4"></i>
+        </button>
+      </div>
+    </header>
+
+    <!-- chat + citations split -->
+    <div class="flex-1 flex min-h-0">
+
+      <!-- chat thread -->
+      <section class="flex-1 flex flex-col min-w-0">
+        <div class="flex-1 overflow-y-auto">
+          <div class="max-w-3xl mx-auto px-8 py-10">
+
+            <!-- user turn -->
+            <div class="mb-10 flex justify-end">
+              <div class="max-w-[80%] px-4 py-3 rounded-2xl rounded-tr-md bg-zinc-100 text-[14px] leading-relaxed text-zinc-900">
+                We had a party in the last 2–3 years where we needed someone to supply something very fast — who and which party?
+              </div>
+            </div>
+
+            <!-- assistant turn -->
+            <div class="mb-2">
+              <div class="flex items-center gap-2 mb-4 text-xs">
+                <div class="w-5 h-5 rounded bg-zinc-900 flex items-center justify-center text-white text-[10px] font-semibold">K</div>
+                <span class="text-zinc-500">Answer</span>
+                <span class="flex items-center gap-1 text-zinc-500">
+                  <span class="w-1.5 h-1.5 rounded-full bg-zinc-900"></span>
+                  <span class="mono">grounded · 92%</span>
+                </span>
+                <span class="text-zinc-300">·</span>
+                <span class="text-zinc-500 mono">no conflicts</span>
+              </div>
+
+              <div class="text-[15px] leading-[1.75] text-zinc-800">
+                In <span class="text-zinc-900 font-medium">November 2024</span>, <span class="text-zinc-900 font-medium">Vertex Logistics Pvt Ltd</span> was the supplier on the <span class="text-zinc-900 font-medium">Aurangabad warehouse</span> project, contracted via an unusually fast-turnaround clause: concrete materials had to be delivered within <span class="text-zinc-900 font-medium">4 hours of order placement</span><sup class="cref">[1]</sup>.
+                <br /><br />
+                This clause is rare in your corpus — the median delivery window across 23 supply contracts is <span class="mono text-zinc-900">7–30 days</span><sup class="cref">[2]</sup>. The contract was executed between <span class="text-zinc-900 font-medium">Aakash Constructions</span> (procurer) and Vertex Logistics, signed on <span class="text-zinc-900 font-medium">14 Nov 2024</span><sup class="cref">[3]</sup>.<span class="caret"></span>
+              </div>
+
+              <!-- plan inspector -->
+              <details class="mt-6 rounded-lg border border-zinc-200">
+                <summary class="px-4 py-2.5 flex items-center gap-2 text-xs text-zinc-600 hover:text-zinc-900">
+                  <i data-lucide="chevron-right" class="chev w-3.5 h-3.5 text-zinc-400"></i>
+                  How I answered
+                  <span class="ml-auto mono text-zinc-400">2.3s · $0.007 · 47→8→3</span>
+                </summary>
+                <div class="px-4 pb-4 pt-3 text-xs border-t border-zinc-200">
+                  <div class="grid grid-cols-[110px_1fr] gap-x-3 gap-y-2 mono">
+                    <div class="text-zinc-400">Mode</div>
+                    <div class="text-zinc-700"><span class="text-zinc-900 font-medium">K</span> (chain-aware) + <span class="text-zinc-900 font-medium">standard</span> (entity-bridging)</div>
+                    <div class="text-zinc-400">Rewriter</div>
+                    <div class="text-zinc-700">Step-Back ("which suppliers delivered on tight deadlines?") + HyDE</div>
+                    <div class="text-zinc-400">Channels</div>
+                    <div class="text-zinc-700">BM25 · dense L1a · dense L1d · atomic-unit rarity≥0.95 · HippoRAG PPR</div>
+                    <div class="text-zinc-400">Fusion</div>
+                    <div class="text-zinc-700">RRF (k=60) → Cohere Rerank 3.5 → Astute RAG generation</div>
+                    <div class="text-zinc-400">Funnel</div>
+                    <div class="text-zinc-700">47 candidates → 8 reranked → 3 cited</div>
+                    <div class="text-zinc-400">Anchor hop</div>
+                    <div class="text-zinc-700">contract <span class="text-zinc-900">vertex-aurangabad-2024.pdf</span> → Event entity → procurer Aakash Constructions</div>
+                    <div class="text-zinc-400">CRAG</div>
+                    <div class="text-zinc-700">confident · no fallback needed</div>
+                    <div class="text-zinc-400">Faithfulness</div>
+                    <div class="text-zinc-700">3/3 claims grounded in retrieved evidence</div>
+                  </div>
+                  <div class="pt-3 mt-3 border-t border-zinc-200 flex gap-4 text-zinc-500">
+                    <button class="flex items-center gap-1.5 hover:text-zinc-900"><i data-lucide="copy" class="w-3.5 h-3.5"></i> Copy trace</button>
+                    <button class="flex items-center gap-1.5 hover:text-zinc-900"><i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i> Re-run with deep_research</button>
+                    <button class="flex items-center gap-1.5 hover:text-zinc-900"><i data-lucide="flag" class="w-3.5 h-3.5"></i> Flag answer</button>
+                  </div>
+                </div>
+              </details>
+
+              <!-- followups -->
+              <div class="mt-5 flex flex-wrap gap-2">
+                <button class="text-xs px-3 py-1.5 rounded-full border border-zinc-200 text-zinc-700 hover:border-zinc-400 hover:bg-zinc-50">
+                  Why was the delivery window so short?
+                </button>
+                <button class="text-xs px-3 py-1.5 rounded-full border border-zinc-200 text-zinc-700 hover:border-zinc-400 hover:bg-zinc-50">
+                  Any other Vertex contracts in our corpus?
+                </button>
+                <button class="text-xs px-3 py-1.5 rounded-full border border-zinc-200 text-zinc-700 hover:border-zinc-400 hover:bg-zinc-50">
+                  Show all sub-7-day delivery clauses
+                </button>
+              </div>
+
+              <!-- assistant footer -->
+              <div class="mt-5 flex items-center gap-3 text-zinc-400 text-xs">
+                <button class="hover:text-zinc-700"><i data-lucide="thumbs-up" class="w-3.5 h-3.5"></i></button>
+                <button class="hover:text-zinc-700"><i data-lucide="thumbs-down" class="w-3.5 h-3.5"></i></button>
+                <button class="hover:text-zinc-700"><i data-lucide="copy" class="w-3.5 h-3.5"></i></button>
+                <button class="hover:text-zinc-700"><i data-lucide="share-2" class="w-3.5 h-3.5"></i></button>
+                <span class="ml-auto mono text-zinc-400">Gemini 2.5 Flash · 14:42</span>
+              </div>
+            </div>
+
+          </div>
+        </div>
+
+        <!-- composer -->
+        <div class="flex-shrink-0 border-t border-zinc-200">
+          <div class="max-w-3xl mx-auto px-8 py-4">
+            <div class="rounded-xl border border-zinc-200 bg-white focus-within:border-zinc-400 transition-colors">
+              <textarea
+                rows="2"
+                placeholder="Ask anything about your knowledge base…"
+                class="w-full bg-transparent resize-none px-4 pt-3 pb-2 text-[14px] placeholder-zinc-400 outline-none"
+              ></textarea>
+              <div class="px-2.5 py-2 flex items-center gap-1 border-t border-zinc-100">
+                <button class="flex items-center gap-1.5 px-2 py-1 rounded text-xs text-zinc-600 hover:bg-zinc-100">
+                  <i data-lucide="at-sign" class="w-3.5 h-3.5"></i> doc filter
+                </button>
+                <button class="flex items-center gap-1.5 px-2 py-1 rounded text-xs text-zinc-600 hover:bg-zinc-100">
+                  <i data-lucide="paperclip" class="w-3.5 h-3.5"></i> attach
+                </button>
+                <label class="flex items-center gap-1.5 px-2 py-1 rounded text-xs text-zinc-600 hover:bg-zinc-100 cursor-pointer">
+                  <input type="checkbox" class="accent-zinc-900 w-3 h-3" />
+                  <i data-lucide="sparkles" class="w-3.5 h-3.5"></i> deep_research
+                </label>
+                <label class="flex items-center gap-1.5 px-2 py-1 rounded text-xs text-zinc-600 hover:bg-zinc-100 cursor-pointer">
+                  <input type="checkbox" class="accent-zinc-900 w-3 h-3" />
+                  <i data-lucide="table" class="w-3.5 h-3.5"></i> batch matrix
+                </label>
+                <div class="ml-auto flex items-center gap-2">
+                  <span class="text-[11px] text-zinc-400 mono">~$0.007</span>
+                  <button class="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-zinc-900 text-white text-xs font-medium hover:bg-zinc-800">
+                    Send <i data-lucide="arrow-up" class="w-3.5 h-3.5"></i>
+                  </button>
+                </div>
+              </div>
+            </div>
+            <div class="mt-2 text-[11px] text-zinc-400 px-1">
+              Read-only. Retrieves and reasons; never sends, places, or mutates anything.
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- citations panel -->
+      <aside class="w-[360px] flex-shrink-0 border-l border-zinc-200 bg-zinc-50/50 flex flex-col min-h-0">
+        <header class="px-5 py-3 border-b border-zinc-200 flex items-center justify-between flex-shrink-0 bg-white">
+          <div class="text-sm font-medium text-zinc-900">Sources <span class="text-zinc-400 ml-1 font-normal">3</span></div>
+          <div class="flex gap-0.5">
+            <button class="text-[11px] mono px-2 py-0.5 rounded text-zinc-900 bg-zinc-100">all</button>
+            <button class="text-[11px] mono px-2 py-0.5 rounded text-zinc-500 hover:bg-zinc-100">pdf</button>
+            <button class="text-[11px] mono px-2 py-0.5 rounded text-zinc-500 hover:bg-zinc-100">xlsx</button>
+            <button class="text-[11px] mono px-2 py-0.5 rounded text-zinc-500 hover:bg-zinc-100">scan</button>
+          </div>
+        </header>
+
+        <div class="flex-1 overflow-y-auto p-3 space-y-2">
+
+          <!-- citation 1 -->
+          <article class="rounded-lg border border-zinc-200 bg-white p-3 hover:border-zinc-400 transition-colors cursor-pointer">
+            <div class="flex items-start gap-2.5">
+              <span class="mt-0.5 text-[10px] mono font-medium text-zinc-600 bg-zinc-100 rounded px-1.5 py-0.5">1</span>
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-1.5 text-[11px] text-zinc-500 mono">
+                  <i data-lucide="file-text" class="w-3 h-3"></i>
+                  <span>PDF · Clause · p.7 §3.2</span>
+                </div>
+                <a href="doc-detail.html" class="text-[13px] font-medium text-zinc-900 mt-1 truncate block hover:underline">vertex-aurangabad-2024.pdf</a>
+                <blockquote class="text-[12.5px] text-zinc-700 mt-2 leading-snug border-l-2 border-zinc-200 pl-2.5">
+                  Supplier shall deliver concrete materials within 4 (four) hours of order placement, failing which a penalty of ₹50,000/hr shall apply…
+                </blockquote>
+                <div class="mt-2.5 flex flex-wrap items-center gap-1">
+                  <a href="explore.html" class="text-[10px] mono px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-700 hover:bg-zinc-200">rarity 0.99</a>
+                  <a href="schema-studio.html" class="text-[10px] mono px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-700 hover:bg-zinc-200">contract</a>
+                  <a href="schema-studio.html" class="text-[10px] mono px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-700 hover:bg-zinc-200">delivery_window=4h</a>
+                </div>
+                <div class="mt-2.5 flex items-center gap-3 text-[11px] text-zinc-500">
+                  <button class="hover:text-zinc-900 flex items-center gap-1"><i data-lucide="external-link" class="w-3 h-3"></i> Doc Detail</button>
+                  <button class="hover:text-zinc-900 flex items-center gap-1"><i data-lucide="eye" class="w-3 h-3"></i> Show in PDF</button>
+                </div>
+              </div>
+            </div>
+          </article>
+
+          <!-- citation 2 -->
+          <article class="rounded-lg border border-zinc-200 bg-white p-3 hover:border-zinc-400 transition-colors cursor-pointer">
+            <div class="flex items-start gap-2.5">
+              <span class="mt-0.5 text-[10px] mono font-medium text-zinc-600 bg-zinc-100 rounded px-1.5 py-0.5">2</span>
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-1.5 text-[11px] text-zinc-500 mono">
+                  <i data-lucide="bar-chart-2" class="w-3 h-3"></i>
+                  <span>Aggregate · Q-mode · 23 contracts</span>
+                </div>
+                <div class="text-[13px] font-medium text-zinc-900 mt-1">Delivery-window distribution</div>
+                <div class="text-[12.5px] text-zinc-700 mt-2 leading-snug">
+                  Median: <span class="mono text-zinc-900">14 days</span> · P5–P95: <span class="mono text-zinc-900">7–30 days</span> · Outliers ≤24h: <span class="mono text-zinc-900">2</span>
+                </div>
+                <div class="mt-2.5 flex flex-wrap items-center gap-1">
+                  <a href="schema-studio.html" class="text-[10px] mono px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-700 hover:bg-zinc-200">aggregation</a>
+                  <a href="audit.html" class="text-[10px] mono px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-700 hover:bg-zinc-200">q_2026_05_22_b71a</a>
+                </div>
+                <div class="mt-2.5 flex items-center gap-3 text-[11px] text-zinc-500">
+                  <button class="hover:text-zinc-900 flex items-center gap-1"><i data-lucide="terminal" class="w-3 h-3"></i> Calc trace</button>
+                  <button class="hover:text-zinc-900 flex items-center gap-1"><i data-lucide="refresh-cw" class="w-3 h-3"></i> Re-run</button>
+                </div>
+              </div>
+            </div>
+          </article>
+
+          <!-- citation 3 -->
+          <article class="rounded-lg border border-zinc-200 bg-white p-3 hover:border-zinc-400 transition-colors cursor-pointer">
+            <div class="flex items-start gap-2.5">
+              <span class="mt-0.5 text-[10px] mono font-medium text-zinc-600 bg-zinc-100 rounded px-1.5 py-0.5">3</span>
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-1.5 text-[11px] text-zinc-500 mono">
+                  <i data-lucide="image" class="w-3 h-3"></i>
+                  <span>Scan · Signature page · p.12</span>
+                </div>
+                <a href="doc-detail.html" class="text-[13px] font-medium text-zinc-900 mt-1 truncate block hover:underline">vertex-aurangabad-2024.pdf</a>
+                <blockquote class="text-[12.5px] text-zinc-700 mt-2 leading-snug border-l-2 border-zinc-200 pl-2.5">
+                  …signed at Mumbai this 14<sup>th</sup> day of November, 2024, by and between Aakash Constructions ('Procurer') and Vertex Logistics Pvt Ltd ('Supplier')…
+                </blockquote>
+                <div class="mt-2.5 flex flex-wrap items-center gap-1">
+                  <span class="text-[10px] mono px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-700">OCR 0.94</span>
+                  <a href="schema-studio.html" class="text-[10px] mono px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-700 hover:bg-zinc-200">date=2024-11-14</a>
+                  <a href="explore.html" class="text-[10px] mono px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-700 hover:bg-zinc-200">2 entities</a>
+                </div>
+                <div class="mt-2.5 flex items-center gap-3 text-[11px] text-zinc-500">
+                  <button class="hover:text-zinc-900 flex items-center gap-1"><i data-lucide="external-link" class="w-3 h-3"></i> Doc Detail</button>
+                  <button class="hover:text-zinc-900 flex items-center gap-1"><i data-lucide="check-circle-2" class="w-3 h-3"></i> Verify OCR</button>
+                </div>
+              </div>
+            </div>
+          </article>
+
+          <details class="rounded-lg border border-dashed border-zinc-200 p-3 mt-1">
+            <summary class="text-xs text-zinc-500 hover:text-zinc-900 flex items-center gap-2">
+              <i data-lucide="chevron-right" class="chev w-3.5 h-3.5 text-zinc-400"></i>
+              5 more retrieved
+              <span class="ml-auto mono text-zinc-400">below threshold</span>
+            </summary>
+            <ul class="mt-3 space-y-1.5 text-[12px] text-zinc-500 mono">
+              <li class="flex justify-between"><a href="doc-detail.html" class="hover:text-zinc-900 hover:underline">steelco-mou-2023.pdf</a><span>0.41</span></li>
+              <li class="flex justify-between"><a href="doc-detail.html" class="hover:text-zinc-900 hover:underline">quickbuild-emergency-2024.pdf</a><span>0.38</span></li>
+              <li class="flex justify-between"><a href="doc-detail.html" class="hover:text-zinc-900 hover:underline">contractor-pool-2024.xlsx</a><span>0.34</span></li>
+              <li class="flex justify-between"><a href="doc-detail.html" class="hover:text-zinc-900 hover:underline">note_site_visit_mar2024.jpg</a><span>0.29</span></li>
+              <li class="flex justify-between"><a href="doc-detail.html" class="hover:text-zinc-900 hover:underline">vendor-mou-template.pdf</a><span>0.24</span></li>
+            </ul>
+          </details>
+
+        </div>
+      </aside>
+    </div>
+  </main>
+</div>
+
+<script>
+  lucide.createIcons();
+</script>
+
+</body>
+</html>

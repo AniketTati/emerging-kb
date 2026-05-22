@@ -1,0 +1,416 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>KB · Upload</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/lucide@latest"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  html, body { height: 100%; }
+  body { font-family: 'Inter', system-ui, sans-serif; -webkit-font-smoothing: antialiased; color: #18181b; background: #ffffff; }
+  .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
+  .sidebar { transition: width .2s ease; }
+  .sidebar:hover { width: 220px; }
+  .sidebar:hover .label { opacity: 1; }
+  .label { opacity: 0; transition: opacity .15s; white-space: nowrap; }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #e4e4e7; border-radius: 6px; border: 2px solid #ffffff; }
+  ::-webkit-scrollbar-thumb:hover { background: #d4d4d8; }
+  details > summary { list-style: none; cursor: pointer; }
+  details > summary::-webkit-details-marker { display: none; }
+  details[open] .chev { transform: rotate(90deg); }
+  .chev { transition: transform .15s; display: inline-block; }
+  [data-lucide] { stroke-width: 1.75; }
+  /* stage pip animation */
+  @keyframes pulse-soft { 0%,100% { opacity: 1; } 50% { opacity: 0.45; } }
+  .pip-active { animation: pulse-soft 1.4s ease-in-out infinite; }
+  /* drop zone */
+  .dropzone { transition: border-color .15s, background .15s; }
+  .dropzone:hover { border-color: #a1a1aa; background: #fafafa; }
+</style>
+</head>
+<body class="h-screen overflow-hidden">
+
+<div class="flex h-full">
+
+  <!-- ============== SIDEBAR ============== -->
+  <aside class="sidebar w-[56px] flex-shrink-0 bg-white border-r border-zinc-200 flex flex-col py-2 overflow-hidden">
+    <a href="index.html" class="px-3.5 mb-4 mt-1 flex items-center gap-3">
+      <div class="w-6 h-6 rounded-md bg-zinc-900 flex items-center justify-center text-white text-[11px] font-semibold tracking-tight">K</div>
+      <div class="label text-sm font-medium text-zinc-900">Knowledge Base</div>
+    </a>
+
+    <div class="px-3 mt-2 mb-1 text-[10px] uppercase tracking-wider text-zinc-400 label">Primary</div>
+    <nav class="px-2 space-y-px">
+      <a href="chat.html" class="flex items-center gap-3 px-2 py-1.5 rounded-md text-sm text-zinc-600 hover:bg-zinc-50">
+        <i data-lucide="message-square" class="w-4 h-4"></i><span class="label">Chat</span>
+      </a>
+      <a href="upload.html" class="flex items-center gap-3 px-2 py-1.5 rounded-md text-sm bg-zinc-100 text-zinc-900">
+        <i data-lucide="upload" class="w-4 h-4"></i><span class="label">Upload</span>
+      </a>
+      <a href="explore.html" class="flex items-center gap-3 px-2 py-1.5 rounded-md text-sm text-zinc-600 hover:bg-zinc-50">
+        <i data-lucide="search" class="w-4 h-4"></i><span class="label">Explore</span>
+      </a>
+    </nav>
+
+    <div class="px-3 mt-5 mb-1 text-[10px] uppercase tracking-wider text-zinc-400 label">Studio</div>
+    <nav class="px-2 space-y-px">
+      <a href="schema-studio.html" class="flex items-center gap-3 px-2 py-1.5 rounded-md text-sm text-zinc-600 hover:bg-zinc-50">
+        <i data-lucide="layers" class="w-4 h-4"></i><span class="label">Schema</span>
+      </a>
+      <a href="extraction-studio.html" class="flex items-center gap-3 px-2 py-1.5 rounded-md text-sm text-zinc-600 hover:bg-zinc-50">
+        <i data-lucide="flask-conical" class="w-4 h-4"></i><span class="label">Extraction</span>
+      </a>
+      <a href="playground.html" class="flex items-center gap-3 px-2 py-1.5 rounded-md text-sm text-zinc-600 hover:bg-zinc-50">
+        <i data-lucide="sliders-horizontal" class="w-4 h-4"></i><span class="label">Playground</span>
+      </a>
+    </nav>
+
+    <div class="px-3 mt-5 mb-1 text-[10px] uppercase tracking-wider text-zinc-400 label">Admin</div>
+    <nav class="px-2 space-y-px">
+      <a href="dashboard.html" class="flex items-center gap-3 px-2 py-1.5 rounded-md text-sm text-zinc-600 hover:bg-zinc-50">
+        <i data-lucide="layout-dashboard" class="w-4 h-4"></i><span class="label">Dashboard</span>
+      </a>
+      <a href="audit.html" class="flex items-center gap-3 px-2 py-1.5 rounded-md text-sm text-zinc-600 hover:bg-zinc-50">
+        <i data-lucide="scroll-text" class="w-4 h-4"></i><span class="label">Audit</span>
+      </a>
+      <a href="settings.html" class="flex items-center gap-3 px-2 py-1.5 rounded-md text-sm text-zinc-600 hover:bg-zinc-50">
+        <i data-lucide="settings" class="w-4 h-4"></i><span class="label">Settings</span>
+      </a>
+    </nav>
+
+    <div class="mt-auto px-2 pt-3 border-t border-zinc-200">
+      <button class="w-full flex items-center gap-3 px-2 py-1.5 rounded-md text-sm text-zinc-600 hover:bg-zinc-50">
+        <i data-lucide="circle-user" class="w-4 h-4"></i><span class="label">aniket@kb</span>
+      </button>
+    </div>
+  </aside>
+
+  <!-- ============== MAIN COLUMN ============== -->
+  <main class="flex-1 flex flex-col min-w-0 bg-white">
+
+    <!-- top bar -->
+    <header class="h-12 flex-shrink-0 border-b border-zinc-200 flex items-center px-5 gap-4">
+      <div class="flex items-center gap-2 text-sm">
+        <span class="text-zinc-900">Upload</span>
+        <span class="ml-1 text-[11px] text-zinc-400 mono">87 ready · 5 processing · 2 failed</span>
+      </div>
+
+      <div class="ml-auto flex items-center gap-1">
+        <button class="flex items-center gap-1.5 px-2 py-1 rounded text-xs text-zinc-500 hover:bg-zinc-100 mono">
+          <i data-lucide="command" class="w-3.5 h-3.5"></i> K
+        </button>
+        <button class="w-7 h-7 rounded hover:bg-zinc-100 flex items-center justify-center text-zinc-500">
+          <i data-lucide="sun" class="w-4 h-4"></i>
+        </button>
+      </div>
+    </header>
+
+    <!-- content -->
+    <div class="flex-1 overflow-y-auto">
+      <div class="max-w-6xl mx-auto px-8 py-8">
+
+        <!-- header -->
+        <div class="mb-6">
+          <h1 class="text-lg font-semibold text-zinc-900">Upload documents</h1>
+          <p class="text-sm text-zinc-500 mt-1">Drop anything. The system auto-detects type, parses, extracts entities, and indexes — typically 30s–2m per doc.</p>
+        </div>
+
+        <!-- drop zone -->
+        <div class="dropzone border border-dashed border-zinc-300 rounded-xl bg-white px-8 py-10 mb-8 cursor-pointer">
+          <div class="flex items-center justify-center flex-col text-center">
+            <div class="w-10 h-10 rounded-lg bg-zinc-100 flex items-center justify-center mb-3 text-zinc-500">
+              <i data-lucide="upload-cloud" class="w-5 h-5"></i>
+            </div>
+            <div class="text-sm font-medium text-zinc-900">Drop files, folders, or ZIPs here</div>
+            <div class="text-xs text-zinc-500 mt-1">or <span class="text-zinc-900 underline underline-offset-2">click to browse</span></div>
+            <div class="text-[11px] text-zinc-400 mt-3 mono">PDF (digital + scanned) · xlsx · csv · jpg · png · eml · zip · folder</div>
+          </div>
+        </div>
+
+        <!-- filter row -->
+        <div class="flex items-center gap-3 mb-3">
+          <div class="flex items-center gap-0.5 rounded-md border border-zinc-200 p-0.5">
+            <button class="text-xs px-2.5 py-1 rounded text-zinc-900 bg-zinc-100">All <span class="text-zinc-500 ml-0.5">94</span></button>
+            <button class="text-xs px-2.5 py-1 rounded text-zinc-600 hover:bg-zinc-50">Processing <span class="text-zinc-400 ml-0.5">5</span></button>
+            <button class="text-xs px-2.5 py-1 rounded text-zinc-600 hover:bg-zinc-50">Ready <span class="text-zinc-400 ml-0.5">87</span></button>
+            <button class="text-xs px-2.5 py-1 rounded text-zinc-600 hover:bg-zinc-50">Failed <span class="text-zinc-400 ml-0.5">2</span></button>
+            <button class="text-xs px-2.5 py-1 rounded text-zinc-600 hover:bg-zinc-50">Needs attention <span class="text-zinc-400 ml-0.5">3</span></button>
+          </div>
+
+          <div class="flex-1 relative">
+            <i data-lucide="search" class="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-400"></i>
+            <input type="text" placeholder="Filter by filename, type, entity…" class="w-full text-xs pl-7 pr-3 py-1.5 rounded-md border border-zinc-200 focus:outline-none focus:border-zinc-400" />
+          </div>
+
+          <button class="text-xs flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border border-zinc-200 text-zinc-600 hover:bg-zinc-50">
+            <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i> Re-run failed
+          </button>
+        </div>
+
+        <!-- table -->
+        <div class="rounded-lg border border-zinc-200 overflow-hidden">
+          <!-- table header -->
+          <div class="grid grid-cols-[1fr_140px_160px_120px_80px_60px] gap-3 px-4 py-2.5 text-[11px] uppercase tracking-wider text-zinc-500 bg-zinc-50 border-b border-zinc-200">
+            <div>File</div>
+            <div>Type</div>
+            <div>Stage</div>
+            <div>Elapsed</div>
+            <div>Detected</div>
+            <div></div>
+          </div>
+
+          <!-- row 1 — parsing -->
+          <details class="border-b border-zinc-100 last:border-0">
+            <summary class="grid grid-cols-[1fr_140px_160px_120px_80px_60px] gap-3 px-4 py-3 items-center hover:bg-zinc-50">
+              <div class="flex items-center gap-2 min-w-0">
+                <i data-lucide="chevron-right" class="chev w-3.5 h-3.5 text-zinc-400 flex-shrink-0"></i>
+                <i data-lucide="file-text" class="w-3.5 h-3.5 text-zinc-500 flex-shrink-0"></i>
+                <a href="doc-detail.html" class="text-sm text-zinc-900 truncate hover:underline">offer_priya_employment.pdf</a>
+              </div>
+              <a href="schema-studio.html" class="text-xs text-zinc-600 hover:text-zinc-900 hover:underline">contract</a>
+              <div class="flex items-center gap-2">
+                <div class="flex items-center gap-0.5">
+                  <span class="w-1.5 h-1.5 rounded-full bg-zinc-900 pip-active"></span>
+                  <span class="w-1.5 h-1.5 rounded-full bg-zinc-200"></span>
+                  <span class="w-1.5 h-1.5 rounded-full bg-zinc-200"></span>
+                  <span class="w-1.5 h-1.5 rounded-full bg-zinc-200"></span>
+                  <span class="w-1.5 h-1.5 rounded-full bg-zinc-200"></span>
+                </div>
+                <span class="text-xs text-zinc-600">parsing</span>
+              </div>
+              <div class="text-xs text-zinc-500 mono">4s</div>
+              <div class="text-xs text-zinc-400 mono">—</div>
+              <div></div>
+            </summary>
+            <div class="px-12 py-3 bg-zinc-50 text-xs text-zinc-600 border-t border-zinc-100">
+              <div class="mono text-zinc-500">Started 14:42:18 · Docling parser · pages detected: 3</div>
+            </div>
+          </details>
+
+          <!-- row 2 — chunking -->
+          <details class="border-b border-zinc-100">
+            <summary class="grid grid-cols-[1fr_140px_160px_120px_80px_60px] gap-3 px-4 py-3 items-center hover:bg-zinc-50">
+              <div class="flex items-center gap-2 min-w-0">
+                <i data-lucide="chevron-right" class="chev w-3.5 h-3.5 text-zinc-400 flex-shrink-0"></i>
+                <i data-lucide="file-text" class="w-3.5 h-3.5 text-zinc-500 flex-shrink-0"></i>
+                <a href="doc-detail.html" class="text-sm text-zinc-900 truncate hover:underline">hdfc_statement_jan2025.pdf</a>
+              </div>
+              <a href="schema-studio.html" class="text-xs text-zinc-600 hover:text-zinc-900 hover:underline">bank_statement</a>
+              <div class="flex items-center gap-2">
+                <div class="flex items-center gap-0.5">
+                  <span class="w-1.5 h-1.5 rounded-full bg-zinc-900"></span>
+                  <span class="w-1.5 h-1.5 rounded-full bg-zinc-900 pip-active"></span>
+                  <span class="w-1.5 h-1.5 rounded-full bg-zinc-200"></span>
+                  <span class="w-1.5 h-1.5 rounded-full bg-zinc-200"></span>
+                  <span class="w-1.5 h-1.5 rounded-full bg-zinc-200"></span>
+                </div>
+                <span class="text-xs text-zinc-600">contextualizing</span>
+              </div>
+              <div class="text-xs text-zinc-500 mono">12s</div>
+              <div class="text-xs text-zinc-400 mono">—</div>
+              <div></div>
+            </summary>
+          </details>
+
+          <!-- row 3 — extracting -->
+          <details class="border-b border-zinc-100">
+            <summary class="grid grid-cols-[1fr_140px_160px_120px_80px_60px] gap-3 px-4 py-3 items-center hover:bg-zinc-50">
+              <div class="flex items-center gap-2 min-w-0">
+                <i data-lucide="chevron-right" class="chev w-3.5 h-3.5 text-zinc-400 flex-shrink-0"></i>
+                <i data-lucide="image" class="w-3.5 h-3.5 text-zinc-500 flex-shrink-0"></i>
+                <a href="doc-detail.html" class="text-sm text-zinc-900 truncate hover:underline">aakash_site_note_mar2024.jpg</a>
+              </div>
+              <a href="schema-studio.html" class="text-xs text-zinc-600 hover:text-zinc-900 hover:underline">handwritten_note</a>
+              <div class="flex items-center gap-2">
+                <div class="flex items-center gap-0.5">
+                  <span class="w-1.5 h-1.5 rounded-full bg-zinc-900"></span>
+                  <span class="w-1.5 h-1.5 rounded-full bg-zinc-900"></span>
+                  <span class="w-1.5 h-1.5 rounded-full bg-zinc-900 pip-active"></span>
+                  <span class="w-1.5 h-1.5 rounded-full bg-zinc-200"></span>
+                  <span class="w-1.5 h-1.5 rounded-full bg-zinc-200"></span>
+                </div>
+                <span class="text-xs text-zinc-600">extracting</span>
+              </div>
+              <div class="text-xs text-zinc-500 mono">18s</div>
+              <div class="text-xs text-zinc-600 mono">3 ent</div>
+              <div></div>
+            </summary>
+          </details>
+
+          <!-- row 4 — ready (expanded) -->
+          <details class="border-b border-zinc-100" open>
+            <summary class="grid grid-cols-[1fr_140px_160px_120px_80px_60px] gap-3 px-4 py-3 items-center hover:bg-zinc-50">
+              <div class="flex items-center gap-2 min-w-0">
+                <i data-lucide="chevron-right" class="chev w-3.5 h-3.5 text-zinc-400 flex-shrink-0"></i>
+                <i data-lucide="file-text" class="w-3.5 h-3.5 text-zinc-500 flex-shrink-0"></i>
+                <a href="doc-detail.html" class="text-sm text-zinc-900 truncate hover:underline">plant_x_drawing_rev3.pdf</a>
+              </div>
+              <div class="flex items-center gap-1.5">
+                <a href="schema-studio.html" class="text-xs text-zinc-600 hover:text-zinc-900 hover:underline">drawing</a>
+                <a href="schema-studio.html" class="text-[10px] mono px-1 py-0.5 rounded bg-zinc-100 text-zinc-600 hover:bg-zinc-200">new type</a>
+              </div>
+              <div class="flex items-center gap-2">
+                <div class="flex items-center gap-0.5">
+                  <span class="w-1.5 h-1.5 rounded-full bg-zinc-900"></span>
+                  <span class="w-1.5 h-1.5 rounded-full bg-zinc-900"></span>
+                  <span class="w-1.5 h-1.5 rounded-full bg-zinc-900"></span>
+                  <span class="w-1.5 h-1.5 rounded-full bg-zinc-900"></span>
+                  <span class="w-1.5 h-1.5 rounded-full bg-zinc-900"></span>
+                </div>
+                <span class="text-xs text-zinc-900">ready</span>
+              </div>
+              <div class="text-xs text-zinc-500 mono">56s</div>
+              <div class="text-xs text-zinc-600 mono">23 ent · 4 au</div>
+              <div class="text-right">
+                <button class="text-[11px] text-zinc-500 hover:text-zinc-900">open</button>
+              </div>
+            </summary>
+            <div class="px-12 py-4 bg-zinc-50 border-t border-zinc-100">
+              <!-- per-stage timeline -->
+              <div class="grid grid-cols-5 gap-2 mb-4">
+                <div>
+                  <div class="text-[10px] uppercase tracking-wider text-zinc-400">Parse</div>
+                  <div class="text-xs text-zinc-700 mt-0.5">Docling · 8.2s</div>
+                  <div class="text-[11px] text-zinc-500 mono">7 pages · OCR n/a</div>
+                </div>
+                <div>
+                  <div class="text-[10px] uppercase tracking-wider text-zinc-400">Contextualize</div>
+                  <div class="text-xs text-zinc-700 mt-0.5">Chunking + summarizing · 14.1s</div>
+                  <div class="text-[11px] text-zinc-500 mono">38 chunks · 4 summary nodes</div>
+                </div>
+                <div>
+                  <div class="text-[10px] uppercase tracking-wider text-zinc-400">Extract</div>
+                  <div class="text-xs text-zinc-700 mt-0.5">Gemini Flash · 22.4s</div>
+                  <div class="text-[11px] text-zinc-500 mono">23 mentions · 7 L2b fields</div>
+                </div>
+                <div>
+                  <div class="text-[10px] uppercase tracking-wider text-zinc-400">Resolve</div>
+                  <div class="text-xs text-zinc-700 mt-0.5">Identity · 6.8s</div>
+                  <div class="text-[11px] text-zinc-500 mono">23 ent · 4 merged · 0 new</div>
+                </div>
+                <div>
+                  <div class="text-[10px] uppercase tracking-wider text-zinc-400">Index</div>
+                  <div class="text-xs text-zinc-700 mt-0.5">pgvector + pg_search · 4.5s</div>
+                  <div class="text-[11px] text-zinc-500 mono">BM25 + HNSW done</div>
+                </div>
+              </div>
+
+              <div class="border-t border-zinc-200 pt-3 grid grid-cols-3 gap-4 text-xs">
+                <div>
+                  <div class="text-[10px] uppercase tracking-wider text-zinc-400 mb-1.5">Doc-type</div>
+                  <div class="text-zinc-700">drawing <span class="text-[10px] mono px-1 py-0.5 rounded bg-zinc-100 text-zinc-600 ml-1">proposed · 1 of 1 so far</span></div>
+                  <div class="mt-1 text-zinc-500">Components: 4 detected · spec sheet present · revision = 3</div>
+                </div>
+                <div>
+                  <div class="text-[10px] uppercase tracking-wider text-zinc-400 mb-1.5">Entities</div>
+                  <div class="text-zinc-700">23 mentions → 19 canonical</div>
+                  <div class="mt-1 text-zinc-500">4 merged into existing · 0 new persons · 2 new orgs</div>
+                </div>
+                <div>
+                  <div class="text-[10px] uppercase tracking-wider text-zinc-400 mb-1.5">Atomic units</div>
+                  <div class="text-zinc-700">4 components</div>
+                  <div class="mt-1 text-zinc-500">rarity scores 0.12 / 0.34 / 0.41 / 0.89</div>
+                </div>
+              </div>
+
+              <div class="border-t border-zinc-200 pt-3 mt-3 flex items-center gap-4 text-xs text-zinc-500">
+                <button class="flex items-center gap-1.5 hover:text-zinc-900"><i data-lucide="external-link" class="w-3.5 h-3.5"></i> Open Doc Detail</button>
+                <button class="flex items-center gap-1.5 hover:text-zinc-900"><i data-lucide="eye" class="w-3.5 h-3.5"></i> Preview PDF</button>
+                <button class="flex items-center gap-1.5 hover:text-zinc-900"><i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i> Re-extract</button>
+                <span class="ml-auto mono text-zinc-400">finished 14:42:14 · 56.0s total</span>
+              </div>
+            </div>
+          </details>
+
+          <!-- row 5 — indexing with progress -->
+          <details class="border-b border-zinc-100">
+            <summary class="grid grid-cols-[1fr_140px_160px_120px_80px_60px] gap-3 px-4 py-3 items-center hover:bg-zinc-50">
+              <div class="flex items-center gap-2 min-w-0">
+                <i data-lucide="chevron-right" class="chev w-3.5 h-3.5 text-zinc-400 flex-shrink-0"></i>
+                <i data-lucide="table" class="w-3.5 h-3.5 text-zinc-500 flex-shrink-0"></i>
+                <a href="doc-detail.html" class="text-sm text-zinc-900 truncate hover:underline">aurangabad_residents.xlsx</a>
+              </div>
+              <a href="schema-studio.html" class="text-xs text-zinc-600 hover:text-zinc-900 hover:underline">id_sheet</a>
+              <div class="flex items-center gap-2">
+                <div class="flex items-center gap-0.5">
+                  <span class="w-1.5 h-1.5 rounded-full bg-zinc-900"></span>
+                  <span class="w-1.5 h-1.5 rounded-full bg-zinc-900"></span>
+                  <span class="w-1.5 h-1.5 rounded-full bg-zinc-900"></span>
+                  <span class="w-1.5 h-1.5 rounded-full bg-zinc-900 pip-active"></span>
+                  <span class="w-1.5 h-1.5 rounded-full bg-zinc-200"></span>
+                </div>
+                <span class="text-xs text-zinc-600">indexing 3.1k / 8.4k</span>
+              </div>
+              <div class="text-xs text-zinc-500 mono">2m 04s</div>
+              <div class="text-xs text-zinc-600 mono">8.4k rows</div>
+              <div></div>
+            </summary>
+          </details>
+
+          <!-- row 6 — failed -->
+          <details class="border-b border-zinc-100">
+            <summary class="grid grid-cols-[1fr_140px_160px_120px_80px_60px] gap-3 px-4 py-3 items-center hover:bg-zinc-50">
+              <div class="flex items-center gap-2 min-w-0">
+                <i data-lucide="chevron-right" class="chev w-3.5 h-3.5 text-zinc-400 flex-shrink-0"></i>
+                <i data-lucide="file-text" class="w-3.5 h-3.5 text-zinc-500 flex-shrink-0"></i>
+                <a href="doc-detail.html" class="text-sm text-zinc-900 truncate hover:underline">parcel_1234_land_record.pdf</a>
+              </div>
+              <a href="schema-studio.html" class="text-xs text-zinc-600 hover:text-zinc-900 hover:underline">land_record</a>
+              <div class="flex items-center gap-2">
+                <div class="flex items-center gap-0.5">
+                  <span class="w-1.5 h-1.5 rounded-full bg-zinc-300"></span>
+                  <span class="w-1.5 h-1.5 rounded-full bg-zinc-200"></span>
+                  <span class="w-1.5 h-1.5 rounded-full bg-zinc-200"></span>
+                  <span class="w-1.5 h-1.5 rounded-full bg-zinc-200"></span>
+                  <span class="w-1.5 h-1.5 rounded-full bg-zinc-200"></span>
+                </div>
+                <span class="text-xs text-zinc-700">failed · parse</span>
+              </div>
+              <div class="text-xs text-zinc-500 mono">22s</div>
+              <div class="text-xs text-zinc-400 mono">—</div>
+              <div class="text-right">
+                <button class="text-[11px] text-zinc-900 hover:underline mono">re-run</button>
+              </div>
+            </summary>
+            <div class="px-12 py-3 bg-zinc-50 border-t border-zinc-100 text-xs">
+              <div class="text-zinc-700">Mistral OCR could not extract text from pages 1–4. The scan appears to be low-resolution (≤150 DPI) with significant artifacts.</div>
+              <div class="mt-2 mono text-zinc-500">stage=parse · attempt=1 · adapter=mistral-ocr-3 · code=ocr_low_confidence (0.31)</div>
+              <div class="mt-3 flex gap-3 text-zinc-500">
+                <button class="flex items-center gap-1.5 hover:text-zinc-900"><i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i> Re-run with VLM fallback</button>
+                <button class="flex items-center gap-1.5 hover:text-zinc-900"><i data-lucide="upload" class="w-3.5 h-3.5"></i> Replace with higher-res scan</button>
+                <button class="flex items-center gap-1.5 hover:text-zinc-900"><i data-lucide="external-link" class="w-3.5 h-3.5"></i> View OCR diagnostics</button>
+              </div>
+            </div>
+          </details>
+
+          <!-- empty-state row (separator) -->
+          <div class="px-4 py-2 text-[11px] text-zinc-400 mono bg-white border-t border-zinc-100">
+            87 ready · scroll to see all · or filter ↑
+          </div>
+
+        </div>
+
+        <!-- footer note -->
+        <div class="mt-6 text-xs text-zinc-500 flex items-center gap-2">
+          <i data-lucide="info" class="w-3.5 h-3.5"></i>
+          Stages stream live via Server-Sent Events. New docs appear at the top as you drop them.
+        </div>
+
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<script>
+  lucide.createIcons();
+</script>
+
+</body>
+</html>

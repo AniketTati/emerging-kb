@@ -1,0 +1,14 @@
+{
+  "name": "kb-prototype-qa",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Playwright-driven visual QA for the KB prototype screens. Not the production UI.",
+  "scripts": {
+    "qa": "node qa.mjs",
+    "qa:chat": "node qa.mjs chat.html"
+  },
+  "devDependencies": {
+    "playwright": "^1.49.0"
+  }
+}

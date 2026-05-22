@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>KB Prototype — Index</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/lucide@latest"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  body { font-family: 'Inter', system-ui, sans-serif; -webkit-font-smoothing: antialiased; color: #18181b; background: #ffffff; }
+  .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
+  [data-lucide] { stroke-width: 1.75; }
+  ::-webkit-scrollbar { width: 10px; }
+  ::-webkit-scrollbar-thumb { background: #e4e4e7; border-radius: 6px; border: 2px solid #ffffff; }
+</style>
+</head>
+<body class="min-h-screen">
+  <div class="max-w-4xl mx-auto px-8 py-12">
+
+    <header class="mb-10">
+      <div class="flex items-center gap-3 mb-4">
+        <div class="w-7 h-7 rounded-md bg-zinc-900 flex items-center justify-center text-white text-xs font-semibold tracking-tight">K</div>
+        <div class="text-[11px] uppercase tracking-widest text-zinc-500 mono">Knowledge Base Service · Prototype</div>
+      </div>
+      <h1 class="text-2xl font-semibold text-zinc-900 mb-2">Visual review · all 10 surfaces locked</h1>
+      <p class="text-sm text-zinc-600 max-w-2xl leading-relaxed">
+        Clickable HTML prototype reviewed and signed off 2026-05-22. The locked design is back-ported into
+        <a href="../docs/ui_design.md" class="text-zinc-900 hover:underline mono">docs/ui_design.md</a>;
+        every interactive element is mapped to a planned backend endpoint in
+        <a href="wiring_inventory.md" class="text-zinc-900 hover:underline mono">wiring_inventory.md</a>.
+        Phase 0 G1 ready to open.
+      </p>
+    </header>
+
+    <section class="mb-8">
+      <h2 class="text-[10px] uppercase tracking-wider text-zinc-500 mb-3">Primary <span class="text-zinc-400 ml-1">— the 95% surface</span></h2>
+      <div class="space-y-2">
+        <a href="chat.html" class="flex items-center gap-3 p-4 rounded-lg border border-zinc-200 hover:border-zinc-400 hover:bg-zinc-50 transition">
+          <i data-lucide="message-square" class="w-5 h-5 text-zinc-500 flex-shrink-0"></i>
+          <div class="flex-1 min-w-0">
+            <div class="text-sm font-medium text-zinc-900 flex items-center gap-2">Chat <span class="text-[10px] mono px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-700">front door</span></div>
+            <div class="text-xs text-zinc-500 mt-0.5">Ask, get cited answer, click source to verify. The 95% surface.</div>
+          </div>
+          <div class="text-zinc-400 mono text-[11px]">chat.html →</div>
+        </a>
+        <a href="upload.html" class="flex items-center gap-3 p-4 rounded-lg border border-zinc-200 hover:border-zinc-400 hover:bg-zinc-50 transition">
+          <i data-lucide="upload" class="w-5 h-5 text-zinc-500 flex-shrink-0"></i>
+          <div class="flex-1 min-w-0">
+            <div class="text-sm font-medium text-zinc-900">Upload</div>
+            <div class="text-xs text-zinc-500 mt-0.5">Drag-drop + live per-doc per-stage ingestion via SSE.</div>
+          </div>
+          <div class="text-zinc-400 mono text-[11px]">upload.html →</div>
+        </a>
+        <a href="explore.html" class="flex items-center gap-3 p-4 rounded-lg border border-zinc-200 hover:border-zinc-400 hover:bg-zinc-50 transition">
+          <i data-lucide="search" class="w-5 h-5 text-zinc-500 flex-shrink-0"></i>
+          <div class="flex-1 min-w-0">
+            <div class="text-sm font-medium text-zinc-900">Explore</div>
+            <div class="text-xs text-zinc-500 mt-0.5">Knowledge Explorer — search + left-rail facets · progressive expansion · no graph dump.</div>
+          </div>
+          <div class="text-zinc-400 mono text-[11px]">explore.html →</div>
+        </a>
+      </div>
+    </section>
+
+    <section class="mb-8">
+      <h2 class="text-[10px] uppercase tracking-wider text-zinc-500 mb-3">Studio <span class="text-zinc-400 ml-1">— power-user work surfaces</span></h2>
+      <div class="space-y-2">
+        <a href="schema-studio.html" class="flex items-center gap-3 p-4 rounded-lg border border-zinc-200 hover:border-zinc-400 hover:bg-zinc-50 transition">
+          <i data-lucide="layers" class="w-5 h-5 text-zinc-500 flex-shrink-0"></i>
+          <div class="flex-1 min-w-0">
+            <div class="text-sm font-medium text-zinc-900">Schema Studio</div>
+            <div class="text-xs text-zinc-500 mt-0.5">Typed · Inferred · Collisions · Vocabulary · Lineage · Versions · schema-swap.</div>
+          </div>
+          <div class="text-zinc-400 mono text-[11px]">schema-studio.html →</div>
+        </a>
+        <a href="extraction-studio.html" class="flex items-center gap-3 p-4 rounded-lg border border-zinc-200 hover:border-zinc-400 hover:bg-zinc-50 transition">
+          <i data-lucide="flask-conical" class="w-5 h-5 text-zinc-500 flex-shrink-0"></i>
+          <div class="flex-1 min-w-0">
+            <div class="text-sm font-medium text-zinc-900">Extraction Studio</div>
+            <div class="text-xs text-zinc-500 mt-0.5">Per-doc PDF + extracted fields · approve/edit/reject · prompt editor · test mode.</div>
+          </div>
+          <div class="text-zinc-400 mono text-[11px]">extraction-studio.html →</div>
+        </a>
+        <a href="playground.html" class="flex items-center gap-3 p-4 rounded-lg border border-zinc-200 hover:border-zinc-400 hover:bg-zinc-50 transition">
+          <i data-lucide="sliders-horizontal" class="w-5 h-5 text-zinc-500 flex-shrink-0"></i>
+          <div class="flex-1 min-w-0">
+            <div class="text-sm font-medium text-zinc-900">Playground</div>
+            <div class="text-xs text-zinc-500 mt-0.5">Single query sandbox · eval suite (45 questions × 9 strata) · A/B compare configs.</div>
+          </div>
+          <div class="text-zinc-400 mono text-[11px]">playground.html →</div>
+        </a>
+      </div>
+    </section>
+
+    <section class="mb-8">
+      <h2 class="text-[10px] uppercase tracking-wider text-zinc-500 mb-3">Admin <span class="text-zinc-400 ml-1">— operations + governance</span></h2>
+      <div class="space-y-2">
+        <a href="dashboard.html" class="flex items-center gap-3 p-4 rounded-lg border border-zinc-200 hover:border-zinc-400 hover:bg-zinc-50 transition">
+          <i data-lucide="layout-dashboard" class="w-5 h-5 text-zinc-500 flex-shrink-0"></i>
+          <div class="flex-1 min-w-0">
+            <div class="text-sm font-medium text-zinc-900">Dashboard</div>
+            <div class="text-xs text-zinc-500 mt-0.5">Counts + sparklines · live "what just learned" feed · top anomalies · needs-attention.</div>
+          </div>
+          <div class="text-zinc-400 mono text-[11px]">dashboard.html →</div>
+        </a>
+        <a href="audit.html" class="flex items-center gap-3 p-4 rounded-lg border border-zinc-200 hover:border-zinc-400 hover:bg-zinc-50 transition">
+          <i data-lucide="scroll-text" class="w-5 h-5 text-zinc-500 flex-shrink-0"></i>
+          <div class="flex-1 min-w-0">
+            <div class="text-sm font-medium text-zinc-900">Audit</div>
+            <div class="text-xs text-zinc-500 mt-0.5">Immutable per-query log · re-run with current config · add-to-regression-set.</div>
+          </div>
+          <div class="text-zinc-400 mono text-[11px]">audit.html →</div>
+        </a>
+        <a href="settings.html" class="flex items-center gap-3 p-4 rounded-lg border border-zinc-200 hover:border-zinc-400 hover:bg-zinc-50 transition">
+          <i data-lucide="settings" class="w-5 h-5 text-zinc-500 flex-shrink-0"></i>
+          <div class="flex-1 min-w-0">
+            <div class="text-sm font-medium text-zinc-900">Settings <span class="text-[10px] mono px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-700 ml-1">+ /swagger</span></div>
+            <div class="text-xs text-zinc-500 mt-0.5">Workspace · models & retrieval defaults · auto-discovery · API keys · OpenAPI docs.</div>
+          </div>
+          <div class="text-zinc-400 mono text-[11px]">settings.html →</div>
+        </a>
+      </div>
+    </section>
+
+    <section class="mb-8">
+      <h2 class="text-[10px] uppercase tracking-wider text-zinc-500 mb-3">Universal</h2>
+      <a href="doc-detail.html" class="flex items-center gap-3 p-4 rounded-lg border border-zinc-200 hover:border-zinc-400 hover:bg-zinc-50 transition">
+        <i data-lucide="file-text" class="w-5 h-5 text-zinc-500 flex-shrink-0"></i>
+        <div class="flex-1 min-w-0">
+          <div class="text-sm font-medium text-zinc-900">Doc Detail <span class="text-[10px] mono px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-700 ml-1">slide-in panel</span></div>
+          <div class="text-xs text-zinc-500 mt-0.5">Opens from any doc / citation / entity / clause anywhere. Hero zone shows cited clause + PDF region (zero-scroll verification); accordions below for the rest.</div>
+        </div>
+        <div class="text-zinc-400 mono text-[11px]">doc-detail.html →</div>
+      </a>
+    </section>
+
+    <footer class="mt-12 pt-6 border-t border-zinc-200 text-xs text-zinc-500">
+      <div class="flex flex-wrap gap-x-4 gap-y-1">
+        <span>QA reports: <a href="qa/reports/" class="text-zinc-900 hover:underline mono">qa/reports/</a></span>
+        <span>Screenshots: <a href="qa/screens/" class="text-zinc-900 hover:underline mono">qa/screens/</a></span>
+        <span>Tracker: <a href="../docs/build_tracker.md" class="text-zinc-900 hover:underline mono">docs/build_tracker.md</a></span>
+        <span>Wiring: <a href="wiring_inventory.md" class="text-zinc-900 hover:underline mono">wiring_inventory.md</a></span>
+      </div>
+      <div class="mt-2 text-zinc-400">Locked 2026-05-22 · chat-first IA · light theme · lucide icons · monochrome accent.</div>
+    </footer>
+  </div>
+
+  <script>lucide.createIcons();</script>
+</body>
+</html>
