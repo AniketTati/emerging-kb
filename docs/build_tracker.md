@@ -154,9 +154,9 @@ QA gates this at G1.5b — every prototype page is grep'd for the forbidden voca
 
 ## 1. Now / Next / Blocked
 
-**Now:** Phase 0 G4 — **code landed across 5 commits 2026-05-23; not yet verified by running pytest** (local env lacks uv + Python 3.12 + a running Docker daemon for testcontainers). G4 cell stays 🟡 until the suite goes green at G5. Branch: `phase-0/repo-skeleton`.
-**Next:** Phase 0 G5 — `scripts/verify_phase_0.sh` runs the full stack end-to-end + the 49-test pytest suite. This is where G4's correctness is actually proved; until then G4 is "implementation present, not yet validated".
-**Blocked on:** environment setup for G5 — needs uv installed locally (or in CI), Docker running. User decides whether to set up here or move to CI.
+**Now:** Phase 0 G4 — code landed, **49/49 tests passing locally 2026-05-23** (uv installed, paradedb + minio via testcontainers, ~19s suite runtime). Awaiting G4 sign-off.
+**Next:** Phase 0 G5 — `scripts/verify_phase_0.sh` wraps the full `docker compose up --build` → migrations → curl /health, /ready → pytest end-to-end smoke. PR opens at G5.
+**Blocked on:** nothing.
 
 ---
 
@@ -601,6 +601,7 @@ Phases 15–24 per `architecture.md` §12. Tracked here only as a reminder of in
 | 2026-05-23 | **Post-G3 cross-gate consistency sweep (G1↔G2↔G3↔architecture).** Five drifts fixed in one commit: (A) G1 plan §5.1 G5 acceptance #5 was stale post-G2 — said `/openapi.json` returns empty paths, but G4 will mount `/health` + `/ready`; corrected. (B) Spec test count was 41 (claimed) vs 45 (actual recount of first draft); corrected. (C) §3 missing `testcontainers-python` + `freezegun` (test fixtures); added as new row. (D) `ltree` extension missing from `0001_extensions.sql` per architecture §7 (required for Phase 3 doc-chains + Phase 7 lineage_path); added, also added `kb_app` role creation in 0001. §3 DB row updated to include ltree. (E) Unused fixtures (`set_workspace`, `frozen_time`) removed from `conftest.py`. Plus 4 new tests landed: `test_health_returns_json_content_type` (api_contracts §0.1) + 3 per-check timeout tests on `/ready` (api_contracts §1.2 check table). Final test count: 49 (was 45 at G3 first draft). | Aniket |
 | 2026-05-23 | **Phase 0 G3 ✅ signed off.** Spec + 49 red skeletons locked. **G4 opens.** Order of build commits planned: (1) project bootstrap (pyproject.toml, .env.example, .gitignore, Dockerfile); (2) migrations (runner + 4 SQL files); (3) shared modules (config, db pool, logging, storage); (4) FastAPI app + middleware; (5) /health + /ready endpoints + readiness checks; (6) Procrastinate worker entrypoint; (7) docker-compose.yml + scripts/bootstrap_db.sh. Each commit makes some red tests green. | Aniket |
 | 2026-05-23 | **Phase 0 G4 — code landed (5 commits, not yet run).** Commits on `phase-0/repo-skeleton`: `1dec6f5` bootstrap (pyproject, Dockerfile, .env, src/kb stub) · `c0d020c` migrations (runner + 4 SQL) · `18b6ea8` shared modules (config, logging, db pool, storage) · `944c61f` FastAPI app + middleware + /health + /ready · `1dbd08e` worker + compose + bootstrap script + kb_app password wiring. **Tests not yet verified** — local env lacks uv + Python 3.12; will run at G5 (`scripts/verify_phase_0.sh`). G4 cell stays 🟡 until that suite goes green. | Aniket |
+| 2026-05-23 | **Phase 0 G4 debugging pass — all 49 tests pass.** Installed `uv` via Homebrew, ran pytest against fresh paradedb + minio testcontainers, fixed issues surfaced (commit `17baa1c`): PG utility commands (ALTER ROLE, SET LOCAL) don't accept bind parameters → use `psycopg.sql.Literal` + `SELECT set_config(...)`; testcontainer SQLAlchemy-style URLs need stripping for psycopg3; container `.stop()/.start()` in tests reassigns ports and breaks subsequent tests → replaced with monkey-patched check functions; configure_logging now called in build_app (ASGITransport doesn't trigger lifespan); structlog `cache_logger_on_first_use=False` so test-time processor swaps take effect; conftest now sets full MinIO creds + clears lru_caches; 0003/0004 made idempotent (IF NOT EXISTS, DROP POLICY IF EXISTS) so bootstrap test re-application works. Suite runtime ~19s. | Aniket |
 
 ---
 
