@@ -1,0 +1,57 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# uv
+uv.lock
+
+# Env / secrets
+.env
+.env.local
+*.secret
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Docker volumes (when bind-mounted locally)
+.volumes/
+data/
+minio-data/
+pg-data/
+
+# Logs
+*.log
+logs/
+
+# Eval outputs (we'll regenerate)
+eval/outputs/
+
+# Local Claude config (keep private)
+.claude/
+
+# Original problem brief — kept locally, never tracked.
+# The public-friendly version is at docs/problem_statement.md.
+docs/Build a Knowledge Base Service.pdf
+
+# Prototype QA artifacts — regenerable, don't bloat the repo
+prototype/node_modules/
+prototype/package-lock.json
+prototype/qa/screens/
+prototype/qa/reports/
