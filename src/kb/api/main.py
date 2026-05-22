@@ -37,6 +37,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 def build_app() -> FastAPI:
     """Construct + wire the FastAPI app. Called from `kb.api.main:app` and tests."""
+    # Configure logging here (not only in lifespan) so test clients that don't
+    # trigger lifespan (httpx + ASGITransport) still get the binding processors
+    # registered. configure_logging is idempotent.
+    settings = get_settings()
+    configure_logging(level=settings.log_level, fmt=settings.log_format)
+
     app = FastAPI(
         title="Emerging KB",
         version=__version__,
@@ -58,8 +64,15 @@ def build_app() -> FastAPI:
     # Test-only debug endpoint — excluded from OpenAPI (G1 G5 #5 acceptance:
     # /openapi.json paths contains only /health and /ready).
     @app.get("/_debug/workspace", include_in_schema=False)
-    async def _debug_workspace(workspace_id: str = None) -> dict[str, str]:  # noqa: B008
-        return {"workspace_id": current_workspace_id()}
+    async def _debug_workspace() -> dict[str, str]:
+        ws = current_workspace_id()
+        # Display the default-workspace sentinel UUID as "default"; an explicit
+        # UUID (X-Test-Workspace header, or later Phase 1 auth resolution)
+        # echoes back as-is.
+        settings = get_settings()
+        if ws == str(settings.default_workspace_id):
+            return {"workspace_id": "default"}
+        return {"workspace_id": ws}
 
     return app
 

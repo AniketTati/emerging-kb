@@ -47,10 +47,17 @@ def minio_container():
         yield container
 
 
+def _strip_sqlalchemy_driver(url: str) -> str:
+    """Testcontainers returns `postgresql+psycopg2://...` (SQLAlchemy form);
+    psycopg3 wants plain `postgresql://...`.
+    """
+    return url.replace("+psycopg2", "").replace("+psycopg", "")
+
+
 @pytest.fixture(scope="session")
 def db_url_superuser(postgres_container) -> str:
     """Connection URL for the superuser. Used by migrations + admin tests."""
-    return postgres_container.get_connection_url()
+    return _strip_sqlalchemy_driver(postgres_container.get_connection_url())
 
 
 @pytest.fixture(scope="session")
@@ -63,12 +70,13 @@ def db_url_kb_app(postgres_container, _kb_app_password) -> str:
     """
     from urllib.parse import urlparse, urlunparse
 
-    base = postgres_container.get_connection_url()
+    base = _strip_sqlalchemy_driver(postgres_container.get_connection_url())
     parsed = urlparse(base)
     host = parsed.hostname or "localhost"
     port = parsed.port or 5432
+    path = parsed.path or "/test"
     netloc = f"kb_app:{_kb_app_password}@{host}:{port}"
-    return urlunparse(parsed._replace(netloc=netloc))
+    return urlunparse(parsed._replace(netloc=netloc, path=path))
 
 
 @pytest.fixture(scope="session")
@@ -80,8 +88,14 @@ def _kb_app_password() -> str:
 
 
 @pytest.fixture(scope="session", autouse=True)
-def db_migrated(db_url_superuser: str) -> None:
-    """Apply all migrations once per session, before any test runs."""
+def db_migrated(db_url_superuser: str, _kb_app_password: str) -> None:
+    """Apply all migrations once per session, before any test runs.
+
+    Depends on `_kb_app_password` so KB_APP_PASSWORD is set in env *before*
+    the migration runner's `_set_app_role_password` step reads it. Without
+    this dependency, kb_app ships passwordless and every test that connects
+    as kb_app fails scram auth.
+    """
     from migrations.runner import run_migrations  # G4
 
     run_migrations(db_url_superuser)
@@ -119,14 +133,29 @@ async def db_superuser(db_url_superuser: str):
 
 @pytest_asyncio.fixture
 async def client(db_url_kb_app, minio_container) -> AsyncIterator["AsyncClient"]:
-    """httpx.AsyncClient over the FastAPI app via ASGITransport."""
+    """httpx.AsyncClient over the FastAPI app via ASGITransport.
+
+    Sets all KB_* env vars so the lru-cached `get_settings()` + `get_minio_client()`
+    factories pick up the actual testcontainer endpoints + credentials.
+    Cache is cleared at the top so a previous test's cached values don't leak.
+    """
     from httpx import ASGITransport, AsyncClient
 
-    # G4: build_app reads env, wires db pool + minio client + middleware.
     from kb.api.main import build_app  # G4
+    from kb.config import get_settings
+    from kb.storage import get_minio_client
 
+    cfg = minio_container.get_config()
     os.environ["KB_DB_URL"] = db_url_kb_app
-    os.environ["KB_MINIO_ENDPOINT"] = minio_container.get_config()["endpoint"]
+    os.environ["KB_MINIO_ENDPOINT"] = cfg["endpoint"]
+    os.environ["KB_MINIO_ACCESS_KEY"] = cfg["access_key"]
+    os.environ["KB_MINIO_SECRET_KEY"] = cfg["secret_key"]
+    os.environ["KB_MINIO_SECURE"] = "false"
+
+    # Both factories are @lru_cache'd; clear so this build_app reads fresh env.
+    get_settings.cache_clear()
+    get_minio_client.cache_clear()
+
     app = build_app()
 
     async with AsyncClient(

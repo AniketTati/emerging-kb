@@ -56,16 +56,24 @@ async def test_health_ts_is_iso8601_utc_recent(client):
     assert abs(datetime.now(UTC) - ts) < timedelta(seconds=5)
 
 
-async def test_health_does_not_depend_on_db(client, postgres_container):
-    """Liveness ≠ readiness: pausing the DB must not break /health."""
-    postgres_container.stop()
-    try:
-        resp = await client.get("/health")
-        assert resp.status_code == 200, (
-            "api_contracts §1.1 design note: /health must not depend on dependencies"
-        )
-    finally:
-        postgres_container.start()
+async def test_health_does_not_depend_on_db(client, monkeypatch):
+    """Liveness ≠ readiness: a broken DB layer must not break /health.
+
+    Tests can't physically stop the testcontainer Postgres — restart assigns
+    a new port and breaks every later test in the session. Instead, sabotage
+    the db pool: any attempt to open a connection from inside /health would
+    blow up. /health must not even try.
+    """
+    from kb.db import pool
+
+    async def boom(*_a, **_k):
+        raise RuntimeError("/health touched the database")
+
+    monkeypatch.setattr(pool, "open_connection", boom)
+    resp = await client.get("/health")
+    assert resp.status_code == 200, (
+        "api_contracts §1.1 design note: /health must not depend on dependencies"
+    )
 
 
 async def test_health_does_not_write_access_log(client, capsys):

@@ -10,9 +10,9 @@ from __future__ import annotations
 
 import logging
 import time
-import uuid
 from typing import Awaitable, Callable
 
+import structlog
 import uuid_utils
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -73,31 +73,56 @@ class WorkspaceMiddleware(BaseHTTPMiddleware):
 
 
 class AccessLogMiddleware(BaseHTTPMiddleware):
-    """Emit one access-log entry per request. Skips probe endpoints."""
+    """Emit per-request logs.
 
-    def __init__(self, app, logger_name: str = "kb.access") -> None:
+    Two channels with different semantics:
+
+    - **Structlog `kb.request`** fires on EVERY request (probes included). It
+      exercises the contextvar binding (request_id + workspace_id) and is what
+      `capture_structlog` in tests observes. Emitted as a single info-level
+      event with `event_context="request"`.
+
+    - **Stdlib `kb.access`** fires only on NON-probe requests, per api_contracts
+      §0.8 ("probe endpoints skip access logs"). This is the traditional
+      access-log channel that LBs / log aggregators tail. The `capture_access_logs`
+      helper in tests observes this channel.
+    """
+
+    def __init__(self, app, access_logger_name: str = "kb.access") -> None:
         super().__init__(app)
-        self._logger = logging.getLogger(logger_name)
+        self._access_log = logging.getLogger(access_logger_name)
+        # NOTE: structlog logger acquired per-call (not cached as instance attr)
+        # so tests can swap processors via `capture_structlog` and see emitted events.
 
     async def dispatch(
         self, request: Request, call_next: Callable[[Request], Awaitable[Response]]
     ) -> Response:
-        if request.url.path in _PROBE_PATHS:
-            return await call_next(request)
-
         t0 = time.perf_counter()
         response = await call_next(request)
         latency_ms = int((time.perf_counter() - t0) * 1000)
-        self._logger.info(
+
+        # Structlog trace event — always fires; exercises contextvar binding.
+        # request_id + workspace_id are merged in via the configured processors.
+        structlog.get_logger("kb.request").info(
             "request",
-            extra={
-                "event_context": "request",
-                "method": request.method,
-                "path": request.url.path,
-                "status": response.status_code,
-                "latency_ms": latency_ms,
-                "request_id": request_id_var.get(),
-                "workspace_id": workspace_id_var.get(),
-            },
+            event_context="request",
+            method=request.method,
+            path=request.url.path,
+            status=response.status_code,
+            latency_ms=latency_ms,
         )
+
+        # Traditional access log — probes are excluded (api_contracts §0.8).
+        if request.url.path not in _PROBE_PATHS:
+            self._access_log.info(
+                "request",
+                extra={
+                    "method": request.method,
+                    "path": request.url.path,
+                    "status": response.status_code,
+                    "latency_ms": latency_ms,
+                    "request_id": request_id_var.get(),
+                    "workspace_id": workspace_id_var.get(),
+                },
+            )
         return response

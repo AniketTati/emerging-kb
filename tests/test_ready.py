@@ -42,30 +42,39 @@ async def test_ready_ts_is_iso8601_utc_recent(client):
     assert abs(datetime.now(UTC) - ts) < timedelta(seconds=5)
 
 
-async def test_ready_returns_503_when_db_down(client, postgres_container):
-    """Pause postgres; /ready returns 503; db check reports fail with error string."""
-    postgres_container.stop()
-    try:
-        resp = await client.get("/ready")
-        assert resp.status_code == 503
-        body = resp.json()
-        assert body["status"] == "not_ready"
-        assert body["checks"]["db"]["status"] == "fail"
-        assert isinstance(body["checks"]["db"]["error"], str)
-        assert "latency_ms" not in body["checks"]["db"]
-    finally:
-        postgres_container.start()
+async def test_ready_returns_503_when_db_down(client, monkeypatch):
+    """db check fails → /ready returns 503; db reports fail with error string.
+
+    Monkey-patches the check function rather than stopping the container —
+    container restarts assign a new host port and break every later test
+    in the session.
+    """
+    from kb.api import readiness
+
+    async def db_unreachable(*_a, **_k):
+        raise RuntimeError("connection refused")
+
+    monkeypatch.setattr(readiness, "check_db", db_unreachable)
+    resp = await client.get("/ready")
+    assert resp.status_code == 503
+    body = resp.json()
+    assert body["status"] == "not_ready"
+    assert body["checks"]["db"]["status"] == "fail"
+    assert isinstance(body["checks"]["db"]["error"], str)
+    assert "latency_ms" not in body["checks"]["db"]
 
 
-async def test_ready_returns_503_when_minio_down(client, minio_container):
-    """Pause MinIO; /ready returns 503; minio check reports fail."""
-    minio_container.stop()
-    try:
-        resp = await client.get("/ready")
-        assert resp.status_code == 503
-        assert resp.json()["checks"]["minio"]["status"] == "fail"
-    finally:
-        minio_container.start()
+async def test_ready_returns_503_when_minio_down(client, monkeypatch):
+    """minio check fails → /ready returns 503; minio reports fail."""
+    from kb.api import readiness
+
+    async def minio_unreachable(*_a, **_k):
+        raise RuntimeError("connection refused")
+
+    monkeypatch.setattr(readiness, "check_minio", minio_unreachable)
+    resp = await client.get("/ready")
+    assert resp.status_code == 503
+    assert resp.json()["checks"]["minio"]["status"] == "fail"
 
 
 async def test_ready_returns_503_when_migration_pending(
@@ -85,23 +94,29 @@ async def test_ready_returns_503_when_migration_pending(
     assert "9999_pending.sql" in err
 
 
-async def test_ready_response_uses_json_on_failure(client, postgres_container):
+async def test_ready_response_uses_json_on_failure(client, monkeypatch):
     """Failure body uses Content-Type: application/json (not problem+json — /ready is a typed probe)."""
-    postgres_container.stop()
-    try:
-        resp = await client.get("/ready")
-        assert resp.headers["content-type"].startswith("application/json")
-    finally:
-        postgres_container.start()
+    from kb.api import readiness
+
+    async def fail(*_a, **_k):
+        raise RuntimeError("simulated")
+
+    monkeypatch.setattr(readiness, "check_db", fail)
+    resp = await client.get("/ready")
+    assert resp.headers["content-type"].startswith("application/json")
 
 
 async def test_ready_checks_run_in_parallel(client, monkeypatch):
-    """Each check sleeps 1s; total response time ≈ 1s (parallel), not 3s (serial)."""
+    """Each check sleeps 0.5s; total response time ≈ 0.5s (parallel), not 1.5s (serial).
+
+    Sleep < tightest per-check timeout (migrations = 1.0s) so the parallelism
+    test doesn't accidentally trip a per-check timeout.
+    """
     from kb.api import readiness  # G4
 
     async def slow_check(*args, **kwargs):
-        await asyncio.sleep(1.0)
-        return {"status": "ok", "latency_ms": 1000}
+        await asyncio.sleep(0.5)
+        return {"status": "ok", "latency_ms": 500}
 
     monkeypatch.setattr(readiness, "check_db", slow_check)
     monkeypatch.setattr(readiness, "check_minio", slow_check)
@@ -111,8 +126,8 @@ async def test_ready_checks_run_in_parallel(client, monkeypatch):
     resp = await client.get("/ready")
     elapsed = time.perf_counter() - t0
 
-    assert resp.status_code == 200
-    assert elapsed < 2.0, (
+    assert resp.status_code == 200, f"checks returned: {resp.json()}"
+    assert elapsed < 1.0, (
         f"api_contracts §1.2 design note: checks must run in parallel via asyncio.gather; "
         f"elapsed {elapsed:.2f}s implies serial execution"
     )

@@ -90,14 +90,18 @@ async def test_workspace_defaults_to_default_when_unauthenticated(client):
 
 
 async def test_structlog_binds_request_id_and_workspace_id(client):
-    """Logs emitted during a request include request_id and workspace_id."""
+    """Logs emitted during a request include request_id and workspace_id.
+
+    Hits /_debug/workspace (a non-probe endpoint) so AccessLogMiddleware
+    fires its structlog `event_context="request"` event. Probe endpoints
+    (/health, /ready) intentionally skip the access-log channel but still
+    exercise the structlog trace event.
+    """
     from kb.logging import capture_structlog  # G4
 
     with capture_structlog() as records:
-        await client.get("/health")
+        await client.get("/_debug/workspace")
 
-    # At least one record should be the (potentially internal) startup-or-shutdown log,
-    # but the request-scoped one we care about includes both fields.
     request_scoped = [r for r in records if r.get("event_context") == "request"]
     assert request_scoped, "no request-scoped log records captured"
     for r in request_scoped:

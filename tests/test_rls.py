@@ -53,7 +53,9 @@ async def test_audit_log_isolated_across_workspaces(db_url_kb_app):
     # Write as workspace A.
     async with open_connection(db_url_kb_app) as conn_a:
         async with conn_a.transaction():
-            await conn_a.execute("SET LOCAL app.workspace_id = %s", (str(WS_A),))
+            await conn_a.execute(
+                "SELECT set_config('app.workspace_id', %s, true)", (str(WS_A),)
+            )
             await conn_a.execute(
                 "INSERT INTO audit_log (workspace_id, actor, action, payload) "
                 "VALUES (%s, 'test', 'test.action', '{}'::jsonb)",
@@ -63,7 +65,9 @@ async def test_audit_log_isolated_across_workspaces(db_url_kb_app):
     # Write as workspace B.
     async with open_connection(db_url_kb_app) as conn_b:
         async with conn_b.transaction():
-            await conn_b.execute("SET LOCAL app.workspace_id = %s", (str(WS_B),))
+            await conn_b.execute(
+                "SELECT set_config('app.workspace_id', %s, true)", (str(WS_B),)
+            )
             await conn_b.execute(
                 "INSERT INTO audit_log (workspace_id, actor, action, payload) "
                 "VALUES (%s, 'test', 'test.action', '{}'::jsonb)",
@@ -72,8 +76,11 @@ async def test_audit_log_isolated_across_workspaces(db_url_kb_app):
 
     # Read as workspace A — should see only A's row.
     async with open_connection(db_url_kb_app) as conn_a:
-        await conn_a.execute("SET LOCAL app.workspace_id = %s", (str(WS_A),))
-        rows = await conn_a.fetch("SELECT workspace_id FROM audit_log")
+        async with conn_a.transaction():
+            await conn_a.execute(
+                "SELECT set_config('app.workspace_id', %s, true)", (str(WS_A),)
+            )
+            rows = await conn_a.fetch("SELECT workspace_id FROM audit_log")
         assert all(r[0] == WS_A for r in rows), "workspace B's row leaked"
 
 
@@ -83,7 +90,9 @@ async def test_idempotency_keys_isolated_across_workspaces(db_url_kb_app):
 
     async with open_connection(db_url_kb_app) as conn:
         async with conn.transaction():
-            await conn.execute("SET LOCAL app.workspace_id = %s", (str(WS_A),))
+            await conn.execute(
+                "SELECT set_config('app.workspace_id', %s, true)", (str(WS_A),)
+            )
             await conn.execute(
                 "INSERT INTO idempotency_keys (workspace_id, key, response, status_code) "
                 "VALUES (%s, 'k', '{}'::jsonb, 200)",
@@ -91,8 +100,11 @@ async def test_idempotency_keys_isolated_across_workspaces(db_url_kb_app):
             )
 
     async with open_connection(db_url_kb_app) as conn:
-        await conn.execute("SET LOCAL app.workspace_id = %s", (str(WS_B),))
-        rows = await conn.fetch("SELECT key FROM idempotency_keys")
+        async with conn.transaction():
+            await conn.execute(
+                "SELECT set_config('app.workspace_id', %s, true)", (str(WS_B),)
+            )
+            rows = await conn.fetch("SELECT key FROM idempotency_keys")
         assert rows == [], "workspace A's idempotency key leaked into B's view"
 
 
@@ -135,7 +147,10 @@ async def test_dropping_workspace_filter_does_not_leak(db_url_kb_app):
     from kb.db.pool import open_connection  # G4
 
     async with open_connection(db_url_kb_app) as conn:
-        await conn.execute("SET LOCAL app.workspace_id = %s", (str(WS_A),))
-        # Intentionally no WHERE clause — RLS policy must filter.
-        rows = await conn.fetch("SELECT workspace_id FROM audit_log")
+        async with conn.transaction():
+            await conn.execute(
+                "SELECT set_config('app.workspace_id', %s, true)", (str(WS_A),)
+            )
+            # Intentionally no WHERE clause — RLS policy must filter.
+            rows = await conn.fetch("SELECT workspace_id FROM audit_log")
         assert all(r[0] == WS_A for r in rows)

@@ -7,7 +7,7 @@
 --   • Partition-rotation cron.
 --   • GET /audit read API + SSE lifecycle endpoint.
 
-CREATE TABLE audit_log (
+CREATE TABLE IF NOT EXISTS audit_log (
     id            uuid         NOT NULL DEFAULT gen_random_uuid(),
     workspace_id  uuid         NOT NULL,
     created_at    timestamptz  NOT NULL DEFAULT now(),
@@ -23,15 +23,15 @@ CREATE TABLE audit_log (
 ) PARTITION BY RANGE (created_at);
 
 -- Initial partitions: current month + next month. Phase 9 cron rolls forward.
-CREATE TABLE audit_log_2026_05 PARTITION OF audit_log
+CREATE TABLE IF NOT EXISTS audit_log_2026_05 PARTITION OF audit_log
     FOR VALUES FROM ('2026-05-01') TO ('2026-06-01');
-CREATE TABLE audit_log_2026_06 PARTITION OF audit_log
+CREATE TABLE IF NOT EXISTS audit_log_2026_06 PARTITION OF audit_log
     FOR VALUES FROM ('2026-06-01') TO ('2026-07-01');
 
 -- Lookup indexes — Phase 8 query-time audit + Phase 9 read API both need these.
-CREATE INDEX audit_log_ws_created_idx
+CREATE INDEX IF NOT EXISTS audit_log_ws_created_idx
     ON audit_log (workspace_id, created_at DESC);
-CREATE INDEX audit_log_ws_query_idx
+CREATE INDEX IF NOT EXISTS audit_log_ws_query_idx
     ON audit_log (workspace_id, query_id)
     WHERE query_id IS NOT NULL;
 
@@ -42,10 +42,13 @@ ALTER TABLE audit_log FORCE ROW LEVEL SECURITY;
 -- Policy: a session can only see rows for its current workspace.
 -- current_setting(..., true) returns NULL when unset → cast to UUID is NULL
 -- → equality is NULL → policy denies the row. This is the "no context, no rows" rule.
+-- NULLIF(..., '') guards against the empty-string case PG returns when the GUC
+-- was explicitly SET to ''.
+DROP POLICY IF EXISTS audit_log_workspace_isolation ON audit_log;
 CREATE POLICY audit_log_workspace_isolation
     ON audit_log
-    USING (workspace_id = current_setting('app.workspace_id', true)::uuid)
-    WITH CHECK (workspace_id = current_setting('app.workspace_id', true)::uuid);
+    USING (workspace_id = NULLIF(current_setting('app.workspace_id', true), '')::uuid)
+    WITH CHECK (workspace_id = NULLIF(current_setting('app.workspace_id', true), '')::uuid);
 
 -- kb_app may INSERT and SELECT. UPDATE/DELETE intentionally NOT granted — append-only.
 GRANT SELECT, INSERT ON audit_log TO kb_app;

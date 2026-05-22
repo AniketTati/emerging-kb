@@ -47,7 +47,11 @@ def configure_logging(level: str = "INFO", fmt: str = "json") -> None:
             getattr(logging, level.upper(), logging.INFO)
         ),
         logger_factory=structlog.PrintLoggerFactory(),
-        cache_logger_on_first_use=True,
+        # cache_logger_on_first_use=False so that `capture_structlog` in tests
+        # can swap processors at runtime and see events emitted by code that
+        # acquired its logger earlier (e.g. middleware initialized at app
+        # startup). Tradeoff is a small per-call lookup; negligible.
+        cache_logger_on_first_use=False,
     )
 
 

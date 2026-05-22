@@ -21,6 +21,7 @@ import sys
 from pathlib import Path
 
 import psycopg
+from psycopg import sql
 
 logger = logging.getLogger(__name__)
 
@@ -63,8 +64,12 @@ def _set_app_role_password(conn: psycopg.Connection) -> None:
             "applications cannot connect under scram auth"
         )
         return
+    # Postgres utility commands (ALTER ROLE, GRANT, ...) don't accept bind
+    # parameters; we must interpolate. psycopg.sql.Literal handles escaping
+    # safely — equivalent to PG's quote_literal().
+    stmt = sql.SQL("ALTER ROLE kb_app WITH PASSWORD {}").format(sql.Literal(password))
     with conn.transaction():
-        conn.execute("ALTER ROLE kb_app WITH PASSWORD %s", (password,))
+        conn.execute(stmt)
     logger.info("kb_app role password updated from KB_APP_PASSWORD")
 
 
