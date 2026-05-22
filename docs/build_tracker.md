@@ -154,9 +154,9 @@ QA gates this at G1.5b — every prototype page is grep'd for the forbidden voca
 
 ## 1. Now / Next / Blocked
 
-**Now:** Phase 0 G1 — plan drafted (see §5.1 below) · awaiting sign-off. Branch: `phase-0/repo-skeleton`.
-**Next:** Phase 0 G2 — API contracts for first endpoints (`/health`, `/ready`) + Phase 1 G1 — Schema service plan.
-**Blocked on:** nothing. Pre-Phase-0 review complete · all 10 prototype screens signed off · wiring inventory done · `docs/ui_design.md` back-ported.
+**Now:** Phase 0 G2 — API contracts for `/health` + `/ready` (open). Branch: `phase-0/repo-skeleton`.
+**Next:** Phase 0 G3 — test specs for `/health` + `/ready` + migration runner.
+**Blocked on:** nothing. Phase 0 G1 signed off 2026-05-22 · plan locked in §5.1.
 
 ---
 
@@ -259,7 +259,7 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
 
 | Phase | Description | G1 Plan | G2 API | G3 Tests | G4 Build | G5 Run | Notes |
 |---|---|---|---|---|---|---|---|
-| **0** | Repo + docker-compose (Postgres+pgvector+pg_search+MinIO+Procrastinate) + lifecycle DDL | 🟡 | ⬜ | ⬜ | ⬜ | ⬜ | G1 plan in §5.1 · awaiting sign-off. G2 = `/health` + `/ready`. |
+| **0** | Repo + docker-compose (Postgres+pgvector+pg_search+MinIO+Procrastinate) + lifecycle DDL | ✅ | 🟡 | ⬜ | ⬜ | ⬜ | G1 signed off 2026-05-22 (plan §5.1). G2 open: `/health` + `/ready`. |
 | **1** | Schema service: CRUD, versioning, NL field descriptions, hierarchy | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | First "real" API phase |
 | **2** | Parse layer: Docling + Mistral OCR + xlsx + email → raw_pages | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | Internal service; API exposed via upload (phase 10a) |
 | **3** | Chunking + Contextual Retrieval + RAPTOR tree build | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | Internal worker |
@@ -279,9 +279,9 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
 | **11** | Public-dataset loader: CUAD + Enron + SEC 10-K subset + scans + xlsx | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | Scripts, not service endpoints |
 | **12** | Eval harness — 45 stratified Q&A (5 × 9 strata) + RAGAS + HHEM + basic Playground sandbox UI | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | `playground.html` (basic single-query + eval matrix) · regression CI |
 
-### 5.1 Phase 0 plan — Repo skeleton + docker-compose (G1 OPEN)
+### 5.1 Phase 0 plan — Repo skeleton + docker-compose (G1 SIGNED OFF)
 
-> **Status:** G1 open · drafted 2026-05-22 · awaiting sign-off · no code yet. Branch: `phase-0/repo-skeleton`.
+> **Status:** G1 ✅ signed off 2026-05-22 by Aniket. Plan below is locked — changes require re-opening G1 per §0 rule 5. Branch: `phase-0/repo-skeleton`.
 
 #### Scope
 
@@ -479,6 +479,7 @@ Phases 15–24 per `architecture.md` §12. Tracked here only as a reminder of in
 | 2026-05-22 | All 10 prototype screens built, QA-passed, signed off. Polish pass applied: doc names → Doc Detail · field pills → Schema Studio · doc-type badges → Schema Studio · query IDs → Audit · cited sources → Doc Detail. Cross-cutting §0.2 rules verified on every screen. | Aniket |
 | 2026-05-22 | Locked design back-ported into `docs/ui_design.md`. Prior version preserved at `docs/archive/ui_design_v1.md`. **Pre-Phase-0 review complete. Phase 0 G1 ready to open.** | Aniket |
 | 2026-05-22 | **Phase 0 G1 OPEN.** Branched `phase-0/repo-skeleton`. Plan section §5.1 drafted: single-package `src/kb/` layout, ParadeDB image (bundles pgvector + pg_search), raw-SQL migration runner, narrow lifecycle DDL (extensions + `schema_migrations`, `audit_log`, `processing_status`, `idempotency_keys`), `uv`/`ruff`/`pyright`/`pytest` tooling, FastAPI skeleton (routes open at G2). Awaiting sign-off. | Aniket |
+| 2026-05-22 | **Phase 0 G1 ✅ SIGNED OFF.** Plan locked. Phase 0 G2 opens — API contracts for `/health` + `/ready` to land in `docs/api_contracts.md`. | Aniket |
 
 ---
 
