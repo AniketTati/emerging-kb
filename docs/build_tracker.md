@@ -154,7 +154,7 @@ QA gates this at G1.5b — every prototype page is grep'd for the forbidden voca
 
 ## 1. Now / Next / Blocked
 
-**Now:** Phase 0 G1 — repo skeleton + docker-compose plan (open).
+**Now:** Phase 0 G1 — plan drafted (see §5.1 below) · awaiting sign-off. Branch: `phase-0/repo-skeleton`.
 **Next:** Phase 0 G2 — API contracts for first endpoints (`/health`, `/ready`) + Phase 1 G1 — Schema service plan.
 **Blocked on:** nothing. Pre-Phase-0 review complete · all 10 prototype screens signed off · wiring inventory done · `docs/ui_design.md` back-ported.
 
@@ -259,7 +259,7 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
 
 | Phase | Description | G1 Plan | G2 API | G3 Tests | G4 Build | G5 Run | Notes |
 |---|---|---|---|---|---|---|---|
-| **0** | Repo + docker-compose (Postgres+pgvector+pg_search+MinIO+Procrastinate) + lifecycle DDL | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | No API surface yet — G2 = "health" + "ready" endpoints |
+| **0** | Repo + docker-compose (Postgres+pgvector+pg_search+MinIO+Procrastinate) + lifecycle DDL | 🟡 | ⬜ | ⬜ | ⬜ | ⬜ | G1 plan in §5.1 · awaiting sign-off. G2 = `/health` + `/ready`. |
 | **1** | Schema service: CRUD, versioning, NL field descriptions, hierarchy | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | First "real" API phase |
 | **2** | Parse layer: Docling + Mistral OCR + xlsx + email → raw_pages | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | Internal service; API exposed via upload (phase 10a) |
 | **3** | Chunking + Contextual Retrieval + RAPTOR tree build | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | Internal worker |
@@ -278,6 +278,132 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
 | **10g** | UI — Settings (workspace · models & retrieval defaults · auto-discovery · ingestion · cost · API keys · `/swagger` exposure · Effective Config view) | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | `settings.html` |
 | **11** | Public-dataset loader: CUAD + Enron + SEC 10-K subset + scans + xlsx | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | Scripts, not service endpoints |
 | **12** | Eval harness — 45 stratified Q&A (5 × 9 strata) + RAGAS + HHEM + basic Playground sandbox UI | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | `playground.html` (basic single-query + eval matrix) · regression CI |
+
+### 5.1 Phase 0 plan — Repo skeleton + docker-compose (G1 OPEN)
+
+> **Status:** G1 open · drafted 2026-05-22 · awaiting sign-off · no code yet. Branch: `phase-0/repo-skeleton`.
+
+#### Scope
+
+Phase 0 produces the runnable infrastructure that every later phase builds on.
+
+**In scope:**
+- Single-package Python repo layout under `src/kb/`.
+- `docker-compose.yml` bringing up Postgres (pgvector + pg_search), MinIO, a Procrastinate worker container, and the FastAPI app — in one command.
+- Cross-cutting "lifecycle" tables that every later phase reads or writes (audit log, processing status, idempotency keys, migration tracker).
+- Migration runner — raw SQL files + a thin Python applier.
+- Python project tooling (`uv`, `ruff`, `pyright`, `pytest`).
+- FastAPI app skeleton (no routes yet — `/health` + `/ready` open at Phase 0 G2).
+
+**Out of scope (deferred):**
+- Any application logic (schema service, parsers, chunkers, indexers, retrieval, extraction, identity, query, UI). Each owns its phase.
+- Phase-specific DDL (schemas, raw_pages, chunks, embeddings, mentions, entities, queries, raptor_nodes). Each phase ships its own `migrations/sql/NNNN_*.sql` at its own G4.
+- Next.js `web/` project — Phase 10a.
+- CI workflows beyond a single smoke check.
+
+#### Decisions (locked at G1; changes require re-opening G1)
+
+| # | Decision | Choice | Rationale |
+|---|---|---|---|
+| 1 | Repo layout | **Single Python package** at `src/kb/` with internal modules (`kb.api`, `kb.workers`, `kb.db`, `kb.storage`). API and worker share one image; differ only by entrypoint. | All later phases share schema/retrieval/eval primitives. Splitting now invents internal API surface that isn't needed. Process separation already happens via different entrypoints + Procrastinate queue, not packages. |
+| 2 | Postgres image | **`paradedb/paradedb:latest-pg17`** | `pg_search` is a ParadeDB extension; the image bundles it with `pgvector`. Stock `postgres:17` + manual install is fragile. |
+| 3 | Migration tool | **Raw SQL files + thin Python runner** (`migrations/runner.py`) tracking applied files in `schema_migrations`. | Architecture is DDL-heavy (extensions, partitions, HNSW, BM25, materialized views). Alembic autogenerate doesn't help with any of that; every migration would be hand-written. Avoids ORM coupling — multiple services use raw SQL. |
+| 4 | Python tooling | **`uv`** (deps + lockfile), **`ruff`** (lint + format), **`pyright`** basic mode (types), **`pytest` + `pytest-asyncio` + `httpx`** (tests). | Modern, fast, no exotic choices. |
+| 5 | Lifecycle DDL scope | **Narrow** — extensions + cross-cutting tables only. Each phase ships its own DDL at its own G4. | Lets table shapes evolve as the code using them gets written. Phase tables aren't pre-locked. |
+
+#### Repo layout (target after Phase 0 G4)
+
+```
+emerging-kb/
+├── pyproject.toml              ← single uv project
+├── uv.lock
+├── .env.example                ← all env vars documented; real .env gitignored
+├── docker-compose.yml
+├── docker-compose.override.yml ← gitignored; local overrides
+├── Dockerfile                  ← single image; api/worker/migrate = different entrypoints
+├── src/kb/
+│   ├── api/                    ← FastAPI app; entrypoint `kb.api.main:app`
+│   │   ├── main.py             ← app factory; mounts /health, /ready at Phase 0 G2
+│   │   └── deps.py
+│   ├── workers/                ← Procrastinate worker; entrypoint `kb.workers.run`
+│   │   └── run.py
+│   ├── db/                     ← psycopg async pool; transactions
+│   │   └── pool.py
+│   ├── storage/                ← MinIO client
+│   ├── config.py               ← pydantic-settings
+│   └── logging.py              ← structlog config
+├── migrations/
+│   ├── runner.py               ← applies .sql files in lexical order; tracks in schema_migrations
+│   └── sql/
+│       ├── 0001_extensions.sql           ← CREATE EXTENSION vector, pg_search
+│       ├── 0002_schema_migrations.sql    ← bootstrap migration tracker
+│       ├── 0003_audit_log.sql            ← append-only, monthly partitioned
+│       ├── 0004_processing_status.sql    ← per-(doc_id, stage) lifecycle
+│       └── 0005_idempotency_keys.sql     ← cross-cutting idempotency
+├── scripts/
+│   ├── bootstrap_db.sh         ← docker compose up + run migrations
+│   └── verify_phase_0.sh       ← G5 smoke (lands at G5)
+├── tests/
+│   ├── conftest.py             ← lands at G3
+│   └── specs/phase_0.md        ← lands at G3
+└── docs/, prototype/           ← existing
+```
+
+**Reversibility note:** if any module under `src/kb/` later needs its own package (e.g. shared lib, separate deploy target), that's a mechanical extract — cheaper than carrying multi-package scaffolding through 12 phases that may never need it.
+
+#### docker-compose service plan
+
+| Service | Image | Ports | Volumes | Depends on |
+|---|---|---|---|---|
+| `db` | `paradedb/paradedb:latest-pg17` | `5432:5432` | `pg-data:/var/lib/postgresql/data` | — |
+| `minio` | `minio/minio:latest` | `9000:9000` (S3), `9001:9001` (console) | `minio-data:/data` | — |
+| `migrate` | built from `Dockerfile`; entrypoint `python -m migrations.runner` | — | — | `db` (healthy) |
+| `api` | built from `Dockerfile`; entrypoint `uvicorn kb.api.main:app --host 0.0.0.0 --port 8000` | `8000:8000` | — | `migrate` (completed_successfully) |
+| `worker` | built from `Dockerfile`; entrypoint `python -m kb.workers.run` | — | — | `migrate` (completed_successfully) |
+
+**Notes:**
+- Healthchecks: `db` → `pg_isready`; `minio` → HTTP `/minio/health/live`; `api` → `GET /health` once routes land at G2.
+- Single `Dockerfile` for `api`, `worker`, `migrate` — different entrypoints over the same image. Keeps build cache tight.
+- `migrate` runs as a short-lived one-shot init container (Compose `service_completed_successfully` condition gates `api` + `worker`).
+- `.env.example` committed with placeholders. `pg-data/` and `minio-data/` gitignored.
+- No separate broker — Procrastinate uses Postgres directly.
+
+#### Lifecycle DDL — Phase 0 migrations (narrow scope)
+
+1. **`0001_extensions.sql`** — `CREATE EXTENSION IF NOT EXISTS vector; CREATE EXTENSION IF NOT EXISTS pg_search;`
+2. **`0002_schema_migrations.sql`** — `(id text primary key, applied_at timestamptz default now())`. Bootstrap tracker the runner writes to.
+3. **`0003_audit_log.sql`** — append-only, partitioned by `ts` per month. Columns: `id uuid pk · ts timestamptz · actor text · action text · entity_type text · entity_id text · payload jsonb`. Phase 9 builds the read surface over this; phases 1–8 write to it.
+4. **`0004_processing_status.sql`** — per-`(doc_id, stage)` lifecycle row. Columns: `doc_id uuid · stage text · status text · started_at timestamptz · finished_at timestamptz · error jsonb`. Phases 2–7 write; Phase 9 exposes the SSE feed.
+5. **`0005_idempotency_keys.sql`** — `key text pk · response jsonb · created_at timestamptz`. Cross-cutting idempotent request handling.
+
+Each later phase appends its own `NNNN_<purpose>.sql` files at its own G4. Numbering is global (linear apply order).
+
+#### Migration runner behaviour
+
+`python -m migrations.runner`:
+1. Connect to the configured Postgres.
+2. Ensure `schema_migrations` table exists (bootstrap if missing — runs `0002_*.sql` separately).
+3. List `migrations/sql/*.sql` in lexical order.
+4. For each file not yet recorded: run it inside a transaction; on success record `(id=filename, applied_at=now())`.
+5. Idempotent: re-running with no new files does nothing.
+
+No rollback DSL — for DDL we write forward fixes. Standard in DDL-heavy systems.
+
+#### Phase 0 G5 — what "green" means
+
+`scripts/verify_phase_0.sh` lands at G5 and runs end-to-end:
+
+1. `cp .env.example .env && docker compose up -d --build`
+2. Wait for `db`, `minio`, `api`, `worker` healthy; `migrate` exited 0.
+3. `psql` into `db`: `\dx` includes `vector` and `pg_search`; `\dt` includes `schema_migrations`, `audit_log`, `processing_status`, `idempotency_keys`.
+4. `curl http://localhost:8000/openapi.json` returns 200 with an empty `paths` object (routes open at Phase 0 G2).
+5. `pytest tests/test_phase_0_*.py` is green.
+
+#### Sign-off
+
+When Aniket approves this plan, the Phase 0 G1 cell in §5 flips 🟡 → ✅ and Phase 0 G2 opens (API contracts for `/health` + `/ready`). Sign-off recorded in §9 (Change log).
+
+---
 
 ### Wave B (build if time)
 
@@ -352,6 +478,7 @@ Phases 15–24 per `architecture.md` §12. Tracked here only as a reminder of in
 | 2026-05-22 | Added G1.6 (Wiring inventory) gate. Every interactive element on every screen → planned backend endpoint or marked client-only. `prototype/wiring_inventory.md` produced — ~210 elements audited, ~100 unique endpoints across 16 groups. Becomes the input set for G2. | Aniket |
 | 2026-05-22 | All 10 prototype screens built, QA-passed, signed off. Polish pass applied: doc names → Doc Detail · field pills → Schema Studio · doc-type badges → Schema Studio · query IDs → Audit · cited sources → Doc Detail. Cross-cutting §0.2 rules verified on every screen. | Aniket |
 | 2026-05-22 | Locked design back-ported into `docs/ui_design.md`. Prior version preserved at `docs/archive/ui_design_v1.md`. **Pre-Phase-0 review complete. Phase 0 G1 ready to open.** | Aniket |
+| 2026-05-22 | **Phase 0 G1 OPEN.** Branched `phase-0/repo-skeleton`. Plan section §5.1 drafted: single-package `src/kb/` layout, ParadeDB image (bundles pgvector + pg_search), raw-SQL migration runner, narrow lifecycle DDL (extensions + `schema_migrations`, `audit_log`, `processing_status`, `idempotency_keys`), `uv`/`ruff`/`pyright`/`pytest` tooling, FastAPI skeleton (routes open at G2). Awaiting sign-off. | Aniket |
 
 ---
 
