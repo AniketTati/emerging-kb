@@ -177,7 +177,7 @@ These exist *before* any phase opens. They define the system as a whole. Each mu
 | Competitive audit (2026 SOTA) | [docs/competitive_audit.md](competitive_audit.md) | ✅ Done | Wave B additions confirmed |
 | Scale/perf audit | [docs/scale_perf_audit.md](scale_perf_audit.md) | ✅ Done | 18 weaknesses named — accepted |
 | **Build Tracker (this file)** | docs/build_tracker.md | 🟡 In review | **You sign off** |
-| API contracts (skeleton) | docs/api_contracts.md | ⬜ Not started | Created when Phase 1 enters G2 |
+| API contracts | [docs/api_contracts.md](api_contracts.md) | 🟡 Phase 0 contracts drafted | Awaiting sign-off on Phase 0 §1 (`/health`, `/ready`) |
 | Test specs (per-phase) | tests/specs/ | ⬜ Not started | Created per phase at G3 |
 
 ---
@@ -425,11 +425,11 @@ Phases 15–24 per `architecture.md` §12. Tracked here only as a reminder of in
 
 ## 6. API contracts — index
 
-> Filled in as each phase enters G2. Authoritative file: [`docs/api_contracts.md`](api_contracts.md) (created when Phase 0 G2 opens).
+> Filled in as each phase enters G2. Authoritative file: [`docs/api_contracts.md`](api_contracts.md).
 
 | Phase | Endpoints planned | Contract status |
 |---|---|---|
-| 0 | `GET /health`, `GET /ready` | ⬜ |
+| 0 | `GET /health`, `GET /ready` | 🟡 drafted · awaiting sign-off |
 | 1 | `GET/POST/PUT/DELETE /schema`, `GET /schema/versions`, hierarchy endpoints | ⬜ |
 | 2–7 | Mostly internal workers; admin endpoints TBD at G1 | ⬜ |
 | 8 | `POST /query`, `POST /chat`, `GET /chat/:id/stream` (SSE) | ⬜ |
@@ -480,6 +480,7 @@ Phases 15–24 per `architecture.md` §12. Tracked here only as a reminder of in
 | 2026-05-22 | Locked design back-ported into `docs/ui_design.md`. Prior version preserved at `docs/archive/ui_design_v1.md`. **Pre-Phase-0 review complete. Phase 0 G1 ready to open.** | Aniket |
 | 2026-05-22 | **Phase 0 G1 OPEN.** Branched `phase-0/repo-skeleton`. Plan section §5.1 drafted: single-package `src/kb/` layout, ParadeDB image (bundles pgvector + pg_search), raw-SQL migration runner, narrow lifecycle DDL (extensions + `schema_migrations`, `audit_log`, `processing_status`, `idempotency_keys`), `uv`/`ruff`/`pyright`/`pytest` tooling, FastAPI skeleton (routes open at G2). Awaiting sign-off. | Aniket |
 | 2026-05-22 | **Phase 0 G1 ✅ SIGNED OFF.** Plan locked. Phase 0 G2 opens — API contracts for `/health` + `/ready` to land in `docs/api_contracts.md`. | Aniket |
+| 2026-05-22 | **Phase 0 G2 drafted.** Created `docs/api_contracts.md` with §0 conventions (RFC 9457 errors, UUIDv7 IDs, ISO-8601 timestamps, idempotency headers, status code map) and §1 Phase 0 contracts: `GET /health` (liveness — process up, no dependency checks) and `GET /ready` (readiness — db + minio + migrations check, 503 with `application/problem+json` on fail, parallel checks with 5s budget). Awaiting sign-off. | Aniket |
 
 ---
 
