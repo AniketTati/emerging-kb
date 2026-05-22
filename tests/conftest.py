@@ -54,11 +54,29 @@ def db_url_superuser(postgres_container) -> str:
 
 
 @pytest.fixture(scope="session")
-def db_url_kb_app(postgres_container) -> str:
-    """Connection URL for the non-superuser `kb_app` role. Default for tests."""
+def db_url_kb_app(postgres_container, _kb_app_password) -> str:
+    """Connection URL for the non-superuser `kb_app` role. Default for tests.
+
+    0001 creates the role; the migration runner sets the password from
+    KB_APP_PASSWORD (see `_kb_app_password` below). We swap credentials on
+    the testcontainer URL.
+    """
+    from urllib.parse import urlparse, urlunparse
+
     base = postgres_container.get_connection_url()
-    # G4: rewrite credentials to use kb_app role created by migration 0001.
-    raise NotImplementedError("G4: derive kb_app connection URL")
+    parsed = urlparse(base)
+    host = parsed.hostname or "localhost"
+    port = parsed.port or 5432
+    netloc = f"kb_app:{_kb_app_password}@{host}:{port}"
+    return urlunparse(parsed._replace(netloc=netloc))
+
+
+@pytest.fixture(scope="session")
+def _kb_app_password() -> str:
+    """Set KB_APP_PASSWORD on the env so migrations pick it up; return the value."""
+    password = "kb-app-test-password"
+    os.environ["KB_APP_PASSWORD"] = password
+    return password
 
 
 @pytest.fixture(scope="session", autouse=True)

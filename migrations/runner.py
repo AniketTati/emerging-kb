@@ -45,6 +45,27 @@ def run_migrations(database_url: str) -> None:
                 logger.debug("skip already-applied migration: %s", path.name)
                 continue
             _apply_one(conn, path)
+        _set_app_role_password(conn)
+
+
+def _set_app_role_password(conn: psycopg.Connection) -> None:
+    """Set kb_app's password from KB_APP_PASSWORD env var (post-migration step).
+
+    0001 creates kb_app WITH LOGIN but no password. Without a password the role
+    can't connect under scram auth (the Postgres default). This step closes the
+    loop. In dev/CI: KB_APP_PASSWORD is in .env / fixtures. In prod: orchestrator
+    injects it. The migration log records that the role exists — not the secret.
+    """
+    password = os.environ.get("KB_APP_PASSWORD")
+    if not password:
+        logger.warning(
+            "KB_APP_PASSWORD not set; kb_app role has no password — "
+            "applications cannot connect under scram auth"
+        )
+        return
+    with conn.transaction():
+        conn.execute("ALTER ROLE kb_app WITH PASSWORD %s", (password,))
+    logger.info("kb_app role password updated from KB_APP_PASSWORD")
 
 
 def _bootstrap_schema_migrations(conn: psycopg.Connection) -> None:
