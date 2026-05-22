@@ -1,4 +1,4 @@
-# Knowledge Base Service — Locked Architecture Design
+# Emerging KB — Locked Architecture Design
 
 **Date:** 2026-05-20
 **Status:** Locked design, awaiting user approval before Phase 0 implementation

@@ -1,4 +1,4 @@
-# Contributing to Knowledge Base Service
+# Contributing to Emerging KB
 
 Thanks for looking at this. The project follows a strict gate-by-gate build discipline so that the design decisions, API contracts, tests, and implementation never drift out of sync. This doc is the short version. The long version lives in [`docs/build_tracker.md`](docs/build_tracker.md).
 

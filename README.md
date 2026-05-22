@@ -1,6 +1,8 @@
-# Knowledge Base Service
+# Emerging KB
 
-> A domain-agnostic enterprise knowledge base. Upload heterogeneous documents (PDFs digital + scanned, spreadsheets, images, emails). Ask cited natural-language questions. The system auto-discovers structure as data arrives; user-defined schemas are a *view* on top, never a precondition.
+> An **open-source, self-hosted RAG knowledge base** where **schema emerges from your data** — no upfront modeling required. Upload heterogeneous documents (PDFs digital + scanned, spreadsheets, images, emails). Ask **cited natural-language questions** across all of them.
+>
+> **An alternative to Glean, NotebookLM, Hebbia** for teams that need to keep their data on their own infrastructure. Built on Postgres + pgvector + ParadeDB. Domain-agnostic. MIT-licensed.
 
 **Status:** planning / pre-build (as of 2026-05-22). Architecture, UI (10-surface IA via clickable prototype at [`prototype/`](prototype/)), wiring inventory (~100 endpoints), and all nine tier-1 gap designs are locked. Phase 0 G1 ready to open.
 

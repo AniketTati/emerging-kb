@@ -1,4 +1,4 @@
-# Problem Statement — The Knowledge Base Service
+# Problem Statement — Emerging KB
 
 A domain-agnostic enterprise knowledge base. Upload heterogeneous documents (PDFs both digital and scanned, spreadsheets, images, emails). Ask natural-language questions and get cited answers. The system auto-discovers structure as data arrives; user-defined schemas are a *view* on top, never a precondition.
 
