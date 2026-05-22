@@ -9,8 +9,7 @@ from __future__ import annotations
 
 import os
 
-from procrastinate import App
-from procrastinate.contrib.psycopg import PsycopgConnector
+from procrastinate import App, PsycopgConnector
 
 # Procrastinate uses the superuser DB URL (it manages its own tables).
 _conninfo = os.environ.get("KB_DATABASE_URL", "")

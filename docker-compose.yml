@@ -5,14 +5,16 @@
 # Per-developer overrides go in docker-compose.override.yml (gitignored).
 
 services:
+  # NOTE: db + minio do NOT publish host ports by default. The api + worker
+  # containers reach them via the compose-internal network ("db", "minio"
+  # DNS names). Dev workflows that need a host-side psql / S3 client should
+  # add port bindings in `docker-compose.override.yml` (gitignored).
   db:
     image: paradedb/paradedb:latest-pg17
     environment:
       POSTGRES_USER: ${KB_POSTGRES_USER:-kb}
       POSTGRES_PASSWORD: ${KB_POSTGRES_PASSWORD:-kb-dev-password}
       POSTGRES_DB: ${KB_POSTGRES_DB:-kb}
-    ports:
-      - "5432:5432"
     volumes:
       - pg-data:/var/lib/postgresql/data
     healthcheck:
@@ -27,9 +29,6 @@ services:
     environment:
       MINIO_ROOT_USER: ${KB_MINIO_ACCESS_KEY:-kb-minio-dev}
       MINIO_ROOT_PASSWORD: ${KB_MINIO_SECRET_KEY:-kb-minio-dev-secret}
-    ports:
-      - "9000:9000"
-      - "9001:9001"
     volumes:
       - minio-data:/data
     healthcheck:

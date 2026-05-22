@@ -20,12 +20,14 @@ ENV UV_LINK_MODE=copy \
     UV_PYTHON=python3.12
 
 # Install dependencies first (cached layer) before copying source.
-COPY pyproject.toml uv.lock ./
+# README + LICENSE are referenced by pyproject.toml metadata; hatchling needs them.
+COPY pyproject.toml uv.lock README.md LICENSE ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-install-project
 
 COPY src/ ./src/
 COPY migrations/ ./migrations/
+COPY scripts/ ./scripts/
 
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev
