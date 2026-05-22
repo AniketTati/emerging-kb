@@ -154,8 +154,8 @@ QA gates this at G1.5b — every prototype page is grep'd for the forbidden voca
 
 ## 1. Now / Next / Blocked
 
-**Now:** Phase 0 G4 — code landed, **49/49 tests passing locally 2026-05-23** (uv installed, paradedb + minio via testcontainers, ~19s suite runtime). Awaiting G4 sign-off.
-**Next:** Phase 0 G5 — `scripts/verify_phase_0.sh` wraps the full `docker compose up --build` → migrations → curl /health, /ready → pytest end-to-end smoke. PR opens at G5.
+**Now:** Phase 0 G5 — **GREEN 2026-05-23**. `scripts/verify_phase_0.sh` runs 16 checks end-to-end (docker compose smoke + psql DDL/RLS checks + curl /health, /ready, /openapi.json + 49-test pytest suite); all pass in ~2 minutes. Ready to open PR.
+**Next:** Open PR to merge `phase-0/repo-skeleton` → `main`. Then Phase 1 G1 — schema service plan.
 **Blocked on:** nothing.
 
 ---
@@ -260,7 +260,7 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
 
 | Phase | Description | G1 Plan | G2 API | G3 Tests | G4 Build | G5 Run | Notes |
 |---|---|---|---|---|---|---|---|
-| **0** | Repo + docker-compose (Postgres+pgvector+pg_search+MinIO+Procrastinate) + lifecycle DDL | ✅ | ✅ | ✅ | 🟡 | ⬜ | G1+G2+G3 signed off 2026-05-23. G4 open: implement code to turn 49 tests green. |
+| **0** | Repo + docker-compose (Postgres+pgvector+pg_search+MinIO+Procrastinate) + lifecycle DDL | ✅ | ✅ | ✅ | ✅ | ✅ | All 5 gates green 2026-05-23. `scripts/verify_phase_0.sh` 16/16 checks pass. Ready to merge. |
 | **1** | Schema service: CRUD, versioning, NL field descriptions, hierarchy | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | First "real" API phase |
 | **2** | Parse layer: Docling + Mistral OCR + xlsx + email → raw_pages | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | Internal service; API exposed via upload (phase 10a) |
 | **3** | Chunking + Contextual Retrieval + RAPTOR tree build | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | Internal worker |
@@ -571,7 +571,7 @@ Phases 15–24 per `architecture.md` §12. Tracked here only as a reminder of in
 
 | Phase | Verify script | Last run | Result |
 |---|---|---|---|
-| 0 | scripts/verify_phase_0.sh | — | — |
+| 0 | [scripts/verify_phase_0.sh](../scripts/verify_phase_0.sh) | 2026-05-23 | ✅ 16/16 (compose smoke + 49 pytest) |
 | 1 | scripts/verify_phase_1.sh | — | — |
 | ... | | | |
 
@@ -602,6 +602,7 @@ Phases 15–24 per `architecture.md` §12. Tracked here only as a reminder of in
 | 2026-05-23 | **Phase 0 G3 ✅ signed off.** Spec + 49 red skeletons locked. **G4 opens.** Order of build commits planned: (1) project bootstrap (pyproject.toml, .env.example, .gitignore, Dockerfile); (2) migrations (runner + 4 SQL files); (3) shared modules (config, db pool, logging, storage); (4) FastAPI app + middleware; (5) /health + /ready endpoints + readiness checks; (6) Procrastinate worker entrypoint; (7) docker-compose.yml + scripts/bootstrap_db.sh. Each commit makes some red tests green. | Aniket |
 | 2026-05-23 | **Phase 0 G4 — code landed (5 commits, not yet run).** Commits on `phase-0/repo-skeleton`: `1dec6f5` bootstrap (pyproject, Dockerfile, .env, src/kb stub) · `c0d020c` migrations (runner + 4 SQL) · `18b6ea8` shared modules (config, logging, db pool, storage) · `944c61f` FastAPI app + middleware + /health + /ready · `1dbd08e` worker + compose + bootstrap script + kb_app password wiring. **Tests not yet verified** — local env lacks uv + Python 3.12; will run at G5 (`scripts/verify_phase_0.sh`). G4 cell stays 🟡 until that suite goes green. | Aniket |
 | 2026-05-23 | **Phase 0 G4 debugging pass — all 49 tests pass.** Installed `uv` via Homebrew, ran pytest against fresh paradedb + minio testcontainers, fixed issues surfaced (commit `17baa1c`): PG utility commands (ALTER ROLE, SET LOCAL) don't accept bind parameters → use `psycopg.sql.Literal` + `SELECT set_config(...)`; testcontainer SQLAlchemy-style URLs need stripping for psycopg3; container `.stop()/.start()` in tests reassigns ports and breaks subsequent tests → replaced with monkey-patched check functions; configure_logging now called in build_app (ASGITransport doesn't trigger lifespan); structlog `cache_logger_on_first_use=False` so test-time processor swaps take effect; conftest now sets full MinIO creds + clears lru_caches; 0003/0004 made idempotent (IF NOT EXISTS, DROP POLICY IF EXISTS) so bootstrap test re-application works. Suite runtime ~19s. | Aniket |
+| 2026-05-23 | **Phase 0 G5 ✅ GREEN — full stack verified.** Authored `scripts/verify_phase_0.sh` (commit `f9a73fa`); 16 checks pass end-to-end: docker compose build + up, migrate one-shot exits 0, db/minio/api healthy, vector+pg_search+ltree installed, lifecycle tables + partitions + RLS state correct, kb_app role exists, /health + /ready + /openapi.json + X-Request-Id all behave per contract, pytest 49/49. Additional bug fixes landed in the same commit: Dockerfile missing README+LICENSE COPY (hatchling needs them); base compose was binding db/minio host ports → conflicts with developers' other infra → moved to `docker-compose.override.yml`; Procrastinate v3 PsycopgConnector import was under non-existent `contrib.psycopg` → use `procrastinate.PsycopgConnector` directly; 0002 missing explicit GRANT SELECT on schema_migrations for kb_app (ALTER DEFAULT PRIVILEGES in 0001 doesn't retroactively cover bootstrap-created tables). **Phase 0 complete; ready to open PR.** | Aniket |
 
 ---
 
