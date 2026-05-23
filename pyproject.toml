@@ -27,6 +27,8 @@ dependencies = [
     # Phase 2a — parse layer
     "docling>=2.0",
     "python-multipart>=0.0.12",
+    # Phase 3a — chunking (token budgeting via cl100k_base)
+    "tiktoken>=0.8.0",
     # Pin torch + torchvision as direct deps so [tool.uv.sources] applies
     # (sources only override packages listed in this project's dependencies).
     "torch>=2.0",

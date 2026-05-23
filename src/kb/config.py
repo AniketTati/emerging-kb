@@ -53,6 +53,13 @@ class Settings(BaseSettings):
         alias="KB_MAX_UPLOAD_BYTES",
     )
 
+    # ---- Phase 3a — chunker tuning ----
+    # Per build_tracker §5.7 decision #1: 2500 default (mid of architecture's
+    # "~2–4K tokens" guidance). Tests override to ~200 for fast deterministic
+    # multi-chunk fixtures.
+    chunk_tokens: int = Field(default=2500, alias="KB_CHUNK_TOKENS")
+    chunk_overlap_tokens: int = Field(default=250, alias="KB_CHUNK_OVERLAP_TOKENS")
+
     # ---- Runtime overrides (used by tests + the in-process FastAPI app) ----
     # KB_DB_URL overrides the kb_app (RLS-applicable) URL — used by API + most
     # tests. KB_DATABASE_URL overrides the superuser URL — used by migrations,
