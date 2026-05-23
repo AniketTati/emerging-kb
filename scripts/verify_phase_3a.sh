@@ -157,9 +157,10 @@ for _ in $(seq 1 180); do
     if [[ -z "$pdf_id" ]]; then break; fi
     s=$(curl -sS "http://localhost:8000/files/$pdf_id" -H "X-Test-Workspace: $WS_A" \
          | python3 -c "import sys,json; print(json.loads(sys.stdin.read()).get('lifecycle_state',''))")
-    # Phase 3b chained contextualize_file may race past 'chunked' to
-    # 'contextualized' before this loop polls. Any post-chunked state counts.
-    if [[ "$s" == "chunked" || "$s" == "contextualized" || "$s" == "ready" ]]; then chunked=1; break; fi
+    # Phase 3b/3c chained contextualize_file + embed_file may race past
+    # 'chunked' to 'contextualized'/'embedded'/'ready' before this loop
+    # polls. Any post-chunked state counts as chunking-success.
+    if [[ "$s" == "chunked" || "$s" == "contextualized" || "$s" == "embedded" || "$s" == "ready" ]]; then chunked=1; break; fi
     if [[ "$s" == "failed" ]]; then break; fi
     sleep 2
 done
@@ -209,9 +210,10 @@ for _ in $(seq 1 60); do
     if [[ -z "$xlsx_id" ]]; then break; fi
     s=$(curl -sS "http://localhost:8000/files/$xlsx_id" -H "X-Test-Workspace: $WS_A" \
          | python3 -c "import sys,json; print(json.loads(sys.stdin.read()).get('lifecycle_state',''))")
-    # Phase 3b chained contextualize_file may race past 'chunked' to
-    # 'contextualized' before this loop polls. Any post-chunked state counts.
-    if [[ "$s" == "chunked" || "$s" == "contextualized" || "$s" == "ready" ]]; then chunked=1; break; fi
+    # Phase 3b/3c chained contextualize_file + embed_file may race past
+    # 'chunked' to 'contextualized'/'embedded'/'ready' before this loop
+    # polls. Any post-chunked state counts as chunking-success.
+    if [[ "$s" == "chunked" || "$s" == "contextualized" || "$s" == "embedded" || "$s" == "ready" ]]; then chunked=1; break; fi
     if [[ "$s" == "failed" ]]; then break; fi
     sleep 2
 done
@@ -235,9 +237,10 @@ for _ in $(seq 1 60); do
     if [[ -z "$eml_id" ]]; then break; fi
     s=$(curl -sS "http://localhost:8000/files/$eml_id" -H "X-Test-Workspace: $WS_A" \
          | python3 -c "import sys,json; print(json.loads(sys.stdin.read()).get('lifecycle_state',''))")
-    # Phase 3b chained contextualize_file may race past 'chunked' to
-    # 'contextualized' before this loop polls. Any post-chunked state counts.
-    if [[ "$s" == "chunked" || "$s" == "contextualized" || "$s" == "ready" ]]; then chunked=1; break; fi
+    # Phase 3b/3c chained contextualize_file + embed_file may race past
+    # 'chunked' to 'contextualized'/'embedded'/'ready' before this loop
+    # polls. Any post-chunked state counts as chunking-success.
+    if [[ "$s" == "chunked" || "$s" == "contextualized" || "$s" == "embedded" || "$s" == "ready" ]]; then chunked=1; break; fi
     if [[ "$s" == "failed" ]]; then break; fi
     sleep 2
 done
