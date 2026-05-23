@@ -27,11 +27,13 @@ from kb.api.middleware import (
     RequestIdMiddleware,
     WorkspaceMiddleware,
 )
+from kb.api.files import router as files_router
 from kb.api.readiness import router as ready_router
 from kb.api.schema_hierarchy import router as schema_hierarchy_router
 from kb.api.schema_versions import router as schema_versions_router
 from kb.api.schemas import router as schemas_router
 from kb.config import get_settings
+from kb.domain.files import FileNotFoundError
 from kb.domain.schema_hierarchy import (
     EntityNameConflictError,
     EntityNotFoundError,
@@ -44,6 +46,7 @@ from kb.domain.schema_hierarchy import (
 from kb.domain.schema_versions import RollbackNoopError, VersionNotFoundError
 from kb.domain.schemas import DuplicateNameError, NotFoundError
 from kb.logging import configure_logging, get_logger
+from kb.parsers import PayloadTooLargeError, UnsupportedMediaTypeError
 
 
 @asynccontextmanager
@@ -52,8 +55,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     configure_logging(level=settings.log_level, fmt=settings.log_format)
     logger = get_logger("kb.api")
     logger.info("kb-api starting", version=__version__)
-    yield
-    logger.info("kb-api stopping")
+
+    # Phase 2a: open Procrastinate App so the HTTP layer can defer tasks
+    # (POST /files enqueues parse_file). The worker container manages its
+    # own lifecycle separately.
+    from kb.workers.app import app as procrastinate_app
+    from kb.workers.tasks import parse_file  # noqa: F401 — registers the task
+
+    await procrastinate_app.open_async()
+    try:
+        yield
+    finally:
+        await procrastinate_app.close_async()
+        logger.info("kb-api stopping")
 
 
 def build_app() -> FastAPI:
@@ -84,6 +98,11 @@ def build_app() -> FastAPI:
     app.include_router(schemas_router)
     app.include_router(schema_versions_router)
     app.include_router(schema_hierarchy_router)
+    app.include_router(files_router)
+
+    # Phase 2a — register default parsers (Docling). Idempotent.
+    from kb.parsers import register_default_parsers
+    register_default_parsers()
 
     # ---- Exception handlers — RFC 9457 problem+json for every 4xx ----
 
@@ -160,6 +179,30 @@ def build_app() -> FastAPI:
         return problem_response(
             req, status_code=422, type_slug="validation-error",
             title="Relationship references an entity in a different schema",
+            detail=str(exc),
+        )
+
+    # Phase 2a — files + parse layer
+    @app.exception_handler(FileNotFoundError)
+    async def _file_not_found(req: Request, exc: FileNotFoundError):  # noqa: ARG001
+        return problem_response(
+            req, status_code=404, type_slug="not-found",
+            title="File not found", detail=str(exc),
+        )
+
+    @app.exception_handler(PayloadTooLargeError)
+    async def _payload_too_large(req: Request, exc: PayloadTooLargeError):  # noqa: ARG001
+        return problem_response(
+            req, status_code=413, type_slug="payload-too-large",
+            title="Upload exceeds the configured size limit",
+            detail=str(exc),
+        )
+
+    @app.exception_handler(UnsupportedMediaTypeError)
+    async def _unsupported_mime(req: Request, exc: UnsupportedMediaTypeError):  # noqa: ARG001
+        return problem_response(
+            req, status_code=415, type_slug="unsupported-media-type",
+            title="MIME type not accepted by this phase",
             detail=str(exc),
         )
 
