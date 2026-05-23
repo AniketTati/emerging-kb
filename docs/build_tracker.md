@@ -154,9 +154,9 @@ QA gates this at G1.5b — every prototype page is grep'd for the forbidden voca
 
 ## 1. Now / Next / Blocked
 
-**Now:** Phase 0 G5 — **GREEN 2026-05-23**. `scripts/verify_phase_0.sh` runs 16 checks end-to-end (docker compose smoke + psql DDL/RLS checks + curl /health, /ready, /openapi.json + 49-test pytest suite); all pass in ~2 minutes. Ready to open PR.
-**Next:** Open PR to merge `phase-0/repo-skeleton` → `main`. Then Phase 1 G1 — schema service plan.
-**Blocked on:** nothing.
+**Now:** Phase 0 G5 — **GREEN 2026-05-23**. `scripts/verify_phase_0.sh` runs 16 checks end-to-end. PR ready to open. Phase 1 split into **1a/1b/1c** per the discipline (architecture-§12 phasing entry listed four comma-separated deliverables, which is the split-trigger criterion).
+**Next:** (1) Open Phase 0 PR. (2) Open Phase 1a G1 — schemas-table-only CRUD plan.
+**Blocked on:** nothing. Phase 1a branches from `main` after Phase 0 merges.
 
 ---
 
@@ -261,7 +261,9 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
 | Phase | Description | G1 Plan | G2 API | G3 Tests | G4 Build | G5 Run | Notes |
 |---|---|---|---|---|---|---|---|
 | **0** | Repo + docker-compose (Postgres+pgvector+pg_search+MinIO+Procrastinate) + lifecycle DDL | ✅ | ✅ | ✅ | ✅ | ✅ | All 5 gates green 2026-05-23. `scripts/verify_phase_0.sh` 16/16 checks pass. Ready to merge. |
-| **1** | Schema service: CRUD, versioning, NL field descriptions, hierarchy | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | First "real" API phase |
+| **1a** | Schema service — **CRUD foundation**: `schemas` table + 5 endpoints (POST/GET-list/GET/PUT/DELETE) | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | First "real" API phase. Workspace-scoped + RLS day-1, Idempotency-Key honored, soft-delete via lifecycle_state. |
+| **1b** | Schema service — **versioning**: `schema_versions` table; every PUT creates a new version; version list/read/rollback endpoints | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | Builds on 1a. Full JSON snapshots stored; diffs computed on read (architecture §7). Rollback creates a new version cloning the target. |
+| **1c** | Schema service — **hierarchy**: `schema_entities`, `schema_fields`, `schema_relationships` tables; nested CRUD; NL field descriptions; single_parent + cascade_delete constraints | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | Builds on 1a+1b. Re-extraction trigger on rollback stubbed (Phase 6 wires it). domain_vocabulary deferred to Phase 5. |
 | **2** | Parse layer: Docling + Mistral OCR + xlsx + email → raw_pages | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | Internal service; API exposed via upload (phase 10a) |
 | **3** | Chunking + Contextual Retrieval + RAPTOR tree build | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | Internal worker |
 | **4** | Indexing: pgvector HNSW + pg_search BM25 on all RAPTOR levels | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | Internal worker |
@@ -603,6 +605,7 @@ Phases 15–24 per `architecture.md` §12. Tracked here only as a reminder of in
 | 2026-05-23 | **Phase 0 G4 — code landed (5 commits, not yet run).** Commits on `phase-0/repo-skeleton`: `1dec6f5` bootstrap (pyproject, Dockerfile, .env, src/kb stub) · `c0d020c` migrations (runner + 4 SQL) · `18b6ea8` shared modules (config, logging, db pool, storage) · `944c61f` FastAPI app + middleware + /health + /ready · `1dbd08e` worker + compose + bootstrap script + kb_app password wiring. **Tests not yet verified** — local env lacks uv + Python 3.12; will run at G5 (`scripts/verify_phase_0.sh`). G4 cell stays 🟡 until that suite goes green. | Aniket |
 | 2026-05-23 | **Phase 0 G4 debugging pass — all 49 tests pass.** Installed `uv` via Homebrew, ran pytest against fresh paradedb + minio testcontainers, fixed issues surfaced (commit `17baa1c`): PG utility commands (ALTER ROLE, SET LOCAL) don't accept bind parameters → use `psycopg.sql.Literal` + `SELECT set_config(...)`; testcontainer SQLAlchemy-style URLs need stripping for psycopg3; container `.stop()/.start()` in tests reassigns ports and breaks subsequent tests → replaced with monkey-patched check functions; configure_logging now called in build_app (ASGITransport doesn't trigger lifespan); structlog `cache_logger_on_first_use=False` so test-time processor swaps take effect; conftest now sets full MinIO creds + clears lru_caches; 0003/0004 made idempotent (IF NOT EXISTS, DROP POLICY IF EXISTS) so bootstrap test re-application works. Suite runtime ~19s. | Aniket |
 | 2026-05-23 | **Phase 0 G5 ✅ GREEN — full stack verified.** Authored `scripts/verify_phase_0.sh` (commit `f9a73fa`); 16 checks pass end-to-end: docker compose build + up, migrate one-shot exits 0, db/minio/api healthy, vector+pg_search+ltree installed, lifecycle tables + partitions + RLS state correct, kb_app role exists, /health + /ready + /openapi.json + X-Request-Id all behave per contract, pytest 49/49. Additional bug fixes landed in the same commit: Dockerfile missing README+LICENSE COPY (hatchling needs them); base compose was binding db/minio host ports → conflicts with developers' other infra → moved to `docker-compose.override.yml`; Procrastinate v3 PsycopgConnector import was under non-existent `contrib.psycopg` → use `procrastinate.PsycopgConnector` directly; 0002 missing explicit GRANT SELECT on schema_migrations for kb_app (ALTER DEFAULT PRIVILEGES in 0001 doesn't retroactively cover bootstrap-created tables). **Phase 0 complete; ready to open PR.** | Aniket |
+| 2026-05-23 | **Phase 1 split into 1a/1b/1c.** Architecture §12 lists "CRUD, versioning, NL field descriptions, hierarchy" as Phase 1's scope — four distinct deliverables. Per the discipline (sub-phase splits memory entry), each becomes its own G1→G5 cycle with its own branch + PR. 1a = `schemas` CRUD foundation (5 endpoints). 1b = `schema_versions` + versioning endpoints. 1c = `schema_entities` + `schema_fields` + `schema_relationships` hierarchy + NL descriptions. domain_vocabulary deferred to Phase 5; re-extraction trigger on rollback stubbed for Phase 6. | Aniket |
 
 ---
 
