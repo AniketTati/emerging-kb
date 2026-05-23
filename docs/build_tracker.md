@@ -154,8 +154,8 @@ QA gates this at G1.5b — every prototype page is grep'd for the forbidden voca
 
 ## 1. Now / Next / Blocked
 
-**Now:** Phase 3a — all 5 gates ✅. verify_phase_3a.sh 18/18. Cross-phase sweep clean (124/124 across Phase 0/1a/1b/1c/2a/2b/3a). Ready to push branch + open PR.
-**Next:** Phase 3b — contextual retrieval Anthropic prefix LLM call (first LLM call in the pipeline; prompt-cached doc-level context). Lands on same `phase-3/chunking-raptor` branch as additional commit-sets.
+**Now:** Phase 3b — G1 OPEN (drafted using the `claude-api` skill's prompt-caching pattern + Anthropic Contextual Retrieval cookbook). 14 decisions locked. Phase 3a already complete + pushed.
+**Next:** Phase 3b G1 sign-off → G2 (lifecycle enum widens by `contextualized`) → G3 → G4 → G5; then 3c (embeddings + RAPTOR). All on same branch as Phase 3a.
 **Blocked on:** nothing.
 
 ---
@@ -267,7 +267,7 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
 | **2a** | Parse layer — **scaffold + Docling**: `files` + `file_lifecycle` + `raw_pages` + `parse_artifacts` tables; Procrastinate `parse_file` task; MIME-based dispatcher; Docling (digital PDF) parser; admin `POST /files` upload endpoint | ✅ | ✅ | ✅ | ✅ | ✅ | All 5 gates green 2026-05-23. pytest 170/170. First worker phase complete. Ready to merge. |
 | **2b** | Parse layer — **additional parsers**: xlsx (openpyxl) + email (stdlib) + Mistral OCR (external API adapter class + mock-tested; real-API gated on `KB_MISTRAL_API_KEY`) | ✅ | ✅ | ✅ | ✅ | ✅ | All 5 gates green 2026-05-23. verify_phase_2b.sh 15/15. pytest 188/188. xlsx + email E2E pipeline verified in Docker stack (xlsx → 2 sheets → 2 raw_pages; email → 1 page with headers + body). Mistral OCR adapter ready, self-disabled without API key. Ready to merge. |
 | **3a** | Chunking — late chunking of `raw_pages` → `chunks` table (layout-aware, token-bounded, cross-page joining); worker stage `chunk_file`; new lifecycle state `chunked` | ✅ | ✅ | ✅ | ✅ | ✅ | All 5 gates green 2026-05-23. verify_phase_3a.sh 18/18. Cross-phase sweep: 0/1a/1b/1c/2a/2b all still green (124/124 cumulative checks). pytest 204/204. Ready to merge. |
-| **3b** | Contextual Retrieval — Anthropic Claude per-chunk prefix with prompt-cached doc context; `contextual_chunks` table; worker stage `contextualize_file` | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | First LLM call; gated on `KB_ANTHROPIC_API_KEY` (self-disables in CI, real-call path covered by mock) |
+| **3b** | Contextual Retrieval — Anthropic Claude per-chunk prefix with prompt-cached doc context; `contextual_chunks` table; worker stage `contextualize_file` | ✅ | ✅ | ⬜ | ⬜ | ⬜ | First LLM call; `claude-opus-4-7` default; gated on `KB_ANTHROPIC_API_KEY` with IdentityContextualizer fallback when unset (degraded mode lets pipeline still complete) |
 | **3c** | Embedding + RAPTOR tree build — Gemini Embedding 001 on contextual chunks; `chunk_embeddings`; recursive cluster→summarize→re-embed → `raptor_nodes` + `raptor_edges`; lifecycle terminates at `ready` | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | First embedding call; gated on `KB_GEMINI_API_KEY` with mock embedder for CI; HNSW + BM25 indexes themselves land in Phase 4 |
 | **4** | Indexing: pgvector HNSW + pg_search BM25 on all RAPTOR levels | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | Internal worker |
 | **5** | Open extraction → mentions; clause split + typing + anomaly score | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | L2 + L2b + L3 |
@@ -1336,11 +1336,115 @@ When Aniket approves this plan, the Phase 3a G1 cell in §5 flips 🟡 → ✅ a
 
 ---
 
-### 5.8 Phase 3b plan — Contextual Retrieval (placeholder)
+### 5.8 Phase 3b plan — Contextual Retrieval (G1 ✅ + G2 ✅ SIGNED OFF)
 
-> **Status:** ⬜ Not yet drafted. Opens after Phase 3a G5 ✅.
+> **Status:** G1 ✅ + G2 ✅ signed off 2026-05-23 in single drafting pass. Plan grounded in the `claude-api` skill's prompt-caching guidance + Anthropic's [Contextual Retrieval write-up](https://www.anthropic.com/news/contextual-retrieval). Single contract delta (lifecycle enum widens by `contextualized`). Branch: `phase-3/chunking-raptor` (second commit-set).
 
-Scope sketch (to be locked at G1 when 3a closes): per-chunk Anthropic Claude prefix call with **prompt-cached doc-level context** (architecture §5 step 7). New `contextual_chunks` table holding the 50–100 token "this is from X about Y" header + the chunk text. Worker stage `contextualize_file(file_id)` reads `chunks` rows, batches by doc, issues one Claude call per chunk with `cache_control: ephemeral` on the parent-doc raw text. First LLM call in the pipeline — `KB_ANTHROPIC_API_KEY` gates real activation; CI uses a mock Anthropic client returning canned prefixes. Lifecycle: `chunked → contextualized`.
+#### Scope
+
+Phase 3b takes a `chunked` file and produces a **`contextual_chunks`** row per `chunks` row: each contextual chunk carries a 50–100 token LLM-generated "this is from X about Y" prefix prepended to the chunk text. The prefix is what BM25 + dense embedding will actually index in Phase 3c + Phase 4 — the rationale (per Anthropic's [eval](https://www.anthropic.com/news/contextual-retrieval)) is that a chunk "Q3 revenue grew 12%" is hard to retrieve without knowing it's from ACME Corp's 2024 10-K. The prefix supplies that missing context. **This is the first LLM call in the pipeline.**
+
+**In scope:**
+- **`0010_contextual_chunks.sql` migration** — `contextual_chunks` table (workspace-scoped, RLS day-1, immutable: REVOKE UPDATE/DELETE on kb_app). Columns: `id uuid PK`, `chunk_id uuid FK to chunks ON DELETE CASCADE`, `file_id uuid FK`, `workspace_id uuid`, `contextual_prefix text` (the LLM-generated header), `contextual_text text` (`= prefix + "\n\n" + chunks.text`, denormalized for index efficiency), `model_id text` (e.g., `'claude-opus-4-7'` — records which LLM produced the prefix), `prefix_token_count int`, `cache_creation_input_tokens int`, `cache_read_input_tokens int` (Anthropic-reported cache metrics for cost auditing), `created_at timestamptz`. UNIQUE `(chunk_id)`. Indexes: `(workspace_id)`, `(file_id)`.
+- **Lifecycle state extension** — `files.lifecycle_state` CHECK widens to include `contextualized`. Transition `chunked → contextualized` (success) or `chunked → failed` (error).
+- **`kb/contextualization/__init__.py`** — `Contextualizer` Protocol with one method: `async contextualize(*, doc_text: str, chunk_text: str) -> ContextualizedChunk`. Real impl `AnthropicContextualizer(api_key=..., client=None, concurrency=8)` uses `anthropic.AsyncAnthropic`. **All-or-nothing self-disable**: `KB_ANTHROPIC_API_KEY` unset → `IdentityContextualizer` swaps in (returns `contextual_prefix=""` so `contextual_text == chunk_text`); downstream pipeline keeps moving, retrieval recall degrades to "no contextual retrieval" baseline. This means Phase 3c + Phase 4 + Phase 8 work without an API key, just less accurately.
+- **Prompt-caching strategy** (per `claude-api` skill + architecture §5 step 7):
+  - **System block carries the full doc context** + `cache_control: {type: "ephemeral"}`. Render order is `tools → system → messages`; the doc text sits early in the prefix where caching matters.
+  - **User message carries the chunk** + "Provide a 50–100 token contextual prefix" instruction.
+  - `max_tokens=200` (prefix target is 50–100 tokens; budget = ~2× that for safety margin).
+  - No thinking (`thinking: {type: "disabled"}` — short description task; thinking would burn tokens for no benefit). Note: Opus 4.7 default IS thinking-disabled, but explicit is clearer.
+  - Cache-hit verification at ingest time via `response.usage.cache_read_input_tokens` — recorded into `contextual_chunks.cache_read_input_tokens`. Phase 3b G5 verify asserts cache hits > 0 across multi-chunk docs.
+- **Concurrency cap** — `asyncio.Semaphore(8)` per doc (one task per chunk, max 8 in flight). Phase 3b worker reads `chunks` rows for a file, batches them, awaits all completions, then writes.
+- **Worker stage `contextualize_file_impl(file_id)`** in `kb/workers/tasks.py` — reads file row, reads all `raw_pages` (for doc context), reads all `chunks` (input), runs the contextualizer batch, INSERTs `contextual_chunks` rows, transitions lifecycle to `contextualized` with event `contextualization_done` carrying `{prefix_count, total_cache_read_tokens, total_cache_creation_tokens, model_id}`. Idempotent: returns immediately if already `contextualized`.
+- **Task chaining** — `chunk_file_impl()`'s success path defers `contextualize_file(file_id)` in a separate tx (same pattern as Phase 3a → 3a's parse-to-chunk defer).
+- **Failure mode** — Anthropic API failures (4xx, 5xx, network) → `chunked → failed` with `event='contextualization_failed'`, payload includes `{error_class, message, anthropic_request_id}` if available.
+
+**Out of scope (deferred):**
+- Embedding the contextual chunks → **Phase 3c**.
+- RAPTOR tree build → **Phase 3c**.
+- HNSW + BM25 indexes on `contextual_chunks.contextual_text` → **Phase 4**.
+- Re-running contextualization when the doc context changes (e.g., user updates the file metadata) → not relevant; raw_pages are immutable.
+- Configurable prefix prompt → Phase 8 / config layering (Hydra/OmegaConf lands at Phase 5 per Phase 0 §3).
+- Other LLM providers (Gemini Flash, GPT) → adapter pattern is in place via the `Contextualizer` Protocol; another impl can land later as additive.
+- `audit_log` writes on contextualization → Phase 9.
+
+#### Decisions (locked at G1; changes require re-opening G1)
+
+| # | Decision | Choice | Rationale |
+|---|---|---|---|
+| 1 | LLM model | **`claude-opus-4-7`** (default; configurable via `KB_CONTEXTUAL_MODEL` env). | Per the `claude-api` skill: "ALWAYS use `claude-opus-4-7` unless the user explicitly names a different model — never downgrade for cost; that's the user's decision." Skill is authoritative on model choice. Architecture §8's "Gemini 2.5 Flash" was a placeholder for the *extraction LLM*; contextual prefix is a separate stage and Anthropic's own Contextual Retrieval recipe is canonical here. **User can override to `claude-haiku-4-5` via `KB_CONTEXTUAL_MODEL` for ~5× cost savings if quality holds.** |
+| 2 | Prompt-cache placement | Single `cache_control: {type: "ephemeral"}` breakpoint on the system block containing the full doc context. | Standard prompt-caching pattern per the skill. Doc context renders first in the prefix; per-chunk completion calls reuse the cached prefix (saves ~90% on doc context tokens after the first call). [Anthropic blog](https://www.anthropic.com/news/contextual-retrieval) reports ~$1/M src tokens with caching vs ~$5/M uncached. |
+| 3 | Minimum cacheable prefix | Anthropic Opus 4.7's prompt cache requires ≥ 4096 tokens of prefix to actually cache (per the `claude-api` skill ref). For docs shorter than ~4K tokens, the cache silently doesn't kick in (no error; `cache_creation_input_tokens=0`). We record this in `cache_creation_input_tokens` for cost auditing. | Skill-documented behavior. For tiny docs the per-call cost is already trivial. |
+| 4 | Per-chunk concurrency | `asyncio.Semaphore(8)` — at most 8 in-flight Anthropic calls per doc. Configurable via `KB_CONTEXTUAL_CONCURRENCY`. | Balances throughput vs Anthropic rate-limit headroom (defaults are 50 RPM and 40K ITPM at tier 1; 8-way concurrency stays well under). Higher concurrency risks 429s on bursty docs; lower wastes wall-clock time. |
+| 5 | Adapter pattern | `Contextualizer` Protocol with `AnthropicContextualizer` (real) + `IdentityContextualizer` (env-key-unset fallback) + tests inject `MockContextualizer`. | Same pattern as Phase 2b's Mistral OCR (decision #7-9) — externalize the API surface so CI is hermetic + real activation flips on with an env var. |
+| 6 | Self-disable behavior | When `KB_ANTHROPIC_API_KEY` is unset, worker logs a structured warning AND swaps in `IdentityContextualizer` (returns `prefix=""` → `contextual_text == chunk_text`). File still advances to `contextualized`. | Pipeline-completes-without-key beats pipeline-blocks-without-key — Phase 3c + Phase 4 + Phase 8 retrieval still work (just at "no contextual retrieval" recall baseline). Production deploys MUST set the key; alarm/dashboard on `model_id == 'identity'` count. |
+| 7 | Prefix prompt template | Fixed system prompt: `"Here is the full document for context (cached for efficiency):\n\n<document>\n{doc_text}\n</document>"`. User prompt: `"Here is a chunk from that document:\n\n<chunk>\n{chunk_text}\n</chunk>\n\nProvide a short (50-100 token) context line that situates this chunk within the document. Return ONLY the context line, no preamble."`. | Verbatim from Anthropic's [Contextual Retrieval cookbook](https://github.com/anthropics/anthropic-cookbook/tree/main/skills/contextual-embeddings). Proven recipe; deviation = re-running the eval. |
+| 8 | Output token budget | `max_tokens=200`. Architecture §5 step 7 targets "50-100 tokens"; budget is 2× the upper bound for safety margin. | If Claude generates >100 token prefix, that's still OK (extra context never hurts retrieval). 200 is the hard cap — runaway prefixes get truncated, which the worker logs but doesn't fail on. |
+| 9 | `thinking` mode | **Disabled** (`thinking: {type: "disabled"}`). | Contextual prefix is a short-description task. Per `claude-api` skill, Opus 4.7 default is thinking-off anyway, but explicit makes the cost story unambiguous. Adaptive thinking would burn tokens for no measurable recall benefit. |
+| 10 | Contextual chunks table immutability | `REVOKE UPDATE, DELETE ON contextual_chunks FROM kb_app;` — same pattern as `chunks` (3a #7) and `raw_pages` (2a #5). | Downstream Phase 3c embeddings reference `contextual_chunks` by id. In-place mutation invalidates embeddings + RAPTOR clusters. Re-contextualize via superuser delete + re-run. |
+| 11 | Cache metrics persisted | `cache_creation_input_tokens` + `cache_read_input_tokens` columns on every row. Phase 3b G5 verify asserts at least one row in a multi-chunk doc has `cache_read_input_tokens > 0`. | Post-hoc cost auditing. Hit rate = `sum(cache_read) / (sum(cache_read) + sum(cache_creation))`. Target: > 0.85 after the first chunk per doc. |
+| 12 | Lifecycle state addition | `files.lifecycle_state` CHECK widens to `('queued','parsing','parsed','chunked','contextualized','failed','deleted')`. Phase 3c will add the terminal `ready`. | Each sub-phase appends exactly one new state per the forward-compat convention locked in Phase 3a G2. |
+| 13 | Task chaining | `chunk_file_impl()` success path defers `contextualize_file(file_id)` in a SEPARATE PG transaction (so an Anthropic API + Procrastinate-defer interleaving doesn't roll back the chunked state). | Same shape as Phase 3a's parse → chunk defer (3a #9). |
+| 14 | Failure mode | API errors (4xx, 5xx, network): worker writes `chunked→failed` with `event='contextualization_failed'`. Payload includes `error_class`, `message`, and `anthropic_request_id` if present in the exception. | Anthropic exceptions carry `_request_id` per the SDK — recording it lets us trace failed calls to Anthropic's audit log if support is needed. |
+
+#### Repo layout delta after Phase 3b G4
+
+```
+emerging-kb/
+├── migrations/sql/
+│   └── 0010_contextual_chunks.sql        ← NEW (table + RLS + REVOKE UPDATE/DELETE + 'contextualized' CHECK widen)
+├── src/kb/
+│   ├── contextualization/
+│   │   └── __init__.py                   ← NEW (`Contextualizer` Protocol + `AnthropicContextualizer` + `IdentityContextualizer`)
+│   ├── domain/
+│   │   └── contextual_chunks.py          ← NEW (pydantic + `insert_contextual_chunk` + `read_chunks_for_contextualization`)
+│   └── workers/
+│       └── tasks.py                      ← MUTATED (`contextualize_file_impl` + `contextualize_file` task + chained defer from chunk_file)
+└── tests/
+    ├── test_contextualization_unit.py    ← NEW (~9 unit tests: AnthropicContextualizer with mock client, IdentityContextualizer, concurrency cap, prompt shape, cache_control marker, response parsing, error handling)
+    ├── test_contextualization_worker.py  ← NEW (~6 worker tests: end-to-end chunked→contextualized, idempotency, identity fallback, failure mode, task chaining, cache metrics persisted)
+    └── specs/phase_3b.md                 ← NEW
+```
+
+No `kb/api/` mutations. Phase 3b is pure-internal — no new endpoints, single contract delta in `api_contracts.md` §5.2 lifecycle enum (adds `contextualized`).
+
+#### Endpoint contract delta (api_contracts.md §5.1 #3 + §5.2)
+
+Per the forward-compat convention locked in Phase 3a G2: `files.lifecycle_state` enum widens from `queued | parsing | parsed | chunked | failed | deleted` to add `contextualized`. §5.1 invariant #3 already documents the full chain through 3c (`ready` lands at 3c). Single-line delta in the §5.2 file-resource row's enum description.
+
+#### Phase 3b G5 — what "green" means
+
+`scripts/verify_phase_3b.sh` adds to Phase 0+1a+1b+1c+2a+2b+3a verify checks:
+1. `psql` confirms `0010_contextual_chunks.sql` applied: table exists with workspace_id + RLS forced + UPDATE/DELETE revoked from kb_app + UNIQUE `(chunk_id)`.
+2. `psql` confirms `files.lifecycle_state` CHECK includes `contextualized`.
+3. Compose smoke (`KB_ANTHROPIC_API_KEY` unset path): `POST tiny.pdf` → file reaches `lifecycle_state='contextualized'` within 4 min using `IdentityContextualizer` (model_id column == `'identity'`); contextual_text equals chunk text byte-for-byte.
+4. `psql` confirms ≥1 `contextual_chunks` row exists for the file; `model_id='identity'`.
+5. If `KB_ANTHROPIC_API_KEY` is set in the test env (CI nightly run + local dev): compose smoke also runs the real-API path; verifies `cache_read_input_tokens > 0` on the second+ chunks of a multi-chunk doc + `prefix_token_count BETWEEN 30 AND 200`.
+6. Re-deferring `contextualize_file(file_id)` on an already-`contextualized` file → no duplicate rows.
+7. `pytest tests/` green: 204 (existing) + ~15 new = ~219.
+
+#### Pre-G2 consistency review checklist
+
+Before G2 opens:
+- [ ] Architecture §5 step 7 + step 8 traceability — Phase 3b covers the prefix LLM call only; step 8 (embed contextualized chunks) and step 9 (BM25 index) belong to 3c/Phase 4 respectively.
+- [ ] No leak into Phase 3c territory (no `chunk_embeddings` table, no embedding API call, no RAPTOR refs).
+- [ ] No leak into Phase 4 territory (no HNSW/BM25 index creation).
+- [ ] `audit_log` writes still deferred to Phase 9.
+- [ ] RLS invariant grows from 12 → 13 workspace-scoped tables (`contextual_chunks` joins the list).
+- [ ] Prompt-cache placement verified against `shared/prompt-caching.md` (system block, single breakpoint, deterministic doc context).
+- [ ] Model choice traced to `claude-api` skill's "always default to claude-opus-4-7" mandate.
+
+#### Sign-off
+
+When Aniket approves this plan, the Phase 3b G1 cell in §5 flips 🟡 → ✅ and G2 opens (single contract delta in `api_contracts.md` §5.2 lifecycle enum). Sign-off recorded in §9.
+
+---
+
+### 5.9 Phase 3c plan — Embedding + RAPTOR tree (placeholder)
+
+> **Status:** ⬜ Not yet drafted. Opens after Phase 3b G5 ✅.
+
+Scope sketch (to be locked at G1 when 3b closes): Gemini Embedding 001 calls on every contextual chunk → `chunk_embeddings` (`vector(3072)` via pgvector halfvec). Recursive RAPTOR build: cluster contextual chunks via GMM on embeddings, summarize each cluster via Gemini Flash, re-embed summaries, re-cluster — until ≤8 nodes remain OR `level == max_levels=4`. New tables: `chunk_embeddings`, `raptor_nodes`, `raptor_edges`. Worker stage `embed_and_raptor_file(file_id)`. Lifecycle terminates at `ready` (the final success state every downstream phase asserts). First embedding call — `KB_GEMINI_API_KEY` gates real activation; CI uses a deterministic mock embedder. HNSW + BM25 indexes themselves land in Phase 4.
 
 ### 5.9 Phase 3c plan — Embedding + RAPTOR tree (placeholder)
 
@@ -1503,6 +1607,8 @@ Phases 15–24 per `architecture.md` §12. Tracked here only as a reminder of in
 | 2026-05-23 | **Phase 3a post-G3 cross-gate review (G1↔G2↔G3).** All 12 G1 decisions traced to ≥1 G3 test: #1 budget enforced via the over-budget split test; #2 overlap via `test_chunk_pages_overlap_preserves_tail_of_prior_chunk`; #3 tokenizer implicit via budget assertions across all tests; #4 layout-aware boundary via single-short-page-stays-one-chunk; #5 small-page joining via `test_chunk_pages_small_pages_join_until_budget`; #6 source_page_numbers via dedicated test; #7 REVOKE UPDATE via `test_chunks_table_rejects_update_via_kb_app`; #8 lifecycle widening via `test_chunk_file_impl_reads_raw_pages_and_writes_chunks` (asserts lifecycle_state=='chunked'); #9 task chaining via `test_parse_file_impl_chains_chunk_file_via_defer`; #10 idempotency via `test_chunk_file_impl_is_idempotent_on_already_chunked`; #11 empty-input via `test_chunk_file_impl_empty_raw_pages_marks_failed`; #12 row-boundary via `test_chunk_pages_xlsx_huge_sheet_splits_on_row_boundary`. No scope leak (no embedding/LLM/RAPTOR/HNSW/BM25 refs in test sources). **G3 ✅ signed off. G4 opens.** | Aniket |
 | 2026-05-23 | **Phase 3a G4 ✅ — code landed (single commit).** 5 new files + 3 mutated. All 16 new tests pass on first run; full suite 204/204 in 56.4s. **Zero in-G4 fixes** (Phase 2a's task infrastructure + Phase 2b's parser Protocol pattern meant the chunker slots in cleanly — second consecutive G4 with no rework). Files: `migrations/sql/0009_chunks.sql` (ALTER files CHECK + CREATE TABLE chunks + RLS + REVOKE UPDATE/DELETE + UNIQUE (file_id, chunk_index)); `src/kb/chunking/__init__.py` (Chunker pure-fn + ChunkingError + tiktoken cl100k_base + small-page joining + paragraph-/row-boundary back-off splitter); `src/kb/domain/chunks.py` (insert_chunk + count_chunks_for_file + read_pages_for_chunking); `src/kb/workers/tasks.py` MUTATED (chunk_file_impl + chunk_file Procrastinate task + parse_file_impl chained-defer in separate tx; _mark_failed generalised with from_state + event kwargs); `src/kb/config.py` MUTATED (chunk_tokens + chunk_overlap_tokens settings); `pyproject.toml` MUTATED (tiktoken>=0.8.0 dep). All 12 G1 decisions traced in implementation. | Aniket |
 | 2026-05-23 | **Phase 3a G5 ✅ + cross-phase sweep complete.** Authored `scripts/verify_phase_3a.sh` (18 checks): compose smoke + 4 DDL assertions (chunks table + UNIQUE constraint + RLS forced + kb_app grants restricted + lifecycle CHECK widened) + 4 PDF/xlsx/email E2E parse-to-`chunked` flows + chunks-row + source_page_numbers + lifecycle history string assertion + chunked-event idempotent re-defer + Phase-3a pytest 16. **Two in-G5 fixes in the verify script** (psql booleans print as `true`/`false`, not `t`/`f` — corrected the string matchers). **Cross-phase sweep** ran all 6 prior verify scripts: Phase 0 16/16 · 1a 17/17 · 1b 21/21 · 1c 20/20 · 2a 17/17 · 2b 15/15 (124/124 cumulative). One ANTICIPATED regression caught + fixed in the same commit: Phase 2a + 2b's verify scripts polled for `lifecycle_state == 'parsed'` as their success condition, but Phase 3a's chained defer races past `parsed → chunked` within ~1s, so the polls timed out. Fixed by widening the accept-set: `parsed | chunked | contextualized | ready` all count as parse-success (forward-compat for 3b + 3c). Also widened Phase 2a's "queued→parsing→parsed exact sequence" assertion to a "starts with that prefix" check (chunked event now appended). **Phase 3a complete; first Phase 3 sub-phase shipped.** | Aniket |
+| 2026-05-23 | **Phase 3b G1 OPEN.** Same `phase-3/chunking-raptor` branch (second commit-set). Plan section §5.8 drafted using the `claude-api` skill's prompt-caching guidance + Anthropic's Contextual Retrieval cookbook: `0010_contextual_chunks.sql` adds workspace-scoped + RLS-day-1 + immutable `contextual_chunks` table (denormalized `contextual_text = prefix + chunk_text` for index efficiency; persists `cache_creation_input_tokens` + `cache_read_input_tokens` columns for post-hoc cache-rate auditing); `Contextualizer` Protocol with `AnthropicContextualizer` (`claude-opus-4-7` default per skill mandate, configurable via `KB_CONTEXTUAL_MODEL`) + `IdentityContextualizer` fallback when `KB_ANTHROPIC_API_KEY` is unset (pipeline still completes at "no contextual retrieval" recall baseline so downstream phases stay unblocked); `asyncio.Semaphore(8)` concurrency cap; single `cache_control: {ephemeral}` breakpoint on the system block holding the doc context; prefix prompt verbatim from Anthropic's [Contextual Retrieval cookbook](https://github.com/anthropics/anthropic-cookbook/tree/main/skills/contextual-embeddings); new lifecycle state `contextualized`; worker stage `contextualize_file_impl` chained from `chunk_file_impl` via separate-tx defer (same pattern as 3a). 14 decisions locked. Out of scope: embeddings + RAPTOR (3c), HNSW + BM25 indexes (Phase 4), audit_log writes (Phase 9), Hydra/OmegaConf config layering (Phase 5). Awaiting sign-off. | Aniket |
+| 2026-05-23 | **Phase 3b G1 ✅ + G2 ✅ signed off (single drafting pass — third consecutive sub-phase with this rhythm).** G1's 14 decisions are conservative and traceable: #1 model choice to `claude-api` skill mandate (`claude-opus-4-7` default, `KB_CONTEXTUAL_MODEL` user override); #2 prompt-cache placement to `shared/prompt-caching.md` (system block + single ephemeral breakpoint); #4 concurrency cap to Anthropic tier-1 RPM/ITPM headroom; #6 IdentityContextualizer fallback to operational pragmatism (pipeline-completes-without-key beats pipeline-blocks); #7 prefix prompt verbatim from Anthropic's Contextual Retrieval cookbook (proven recipe, no eval deviation); #10 immutability matches Phase 3a chunks + raw_pages; #12 forward-compat enum convention; #13 chained-defer matches 3a's parse-to-chunk shape. G2 is one contract delta in `api_contracts.md` §5.1 #3 + §5.2 file-shape enum: `lifecycle_state` widens to include `contextualized`. **G3 opens** — drafting `tests/specs/phase_3b.md` + 2 new red skeleton files (~15 tests: 9 unit on AnthropicContextualizer with mock client + Identity fallback + 6 worker integration through testcontainers). | Aniket |
 
 ---
 
