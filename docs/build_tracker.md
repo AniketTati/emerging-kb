@@ -154,8 +154,8 @@ QA gates this at G1.5b — every prototype page is grep'd for the forbidden voca
 
 ## 1. Now / Next / Blocked
 
-**Now:** Phase 2b — all 5 gates ✅. Cross-phase sweep running in background. Ready to open PR (`phase-2b/parse-formats` → `main`).
-**Next:** Phase 3 — chunking + Contextual Retrieval + RAPTOR tree build (architecture §5 steps 6–10). First non-trivial worker phase that reads from `raw_pages`. Phase 2c (force-parser route + real Mistral activation) deferred — can land later as a small additive PR when a Mistral API key is procured.
+**Now:** Phase 3a — chunking (G1 OPEN). Branched `phase-3/chunking-raptor` off `main` after Phase 2b merged (PR #6 · merge commit `971a019`). Phase 3 split into 3a/3b/3c per [`feedback_sub_phase_splits`](../../.claude/memory/feedback_sub_phase_splits.md) — see §5.7/§5.8/§5.9.
+**Next:** Phase 3a G1 sign-off → G2 → G3 → G4 → G5; then 3b (contextual retrieval LLM call, first Anthropic prompt-cache pass); then 3c (RAPTOR tree + embeddings).
 **Blocked on:** nothing.
 
 ---
@@ -266,7 +266,9 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
 | **1c** | Schema service — **hierarchy**: `schema_entities`, `schema_fields`, `schema_relationships` tables; nested CRUD; NL field descriptions; single_parent + cascade_delete constraints | ✅ | ✅ | ✅ | ✅ | ✅ | All 5 gates green 2026-05-23. verify_phase_1c.sh 20/20. verify_phase_1b.sh still 21/21. verify_phase_1a.sh still 17/17. verify_phase_0.sh still 16/16. pytest 142/142. Ready to merge. |
 | **2a** | Parse layer — **scaffold + Docling**: `files` + `file_lifecycle` + `raw_pages` + `parse_artifacts` tables; Procrastinate `parse_file` task; MIME-based dispatcher; Docling (digital PDF) parser; admin `POST /files` upload endpoint | ✅ | ✅ | ✅ | ✅ | ✅ | All 5 gates green 2026-05-23. pytest 170/170. First worker phase complete. Ready to merge. |
 | **2b** | Parse layer — **additional parsers**: xlsx (openpyxl) + email (stdlib) + Mistral OCR (external API adapter class + mock-tested; real-API gated on `KB_MISTRAL_API_KEY`) | ✅ | ✅ | ✅ | ✅ | ✅ | All 5 gates green 2026-05-23. verify_phase_2b.sh 15/15. pytest 188/188. xlsx + email E2E pipeline verified in Docker stack (xlsx → 2 sheets → 2 raw_pages; email → 1 page with headers + body). Mistral OCR adapter ready, self-disabled without API key. Ready to merge. |
-| **3** | Chunking + Contextual Retrieval + RAPTOR tree build | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | Internal worker |
+| **3a** | Chunking — late chunking of `raw_pages` → `chunks` table (layout-aware, token-bounded, cross-page joining); worker stage `chunk_file`; new lifecycle state `chunked` | 🟡 | ⬜ | ⬜ | ⬜ | ⬜ | Internal worker; no LLM/embedding calls |
+| **3b** | Contextual Retrieval — Anthropic Claude per-chunk prefix with prompt-cached doc context; `contextual_chunks` table; worker stage `contextualize_file` | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | First LLM call; gated on `KB_ANTHROPIC_API_KEY` (self-disables in CI, real-call path covered by mock) |
+| **3c** | Embedding + RAPTOR tree build — Gemini Embedding 001 on contextual chunks; `chunk_embeddings`; recursive cluster→summarize→re-embed → `raptor_nodes` + `raptor_edges`; lifecycle terminates at `ready` | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | First embedding call; gated on `KB_GEMINI_API_KEY` with mock embedder for CI; HNSW + BM25 indexes themselves land in Phase 4 |
 | **4** | Indexing: pgvector HNSW + pg_search BM25 on all RAPTOR levels | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | Internal worker |
 | **5** | Open extraction → mentions; clause split + typing + anomaly score | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | L2 + L2b + L3 |
 | **6** | Schema-driven extraction (Gemini structured outputs) | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | L4/L5 projection |
@@ -1236,6 +1238,118 @@ When Aniket approves this plan, the Phase 2b G1 cell in §5 flips 🟡 → ✅ a
 
 ---
 
+### 5.7 Phase 3a plan — Chunking (G1 🟡 OPEN)
+
+> **Status:** G1 🟡 OPEN — drafted 2026-05-23. Branch: `phase-3/chunking-raptor` off `main` (Phase 2b merged as PR #6 · merge commit `971a019`). Awaiting Aniket sign-off.
+
+#### Scope
+
+Phase 3a takes a `parsed` file (raw_pages already populated by Phase 2a/2b parsers) and produces the layout-aware **`chunks`** table that all downstream retrieval channels consume (BM25, dense embedding, RAPTOR clustering input). This is the first internal worker stage that doesn't add an HTTP endpoint — the chunker is automatic post-parse, driven by Procrastinate task chaining.
+
+**In scope:**
+- **`0009_chunks.sql` migration** — `chunks` table (workspace-scoped, RLS day-1, immutable: REVOKE UPDATE/DELETE on kb_app). Columns: `id uuid PK`, `file_id uuid FK`, `workspace_id uuid`, `chunk_index int` (0-based ordering within file), `text text`, `source_page_numbers int[]` (every raw_page that contributed bytes), `token_count int`, `content_sha text` (sha256 of `text`), `created_at timestamptz`. Indexes: `(workspace_id)`, `(file_id, chunk_index)`. UNIQUE `(file_id, chunk_index)`.
+- **Lifecycle state extension** — `files.lifecycle_state` CHECK widens to include `chunked`. Transitions allowed: `parsed → chunked` (success), `parsed → failed` (chunker error). The terminal `'ready'` state lands in Phase 3c after RAPTOR build.
+- **`kb/chunking/__init__.py`** — `Chunker` module with one function `chunk_pages(raw_pages: list[RawPage], *, budget_tokens: int = 2500, overlap_tokens: int = 250) -> list[Chunk]`. Pure: no DB, no I/O. Token counting via `tiktoken.get_encoding("cl100k_base")`. Layout-aware: respects raw_page boundaries; joins small pages (< budget/4) with their neighbours; never splits a single page mid-stream unless it exceeds the budget on its own.
+- **Worker stage `chunk_file_impl(file_id)`** in `kb/workers/tasks.py` — reads file row + raw_pages, sets workspace context, calls `chunk_pages()`, INSERTs `chunks` rows, transitions lifecycle to `chunked` with event `chunking_done` carrying `{chunk_count, total_tokens}`. Idempotent: returns immediately if lifecycle is already `chunked`. Wrapped in a `@procrastinate_app.task(name="chunk_file", queue="kb")`.
+- **Task chaining** — `parse_file_impl()`'s success path defers `chunk_file(file_id)` after writing the `parsed` lifecycle event. Done inside the same task as a Procrastinate `defer` — cheap and matches architecture's "chained worker stage" pattern.
+- **Failure mode** — chunker exceptions → `parsed→failed` lifecycle event with `event='chunking_failed'`. Same `_mark_failed` shape Phase 2a uses, just with `from_state='parsed'`.
+- **Empty input handling** — file with `raw_pages.count() == 0` shouldn't happen post-2a (every parser emits ≥1 row per decision #13), but defensive: raises `ChunkingError("empty raw_pages")` → fails the file rather than silently producing zero chunks.
+- **Cross-parser uniformity** — chunker doesn't know the source parser. xlsx files arrive as multiple raw_pages (one per sheet); the chunker treats each sheet as a layout unit, joining small sheets, splitting huge ones at row boundaries (`\n` separator). Email files arrive as a single raw_page that may or may not need splitting — most emails fit in one chunk.
+
+**Out of scope (deferred):**
+- Contextual Retrieval prefix LLM call → **Phase 3b**.
+- Embedding calls + `chunk_embeddings` table → **Phase 3c**.
+- RAPTOR tree build → **Phase 3c**.
+- HNSW + BM25 indexes on `chunks.text` → **Phase 4** (architecture §5 step 9; Phase 3a stops at producing chunk rows without search-time indexes).
+- Force-rechunk admin endpoint (`POST /files/:id/rechunk`) → Phase 4 (paired with re-index endpoint).
+- Custom per-doc-type chunking (legal contracts get clause-aware chunks, xlsx gets row-aware chunks) → Wave B / Phase 5 (atomic-unit extraction owns clause/transaction boundaries; Phase 3a is the generic token-budgeted chunker).
+- True Jina-style late chunking (token-level embeddings aggregated to chunk vectors) → Wave B optimization. Architecture §5 step 6 uses "late chunking" terminology loosely; BGE-M3 and Gemini Embedding 001 don't expose per-token outputs. Phase 3a implements **layout-aware token-bounded chunking**, the practical approximation.
+- `audit_log` writes on chunk_file completion → Phase 9.
+
+#### Decisions (locked at G1; changes require re-opening G1)
+
+| # | Decision | Choice | Rationale |
+|---|---|---|---|
+| 1 | Chunk budget | **2500 tokens default**, configurable via `KB_CHUNK_TOKENS` env (test fixture overrides to 200). | Mid-range of architecture §5 step 6's "~2–4K tokens" guidance. Leaves headroom for Phase 3b's contextual prefix (~75 tokens) plus retrieval-time concatenation of neighbours without bumping the embedder's 8K-token context limit. Lower defaults (256–512) hurt recall on multi-hop queries per the [Anthropic Contextual Retrieval write-up](https://www.anthropic.com/news/contextual-retrieval). |
+| 2 | Overlap policy | **Rolling 10% (250 tokens) overlap** between consecutive chunks within the same file. No overlap across files. | RAG papers consistently show non-zero overlap improves recall on queries that span chunk boundaries. 10% is the LangChain/LlamaIndex industry default; large enough to recover boundary context, small enough not to inflate the chunk count beyond ~1.1×. |
+| 3 | Tokenizer | **`tiktoken` `cl100k_base`** (gpt-4 / gpt-3.5-turbo encoder). | Stable, fast, hard dep already pulled by other Anthropic-ecosystem libraries. Token counts are *approximate* for non-OpenAI embedders but within ±5% of BGE-M3 / Gemini Embedding tokenizers — adequate for budgeting. Anthropic's tokenizer isn't public; cl100k_base is the standard proxy. |
+| 4 | Layout-aware boundary rule | The chunker treats each `raw_pages` row as a **layout unit** with hard "do-not-split" preference. Splitting WITHIN a page is allowed only when the page on its own exceeds the budget; in that case, split on the largest paragraph-break (`\n\n`) closest to the budget point. | Respects parser output. For PDF parsed by Docling, one raw_page == one printed page (already paragraph-segmented). For xlsx, one raw_page == one sheet (sheet boundary preserved). For email, one raw_page == the whole message (small enough to never split). |
+| 5 | Small-page joining | If a page's token count is `< budget // 4` (default: 625 tokens), and the next page exists, **join** it with subsequent pages until the budget is reached or the file ends. | Tiny standalone chunks (~1 page of cover-letter or signature) hurt retrieval recall. Joining recovers context. Boundary doesn't cross files. |
+| 6 | Cross-page chunks track all source pages | `chunks.source_page_numbers int[]` records EVERY raw_page that contributed at least one byte (e.g., a chunk spanning pages 5-6-7 stores `{5,6,7}`). | Phase 8 citation rendering needs this for "this answer came from pages 5–7." Storing the array now avoids a Phase 8 migration. |
+| 7 | Chunks table immutability | `REVOKE UPDATE, DELETE ON chunks FROM kb_app;` — same pattern as `raw_pages` (Phase 2a decision #5) and `schema_versions` (Phase 1b decision #10). Re-chunking deletes-via-superuser + re-inserts via a future admin path. | Chunks are an immutable derived artifact; downstream embeddings reference them by id. In-place mutation would silently invalidate Phase 3b's contextual prefix + Phase 3c's embeddings. |
+| 8 | Lifecycle state addition | `files.lifecycle_state` CHECK widens to `('queued','parsing','parsed','chunked','failed','deleted')`. Phase 3b will add `contextualized`; Phase 3c will add `ready`. | Each sub-phase appends ONE new state. Easier to reason about than retrofitting all four at once. |
+| 9 | Task chaining mechanism | `parse_file_impl()` calls `await procrastinate_app.configure_task(name="chunk_file").defer_async(file_id=file_id)` after the `parsed` lifecycle event is written. Done in a SEPARATE PG transaction (not the parse's tx) so a Procrastinate defer failure doesn't roll back the parse. | Procrastinate's defer is itself an INSERT into its task table; nesting it inside our parse tx couples two concerns. Worst case (defer fails): file stays at `parsed`; an out-of-band `chunk_file` invocation by an admin path recovers it. |
+| 10 | Idempotency | `chunk_file_impl(file_id)` returns immediately when `files.lifecycle_state` is already `chunked` (or downstream: `contextualized` / `ready`). Idempotency key on UNIQUE `(file_id, chunk_index)` prevents duplicate rows on replay. | Matches Phase 2a's per-stage idempotency pattern. `SELECT FOR UPDATE` on the files row inside the lifecycle tx serializes concurrent invocations. |
+| 11 | Empty-file handling | If `SELECT count(*) FROM raw_pages WHERE file_id = %s` returns 0, raise `ChunkingError("empty raw_pages for file=…")` → write `parsed→failed` lifecycle event. Don't emit zero chunks (would silently break downstream). | Shouldn't happen post-2a/2b but defensive. Failing loud beats failing silent. |
+| 12 | xlsx row-boundary respect within a sheet | When a single xlsx sheet exceeds the chunk budget, the split point is the last `\n` before the budget — preserving row boundaries (Phase 2b decision #3 made sheet text `\t`-separated cells, `\n`-separated rows). | Mid-row splits break the columnar grid that Phase 5 atomic-unit extraction relies on. Row boundaries are a free, natural breakpoint. |
+
+#### Repo layout delta after Phase 3a G4
+
+```
+emerging-kb/
+├── migrations/sql/
+│   └── 0009_chunks.sql                       ← NEW (table + RLS + REVOKE UPDATE/DELETE)
+├── src/kb/
+│   ├── chunking/
+│   │   └── __init__.py                       ← NEW (`Chunker` Protocol + `chunk_pages()` function + tokenizer cache)
+│   ├── domain/
+│   │   └── chunks.py                         ← NEW (pydantic `Chunk` + `insert_chunk()` + `list_chunks_for_file()`)
+│   └── workers/
+│       └── tasks.py                          ← MUTATED (`chunk_file_impl` + Procrastinate `chunk_file` task + defer at end of parse)
+└── tests/
+    ├── test_chunking_unit.py                 ← NEW (~10 pure-fn tests on `chunk_pages` — budget/overlap/joining/splitting)
+    ├── test_chunking_worker.py               ← NEW (~6 worker-tests: end-to-end parsed→chunked, idempotency, failure mode, task chaining)
+    └── specs/phase_3a.md                     ← NEW
+```
+
+No `kb/api/` mutations. Phase 3a is pure-internal — no new endpoints, no contract deltas in `api_contracts.md` (Phase 3a docs append a single sentence to §5.2 noting the new `'chunked'` lifecycle state value on the wire).
+
+#### Endpoint contract delta (api_contracts.md §5.2)
+
+The §5.2 file-resource description lists the `lifecycle_state` enum on the wire. Phase 3a's only contract change: enum widens from `queued | parsing | parsed | failed | deleted` to `queued | parsing | parsed | chunked | failed | deleted`. Phase 3b adds `contextualized`; 3c adds `ready`. No new endpoints, no new error slugs.
+
+#### Phase 3a G5 — what "green" means
+
+`scripts/verify_phase_3a.sh` adds to Phase 0+1a+1b+1c+2a+2b verify checks:
+1. `psql` confirms `0009_chunks.sql` applied: `chunks` table exists with workspace_id + RLS forced + UPDATE/DELETE revoked from kb_app + UNIQUE `(file_id, chunk_index)` constraint present.
+2. `psql` confirms `files.lifecycle_state` CHECK includes `chunked`.
+3. Compose smoke: `curl POST /files (tiny.pdf, multipart)` → 201 → worker parses (Docling) → worker chunks → `files.lifecycle_state = 'chunked'` within 4 min.
+4. `psql` confirms ≥1 chunk row exists for the file with `source_page_numbers` populated and `token_count > 0`.
+5. `curl POST /files (tiny.xlsx, multipart)` → parse → chunk; `psql` confirms chunks for each non-empty sheet.
+6. `curl POST /files (tiny.eml, multipart)` → parse → chunk; `psql` confirms ≥1 chunk row.
+7. Re-deferring `chunk_file(file_id)` on an already-`chunked` file → no duplicate chunk rows.
+8. `pytest tests/` green: 188 (existing) + ~16 new = ~204.
+
+#### Pre-G2 consistency review checklist
+
+Before G2 opens:
+- [ ] Architecture §5 step 6 traceability — Phase 3a covers the layout-aware token-bounded chunker only; "late chunking" terminology kept in docs (architecture's phrasing) with a code comment noting the practical implementation.
+- [ ] No leak into Phase 3b territory (no `contextual_chunks` table, no LLM call, no `KB_ANTHROPIC_API_KEY` reference).
+- [ ] No leak into Phase 3c territory (no `chunk_embeddings`, no `raptor_nodes`, no embedding API call).
+- [ ] No `audit_log` writes (Phase 9).
+- [ ] Phase 2a/2b's E2E pipeline still serves every supported mime correctly after the chained defer is added (cross-phase sweep at G5).
+- [ ] RLS invariant grows from 11 → 12 workspace-scoped tables (chunks joins the list).
+
+#### Sign-off
+
+When Aniket approves this plan, the Phase 3a G1 cell in §5 flips 🟡 → ✅ and Phase 3a G2 opens (single contract delta in `docs/api_contracts.md` §5.2 lifecycle enum). Sign-off recorded in §9.
+
+---
+
+### 5.8 Phase 3b plan — Contextual Retrieval (placeholder)
+
+> **Status:** ⬜ Not yet drafted. Opens after Phase 3a G5 ✅.
+
+Scope sketch (to be locked at G1 when 3a closes): per-chunk Anthropic Claude prefix call with **prompt-cached doc-level context** (architecture §5 step 7). New `contextual_chunks` table holding the 50–100 token "this is from X about Y" header + the chunk text. Worker stage `contextualize_file(file_id)` reads `chunks` rows, batches by doc, issues one Claude call per chunk with `cache_control: ephemeral` on the parent-doc raw text. First LLM call in the pipeline — `KB_ANTHROPIC_API_KEY` gates real activation; CI uses a mock Anthropic client returning canned prefixes. Lifecycle: `chunked → contextualized`.
+
+### 5.9 Phase 3c plan — Embedding + RAPTOR tree (placeholder)
+
+> **Status:** ⬜ Not yet drafted. Opens after Phase 3b G5 ✅.
+
+Scope sketch (to be locked at G1 when 3b closes): Gemini Embedding 001 calls on every contextual chunk → `chunk_embeddings` (`vector(3072)` via pgvector halfvec). Recursive RAPTOR build: cluster contextual chunks via GMM on embeddings, summarize each cluster via Gemini Flash, re-embed summaries, re-cluster — until ≤8 nodes remain OR `level == max_levels=4`. New tables: `chunk_embeddings`, `raptor_nodes`, `raptor_edges`. Worker stage `embed_and_raptor_file(file_id)`. Lifecycle terminates at `ready` (the final success state every downstream phase asserts). First embedding call — `KB_GEMINI_API_KEY` gates real activation; CI uses a deterministic mock embedder. HNSW + BM25 indexes themselves land in Phase 4.
+
+---
+
 ### Wave B (build if time)
 
 | Phase | Description | G1 | G2 | G3 | G4 | G5 |
@@ -1262,7 +1376,8 @@ Phases 15–24 per `architecture.md` §12. Tracked here only as a reminder of in
 |---|---|---|
 | 0 | `GET /health`, `GET /ready` | ✅ signed off 2026-05-23 |
 | 1 | `GET/POST/PUT/DELETE /schema`, `GET /schema/versions`, hierarchy endpoints | ⬜ |
-| 2–7 | Mostly internal workers; admin endpoints TBD at G1 | ⬜ |
+| 3a | (no new endpoints; `lifecycle_state` enum widens by `chunked`) | 🟡 G1 draft |
+| 3b–7 | Mostly internal workers; admin endpoints TBD at G1 | ⬜ |
 | 8 | `POST /query`, `POST /chat`, `GET /chat/:id/stream` (SSE) | ⬜ |
 | 9 | `GET /upload/:id/status` (SSE), `GET /audit` | ⬜ |
 
@@ -1283,6 +1398,7 @@ Phases 15–24 per `architecture.md` §12. Tracked here only as a reminder of in
 | 1c | [tests/specs/phase_1c.md](../tests/specs/phase_1c.md) | [test_schema_entities.py](../tests/test_schema_entities.py) · [test_schema_fields.py](../tests/test_schema_fields.py) · [test_schema_relationships.py](../tests/test_schema_relationships.py) · [test_schema_hierarchy_versions.py](../tests/test_schema_hierarchy_versions.py) | ✅ 36 new tests green (post-G5); suite total 142 |
 | 2a | [tests/specs/phase_2a.md](../tests/specs/phase_2a.md) | [test_files_crud.py](../tests/test_files_crud.py) · [test_parse_dispatch.py](../tests/test_parse_dispatch.py) · [test_parse_pdf_docling.py](../tests/test_parse_pdf_docling.py) · [test_raw_pages.py](../tests/test_raw_pages.py) · [test_files_lifecycle.py](../tests/test_files_lifecycle.py) | ✅ 28 new tests green (post-G5); suite total 170 |
 | 2b | [tests/specs/phase_2b.md](../tests/specs/phase_2b.md) | [test_parse_xlsx.py](../tests/test_parse_xlsx.py) · [test_parse_email.py](../tests/test_parse_email.py) · [test_parse_mistral_ocr.py](../tests/test_parse_mistral_ocr.py) · [test_files_crud.py](../tests/test_files_crud.py) (additive) | ✅ 18 new tests green (15 parser-unit + 3 HTTP-additive); suite total 188 |
+| 3a | tests/specs/phase_3a.md (lands at G3) | test_chunking_unit.py · test_chunking_worker.py (land at G3) | 🟡 G1 draft |
 | ... | | | |
 
 ---
@@ -1299,6 +1415,7 @@ Phases 15–24 per `architecture.md` §12. Tracked here only as a reminder of in
 | 1c | [scripts/verify_phase_1c.sh](../scripts/verify_phase_1c.sh) | 2026-05-23 | ✅ 20/20 (compose smoke + 4 DDL assertions on 3 new tables + 10 HTTP/cascade/rollback/RLS curl checks + openapi exposure + Phase-1c pytest 36) |
 | 2a | [scripts/verify_phase_2a.sh](../scripts/verify_phase_2a.sh) | 2026-05-23 | ✅ 17/17 (compose smoke + 4 DDL assertions on 4 new tables + 9 HTTP/E2E parse curl checks incl. real Docling parse + RLS isolation + dedup-header + 415 + openapi exposure + Phase-2a pytest 28) |
 | 2b | [scripts/verify_phase_2b.sh](../scripts/verify_phase_2b.sh) | 2026-05-23 | ✅ 15/15 (compose smoke + xlsx + email upload + parse to lifecycle_state='parsed' + xlsx page-text sheet header + magic-byte sniff routing both ways + Mistral inert without API key + text/plain 415 + Phase-2b pytest 28) |
+| 3a | scripts/verify_phase_3a.sh (lands at G5) | — | 🟡 G1 draft |
 | ... | | | |
 
 ---
@@ -1378,6 +1495,9 @@ Phases 15–24 per `architecture.md` §12. Tracked here only as a reminder of in
 | 2026-05-23 | **Phase 2b G3 ✅ signed off. G4 opens.** Build order: (1) `kb/parsers/xlsx_parser.py` (openpyxl-driven; one page per sheet; TSV + sheet header text); (2) `kb/parsers/email_parser.py` (stdlib email.parser; multipart traversal; html.parser strip-tags fallback); (3) `kb/parsers/mistral_ocr_parser.py` (httpx-based adapter; constructor takes optional http_client for mock injection; can_handle gated on KB_MISTRAL_API_KEY); (4) extend `kb/parsers/__init__.py` `register_default_parsers()` to register the 3 new parsers (Docling first → xlsx → email → Mistral OCR); (5) widen `kb/api/files.py` `_PHASE_2A_WHITELIST` to set + add magic-byte sniff before mime check; (6) commit fixture bytes (`tiny.xlsx` ≈ 1 KB via openpyxl; `tiny.eml` + `tiny_with_attachment.eml` minimal RFC822). | Aniket |
 | 2026-05-23 | **Phase 2b G4 ✅ — code landed (single commit `b5757da`).** All 18 new tests pass on first run; full suite 188/188 in 49.7s. **Zero in-G4 fixes** (Phase 2a's testing infra + parser Protocol meant the new parsers slot in cleanly). All 13 G1 decisions traced in commit body. 3 new parser modules (xlsx + email + mistral_ocr) + extension of `register_default_parsers()` + widened `_MIME_WHITELIST` in `kb/api/files.py` + `_sniff_mime_from_magic()` helper called from both `_handle_multipart` and `_handle_json` + 3 fixture files (`tiny.xlsx` 5 KB, `tiny.eml` 228 B, `tiny_with_attachment.eml` 413 B). | Aniket |
 | 2026-05-23 | **Phase 2b G5 ✅ + cross-phase sweep running.** Authored `scripts/verify_phase_2b.sh` (15 checks): compose smoke + xlsx + email upload paths + worker parse to `lifecycle_state='parsed'` + xlsx page text starts with `# Sheet: Sheet1` + magic-byte sniff routing both ways (xlsx + email from octet-stream) + Mistral OCR inert (PDF still wins by Docling first in dispatch order) + text/plain still 415 + Phase-2b pytest. Full E2E pipeline verified for both new formats: `POST tiny.xlsx → MinIO → parse_file → openpyxl → 2 raw_pages (one per sheet)`; `POST tiny.eml → MinIO → parse_file → email.message_from_bytes → 1 raw_page (headers + body)`. **Phase 2b complete; cross-phase sweep verifies Phase 0/1a/1b/1c/2a still pass.** | Aniket |
+| 2026-05-23 | **Phase 2b merged.** PR #6 squash-merged into `main` (merge commit `971a019`). Local fast-forward sync confirmed. **Phase 2 (a/b) closed.** Phase 2c (force-parser route + real Mistral activation) parked as a tracked deferral — will land as an additive PR when a Mistral API key is procured + a real scanned-PDF eval set is ready. | Aniket |
+| 2026-05-23 | **Phase 3 split into 3a + 3b + 3c** per [`feedback_sub_phase_splits`](../../.claude/memory/feedback_sub_phase_splits.md). Architecture §5 step 6–10 lists four conceptual deliverables (late chunking, contextual prefix, embedding, RAPTOR build) — each end-to-end testable on its own. 3a = chunking only (no LLM, no embedding); 3b = Contextual Retrieval Anthropic prefix call; 3c = embeddings + RAPTOR tree (first embedding call). Each gets its own G1→G5 cycle but all three live on the same `phase-3/chunking-raptor` branch (no inter-PR dependency since each commit-set advances the same lifecycle state machine — opening 3 separate PRs is unnecessary friction). HNSW + BM25 index creation explicitly stays in Phase 4 per architecture §5 step 8–9. | Aniket |
+| 2026-05-23 | **Phase 3a G1 OPEN.** Branched `phase-3/chunking-raptor` from `main`. Plan section §5.7 drafted: `0009_chunks.sql` adds workspace-scoped + RLS-day-1 + immutable `chunks` table; pure-function `chunk_pages(raw_pages, budget=2500, overlap=250)` using tiktoken `cl100k_base`; layout-aware (raw_page as default boundary, paragraph-break splits for over-budget pages, row-boundary splits for huge xlsx sheets); small-page joining when page < budget/4; new lifecycle state `chunked`; worker stage `chunk_file_impl` chained from `parse_file_impl`'s success path via separate-tx defer. 12 decisions locked. Out of scope: contextual prefix LLM (3b), embeddings + RAPTOR (3c), HNSW + BM25 indexes (Phase 4), force-rechunk admin endpoint (Phase 4), atomic-unit-aware chunking (Phase 5), Jina-style true late chunking (Wave B). Awaiting sign-off. | Aniket |
 
 ---
 
