@@ -39,6 +39,14 @@ FROM python:3.12-slim AS runtime
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libpq5 \
+        # Phase 2a — Docling pulls opencv-python + pillow which need these
+        # system libs for image decoding + GL rendering paths.
+        libxcb1 \
+        libgl1 \
+        libglib2.0-0 \
+        libsm6 \
+        libxext6 \
+        libxrender1 \
     && rm -rf /var/lib/apt/lists/*
 
 # Non-root user.
@@ -50,7 +58,13 @@ COPY --from=builder --chown=kb:kb /app /app
 
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1
+    PYTHONDONTWRITEBYTECODE=1 \
+    HF_HOME=/tmp/huggingface \
+    XDG_CACHE_HOME=/tmp/cache
+
+# Pre-create writable cache directories for the kb user (uid 1000).
+# Docling downloads layout models from HuggingFace at first parse.
+RUN mkdir -p /tmp/huggingface /tmp/cache && chown -R kb:kb /tmp/huggingface /tmp/cache
 
 USER kb
 

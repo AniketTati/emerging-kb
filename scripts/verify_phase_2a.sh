@@ -150,15 +150,18 @@ FILE_ID=$(curl -sS -X POST http://localhost:8000/files \
 [[ -n "$FILE_ID" ]] && ok "queued file id=$FILE_ID" || fail "POST failed to return queued file id"
 
 step "wait for worker to parse the file (poll lifecycle_state)"
+# Docling downloads model weights from HuggingFace on first use (~150 MB);
+# in a fresh container this can take a few minutes. After the first parse,
+# subsequent ones complete in seconds.
 parsed=0
-for _ in $(seq 1 60); do
+for _ in $(seq 1 120); do
     state=$(curl -sS "http://localhost:8000/files/$FILE_ID" -H "X-Test-Workspace: $WS_A" \
             | python3 -c "import sys,json; print(json.loads(sys.stdin.read()).get('lifecycle_state',''))")
     if [[ "$state" == "parsed" ]]; then parsed=1; break; fi
     if [[ "$state" == "failed" ]]; then break; fi
-    sleep 3
+    sleep 5
 done
-(( parsed == 1 )) && ok "worker transitioned to 'parsed'" || fail "did not parse within 180s (state: $state)"
+(( parsed == 1 )) && ok "worker transitioned to 'parsed'" || fail "did not parse within 600s (state: $state)"
 
 step "curl: GET /files/:id/pages returns ≥1 page after parse"
 total=$(curl -sS "http://localhost:8000/files/$FILE_ID/pages" -H "X-Test-Workspace: $WS_A" \
@@ -181,15 +184,13 @@ print('match' if transitions == expected else 'mismatch: ' + str(transitions))
 # ---------------------------------------------------------------------------
 
 step "curl: duplicate POST same content returns 200 with X-Dedup-Reason header"
-dedup_status=$(curl -sS -o /tmp/kb-verify-2a-dedup.json -w "%{http_code} %{header_json}" -X POST http://localhost:8000/files \
+# -D dumps response headers to file; -w gets status. One curl, two outputs.
+http=$(curl -sS -D /tmp/kb-verify-2a-dedup-headers -o /dev/null -w "%{http_code}" \
+    -X POST http://localhost:8000/files \
     -H "X-Test-Workspace: $WS_A" \
     -H "Idempotency-Key: $(uuidgen)" \
     -F "file=@tests/fixtures/tiny.pdf;type=application/pdf")
-http=$(echo "$dedup_status" | awk '{print $1}')
-dedup_header=$(curl -sS -I -X POST http://localhost:8000/files \
-    -H "X-Test-Workspace: $WS_A" \
-    -H "Idempotency-Key: $(uuidgen)" \
-    -F "file=@tests/fixtures/tiny.pdf;type=application/pdf" 2>&1 | grep -i "x-dedup-reason" || echo "")
+dedup_header=$(grep -i "^x-dedup-reason:" /tmp/kb-verify-2a-dedup-headers || echo "")
 if [[ "$http" == "200" && "$dedup_header" == *"content-hash"* ]]; then
     ok "dedup returned 200 with X-Dedup-Reason: content-hash"
 else

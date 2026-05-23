@@ -27,6 +27,10 @@ dependencies = [
     # Phase 2a — parse layer
     "docling>=2.0",
     "python-multipart>=0.0.12",
+    # Pin torch + torchvision as direct deps so [tool.uv.sources] applies
+    # (sources only override packages listed in this project's dependencies).
+    "torch>=2.0",
+    "torchvision>=0.15",
 ]
 
 [dependency-groups]
@@ -59,9 +63,16 @@ name = "pytorch-cpu"
 url = "https://download.pytorch.org/whl/cpu"
 explicit = true
 
+# Pin torch to the CPU index across all platforms. The `[index = "..."]`
+# pattern requires `explicit = true` on the index so other packages aren't
+# accidentally pulled from it; the package-level override here is mandatory.
 [tool.uv.sources]
-torch = [{ index = "pytorch-cpu" }]
-torchvision = [{ index = "pytorch-cpu" }]
+torch = [
+  { index = "pytorch-cpu", marker = "sys_platform == 'linux' or sys_platform == 'darwin'" },
+]
+torchvision = [
+  { index = "pytorch-cpu", marker = "sys_platform == 'linux' or sys_platform == 'darwin'" },
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
