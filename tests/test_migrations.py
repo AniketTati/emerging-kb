@@ -34,7 +34,12 @@ async def test_runner_bootstraps_schema_migrations_on_empty_db(db_url_superuser)
 
 
 async def test_runner_applies_all_files_in_lexical_order(db_url_superuser):
-    """After fresh apply: schema_migrations has all .sql files in filename order."""
+    """After fresh apply: schema_migrations has Phase 0's files (first 4) in order.
+
+    Phase 0 fixed-set assertion was made open-ended in Phase 1a — later phases
+    append migrations, and Phase 0's invariant is only that ITS migrations are
+    present and ordered, not that nothing else exists.
+    """
     import psycopg
 
     with psycopg.connect(db_url_superuser) as conn:
@@ -42,12 +47,13 @@ async def test_runner_applies_all_files_in_lexical_order(db_url_superuser):
             "SELECT id FROM schema_migrations ORDER BY applied_at, id"
         ).fetchall()
     ids = [r[0] for r in rows]
-    assert ids == [
+    phase_0_files = [
         "0001_extensions.sql",
         "0002_schema_migrations.sql",
         "0003_audit_log.sql",
         "0004_idempotency_keys.sql",
     ]
+    assert ids[:4] == phase_0_files, f"Phase 0 migrations missing or out of order: {ids}"
 
 
 async def test_runner_is_idempotent_when_rerun(db_url_superuser):
