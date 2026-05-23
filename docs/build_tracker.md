@@ -154,8 +154,8 @@ QA gates this at G1.5b — every prototype page is grep'd for the forbidden voca
 
 ## 1. Now / Next / Blocked
 
-**Now:** Phase 1c — all 5 gates ✅. End-of-phase cross-phase sweep complete. Ready to open PR (`phase-1c/schema-hierarchy` → `main`).
-**Next:** Phase 2 — Parse layer (Docling + Mistral OCR + xlsx + email → raw_pages). First worker phase.
+**Now:** Phase 2a G1 — parse-layer scaffold + Docling (digital PDF) plan (drafted 2026-05-23; awaiting sign-off). Branch: `phase-2a/parse-scaffold` off `main`. Phase 1c merged as PR #4; tag `phase-1c-complete` at the merge commit.
+**Next:** Phase 2a G2 — endpoint contracts for `/files` admin upload + read endpoints.
 **Blocked on:** nothing.
 
 ---
@@ -264,7 +264,8 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
 | **1a** | Schema service — **CRUD foundation**: `schemas` table + 5 endpoints (POST/GET-list/GET/PUT/DELETE) | ✅ | ✅ | ✅ | ✅ | ✅ | All 5 gates green 2026-05-23. verify_phase_1a.sh 17/17. verify_phase_0.sh still 16/16. Ready to merge. |
 | **1b** | Schema service — **versioning**: `schema_versions` table; every PUT creates a new version; version list/read/rollback endpoints | ✅ | ✅ | ✅ | ✅ | ✅ | All 5 gates green 2026-05-23. verify_phase_1b.sh 21/21. verify_phase_1a.sh still 17/17. verify_phase_0.sh still 16/16. pytest 106/106. Ready to merge. |
 | **1c** | Schema service — **hierarchy**: `schema_entities`, `schema_fields`, `schema_relationships` tables; nested CRUD; NL field descriptions; single_parent + cascade_delete constraints | ✅ | ✅ | ✅ | ✅ | ✅ | All 5 gates green 2026-05-23. verify_phase_1c.sh 20/20. verify_phase_1b.sh still 21/21. verify_phase_1a.sh still 17/17. verify_phase_0.sh still 16/16. pytest 142/142. Ready to merge. |
-| **2** | Parse layer: Docling + Mistral OCR + xlsx + email → raw_pages | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | Internal service; API exposed via upload (phase 10a) |
+| **2a** | Parse layer — **scaffold + Docling**: `files` + `file_lifecycle` + `raw_pages` + `parse_artifacts` tables; Procrastinate `parse_file` task; MIME-based dispatcher; Docling (digital PDF) parser; admin `POST /files` upload endpoint | 🟡 | ⬜ | ⬜ | ⬜ | ⬜ | G1 plan drafted 2026-05-23 (§5.5). First worker phase. End-to-end pipeline runnable on PDF after 2a. |
+| **2b** | Parse layer — **additional parsers**: xlsx (openpyxl) + email (stdlib) + Mistral OCR (external API + mock fallback) | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | Builds on 2a's dispatcher + raw_pages contract. Each parser is an additive `Parser` Protocol implementation. |
 | **3** | Chunking + Contextual Retrieval + RAPTOR tree build | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | Internal worker |
 | **4** | Indexing: pgvector HNSW + pg_search BM25 on all RAPTOR levels | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | Internal worker |
 | **5** | Open extraction → mentions; clause split + typing + anomaly score | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | L2 + L2b + L3 |
@@ -986,6 +987,161 @@ When Aniket approves this plan, the Phase 1c G1 cell in §5 flips 🟡 → ✅ a
 
 ---
 
+### 5.5 Phase 2a plan — Parse-layer scaffold + Docling (G1 🟡 IN REVIEW)
+
+> **Status:** G1 drafted 2026-05-23 by Aniket. Awaiting sign-off. Branch: `phase-2a/parse-scaffold` off `main` (Phase 1c merged as PR #4; tag `phase-1c-complete`).
+>
+> **Why split Phase 2 into 2a + 2b:** the §5 description ("Docling + Mistral OCR + xlsx + email → raw_pages") is four comma-separated parsers — the [`feedback_sub_phase_splits`](../../.claude/memory/feedback_sub_phase_splits.md) rule applies. 2a builds the **scaffold** (tables + Procrastinate worker + dispatcher + admin upload endpoint + ONE parser to prove the pipeline). 2b layers the remaining parsers on top via the same `Parser` Protocol.
+
+#### Scope
+
+Phase 2a builds the **runnable end-to-end ingestion path**: upload a PDF → MinIO → `files` row → Procrastinate task → Docling parser → `raw_pages` rows → readable via API. This is the first worker phase; the pattern (Procrastinate task + per-stage idempotency via `file_lifecycle`) gets copied by every later worker phase (3 chunking, 4 indexing, 5 mention extraction, 6 schema extraction).
+
+**In scope:**
+- One DDL file: `migrations/sql/0008_parse_layer.sql`. Four new workspace-scoped + RLS-day-1 tables:
+  - `files` — display name + MinIO `object_key` + content `sha256` + `mime_type` + `size_bytes` + `lifecycle_state` enum (`queued/parsing/parsed/failed/deleted`).
+  - `file_lifecycle` — append-only audit trail of state transitions (GRANT SELECT+INSERT only; same immutability pattern as `schema_versions`).
+  - `raw_pages` — immutable per-page output (`file_id` + 1-indexed `page_number` + `text` + `layout_json` + `content_sha`).
+  - `parse_artifacts` — secondary parser output stored in MinIO via `object_key` reference (`kind` enum: `layout`, `tables`, `ocr_confidence`).
+- Admin upload endpoint: `POST /files` accepts multipart upload OR a `{ minio_object_key }` body for pre-uploaded content; computes `sha256`, dedupes by `(workspace_id, content_sha)`, creates the `files` row, enqueues the parse task.
+- Read endpoints: `GET /files` (paginated list) · `GET /files/:id` (file + lifecycle history) · `GET /files/:id/pages` (paginated raw pages) · `DELETE /files/:id` (soft delete; MinIO blob retained).
+- Procrastinate task: `parse_file(file_id: str)` — workspace_id resolved from the row inside the worker; 30-min lease; per-stage idempotency.
+- `Parser` Protocol: `can_handle(mime_type, magic_bytes) -> bool` + `async def parse(file_bytes, file_id) -> ParsedDocument`.
+- Docling parser implementation (Wave A's main use case: digital PDFs from CUAD, SEC 10-K, etc.).
+- MIME + magic-bytes-based dispatcher that picks the right `Parser` (only Docling registered in 2a; 2b adds more).
+- Failure mode: parser raises → worker writes `file_lifecycle` row with `to_state='failed'`, `payload={error: ...}`, leaves `files.lifecycle_state='failed'`. Caller can `POST /files/:id/retry` (rare — keep for 2b).
+
+**Out of scope (deferred):**
+- xlsx parser (openpyxl) — **Phase 2b**.
+- email parser (stdlib `email`) — **Phase 2b**.
+- Mistral OCR parser (external API) — **Phase 2b**.
+- pptx parser — Wave B (architecture line 421 lists it but Wave A's eval corpus is PDF + xlsx + email).
+- Gemini VLM fallback for image-only PDFs — Wave B (architecture line 423).
+- Doc-chain detection (step 5.5 in architecture) — own phase or rolled into Phase 5.
+- ColPali for visual-heavy pages (step 11) — Phase 4.
+- Chunking, embedding, indexing — Phases 3 + 4.
+- Upload UI (drag-drop SSE) — **Phase 10a**.
+- Authentication on `POST /files` — same `X-Test-Workspace` header as 1a/1b/1c until an auth phase opens.
+- `audit_log` writes on file mutations — **Phase 9**.
+
+#### Decisions (locked at G1)
+
+| # | Decision | Choice | Rationale |
+|---|---|---|---|
+| 1 | Files-vs-blob storage split | **Postgres holds metadata**; **MinIO holds bytes** under `raw_files/<sha256>` (architecture line 853). `files.object_key` is the MinIO key; we never store file bytes in PG. | Postgres rows stay tiny; MinIO handles blob storage efficiently. Standard split. |
+| 2 | Content-hash keying | **sha256 over raw bytes** stored as `content_sha` (lower-hex). Used as both the MinIO object key and a `(workspace_id, content_sha)` partial unique constraint among `lifecycle_state != 'deleted'`. | Per-stage idempotency invariant (architecture line 874): a duplicate upload returns the existing `files` row instead of creating a second one. Cross-workspace duplicates are independent (each workspace owns its own copy of bytes — workspace isolation invariant). |
+| 3 | `files.lifecycle_state` machine | `queued → parsing → parsed` (happy path) · `* → failed` · `* → deleted` (soft delete). Transitions enforced at the application layer via the `file_lifecycle` append-only log. | Matches the architecture §6 lifecycle pattern. Adding states later (e.g., `reextracting` per architecture line 288) is additive. |
+| 4 | `file_lifecycle` shape | Append-only audit trail; one row per state transition: `(id, file_id, workspace_id, from_state, to_state, event, payload jsonb, created_at)`. `GRANT SELECT, INSERT` only; `REVOKE UPDATE, DELETE` mirroring Phase 1b's `schema_versions` immutability. | Per-stage checkpointing for replay safety (architecture line 875). Worker reading `lifecycle_state='parsed'` knows to no-op. |
+| 5 | `raw_pages` immutability | `GRANT SELECT, INSERT` only; `REVOKE UPDATE, DELETE`. Each page is content-hash keyed (`raw_pages.content_sha`) so a re-parse of the same file produces identical rows (idempotent re-runs). | Architecture line 425: "raw_pages table — IMMUTABLE, content-hash keyed". |
+| 6 | Procrastinate task naming + interface | One task: `parse_file(file_id: str)` registered on the `kb` queue. Lease: 30 min (Docling parses can take minutes for large PDFs). Per-stage idempotency: if `files.lifecycle_state == 'parsed'` at task start, return immediately. | Architecture line 867. The task takes only `file_id` so a serialized task arg stays tiny — the worker reads everything else from PG. |
+| 7 | Worker → workspace context | Worker reads `files.workspace_id`, calls `SET LOCAL app.workspace_id = <uuid>` before any subsequent query. Same pattern as the FastAPI `WorkspaceMiddleware` but driven by the task arg. | RLS still applies to worker queries (decision #6 of Phase 0). A worker bug that drops the SET LOCAL would be unable to leak across workspaces. |
+| 8 | Admin upload endpoint shape | `POST /files` accepts EITHER multipart/form-data (the file content + display name) OR JSON `{minio_object_key, name}` (for pre-uploaded content used by tests + Phase 10a's streaming-upload UI). Response: `201 Created` with `files` object including `lifecycle_state='queued'`. Idempotency-Key required. | Both modes are useful: multipart for casual use, JSON for streamed/pre-uploaded use. The two-mode endpoint covers both without a separate URL. |
+| 9 | Idempotency on upload | Two layers: (a) the `Idempotency-Key` header (Phase 0's mechanism) — replay returns cached response. (b) content-hash dedup — same content_sha in same workspace + still active → return the existing `files` row with `lifecycle_state` as-is (could be `queued`, `parsing`, `parsed`). | Stripe-style dedup at the HTTP layer + content-addressed dedup at the storage layer. Both required for safe upload retries. |
+| 10 | Parser interface | `class Parser(Protocol)`: `can_handle(mime_type: str, magic_bytes: bytes) -> bool` and `async def parse(self, file_bytes: bytes, *, file_id: str, workspace_id: str) -> ParsedDocument`. Returns `{pages: [{page_number, text, layout_json}]}`. The dispatcher iterates registered parsers, picks the first that `can_handle`. | Protocol (PEP 544) gives us static-typed pluggability without an ABC's runtime overhead. The dispatcher pattern lets Phase 2b add parsers via registration, not branching. |
+| 11 | Docling integration | Use `docling` PyPI package. Run synchronously in a worker thread (Docling is CPU/IO-bound, not async). Pin to `>= 2.0` (released 2026-01). | Docling 2.x is the supported line. Synchronous in a thread keeps Procrastinate's async loop healthy. |
+| 12 | RLS on 4 new tables | Each carries own `workspace_id` + own `CREATE POLICY` (same predicate). Cross-phase invariant grows from 7 → 11 workspace-scoped tables. | Belt-and-braces (Phase 1c #11 continued). |
+| 13 | Upload-time validation | Hard limits at upload: `≤ 100 MB` per file (rejected with `413 Payload Too Large`); `mime_type` from request's `Content-Type` (or sniffed from magic bytes if multipart); `name` 1–500 chars. | Hard limits keep one bad upload from DoS'ing the worker. 100 MB covers the largest CUAD/SEC documents we need for the demo. |
+| 14 | `parse_artifacts` shape | `(id, file_id, workspace_id, kind text CHECK IN ('layout','tables','ocr_confidence'), object_key text, created_at)`. The artifact JSON lives in MinIO under `parse_artifacts/<file_id>/<kind>.json`. | Architecture line 854. Heavy JSON (layout per page) keeps PG row sizes small while letting clients fetch the artifact directly from MinIO if needed. Phase 2a only writes `kind='layout'` (Docling's layout output); 2b will add `tables` and `ocr_confidence`. |
+| 15 | Failure handling | Parser exception → worker writes `file_lifecycle` row `from='parsing' to='failed'` with `payload={error_class, message, traceback_head}`; updates `files.lifecycle_state='failed'`. Procrastinate retries handled by lease expiry (auto-retry on death); explicit retries by re-enqueueing via `POST /files/:id/retry` — **deferred to 2b** (rare in practice; demo can re-upload). | Failures are visible (lifecycle history) without auto-retry-loops on permanent failures (corrupt PDF). |
+
+#### Repo layout delta after Phase 2a G4
+
+```
+emerging-kb/
+├── migrations/sql/
+│   └── 0008_parse_layer.sql              ← NEW (4 tables)
+├── pyproject.toml                        ← MUTATED (add docling, python-magic, aiofiles)
+├── src/kb/
+│   ├── api/
+│   │   ├── main.py                       ← include files_router
+│   │   └── files.py                      ← NEW (5 endpoints)
+│   ├── domain/
+│   │   ├── files.py                      ← NEW (pydantic + repo functions)
+│   │   └── raw_pages.py                  ← NEW (repo for raw_pages reads)
+│   ├── parsers/                          ← NEW package
+│   │   ├── __init__.py                   ← Parser Protocol + register() + dispatch()
+│   │   └── docling_parser.py             ← Docling implementation
+│   ├── storage/
+│   │   └── files.py                      ← NEW (MinIO helpers: upload + read + key derivation)
+│   └── workers/
+│       └── tasks.py                      ← NEW (parse_file Procrastinate task)
+└── tests/
+    ├── test_files_crud.py                ← NEW (~10 tests)
+    ├── test_parse_dispatch.py            ← NEW (~5 tests — parser registration + routing)
+    ├── test_parse_pdf_docling.py         ← NEW (~5 tests — Docling against a fixture PDF)
+    ├── test_raw_pages.py                 ← NEW (~5 tests — read endpoints + immutability)
+    ├── test_files_lifecycle.py           ← NEW (~5 tests — state machine + audit trail)
+    └── specs/phase_2a.md                 ← NEW
+```
+
+#### `0008_parse_layer.sql` shape (locked at G1)
+
+(Full DDL drops at G4; here's the head — same RLS pattern as schemas/schema_versions.)
+
+```sql
+CREATE TABLE files (
+    id              uuid         NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
+    workspace_id    uuid         NOT NULL,
+    name            text         NOT NULL CHECK (length(name) BETWEEN 1 AND 500),
+    content_sha     text         NOT NULL CHECK (length(content_sha) = 64),
+    object_key      text         NOT NULL,        -- MinIO key (raw_files/<sha>)
+    mime_type       text         NOT NULL,
+    size_bytes      bigint       NOT NULL CHECK (size_bytes >= 0),
+    doc_type        text         NULL,            -- classified type, nullable until classifier runs (later phase)
+    lifecycle_state text         NOT NULL DEFAULT 'queued'
+                                 CHECK (lifecycle_state IN ('queued','parsing','parsed','failed','deleted')),
+    created_at      timestamptz  NOT NULL DEFAULT now(),
+    updated_at      timestamptz  NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX files_workspace_sha_active_idx
+    ON files (workspace_id, content_sha) WHERE lifecycle_state <> 'deleted';
+
+CREATE INDEX files_workspace_lifecycle_idx
+    ON files (workspace_id, lifecycle_state);
+
+-- RLS + GRANT same pattern as schemas.
+```
+
+Plus `file_lifecycle` (GRANT SELECT+INSERT + REVOKE UPDATE+DELETE), `raw_pages` (same immutability), `parse_artifacts`.
+
+#### Endpoint preview (locked at G1; full contracts at G2)
+
+| Method | Path | Notes |
+|---|---|---|
+| `POST` | `/files` | multipart OR JSON `{minio_object_key, name}`; computes sha256; dedupes; enqueues `parse_file`. Idempotency-Key required. |
+| `GET` | `/files` | List active files in workspace; pagination same as 1a. |
+| `GET` | `/files/:id` | File metadata + lifecycle history. |
+| `GET` | `/files/:id/pages` | Paginated raw_pages list (text + layout). |
+| `DELETE` | `/files/:id` | Soft delete; MinIO blob retained. |
+
+#### Phase 2a G5 — what "green" means
+
+`scripts/verify_phase_2a.sh` adds to Phase 0+1a+1b+1c verify checks:
+1. After migrate exits 0: `\dt` includes `files`, `file_lifecycle`, `raw_pages`, `parse_artifacts`; RLS forced on all 4; immutability GRANTs on `file_lifecycle` and `raw_pages` (SELECT+INSERT only).
+2. `curl POST /files` with a tiny test PDF → 201 with `lifecycle_state='queued'`.
+3. Within ~10s (worker polls), `files.lifecycle_state == 'parsed'`; `raw_pages` has ≥ 1 row.
+4. `curl GET /files/:id` returns lifecycle history showing `queued → parsing → parsed`.
+5. Duplicate POST same content_sha → returns existing file (no second row).
+6. `GET /files` as workspace B doesn't see workspace A's files (RLS isolation).
+7. `pytest tests/` green: 142 (prior phases) + ~30 new = ~172 total.
+
+#### Pre-G2 consistency review checklist
+
+Before G2 opens (after this plan is signed off), verify:
+- [ ] Architecture line 417–425 routing list — Phase 2a covers Docling (digital PDF) only; 2b will add Mistral OCR + xlsx + email.
+- [ ] Architecture line 425 — `raw_pages` immutable + content-hash keyed (decision #5).
+- [ ] Architecture line 874 — per-stage idempotency via `file_lifecycle` (decision #4).
+- [ ] api_contracts §0 conventions all apply unchanged.
+- [ ] No `audit_log` writes (Phase 9 owns).
+- [ ] No chunking / embedding / indexing references (Phase 3+).
+
+#### Sign-off
+
+When Aniket approves this plan, the Phase 2a G1 cell in §5 flips 🟡 → ✅ and Phase 2a G2 opens (5 endpoint contracts landing in `docs/api_contracts.md` §5 — the current §5 placeholder index shifts to §6, changelog to §7). Sign-off recorded in §9.
+
+---
+
 ### Wave B (build if time)
 
 | Phase | Description | G1 | G2 | G3 | G4 | G5 |
@@ -1104,6 +1260,9 @@ Phases 15–24 per `architecture.md` §12. Tracked here only as a reminder of in
 | 2026-05-23 | **Phase 1c G3 ✅ signed off. G4 opens.** Build order: (1) `0007_schema_hierarchy.sql` (3 new workspace-scoped + RLS-day-1 tables); (2) `kb/domain/schema_hierarchy.py` (pydantic models + repo functions + subtree builder + name-resolved rollback restorer); (3) extend `kb/domain/schema_versions.py` (recursive compute_diff; subtree snapshot builder); (4) extend `kb/domain/schemas.py` (rollback now uses subtree restorer); (5) `kb/api/schema_hierarchy.py` router with 11 endpoints; (6) wire into `kb/api/main.py` (mount router + 3 new exception handlers for *-name-conflict slugs); (7) extend errors.py with the 3 new domain exceptions. | Aniket |
 | 2026-05-23 | **Phase 1c G4 ✅ — code landed (single commit `a47bcc4`).** 7 files: `0007_schema_hierarchy.sql` (3 new tables + RLS + CHECK enums for type + kind + cardinality); `kb/domain/schema_hierarchy.py` (12 pydantic models + 7 domain exceptions + 11 repo functions + `build_subtree_snapshot` + reconciling `restore_subtree`); `kb/domain/schema_versions.py` mutated (recursive `compute_diff` keyed by name within `entities`/`fields`/`relationships`); `kb/domain/schemas.py` mutated (rollback now calls `restore_subtree`; new `lock_and_assert_active_schema` + `bump_schema_version` helpers); `kb/api/schema_hierarchy.py` router (11 endpoints; each mutating endpoint: lock parent → mutate → bump version); `kb/api/main.py` (mount router + 7 new exception handlers); `tests/test_schema_versions.py` mutated (2 body-shape assertions accept the new {entities: [], relationships: []} keys — Phase 1b's shape is the strict subset). All 13 G1 decisions traced in commit body. **One mid-G4 fix landed in the same commit**: initial `restore_subtree` soft-deleted-all-then-recreated, breaking the rollback tests that expected existing entity UUIDs to survive when the snapshot still includes them by name. Reconciliation algorithm written: keep rows present in both current+snapshot, soft-delete those missing from snapshot, create those missing from current. pytest -q tests/ → **142 passed** in 27.47s. | Aniket |
 | 2026-05-23 | **Phase 1c G5 ✅ + end-of-phase cross-phase sweep.** Authored `scripts/verify_phase_1c.sh` (20 checks): compose smoke + 4 DDL assertions (3 tables exist + RLS forced + kind CHECK enum + type CHECK enum) + 11 HTTP/cascade/rollback/RLS/openapi curl checks + Phase-1c pytest. **Cross-phase sweep** per memory entry `feedback_end_of_phase_cross_phase_check.md`: (a) verify_phase_0.sh re-run → 16/16 GREEN; verify_phase_1a.sh → 17/17 GREEN; verify_phase_1b.sh → 21/21 GREEN; verify_phase_1c.sh → 20/20 GREEN. (b) Scope-leak grep clean — no `extracted_entities` / `lineage_path` / `domain_vocabulary` / `re_extraction` / `enforce.*single_parent` / `/descendants` / `/ancestors` / `/breadcrumb` / rogue `INSERT INTO audit_log` in Phase 1c code. (c) RLS invariant grows from 4 → 7 workspace-scoped tables (audit_log, idempotency_keys, schemas, schema_versions, schema_entities, schema_fields, schema_relationships); each has own `workspace_id` column + own `CREATE POLICY` per the decision-#10 / belt-and-braces convention. (d) pytest --collect-only confirms 142 total tests. **Phase 1c complete; Phase 1 (a/b/c) closed; ready to open PR. Next major phase: Phase 2 (parse layer — first worker phase).** | Aniket |
+| 2026-05-23 | **Phase 1c merged.** PR #4 merged into `main` (merge commit `af2d77f`). Tag `phase-1c-complete` pushed. Local `phase-1c/schema-hierarchy` branch deleted. **Phase 1 (a/b/c) closed.** | Aniket |
+| 2026-05-23 | **Phase 2 split into 2a + 2b** per [`feedback_sub_phase_splits`](../../.claude/memory/feedback_sub_phase_splits.md). §5 description "Parse layer: Docling + Mistral OCR + xlsx + email → raw_pages" is four comma-separated parsers. 2a builds the scaffold + Docling (digital PDF — the most common format; Wave A's CUAD/SEC corpus is mostly digital PDF). 2b layers the remaining parsers (xlsx via openpyxl + email via stdlib + Mistral OCR via external API) via the same `Parser` Protocol. pptx + Gemini VLM fallback explicitly Wave B. | Aniket |
+| 2026-05-23 | **Phase 2a G1 OPEN.** Branched `phase-2a/parse-scaffold` from `main`. Plan section §5.5 drafted: `0008_parse_layer.sql` adds 4 workspace-scoped + RLS-day-1 tables (`files`, `file_lifecycle` append-only audit, `raw_pages` immutable per-page output, `parse_artifacts` MinIO-pointers); MinIO holds bytes under `raw_files/<sha256>`; PG holds metadata; Procrastinate task `parse_file(file_id)` with 30-min lease + per-stage idempotency via `file_lifecycle` checkpoint; `Parser` Protocol + MIME/magic-bytes dispatcher; Docling parser for digital PDF; 5 endpoints (`POST /files` multipart-or-JSON · GET list · GET one · GET pages · DELETE soft). 15 decisions locked. End-to-end pipeline runnable on a PDF after 2a. Awaiting sign-off. | Aniket |
 
 ---
 
