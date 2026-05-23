@@ -47,16 +47,26 @@ class Settings(BaseSettings):
         alias="KB_DEFAULT_WORKSPACE_ID",
     )
 
+    # ---- Phase 2a — upload limits ----
+    max_upload_bytes: int = Field(
+        default=100 * 1024 * 1024,  # 100 MB per build_tracker §5.5 decision #13
+        alias="KB_MAX_UPLOAD_BYTES",
+    )
+
     # ---- Runtime overrides (used by tests + the in-process FastAPI app) ----
-    # When set, takes precedence over the constructed postgres URL.
-    database_url_override: str | None = Field(default=None, alias="KB_DB_URL")
+    # KB_DB_URL overrides the kb_app (RLS-applicable) URL — used by API + most
+    # tests. KB_DATABASE_URL overrides the superuser URL — used by migrations,
+    # Procrastinate, and the worker (worker needs to bypass RLS to read the
+    # initial file row, then SET LOCAL app.workspace_id for downstream queries).
+    app_db_url_override: str | None = Field(default=None, alias="KB_DB_URL")
+    superuser_db_url_override: str | None = Field(default=None, alias="KB_DATABASE_URL")
 
     @computed_field  # type: ignore[misc]
     @property
     def database_url(self) -> str:
-        """Superuser connection string (migrations, admin tasks)."""
-        if self.database_url_override:
-            return self.database_url_override
+        """Superuser connection string (migrations, Procrastinate, worker)."""
+        if self.superuser_db_url_override:
+            return self.superuser_db_url_override
         return (
             f"postgresql://{self.postgres_user}:{self.postgres_password}"
             f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
@@ -65,9 +75,9 @@ class Settings(BaseSettings):
     @computed_field  # type: ignore[misc]
     @property
     def app_database_url(self) -> str:
-        """kb_app role connection string (API + workers; RLS applies)."""
-        if self.database_url_override:
-            return self.database_url_override
+        """kb_app role connection string (API; RLS applies)."""
+        if self.app_db_url_override:
+            return self.app_db_url_override
         return (
             f"postgresql://{self.app_role}:{self.app_password}"
             f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"

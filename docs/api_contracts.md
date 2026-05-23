@@ -884,7 +884,189 @@ Same pagination. Filters to active relationships on active schema. `404` if sche
 
 ---
 
-## 5. Future phases — placeholders
+## 5. Phase 2a — Files + parse pipeline (scaffold + Docling)
+
+Per [build_tracker §5.5](build_tracker.md). Five endpoints under `/files`. First worker phase — the HTTP layer is mostly admin/metadata; the heavy lifting happens in the Procrastinate `parse_file` task.
+
+### 5.1 Pipeline model (the invariants every endpoint depends on)
+
+1. **MinIO holds bytes, Postgres holds metadata.** `files.object_key` references a MinIO object under `raw_files/<sha256>`. Never store file bytes in PG.
+2. **Content-hash dedup per workspace.** `(workspace_id, content_sha)` partial unique among `lifecycle_state != 'deleted'` rows. Re-uploading the same content returns the existing `files` row (not a 409).
+3. **Lifecycle state machine** (`files.lifecycle_state`): `queued → parsing → parsed | failed`; soft-delete via `→ deleted`. Transitions are append-only logged to `file_lifecycle` (immutable audit table).
+4. **`raw_pages` immutable.** Per-page content keyed by `(file_id, page_number)`. `GRANT SELECT, INSERT` only. Re-parsing the same content produces byte-identical rows (content-hash keyed).
+5. **Per-stage idempotency.** If `parse_file(file_id)` is replayed and `files.lifecycle_state == 'parsed'`, the task returns immediately without re-work.
+6. **Workspace-isolated.** All 4 new tables carry own `workspace_id` + own RLS policy. The worker calls `SET LOCAL app.workspace_id` before any per-file query.
+
+### 5.2 File resource shape
+
+```json
+{
+  "id": "0193b2a0-1111-7c2a-9c11-9a3f8c1c9c11",
+  "name": "acme_contract_v3.pdf",
+  "content_sha": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "mime_type": "application/pdf",
+  "size_bytes": 184321,
+  "doc_type": null,
+  "lifecycle_state": "parsed",
+  "created_at": "2026-05-23T12:00:00Z",
+  "updated_at": "2026-05-23T12:00:15Z"
+}
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | uuid | UUIDv4. |
+| `name` | string | 1–500 chars. Display name from upload. NOT unique. |
+| `content_sha` | string | sha256 lower-hex (64 chars). Unique with `workspace_id` among non-deleted. |
+| `mime_type` | string | From upload's Content-Type or sniffed from magic bytes. |
+| `size_bytes` | int | Raw byte count. |
+| `doc_type` | string \| null | Always `null` at Phase 2a (classifier lands in a later phase). |
+| `lifecycle_state` | enum | `queued/parsing/parsed/failed` — `deleted` returns 404 on reads. |
+
+No `workspace_id`, no `object_key` in response — `object_key` is a server-internal detail (clients don't read MinIO directly).
+
+### 5.3 Lifecycle history shape
+
+`GET /files/:id` includes a `lifecycle` array of state-transition events:
+
+```json
+{
+  "lifecycle": [
+    {"from_state": null,      "to_state": "queued",  "event": "upload",      "payload": {},                                "created_at": "..."},
+    {"from_state": "queued",  "to_state": "parsing", "event": "task_started","payload": {"task_id": "0193..."},            "created_at": "..."},
+    {"from_state": "parsing", "to_state": "parsed",  "event": "parse_done",  "payload": {"parser": "docling", "pages": 12},"created_at": "..."}
+  ]
+}
+```
+
+Items in `created_at ASC` order (oldest first). Append-only — clients can verify integrity by checking transitions follow §5.1 #3.
+
+### 5.4 Raw-page resource shape
+
+`GET /files/:id/pages` returns paginated raw pages:
+
+```json
+{
+  "page_number": 1,
+  "text": "...full page text content...",
+  "layout_json": {"blocks": [...]},
+  "content_sha": "...",
+  "created_at": "..."
+}
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `page_number` | int | 1-indexed. Unique with `file_id`. |
+| `text` | string | Full extracted text content. |
+| `layout_json` | object | Parser-specific layout metadata. Docling outputs `{blocks: [{type, bbox, text}]}`. Empty `{}` for parsers that don't produce layout (e.g., email body). |
+| `content_sha` | string | sha256 of `text` (used for per-page de-dup if needed by later phases). |
+
+### 5.5 `POST /files` — upload + enqueue parse
+
+**Auth:** none in 2a. **Idempotency:** `Idempotency-Key` header **required**.
+
+Two modes — server picks based on `Content-Type`:
+
+**Mode A — multipart/form-data:**
+
+```http
+POST /files
+Content-Type: multipart/form-data; boundary=...
+Idempotency-Key: <client-uuid>
+
+(multipart with field `file` = file content; optional field `name` = display name; if `name` omitted, use the multipart filename)
+```
+
+**Mode B — JSON with pre-uploaded `object_key`:**
+
+```http
+POST /files
+Content-Type: application/json
+Idempotency-Key: <client-uuid>
+
+{
+  "minio_object_key": "raw_files/e3b0c442...",
+  "name": "acme_contract.pdf"
+}
+```
+
+Mode B is useful for Phase 10a's streaming-upload UI (which streams directly to MinIO before calling the API) and for tests using pre-staged files.
+
+**Success — `201 Created`:** file object (§5.2) with `lifecycle_state='queued'`. `Location: /files/<id>` header. Server computes `sha256` + writes `files` row + writes initial `file_lifecycle` row (`null → queued`) + enqueues `parse_file` task — all in one tx.
+
+**Content-hash dedup:** if a file with the same `(workspace_id, content_sha)` already exists with `lifecycle_state != 'deleted'`, return `200 OK` (NOT 201) with the existing file object. Header `X-Dedup-Reason: content-hash`.
+
+**Errors:**
+
+| Status | When | `type` slug |
+|---|---|---|
+| `400` | missing `Idempotency-Key`, malformed body | `missing-idempotency-key`, `bad-request` |
+| `413` | content > 100 MB | `payload-too-large` |
+| `415` | mime_type not in supported list (Phase 2a: only `application/pdf` until 2b adds the rest) | `unsupported-media-type` |
+| `422` | `name` empty / > 500 chars, or `minio_object_key` doesn't resolve | `validation-error` |
+
+**Idempotency replay:** standard Phase 0 behavior — cached body returned verbatim.
+
+### 5.6 `GET /files` — list active files
+
+`?limit=50&offset=0` (defaults; 1–200 / ≥0). Sort: `created_at DESC, id DESC`. Filters to `lifecycle_state != 'deleted'`.
+
+```json
+{ "items": [<file>, ...], "total": 12, "limit": 50, "offset": 0 }
+```
+
+**Errors:** `400` (`bad-request`).
+
+### 5.7 `GET /files/:id` — read one file + lifecycle history
+
+Returns the file object (§5.2) **plus** the `lifecycle` array (§5.3).
+
+```json
+{
+  "id": "...", "name": "...", ...,
+  "lifecycle_state": "parsed",
+  "lifecycle": [<event>, ...]
+}
+```
+
+**Errors:** `404` (not found / deleted / wrong workspace).
+
+### 5.8 `GET /files/:id/pages` — list raw pages
+
+`?limit=50&offset=0`. Sort: `page_number ASC`.
+
+```json
+{ "items": [<raw_page>, ...], "total": 12, "limit": 50, "offset": 0 }
+```
+
+Returns `[]` with `total=0` while `lifecycle_state` is `queued` or `parsing` (no pages yet). Returns `404` if file not found.
+
+**Errors:** `400` (`bad-request`), `404`.
+
+### 5.9 `DELETE /files/:id` — soft delete
+
+**Idempotency:** `Idempotency-Key` header **optional**.
+
+Soft-deletes by setting `lifecycle_state='deleted'`. `raw_pages` rows are NOT cascade-deleted (they remain queryable by `file_id` via the immutable contract — Phase 2a doesn't expose a "list-pages-for-deleted-file" endpoint, but a future audit phase could). MinIO blob is **never** deleted by Phase 2a (manual cleanup if needed).
+
+**Success — `204 No Content`.**
+
+**Errors:** `404`.
+
+### 5.10 Out of scope for Phase 2a
+
+- `POST /files/:id/retry` — manual retry on `failed` lifecycle. **Phase 2b.**
+- `PATCH /files/:id` — rename, edit metadata. Out of scope; clients can DELETE + POST.
+- Multipart streaming (chunked upload over multiple HTTP requests). The 100 MB limit is enforced at request-body level. **Wave B if needed.**
+- xlsx / email / Mistral OCR parser support — **Phase 2b** (same dispatcher, same endpoints; just more `Parser` implementations).
+- `doc_type` classifier (architecture step 3.5). Lands when first needed — likely Phase 5.
+- Polling endpoint for parse status — clients re-`GET /files/:id` to watch `lifecycle_state`. SSE lifecycle updates are **Phase 9**.
+- `audit_log` writes on file mutations — **Phase 9**.
+
+---
+
+## 6. Future phases — placeholders
 
 Each phase appends its endpoint contracts here at its G2 gate. Index:
 
@@ -893,15 +1075,17 @@ Each phase appends its endpoint contracts here at its G2 gate. Index:
 | 0 | `/health`, `/ready` | ✅ signed off 2026-05-23 |
 | 1a | `/schemas` CRUD (POST/GET-list/GET/PUT/DELETE) | ✅ signed off 2026-05-23 (§2) |
 | 1b | `/schemas/:id/versions*` (versioning + rollback) | ✅ signed off 2026-05-23 (§3) |
-| **1c** | `/schemas/:id/{entities,fields,relationships}` (hierarchy — 11 endpoints) | 🟡 drafted in §4 — awaiting sign-off |
-| 2–7 | Internal worker triggers + admin endpoints (TBD at each phase's G1) | ⬜ |
+| 1c | `/schemas/:id/{entities,fields,relationships}` (hierarchy — 11 endpoints) | ✅ signed off 2026-05-23 (§4) |
+| **2a** | `/files` admin upload + read (5 endpoints) + worker pipeline | 🟡 drafted in §5 — awaiting sign-off |
+| 2b | Additional parsers (xlsx + email + Mistral OCR) — no new HTTP endpoints | ⬜ |
+| 3–7 | Internal worker triggers + admin endpoints (TBD at each phase's G1) | ⬜ |
 | 8 | `/query`, `/chat`, `/chat/:id/stream` | ⬜ |
 | 9 | `/upload/:id/status` (SSE), `/audit` | ⬜ |
 | 10a–g | UI-driven endpoints follow from `prototype/wiring_inventory.md` | ⬜ |
 
 ---
 
-## 6. Change log
+## 7. Change log
 
 | Date | Change | By |
 |---|---|---|
@@ -911,3 +1095,4 @@ Each phase appends its endpoint contracts here at its G2 gate. Index:
 | 2026-05-23 | **§0.2 UUID convention broadened (post-G3 consistency sweep).** Old text said "All entity IDs are UUIDv7"; reality is Phase 0 ships `audit_log.id` as v4 and Phase 1a chose v4 for `schemas.id`. Honest replacement: v4 by default for PKs where time-sortability isn't a query pattern; v7 required where monotonic-by-creation ordering is queried (X-Request-Id, future `query_id`). Each phase's G1 picks the flavor per table. §2.1 `id` field annotated to cite this. | Aniket |
 | 2026-05-23 | **Phase 1b G2 — schemas versioning contracts drafted.** §3 added with 9 sub-sections: versioning model invariants (§3.1), mutated schema object adds `current_version` (§3.2), POST + PUT behavioural deltas (§3.3, §3.4), version resource shape (§3.5), declarative diff format (§3.6), GET list (§3.7), GET one with computed diff (§3.8), POST rollback with `409 rollback-noop` for same-as-current (§3.9), out-of-scope list (§3.10). Old §3 placeholder index → §4; old §4 changelog → §5. | Aniket |
 | 2026-05-23 | **Phase 1c G2 — schemas hierarchy contracts drafted.** §4 added with 18 sub-sections: hierarchy invariants (§4.1 — workspace-isolated, parent-scoped soft delete, coarse-grained versioning, atomic mutations, name-resolved cross-refs in snapshots, replay never duplicates), extended `schema_versions.body` shape with entities/fields/relationships (§4.2), diff format extension with nested dotted paths (§4.3), entity resource shape + 4 endpoints (§4.4–§4.8 — POST/GET-list/PUT/DELETE; DELETE cascades to fields + relationships), field resource shape + 4 endpoints (§4.9–§4.13; type enum string/number/boolean/date/datetime), relationship resource shape + 3 endpoints (§4.14–§4.17; no PUT — soft-delete + re-create path; kind enum verbatim from architecture line 794; cardinality/cascade_delete/single_parent recorded only), out-of-scope (§4.18). 3 new error slugs introduced: `entity-name-conflict`, `field-name-conflict`, `relationship-name-conflict` (join 1a/1b's 5). Old §4 placeholder index → §5; old §5 changelog → §6. | Aniket |
+| 2026-05-23 | **Phase 2a G2 — files + parse pipeline contracts drafted.** §5 added with 10 sub-sections: pipeline-model invariants (§5.1 — MinIO/PG split, content-hash dedup, lifecycle state machine, raw_pages immutable, per-stage idempotency, workspace-isolated), file resource shape (§5.2), lifecycle history array shape (§5.3), raw-page resource shape (§5.4), POST upload with two modes — multipart OR JSON (§5.5), GET list (§5.6), GET one with lifecycle (§5.7), GET pages (§5.8), DELETE soft (§5.9), out-of-scope §5.10. 2 new error slugs: `payload-too-large` (413, file > 100 MB), `unsupported-media-type` (415, mime not in 2a's whitelist). Idempotency-Key: required POST, optional DELETE (same rule). Content-hash dedup returns `200 OK X-Dedup-Reason: content-hash` (not 409). Old §5 placeholders → §6, old §6 changelog → §7. | Aniket |

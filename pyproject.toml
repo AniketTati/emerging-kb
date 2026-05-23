@@ -24,6 +24,13 @@ dependencies = [
     "minio>=7.2.0",
     # UUIDv7 (not yet in stdlib)
     "uuid-utils>=0.9.0",
+    # Phase 2a — parse layer
+    "docling>=2.0",
+    "python-multipart>=0.0.12",
+    # Pin torch + torchvision as direct deps so [tool.uv.sources] applies
+    # (sources only override packages listed in this project's dependencies).
+    "torch>=2.0",
+    "torchvision>=0.15",
 ]
 
 [dependency-groups]
@@ -46,6 +53,26 @@ packages = ["src/kb"]
 
 [tool.uv]
 package = true
+
+# Phase 2a — force CPU-only torch wheels. Docling pulls in PyTorch; default
+# wheels include ~2 GB of CUDA libraries we don't use (Wave A worker is
+# CPU-only on Linux containers + Mac dev). Saves ~2 GB per image + ~5x
+# faster builds. Switch to GPU when we have a GPU-deployment story.
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+# Pin torch to the CPU index across all platforms. The `[index = "..."]`
+# pattern requires `explicit = true` on the index so other packages aren't
+# accidentally pulled from it; the package-level override here is mandatory.
+[tool.uv.sources]
+torch = [
+  { index = "pytorch-cpu", marker = "sys_platform == 'linux' or sys_platform == 'darwin'" },
+]
+torchvision = [
+  { index = "pytorch-cpu", marker = "sys_platform == 'linux' or sys_platform == 'darwin'" },
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

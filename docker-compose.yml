@@ -18,7 +18,10 @@ services:
     volumes:
       - pg-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${KB_POSTGRES_USER:-kb} -d ${KB_POSTGRES_DB:-kb}"]
+      # Check TCP listener (not unix socket). pg_isready -h localhost forces
+      # TCP probe — otherwise it'd default to the unix socket which passes
+      # before postgres binds to the TCP port (causing migrate races).
+      test: ["CMD-SHELL", "pg_isready -h localhost -U ${KB_POSTGRES_USER:-kb} -d ${KB_POSTGRES_DB:-kb}"]
       interval: 5s
       timeout: 5s
       retries: 20
@@ -62,6 +65,9 @@ services:
       KB_POSTGRES_HOST: db
       KB_MINIO_ENDPOINT: minio:9000
       KB_DB_URL: postgresql://kb_app:${KB_APP_PASSWORD:-kb-app-dev-password}@db:5432/${KB_POSTGRES_DB:-kb}
+      # Phase 2a: API also defers Procrastinate tasks (POST /files). The
+      # superuser URL is what Procrastinate manages its own tables with.
+      KB_DATABASE_URL: postgresql://${KB_POSTGRES_USER:-kb}:${KB_POSTGRES_PASSWORD:-kb-dev-password}@db:5432/${KB_POSTGRES_DB:-kb}
     ports:
       - "8000:8000"
     healthcheck:

@@ -89,16 +89,27 @@ def _kb_app_password() -> str:
 
 @pytest.fixture(scope="session", autouse=True)
 def db_migrated(db_url_superuser: str, _kb_app_password: str) -> None:
-    """Apply all migrations once per session, before any test runs.
+    """Apply all migrations + Procrastinate schema once per session.
 
     Depends on `_kb_app_password` so KB_APP_PASSWORD is set in env *before*
     the migration runner's `_set_app_role_password` step reads it. Without
     this dependency, kb_app ships passwordless and every test that connects
     as kb_app fails scram auth.
+
+    Phase 2a: also applies Procrastinate's schema so the `parse_file` task
+    can be deferred from HTTP-layer tests (mirrors scripts/bootstrap_db.sh).
     """
     from migrations.runner import run_migrations  # G4
 
     run_migrations(db_url_superuser)
+
+    # Apply Procrastinate's schema (creates procrastinate_jobs etc.)
+    import subprocess
+    env = {**os.environ, "KB_DATABASE_URL": db_url_superuser}
+    subprocess.run(
+        ["procrastinate", "--app=kb.workers.app.app", "schema", "--apply"],
+        check=True, env=env, capture_output=True,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -132,12 +143,19 @@ async def db_superuser(db_url_superuser: str):
 
 
 @pytest_asyncio.fixture
-async def client(db_url_kb_app, minio_container) -> AsyncIterator["AsyncClient"]:
+async def client(
+    db_url_kb_app, db_url_superuser, minio_container,
+) -> AsyncIterator["AsyncClient"]:
     """httpx.AsyncClient over the FastAPI app via ASGITransport.
 
     Sets all KB_* env vars so the lru-cached `get_settings()` + `get_minio_client()`
     factories pick up the actual testcontainer endpoints + credentials.
     Cache is cleared at the top so a previous test's cached values don't leak.
+
+    Phase 2a: explicitly opens + closes the Procrastinate App for HTTP-layer
+    `defer_async` calls (POST /files enqueues the parse_file task). ASGITransport
+    doesn't fire lifespan events, so we manage the app lifecycle here. Procrastinate
+    uses the superuser DB URL (it manages its own tables).
     """
     from httpx import ASGITransport, AsyncClient
 
@@ -147,6 +165,7 @@ async def client(db_url_kb_app, minio_container) -> AsyncIterator["AsyncClient"]
 
     cfg = minio_container.get_config()
     os.environ["KB_DB_URL"] = db_url_kb_app
+    os.environ["KB_DATABASE_URL"] = db_url_superuser
     os.environ["KB_MINIO_ENDPOINT"] = cfg["endpoint"]
     os.environ["KB_MINIO_ACCESS_KEY"] = cfg["access_key"]
     os.environ["KB_MINIO_SECRET_KEY"] = cfg["secret_key"]
@@ -156,9 +175,19 @@ async def client(db_url_kb_app, minio_container) -> AsyncIterator["AsyncClient"]
     get_settings.cache_clear()
     get_minio_client.cache_clear()
 
+    # Phase 2a — Procrastinate App needs an open connector for defer_async to work.
+    # kb.workers.app uses _LazyConninfoConnector which reads KB_DATABASE_URL
+    # at open_async() time (handles tests setting the env var AFTER import).
+    from kb.workers.app import app as procrastinate_app
+    from kb.workers import tasks as _tasks  # noqa: F401 — registers @app.task
+
     app = build_app()
 
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as ac:
-        yield ac
+    await procrastinate_app.open_async()
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as ac:
+            yield ac
+    finally:
+        await procrastinate_app.close_async()
