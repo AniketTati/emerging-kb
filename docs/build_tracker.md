@@ -266,7 +266,7 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
 | **1c** | Schema service — **hierarchy**: `schema_entities`, `schema_fields`, `schema_relationships` tables; nested CRUD; NL field descriptions; single_parent + cascade_delete constraints | ✅ | ✅ | ✅ | ✅ | ✅ | All 5 gates green 2026-05-23. verify_phase_1c.sh 20/20. verify_phase_1b.sh still 21/21. verify_phase_1a.sh still 17/17. verify_phase_0.sh still 16/16. pytest 142/142. Ready to merge. |
 | **2a** | Parse layer — **scaffold + Docling**: `files` + `file_lifecycle` + `raw_pages` + `parse_artifacts` tables; Procrastinate `parse_file` task; MIME-based dispatcher; Docling (digital PDF) parser; admin `POST /files` upload endpoint | ✅ | ✅ | ✅ | ✅ | ✅ | All 5 gates green 2026-05-23. pytest 170/170. First worker phase complete. Ready to merge. |
 | **2b** | Parse layer — **additional parsers**: xlsx (openpyxl) + email (stdlib) + Mistral OCR (external API adapter class + mock-tested; real-API gated on `KB_MISTRAL_API_KEY`) | ✅ | ✅ | ✅ | ✅ | ✅ | All 5 gates green 2026-05-23. verify_phase_2b.sh 15/15. pytest 188/188. xlsx + email E2E pipeline verified in Docker stack (xlsx → 2 sheets → 2 raw_pages; email → 1 page with headers + body). Mistral OCR adapter ready, self-disabled without API key. Ready to merge. |
-| **3a** | Chunking — late chunking of `raw_pages` → `chunks` table (layout-aware, token-bounded, cross-page joining); worker stage `chunk_file`; new lifecycle state `chunked` | 🟡 | ⬜ | ⬜ | ⬜ | ⬜ | Internal worker; no LLM/embedding calls |
+| **3a** | Chunking — late chunking of `raw_pages` → `chunks` table (layout-aware, token-bounded, cross-page joining); worker stage `chunk_file`; new lifecycle state `chunked` | ✅ | ✅ | ⬜ | ⬜ | ⬜ | Internal worker; no LLM/embedding calls |
 | **3b** | Contextual Retrieval — Anthropic Claude per-chunk prefix with prompt-cached doc context; `contextual_chunks` table; worker stage `contextualize_file` | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | First LLM call; gated on `KB_ANTHROPIC_API_KEY` (self-disables in CI, real-call path covered by mock) |
 | **3c** | Embedding + RAPTOR tree build — Gemini Embedding 001 on contextual chunks; `chunk_embeddings`; recursive cluster→summarize→re-embed → `raptor_nodes` + `raptor_edges`; lifecycle terminates at `ready` | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | First embedding call; gated on `KB_GEMINI_API_KEY` with mock embedder for CI; HNSW + BM25 indexes themselves land in Phase 4 |
 | **4** | Indexing: pgvector HNSW + pg_search BM25 on all RAPTOR levels | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | Internal worker |
@@ -1238,9 +1238,9 @@ When Aniket approves this plan, the Phase 2b G1 cell in §5 flips 🟡 → ✅ a
 
 ---
 
-### 5.7 Phase 3a plan — Chunking (G1 🟡 OPEN)
+### 5.7 Phase 3a plan — Chunking (G1 ✅ + G2 ✅ SIGNED OFF)
 
-> **Status:** G1 🟡 OPEN — drafted 2026-05-23. Branch: `phase-3/chunking-raptor` off `main` (Phase 2b merged as PR #6 · merge commit `971a019`). Awaiting Aniket sign-off.
+> **Status:** G1 ✅ + G2 ✅ signed off 2026-05-23. Plan + single contract delta locked. Branch: `phase-3/chunking-raptor` off `main` (Phase 2b merged as PR #6 · merge commit `971a019`).
 
 #### Scope
 
@@ -1376,7 +1376,7 @@ Phases 15–24 per `architecture.md` §12. Tracked here only as a reminder of in
 |---|---|---|
 | 0 | `GET /health`, `GET /ready` | ✅ signed off 2026-05-23 |
 | 1 | `GET/POST/PUT/DELETE /schema`, `GET /schema/versions`, hierarchy endpoints | ⬜ |
-| 3a | (no new endpoints; `lifecycle_state` enum widens by `chunked`) | 🟡 G1 draft |
+| 3a | (no new endpoints; `lifecycle_state` enum widens by `chunked`) | ✅ signed off 2026-05-23 (§5.1 #3 + §5.2) |
 | 3b–7 | Mostly internal workers; admin endpoints TBD at G1 | ⬜ |
 | 8 | `POST /query`, `POST /chat`, `GET /chat/:id/stream` (SSE) | ⬜ |
 | 9 | `GET /upload/:id/status` (SSE), `GET /audit` | ⬜ |
@@ -1498,6 +1498,7 @@ Phases 15–24 per `architecture.md` §12. Tracked here only as a reminder of in
 | 2026-05-23 | **Phase 2b merged.** PR #6 squash-merged into `main` (merge commit `971a019`). Local fast-forward sync confirmed. **Phase 2 (a/b) closed.** Phase 2c (force-parser route + real Mistral activation) parked as a tracked deferral — will land as an additive PR when a Mistral API key is procured + a real scanned-PDF eval set is ready. | Aniket |
 | 2026-05-23 | **Phase 3 split into 3a + 3b + 3c** per [`feedback_sub_phase_splits`](../../.claude/memory/feedback_sub_phase_splits.md). Architecture §5 step 6–10 lists four conceptual deliverables (late chunking, contextual prefix, embedding, RAPTOR build) — each end-to-end testable on its own. 3a = chunking only (no LLM, no embedding); 3b = Contextual Retrieval Anthropic prefix call; 3c = embeddings + RAPTOR tree (first embedding call). Each gets its own G1→G5 cycle but all three live on the same `phase-3/chunking-raptor` branch (no inter-PR dependency since each commit-set advances the same lifecycle state machine — opening 3 separate PRs is unnecessary friction). HNSW + BM25 index creation explicitly stays in Phase 4 per architecture §5 step 8–9. | Aniket |
 | 2026-05-23 | **Phase 3a G1 OPEN.** Branched `phase-3/chunking-raptor` from `main`. Plan section §5.7 drafted: `0009_chunks.sql` adds workspace-scoped + RLS-day-1 + immutable `chunks` table; pure-function `chunk_pages(raw_pages, budget=2500, overlap=250)` using tiktoken `cl100k_base`; layout-aware (raw_page as default boundary, paragraph-break splits for over-budget pages, row-boundary splits for huge xlsx sheets); small-page joining when page < budget/4; new lifecycle state `chunked`; worker stage `chunk_file_impl` chained from `parse_file_impl`'s success path via separate-tx defer. 12 decisions locked. Out of scope: contextual prefix LLM (3b), embeddings + RAPTOR (3c), HNSW + BM25 indexes (Phase 4), force-rechunk admin endpoint (Phase 4), atomic-unit-aware chunking (Phase 5), Jina-style true late chunking (Wave B). Awaiting sign-off. | Aniket |
+| 2026-05-23 | **Phase 3a G1 ✅ + G2 ✅ signed off (single drafting pass).** G1's 12 decisions are conservative + grounded in architecture §5 step 6 + Anthropic Contextual Retrieval writeup recommendations (chunk size ≥1500 tokens for recall, 10% overlap as industry default). G2 is one contract delta in `api_contracts.md` §5.1 invariant #3 + §5.2 file-shape enum: `lifecycle_state` widens from `queued/parsing/parsed/failed/deleted` to add `chunked`. Forward-compat pattern locked: each sub-phase appends exactly one new state. No new endpoints; no new error slugs. Cross-gate G1↔G2 trace: decision #8 (lifecycle state addition) maps directly to §5.2 enum widening; decision #9 (task chaining via separate-tx defer) is invisible on the wire (only observable as the state transition itself). **G3 opens** — drafting `tests/specs/phase_3a.md` + 2 new red skeleton files. | Aniket |
 
 ---
 

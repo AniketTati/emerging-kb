@@ -892,7 +892,7 @@ Per [build_tracker §5.5](build_tracker.md). Five endpoints under `/files`. Firs
 
 1. **MinIO holds bytes, Postgres holds metadata.** `files.object_key` references a MinIO object under `raw_files/<sha256>`. Never store file bytes in PG.
 2. **Content-hash dedup per workspace.** `(workspace_id, content_sha)` partial unique among `lifecycle_state != 'deleted'` rows. Re-uploading the same content returns the existing `files` row (not a 409).
-3. **Lifecycle state machine** (`files.lifecycle_state`): `queued → parsing → parsed | failed`; soft-delete via `→ deleted`. Transitions are append-only logged to `file_lifecycle` (immutable audit table).
+3. **Lifecycle state machine** (`files.lifecycle_state`): `queued → parsing → parsed → chunked | failed`; soft-delete via `→ deleted` from any non-failed state. Transitions are append-only logged to `file_lifecycle` (immutable audit table). Phase 3a adds the `chunked` state (after the chained `chunk_file` task succeeds); Phase 3b will add `contextualized`; Phase 3c will add the terminal `ready`. **Each sub-phase appends exactly one new state to the enum** — existing readers ignore unknown states (forward-compatible).
 4. **`raw_pages` immutable.** Per-page content keyed by `(file_id, page_number)`. `GRANT SELECT, INSERT` only. Re-parsing the same content produces byte-identical rows (content-hash keyed).
 5. **Per-stage idempotency.** If `parse_file(file_id)` is replayed and `files.lifecycle_state == 'parsed'`, the task returns immediately without re-work.
 6. **Workspace-isolated.** All 4 new tables carry own `workspace_id` + own RLS policy. The worker calls `SET LOCAL app.workspace_id` before any per-file query.
@@ -921,7 +921,7 @@ Per [build_tracker §5.5](build_tracker.md). Five endpoints under `/files`. Firs
 | `mime_type` | string | From upload's Content-Type or sniffed from magic bytes. |
 | `size_bytes` | int | Raw byte count. |
 | `doc_type` | string \| null | Always `null` at Phase 2a (classifier lands in a later phase). |
-| `lifecycle_state` | enum | `queued/parsing/parsed/failed` — `deleted` returns 404 on reads. |
+| `lifecycle_state` | enum | `queued/parsing/parsed/chunked/failed` (Phase 3b will add `contextualized`; 3c the terminal `ready`) — `deleted` returns 404 on reads. |
 
 No `workspace_id`, no `object_key` in response — `object_key` is a server-internal detail (clients don't read MinIO directly).
 
@@ -1077,8 +1077,9 @@ Each phase appends its endpoint contracts here at its G2 gate. Index:
 | 1b | `/schemas/:id/versions*` (versioning + rollback) | ✅ signed off 2026-05-23 (§3) |
 | 1c | `/schemas/:id/{entities,fields,relationships}` (hierarchy — 11 endpoints) | ✅ signed off 2026-05-23 (§4) |
 | **2a** | `/files` admin upload + read (5 endpoints) + worker pipeline | 🟡 drafted in §5 — awaiting sign-off |
-| 2b | Additional parsers (xlsx + email + Mistral OCR) — no new HTTP endpoints | ⬜ |
-| 3–7 | Internal worker triggers + admin endpoints (TBD at each phase's G1) | ⬜ |
+| 2b | Additional parsers (xlsx + email + Mistral OCR) — no new HTTP endpoints | ✅ signed off 2026-05-23 (§5.5 415 row widened) |
+| 3a | Chunking — no new HTTP endpoints; `lifecycle_state` enum widens to add `chunked` (§5.1 #3 + §5.2 row) | 🟡 G1 drafted in build_tracker §5.7 |
+| 3b–7 | Internal worker triggers + admin endpoints (TBD at each phase's G1) | ⬜ |
 | 8 | `/query`, `/chat`, `/chat/:id/stream` | ⬜ |
 | 9 | `/upload/:id/status` (SSE), `/audit` | ⬜ |
 | 10a–g | UI-driven endpoints follow from `prototype/wiring_inventory.md` | ⬜ |
@@ -1097,3 +1098,4 @@ Each phase appends its endpoint contracts here at its G2 gate. Index:
 | 2026-05-23 | **Phase 1c G2 — schemas hierarchy contracts drafted.** §4 added with 18 sub-sections: hierarchy invariants (§4.1 — workspace-isolated, parent-scoped soft delete, coarse-grained versioning, atomic mutations, name-resolved cross-refs in snapshots, replay never duplicates), extended `schema_versions.body` shape with entities/fields/relationships (§4.2), diff format extension with nested dotted paths (§4.3), entity resource shape + 4 endpoints (§4.4–§4.8 — POST/GET-list/PUT/DELETE; DELETE cascades to fields + relationships), field resource shape + 4 endpoints (§4.9–§4.13; type enum string/number/boolean/date/datetime), relationship resource shape + 3 endpoints (§4.14–§4.17; no PUT — soft-delete + re-create path; kind enum verbatim from architecture line 794; cardinality/cascade_delete/single_parent recorded only), out-of-scope (§4.18). 3 new error slugs introduced: `entity-name-conflict`, `field-name-conflict`, `relationship-name-conflict` (join 1a/1b's 5). Old §4 placeholder index → §5; old §5 changelog → §6. | Aniket |
 | 2026-05-23 | **Phase 2a G2 — files + parse pipeline contracts drafted.** §5 added with 10 sub-sections: pipeline-model invariants (§5.1 — MinIO/PG split, content-hash dedup, lifecycle state machine, raw_pages immutable, per-stage idempotency, workspace-isolated), file resource shape (§5.2), lifecycle history array shape (§5.3), raw-page resource shape (§5.4), POST upload with two modes — multipart OR JSON (§5.5), GET list (§5.6), GET one with lifecycle (§5.7), GET pages (§5.8), DELETE soft (§5.9), out-of-scope §5.10. 2 new error slugs: `payload-too-large` (413, file > 100 MB), `unsupported-media-type` (415, mime not in 2a's whitelist). Idempotency-Key: required POST, optional DELETE (same rule). Content-hash dedup returns `200 OK X-Dedup-Reason: content-hash` (not 409). Old §5 placeholders → §6, old §6 changelog → §7. | Aniket |
 | 2026-05-23 | **Phase 2b G2 — mime whitelist widened (single contract delta).** §5.5 `POST /files` 415 row's narrative grows to list the four supported mime types: `application/pdf` + `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` (.xlsx) + `application/vnd.ms-excel` (.xls) + `message/rfc822` (.eml). Added: "magic-byte sniff at upload picks the right parser when Content-Type is missing or application/octet-stream." No new endpoints; no new error slugs; no other §5 sub-sections changed. | Aniket |
+| 2026-05-23 | **Phase 3a G2 — `lifecycle_state` enum widens by `chunked` (single contract delta).** §5.1 #3 invariant rewritten to make the state machine extension explicit: `queued → parsing → parsed → chunked | failed`; soft-delete via `→ deleted` from any non-failed state. §5.2 file-resource shape's `lifecycle_state` enum row widens accordingly. Phase 3b will append `contextualized`; 3c will append the terminal `ready` — pattern is "each sub-phase appends exactly one new state" so existing wire readers stay forward-compatible. No new endpoints, no new error slugs, no other §5 sub-sections changed. | Aniket |
