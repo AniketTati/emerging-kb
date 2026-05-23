@@ -154,8 +154,8 @@ QA gates this at G1.5b — every prototype page is grep'd for the forbidden voca
 
 ## 1. Now / Next / Blocked
 
-**Now:** Phase 2a G1 — parse-layer scaffold + Docling (digital PDF) plan (drafted 2026-05-23; awaiting sign-off). Branch: `phase-2a/parse-scaffold` off `main`. Phase 1c merged as PR #4; tag `phase-1c-complete` at the merge commit.
-**Next:** Phase 2a G2 — endpoint contracts for `/files` admin upload + read endpoints.
+**Now:** Phase 2a G3 — drafting `tests/specs/phase_2a.md` + red skeleton files. Branch: `phase-2a/parse-scaffold`.
+**Next:** Phase 2a G4 — build (DDL + worker + parser + router + main wiring).
 **Blocked on:** nothing.
 
 ---
@@ -264,7 +264,7 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
 | **1a** | Schema service — **CRUD foundation**: `schemas` table + 5 endpoints (POST/GET-list/GET/PUT/DELETE) | ✅ | ✅ | ✅ | ✅ | ✅ | All 5 gates green 2026-05-23. verify_phase_1a.sh 17/17. verify_phase_0.sh still 16/16. Ready to merge. |
 | **1b** | Schema service — **versioning**: `schema_versions` table; every PUT creates a new version; version list/read/rollback endpoints | ✅ | ✅ | ✅ | ✅ | ✅ | All 5 gates green 2026-05-23. verify_phase_1b.sh 21/21. verify_phase_1a.sh still 17/17. verify_phase_0.sh still 16/16. pytest 106/106. Ready to merge. |
 | **1c** | Schema service — **hierarchy**: `schema_entities`, `schema_fields`, `schema_relationships` tables; nested CRUD; NL field descriptions; single_parent + cascade_delete constraints | ✅ | ✅ | ✅ | ✅ | ✅ | All 5 gates green 2026-05-23. verify_phase_1c.sh 20/20. verify_phase_1b.sh still 21/21. verify_phase_1a.sh still 17/17. verify_phase_0.sh still 16/16. pytest 142/142. Ready to merge. |
-| **2a** | Parse layer — **scaffold + Docling**: `files` + `file_lifecycle` + `raw_pages` + `parse_artifacts` tables; Procrastinate `parse_file` task; MIME-based dispatcher; Docling (digital PDF) parser; admin `POST /files` upload endpoint | 🟡 | ⬜ | ⬜ | ⬜ | ⬜ | G1 plan drafted 2026-05-23 (§5.5). First worker phase. End-to-end pipeline runnable on PDF after 2a. |
+| **2a** | Parse layer — **scaffold + Docling**: `files` + `file_lifecycle` + `raw_pages` + `parse_artifacts` tables; Procrastinate `parse_file` task; MIME-based dispatcher; Docling (digital PDF) parser; admin `POST /files` upload endpoint | ✅ | ✅ | 🟡 | ⬜ | ⬜ | G1+G2 ✅ signed off 2026-05-23 (§5.5 + api_contracts §5 — 5 endpoints + 2 new slugs). G3 drafting now. |
 | **2b** | Parse layer — **additional parsers**: xlsx (openpyxl) + email (stdlib) + Mistral OCR (external API + mock fallback) | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | Builds on 2a's dispatcher + raw_pages contract. Each parser is an additive `Parser` Protocol implementation. |
 | **3** | Chunking + Contextual Retrieval + RAPTOR tree build | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | Internal worker |
 | **4** | Indexing: pgvector HNSW + pg_search BM25 on all RAPTOR levels | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | Internal worker |
@@ -987,9 +987,9 @@ When Aniket approves this plan, the Phase 1c G1 cell in §5 flips 🟡 → ✅ a
 
 ---
 
-### 5.5 Phase 2a plan — Parse-layer scaffold + Docling (G1 🟡 IN REVIEW)
+### 5.5 Phase 2a plan — Parse-layer scaffold + Docling (G1 ✅ SIGNED OFF)
 
-> **Status:** G1 drafted 2026-05-23 by Aniket. Awaiting sign-off. Branch: `phase-2a/parse-scaffold` off `main` (Phase 1c merged as PR #4; tag `phase-1c-complete`).
+> **Status:** G1 ✅ signed off 2026-05-23 by Aniket. Plan locked. Branch: `phase-2a/parse-scaffold` off `main` (Phase 1c merged as PR #4; tag `phase-1c-complete`).
 >
 > **Why split Phase 2 into 2a + 2b:** the §5 description ("Docling + Mistral OCR + xlsx + email → raw_pages") is four comma-separated parsers — the [`feedback_sub_phase_splits`](../../.claude/memory/feedback_sub_phase_splits.md) rule applies. 2a builds the **scaffold** (tables + Procrastinate worker + dispatcher + admin upload endpoint + ONE parser to prove the pipeline). 2b layers the remaining parsers on top via the same `Parser` Protocol.
 
@@ -1263,6 +1263,9 @@ Phases 15–24 per `architecture.md` §12. Tracked here only as a reminder of in
 | 2026-05-23 | **Phase 1c merged.** PR #4 merged into `main` (merge commit `af2d77f`). Tag `phase-1c-complete` pushed. Local `phase-1c/schema-hierarchy` branch deleted. **Phase 1 (a/b/c) closed.** | Aniket |
 | 2026-05-23 | **Phase 2 split into 2a + 2b** per [`feedback_sub_phase_splits`](../../.claude/memory/feedback_sub_phase_splits.md). §5 description "Parse layer: Docling + Mistral OCR + xlsx + email → raw_pages" is four comma-separated parsers. 2a builds the scaffold + Docling (digital PDF — the most common format; Wave A's CUAD/SEC corpus is mostly digital PDF). 2b layers the remaining parsers (xlsx via openpyxl + email via stdlib + Mistral OCR via external API) via the same `Parser` Protocol. pptx + Gemini VLM fallback explicitly Wave B. | Aniket |
 | 2026-05-23 | **Phase 2a G1 OPEN.** Branched `phase-2a/parse-scaffold` from `main`. Plan section §5.5 drafted: `0008_parse_layer.sql` adds 4 workspace-scoped + RLS-day-1 tables (`files`, `file_lifecycle` append-only audit, `raw_pages` immutable per-page output, `parse_artifacts` MinIO-pointers); MinIO holds bytes under `raw_files/<sha256>`; PG holds metadata; Procrastinate task `parse_file(file_id)` with 30-min lease + per-stage idempotency via `file_lifecycle` checkpoint; `Parser` Protocol + MIME/magic-bytes dispatcher; Docling parser for digital PDF; 5 endpoints (`POST /files` multipart-or-JSON · GET list · GET one · GET pages · DELETE soft). 15 decisions locked. End-to-end pipeline runnable on a PDF after 2a. Awaiting sign-off. | Aniket |
+| 2026-05-23 | **Phase 2a G1 ✅ signed off. G2 drafted.** `api_contracts.md` §5 added (10 sub-sections): pipeline-model invariants (§5.1), file resource shape (§5.2 — `lifecycle_state` enum on wire + content_sha + mime_type + size_bytes; NO object_key/workspace_id on response), lifecycle history shape (§5.3 — append-only event array), raw-page shape (§5.4), POST /files with two modes (§5.5 — multipart OR JSON `{minio_object_key, name}` for tests + Phase 10a streaming upload), GET list (§5.6), GET one with lifecycle (§5.7), GET pages (§5.8), DELETE soft (§5.9), out-of-scope (§5.10). 2 new error slugs: `payload-too-large` (413 — > 100 MB) + `unsupported-media-type` (415 — 2a accepts only application/pdf; 2b adds the rest). Content-hash dedup returns `200 OK X-Dedup-Reason: content-hash` (NOT 409 — matches §5.1 #2 invariant + S3-style PUT semantics). Old §5 placeholder → §6, §6 changelog → §7. | Aniket |
+| 2026-05-23 | **Phase 2a post-G2 cross-gate review (G1↔G2).** All 15 G1 decisions traced to §5: MinIO/PG split (§5.1 #1), content-hash dedup (§5.1 #2 + §5.5), state machine (§5.1 #3 + §5.2 enum + §5.5), file_lifecycle as event array (§5.3), raw_pages immutability (§5.1 #4 + §5.4), Procrastinate task enqueue (§5.5), worker workspace context (§5.1 #6), POST two modes (§5.5), idempotency two layers (§5.5 — both Idempotency-Key header + content-hash dedup), 100 MB limit + 1-500 name (§5.5 + §5.2), failure mode (§5.3 includes "failed" state + §5.10 retry endpoint deferred). Parser Protocol + Docling + RLS + parse_artifacts are internal implementations not exposed on wire. | Aniket |
+| 2026-05-23 | **Phase 2a G2 ✅ signed off. G3 opens** — drafting `tests/specs/phase_2a.md` + 5 red skeleton files: `test_files_crud.py` (upload modes · dedup · 413/415 · soft delete · RLS) · `test_parse_dispatch.py` (Parser Protocol + registration + MIME routing) · `test_parse_pdf_docling.py` (Docling against a fixture PDF) · `test_raw_pages.py` (read endpoints + immutability via superuser INSERT block) · `test_files_lifecycle.py` (state machine transitions + append-only audit + per-stage idempotency). | Aniket |
 
 ---
 
