@@ -49,7 +49,11 @@ async def create_schema(client, workspace, *, name="TestSchema", description="")
 
 
 async def test_post_creates_schema_with_documented_shape(client, test_workspace):
-    """api_contracts §2.1: response has exactly the documented keys."""
+    """api_contracts §2.1 + §3.2: response has exactly the documented keys.
+
+    Phase 1b added `current_version` (§3.2). Updated assertion reflects the
+    Phase 1b shape — Phase 1a's shape is the strict subset minus current_version.
+    """
     resp = await client.post(
         "/schemas",
         json={"name": "ContractV1", "description": "Vendor agreements."},
@@ -59,6 +63,7 @@ async def test_post_creates_schema_with_documented_shape(client, test_workspace)
     body = resp.json()
     assert set(body.keys()) == {
         "id", "name", "description", "lifecycle_state",
+        "current_version",
         "created_at", "updated_at",
     }, f"unexpected keys: {body.keys()}"
     assert body["lifecycle_state"] == "active"
@@ -270,3 +275,27 @@ async def test_delete_already_deleted_returns_404(client, test_workspace):
         "second DELETE without an Idempotency-Key should reflect the current state (deleted = not-found), "
         "not replay the prior 204"
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 1b additions — current_version on POST + PUT
+# (api_contracts §3.2, §3.3, §3.4)
+# ---------------------------------------------------------------------------
+
+
+async def test_post_response_includes_current_version_1(client, test_workspace):
+    """§3.3: POST creates v1 atomically; response carries current_version=1."""
+    s = await create_schema(client, test_workspace, name="V1Probe")
+    assert s["current_version"] == 1
+
+
+async def test_put_response_bumps_current_version_to_2(client, test_workspace):
+    """§3.4: PUT writes a new version row in-tx; response shows bumped current_version."""
+    s = await create_schema(client, test_workspace, name="Bumper")
+    resp = await client.put(
+        f"/schemas/{s['id']}",
+        json={"name": "Bumper", "description": "bumped"},
+        headers=headers(test_workspace, idempotency_key=str(uuid.uuid4())),
+    )
+    assert resp.status_code == 200
+    assert resp.json()["current_version"] == 2
