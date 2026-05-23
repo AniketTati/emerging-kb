@@ -154,8 +154,8 @@ QA gates this at G1.5b — every prototype page is grep'd for the forbidden voca
 
 ## 1. Now / Next / Blocked
 
-**Now:** Phase 1b G4 — building (`0006_schema_versions.sql` + extended domain + new router + main wiring). Branch: `phase-1b/schema-versioning`.
-**Next:** Phase 1b G5 — `scripts/verify_phase_1b.sh` + run all 3 verify scripts + end-of-phase cross-phase sweep.
+**Now:** Phase 1b — all 5 gates ✅. End-of-phase cross-phase sweep complete. Ready to open PR (`phase-1b/schema-versioning` → `main`).
+**Next:** Phase 1c — schema hierarchy (G1 plan).
 **Blocked on:** nothing.
 
 ---
@@ -262,7 +262,7 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
 |---|---|---|---|---|---|---|---|
 | **0** | Repo + docker-compose (Postgres+pgvector+pg_search+MinIO+Procrastinate) + lifecycle DDL | ✅ | ✅ | ✅ | ✅ | ✅ | All 5 gates green 2026-05-23. `scripts/verify_phase_0.sh` 16/16 checks pass. Ready to merge. |
 | **1a** | Schema service — **CRUD foundation**: `schemas` table + 5 endpoints (POST/GET-list/GET/PUT/DELETE) | ✅ | ✅ | ✅ | ✅ | ✅ | All 5 gates green 2026-05-23. verify_phase_1a.sh 17/17. verify_phase_0.sh still 16/16. Ready to merge. |
-| **1b** | Schema service — **versioning**: `schema_versions` table; every PUT creates a new version; version list/read/rollback endpoints | ✅ | ✅ | ✅ | 🟡 | ⬜ | G1+G2+G3 ✅ signed off 2026-05-23. 28 new tests collected (25 in `test_schema_versions.py` + 2 in `test_schemas_crud.py` + 1 in `test_idempotency.py`); pytest --collect-only confirms 106 total. G4 building now. |
+| **1b** | Schema service — **versioning**: `schema_versions` table; every PUT creates a new version; version list/read/rollback endpoints | ✅ | ✅ | ✅ | ✅ | ✅ | All 5 gates green 2026-05-23. verify_phase_1b.sh 21/21. verify_phase_1a.sh still 17/17. verify_phase_0.sh still 16/16. pytest 106/106. Ready to merge. |
 | **1c** | Schema service — **hierarchy**: `schema_entities`, `schema_fields`, `schema_relationships` tables; nested CRUD; NL field descriptions; single_parent + cascade_delete constraints | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | Builds on 1a+1b. Re-extraction trigger on rollback stubbed (Phase 6 wires it). domain_vocabulary deferred to Phase 5. |
 | **2** | Parse layer: Docling + Mistral OCR + xlsx + email → raw_pages | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | Internal service; API exposed via upload (phase 10a) |
 | **3** | Chunking + Contextual Retrieval + RAPTOR tree build | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | Internal worker |
@@ -834,7 +834,8 @@ Phases 15–24 per `architecture.md` §12. Tracked here only as a reminder of in
 |---|---|---|---|
 | 0 | [tests/specs/phase_0.md](../tests/specs/phase_0.md) | [test_health.py](../tests/test_health.py) · [test_ready.py](../tests/test_ready.py) · [test_migrations.py](../tests/test_migrations.py) · [test_rls.py](../tests/test_rls.py) · [test_middleware.py](../tests/test_middleware.py) | ✅ signed off 2026-05-23 (49 tests, all green) |
 | 1a | [tests/specs/phase_1a.md](../tests/specs/phase_1a.md) | [test_schemas_crud.py](../tests/test_schemas_crud.py) · [test_schemas_rls.py](../tests/test_schemas_rls.py) · [test_idempotency.py](../tests/test_idempotency.py) | ✅ 29 tests green (post-G4); pytest authoritative |
-| 1 | tests/specs/phase_1.md | tests/test_phase_1_*.py | ⬜ |
+| 1b | [tests/specs/phase_1b.md](../tests/specs/phase_1b.md) | [test_schema_versions.py](../tests/test_schema_versions.py) · [test_schemas_crud.py](../tests/test_schemas_crud.py) (additive) · [test_idempotency.py](../tests/test_idempotency.py) (additive) | ✅ 28 new tests green (post-G5); suite total 106 |
+| 1c | tests/specs/phase_1c.md | tests/test_schema_hierarchy.py · tests/test_schema_entities_*.py | ⬜ |
 | ... | | | |
 
 ---
@@ -846,8 +847,9 @@ Phases 15–24 per `architecture.md` §12. Tracked here only as a reminder of in
 | Phase | Verify script | Last run | Result |
 |---|---|---|---|
 | 0 | [scripts/verify_phase_0.sh](../scripts/verify_phase_0.sh) | 2026-05-23 (post Phase 1a code) | ✅ 16/16 (still green after Phase 1a's code landed) |
-| 1a | [scripts/verify_phase_1a.sh](../scripts/verify_phase_1a.sh) | 2026-05-23 | ✅ 17/17 (compose smoke + 9 schemas assertions + 29 pytest) |
-| 1 | scripts/verify_phase_1.sh | — | — |
+| 1a | [scripts/verify_phase_1a.sh](../scripts/verify_phase_1a.sh) | 2026-05-23 (post Phase 1b code) | ✅ 17/17 (compose smoke + 9 schemas assertions + 29 pytest) — still green after Phase 1b code landed |
+| 1b | [scripts/verify_phase_1b.sh](../scripts/verify_phase_1b.sh) | 2026-05-23 | ✅ 21/21 (compose smoke + 5 DDL assertions on schema_versions + 11 HTTP/rollback/RLS curl checks + openapi check + Phase-1b pytest 52) |
+| 1c | scripts/verify_phase_1c.sh | — | — |
 | ... | | | |
 
 ---
@@ -894,6 +896,9 @@ Phases 15–24 per `architecture.md` §12. Tracked here only as a reminder of in
 | 2026-05-23 | **Phase 1b G3 drafted.** `tests/specs/phase_1b.md` covers the §3 surface with 25 tests in new `test_schema_versions.py` (list 8 · read 9 · rollback 7 · concurrent-PUT 1), 2 additive in `test_schemas_crud.py` (current_version on POST + PUT), 1 additive in `test_idempotency.py` (rollback replay verified via superuser row count). 28 new tests total. pytest --collect-only confirms 106 total (49 Phase 0 + 29 Phase 1a + 28 Phase 1b). Awaiting sign-off. | Aniket |
 | 2026-05-23 | **Phase 1b post-G3 cross-gate review (G1↔G2↔G3).** All 13 G1 decisions traced to ≥1 G3 test (snapshot via body-equality assertions in §3.5 tests; monotonic int via concurrency test; v1-atomic via shape test; PUT-creates-version via current_version assertions; clone-forward via body-equality after rollback; declarative diff via expected-dict comparison; required Idempotency-Key on rollback via 400-missing-key test; rollback-noop 409 via direct assertion). New slug `rollback-noop` reaches §3 contract + spec + test code. No cross-phase scope leak (grep: no entities/fields/relationships/nl_description/audit_log writes in test sources beyond the spec's deliberate out-of-scope notice). | Aniket |
 | 2026-05-23 | **Phase 1b G3 ✅ signed off. G4 opens.** Build order planned: (1) `0006_schema_versions.sql` (schema_versions table + ALTER schemas ADD current_version_id) + idempotent re-application guards (DROP POLICY IF EXISTS, etc.); (2) `kb/domain/schema_versions.py` (snapshot pydantic models + diff helper + repo functions list/get/rollback); (3) extend `kb/domain/schemas.py` (POST + PUT now write version in-tx via SELECT FOR UPDATE); (4) `kb/api/schema_versions.py` router + new `rollback-noop` slug helper; (5) wire into `kb/api/main.py`; (6) extend the `SchemaResponse` pydantic model with `current_version: int`. | Aniket |
+| 2026-05-23 | **Phase 1b G4 ✅ — code landed (single commit `6a5f896`).** Files: `0006_schema_versions.sql` (workspace-scoped + RLS + UNIQUE (schema_id, version_number) + ALTER schemas ADD current_version_id ON DELETE SET NULL); `kb/domain/schema_versions.py` (VersionSummary/VersionRead pydantic + RollbackNoopError/VersionNotFoundError + compute_diff + list_versions/get_version/insert_version); `kb/domain/schemas.py` mutated (SchemaResponse + current_version; INNER JOIN on schema_versions in reads; create_schema writes v1 atomically; update_schema uses SELECT FOR UPDATE + allocates max(v_n)+1; rollback_to_version new); `kb/api/schema_versions.py` router (3 endpoints, Path ge=1, parent 404-gate); `kb/api/main.py` + handlers for both new exceptions. All 13 G1 decisions traced in commit body. pytest -q tests/ → **106 passed** (49 Phase 0 + 29 Phase 1a kept + 28 Phase 1b new) in 24.87s. | Aniket |
+| 2026-05-23 | **Phase 1b G4 cross-gate sweep — 1 issue found and fixed.** verify_phase_1b.sh step 7 (kb_app GRANTs on schema_versions) caught that 0001's `ALTER DEFAULT PRIVILEGES ... GRANT SELECT, INSERT, UPDATE, DELETE` grants the full CRUD set on every NEW table in `public`, overriding 0006's narrow `GRANT SELECT, INSERT`. Without an explicit REVOKE, an application bug or future maintainer could UPDATE/DELETE a version row and silently mutate audit history — violating invariant §3.1 #1. Fix: added `REVOKE UPDATE, DELETE ON schema_versions FROM kb_app;` to 0006 with a comment explaining the default-privileges interaction. Re-run verify_phase_1b.sh: 21/21 GREEN. | Aniket |
+| 2026-05-23 | **Phase 1b G5 ✅ + end-of-phase cross-phase sweep.** Authored `scripts/verify_phase_1b.sh` (21 checks): compose smoke + 5 DDL invariants (table+UNIQUE constraint+RLS forced+kb_app grants restricted+ON DELETE SET NULL) + 11 HTTP/rollback/RLS/idempotency curl checks + openapi exposure + Phase-1b pytest. **Cross-phase sweep** per memory entry `feedback_end_of_phase_cross_phase_check.md`: (a) verify_phase_0.sh re-run → 16/16 GREEN; verify_phase_1a.sh re-run → 17/17 GREEN; verify_phase_1b.sh → 21/21 GREEN. (b) Scope-leak grep clean — no `schema_entities` / `schema_fields` / `schema_relationships` / `nl_description` / `domain_vocabulary` / rogue `INSERT INTO audit_log` in Phase 1b code (the audit_log INSERTs in test_rls.py are Phase 0's RLS tests on the audit_log table itself, by design). (c) RLS invariant holds — all 4 workspace-scoped tables (audit_log, idempotency_keys, schemas, schema_versions) have their own `workspace_id` column + their own `CREATE POLICY` (belt-and-braces per decision #10). (d) pytest --collect-only confirms 106 total tests, matching the spec. **Phase 1b complete; ready to open PR.** | Aniket |
 
 ---
 

@@ -38,8 +38,14 @@ CREATE POLICY schema_versions_workspace_isolation
     WITH CHECK (workspace_id = NULLIF(current_setting('app.workspace_id', true), '')::uuid);
 
 -- Versions are immutable: SELECT + INSERT only (decision #10, invariant §3.1 #1).
--- Soft-delete the parent schema instead of touching versions.
+-- 0001 sets ALTER DEFAULT PRIVILEGES that grant the full CRUD set to kb_app
+-- on every NEW table in public; that's correct for ordinary CRUD tables, but
+-- schema_versions is an audit log, so we explicitly REVOKE UPDATE + DELETE
+-- to enforce immutability at the DB layer. An application bug that tried
+-- to UPDATE a version (e.g., "fix a typo in v3") would error rather than
+-- silently mutate audit history. Soft-delete the parent schema instead.
 GRANT SELECT, INSERT ON schema_versions TO kb_app;
+REVOKE UPDATE, DELETE ON schema_versions FROM kb_app;
 
 -- Pointer from schemas → its head version. Nullable for migration safety;
 -- application code maintains the "schema exists ⇒ ≥1 version exists"
