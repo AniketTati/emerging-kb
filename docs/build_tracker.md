@@ -154,8 +154,8 @@ QA gates this at G1.5b — every prototype page is grep'd for the forbidden voca
 
 ## 1. Now / Next / Blocked
 
-**Now:** Phase 3b — all 5 gates ✅. verify_phase_3b.sh 15/15. Cross-phase sweep clean (139/139 across Phase 0/1a/1b/1c/2a/2b/3a/3b). Ready to push + open PR for the combined Phase 3a+3b branch.
-**Next:** Phase 3c — embedding (Gemini Embedding 001 with mock embedder fallback for CI) + RAPTOR tree build. Will land as a third commit-set on the same `phase-3/chunking-raptor` branch.
+**Now:** Phase 3c — G1 ✅ + G2 ✅ (drafted using the architecture §8 stack table + the adapter pattern locked at 3b). 13 decisions locked. Third commit-set on the same `phase-3/chunking-raptor` branch.
+**Next:** Phase 3c G3 (spec + ~13 red skeletons) → G4 → G5; then 3d (RAPTOR tree build).
 **Blocked on:** nothing.
 
 ---
@@ -268,7 +268,8 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
 | **2b** | Parse layer — **additional parsers**: xlsx (openpyxl) + email (stdlib) + Mistral OCR (external API adapter class + mock-tested; real-API gated on `KB_MISTRAL_API_KEY`) | ✅ | ✅ | ✅ | ✅ | ✅ | All 5 gates green 2026-05-23. verify_phase_2b.sh 15/15. pytest 188/188. xlsx + email E2E pipeline verified in Docker stack (xlsx → 2 sheets → 2 raw_pages; email → 1 page with headers + body). Mistral OCR adapter ready, self-disabled without API key. Ready to merge. |
 | **3a** | Chunking — late chunking of `raw_pages` → `chunks` table (layout-aware, token-bounded, cross-page joining); worker stage `chunk_file`; new lifecycle state `chunked` | ✅ | ✅ | ✅ | ✅ | ✅ | All 5 gates green 2026-05-23. verify_phase_3a.sh 18/18. Cross-phase sweep: 0/1a/1b/1c/2a/2b all still green (124/124 cumulative checks). pytest 204/204. Ready to merge. |
 | **3b** | Contextual Retrieval — Anthropic Claude per-chunk prefix with prompt-cached doc context; `contextual_chunks` table; worker stage `contextualize_file` | ✅ | ✅ | ✅ | ✅ | ✅ | All 5 gates green 2026-05-23. verify_phase_3b.sh 15/15. Cross-phase sweep: 0/1a/1b/1c/2a/2b/3a/3b all green (139/139 cumulative checks). pytest 219/219. Ready to merge. |
-| **3c** | Embedding + RAPTOR tree build — Gemini Embedding 001 on contextual chunks; `chunk_embeddings`; recursive cluster→summarize→re-embed → `raptor_nodes` + `raptor_edges`; lifecycle terminates at `ready` | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | First embedding call; gated on `KB_GEMINI_API_KEY` with mock embedder for CI; HNSW + BM25 indexes themselves land in Phase 4 |
+| **3c** | Embedding — Gemini Embedding 001 on contextual chunks → `chunk_embeddings` (`halfvec(3072)`); worker stage `embed_file`; new lifecycle state `embedded` | ✅ | ✅ | ⬜ | ⬜ | ⬜ | First embedding call; gated on `KB_GEMINI_API_KEY` with DeterministicMockEmbedder for CI; HNSW index lands in Phase 4 |
+| **3d** | RAPTOR tree build — per-doc recursive cluster→summarize→re-embed → `raptor_nodes` + `raptor_edges`; lifecycle terminates at `ready` | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | GMM clustering via sklearn; Gemini Flash summarizer with IdentitySummarizer fallback; corpus-level RAPTOR deferred (per-doc only in Wave A) |
 | **4** | Indexing: pgvector HNSW + pg_search BM25 on all RAPTOR levels | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | Internal worker |
 | **5** | Open extraction → mentions; clause split + typing + anomaly score | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | L2 + L2b + L3 |
 | **6** | Schema-driven extraction (Gemini structured outputs) | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | L4/L5 projection |
@@ -1440,17 +1441,103 @@ When Aniket approves this plan, the Phase 3b G1 cell in §5 flips 🟡 → ✅ a
 
 ---
 
-### 5.9 Phase 3c plan — Embedding + RAPTOR tree (placeholder)
+### 5.9 Phase 3c plan — Embedding (G1 ✅ + G2 ✅ SIGNED OFF)
 
-> **Status:** ⬜ Not yet drafted. Opens after Phase 3b G5 ✅.
+> **Status:** G1 ✅ + G2 ✅ signed off 2026-05-23 in single drafting pass (fourth consecutive sub-phase with this rhythm). Plan grounded in architecture §8 (Gemini Embedding 001) + adapter pattern from 3b. Single contract delta (lifecycle enum widens by `embedded`). Branch: `phase-3/chunking-raptor` (third commit-set). Phase 3 originally listed RAPTOR + embeddings as one piece; split into 3c (embedding) + 3d (RAPTOR build).
 
-Scope sketch (to be locked at G1 when 3b closes): Gemini Embedding 001 calls on every contextual chunk → `chunk_embeddings` (`vector(3072)` via pgvector halfvec). Recursive RAPTOR build: cluster contextual chunks via GMM on embeddings, summarize each cluster via Gemini Flash, re-embed summaries, re-cluster — until ≤8 nodes remain OR `level == max_levels=4`. New tables: `chunk_embeddings`, `raptor_nodes`, `raptor_edges`. Worker stage `embed_and_raptor_file(file_id)`. Lifecycle terminates at `ready` (the final success state every downstream phase asserts). First embedding call — `KB_GEMINI_API_KEY` gates real activation; CI uses a deterministic mock embedder. HNSW + BM25 indexes themselves land in Phase 4.
+#### Scope
 
-### 5.9 Phase 3c plan — Embedding + RAPTOR tree (placeholder)
+Phase 3c calls the Gemini Embedding API on every `contextual_chunks.contextual_text` and stores the result in a new **`chunk_embeddings`** table. Embeddings are the search-time signal Phase 4 wraps in HNSW + BM25 indexes, and the input Phase 3d's RAPTOR clustering consumes.
 
-> **Status:** ⬜ Not yet drafted. Opens after Phase 3b G5 ✅.
+**In scope:**
+- **`0011_chunk_embeddings.sql` migration** — `chunk_embeddings` table (workspace-scoped, RLS day-1, immutable: REVOKE UPDATE/DELETE on kb_app). Columns: `id uuid PK`, `contextual_chunk_id uuid FK to contextual_chunks ON DELETE CASCADE`, `file_id uuid FK`, `workspace_id uuid`, `embedding halfvec(3072)`, `model_id text` (e.g., `'gemini-embedding-001'` or `'mock-deterministic-v1'`), `created_at timestamptz`. UNIQUE `(contextual_chunk_id, model_id)`. Indexes: `(workspace_id)`, `(file_id)`. HNSW index lands in Phase 4.
+- **`kb/embeddings/__init__.py`** — `Embedder` Protocol with `async embed_batch(texts) -> list[EmbeddingResult]`. Real impl `GeminiEmbedder` uses `google-genai` SDK. CI fallback `DeterministicMockEmbedder` produces deterministic [-1, 1] L2-normalized vectors via sha256(text + dim_index).
+- **Factory** `make_embedder()` reads `KB_GEMINI_API_KEY` — set → `GeminiEmbedder`, unset → `DeterministicMockEmbedder`.
+- **Lifecycle state extension** — `embedded` (already permitted by 0009's forward-compat CHECK; locked at Phase 3b G4 fix #2). 0011 just adds the table.
+- **Worker stage `embed_file_impl(file_id)`** — reads contextual_chunks, batch-embeds, INSERTs chunk_embeddings, transitions to `embedded` with event `embedding_done` carrying `{embedding_count, dim, model_id}`. Idempotent.
+- **Task chaining** — `contextualize_file_impl()` defers `embed_file(file_id)` in separate tx.
+- **Failure mode** — API errors → `contextualized → failed` with `event='embedding_failed'`.
 
-Scope sketch (to be locked at G1 when 3b closes): Gemini Embedding 001 calls on every contextual chunk → `chunk_embeddings` (`vector(3072)` via pgvector halfvec). Recursive RAPTOR build: cluster contextual chunks via GMM on embeddings, summarize each cluster via Gemini Flash, re-embed summaries, re-cluster — until ≤8 nodes remain OR `level == max_levels=4`. New tables: `chunk_embeddings`, `raptor_nodes`, `raptor_edges`. Worker stage `embed_and_raptor_file(file_id)`. Lifecycle terminates at `ready` (the final success state every downstream phase asserts). First embedding call — `KB_GEMINI_API_KEY` gates real activation; CI uses a deterministic mock embedder. HNSW + BM25 indexes themselves land in Phase 4.
+**Out of scope (deferred):**
+- RAPTOR tree build → **Phase 3d**.
+- HNSW index on `chunk_embeddings.embedding` → **Phase 4**.
+- BM25 index on `contextual_chunks.contextual_text` → **Phase 4**.
+- Cross-doc / corpus-level embedding clustering → Phase 5 / Phase 7.
+- Embedding model A/B testing → Wave B via Hydra/OmegaConf (Phase 5).
+- `audit_log` writes → Phase 9.
+
+#### Decisions (locked at G1; changes require re-opening G1)
+
+| # | Decision | Choice | Rationale |
+|---|---|---|---|
+| 1 | Embedding model | **`gemini-embedding-001`** (default; `KB_EMBEDDING_MODEL` env override). Architecture §8: "Gemini Embedding 001 (#1 commercial MTEB, 68.32)". | Authoritative per architecture. Override lets the user point at newer model versions without code change. |
+| 2 | Dimensions | **3072** (Gemini Embedding 001's default). Stored as **`halfvec(3072)`** for ~50% storage savings at negligible accuracy loss. | `halfvec` is pgvector's float16; Phase 4's HNSW supports it natively. |
+| 3 | Adapter pattern | `Embedder` Protocol with `GeminiEmbedder` (real) + `DeterministicMockEmbedder` (CI fallback) + `make_embedder()` factory keyed on `KB_GEMINI_API_KEY`. | Same shape as 3b's `Contextualizer` (3b #5). Hermetic CI + production activation via env var. |
+| 4 | Self-disable behavior | `KB_GEMINI_API_KEY` unset → `DeterministicMockEmbedder` swaps in; produces stable vectors derived from `sha256(text || ":" || dim_index)`, L2-normalized to unit length. `model_id='mock-deterministic-v1'`. File still advances to `embedded`. | Pipeline-completes-without-key beats blocking. Production deploys MUST set the key (alarm on `model_id == 'mock-deterministic-v1'`). |
+| 5 | Mock embedder math | `mock_vector[i] = ((sha256(text || ":" || str(i)).digest()[0] / 255.0) * 2 - 1)` per dim, then L2-normalized. Reproducible across processes + Python versions. | Determinism lets Phase 3d's RAPTOR clustering tests assert on cluster shape. Normalized vectors match Gemini Embedding 001's output norm. |
+| 6 | Batching | `GeminiEmbedder.embed_batch()` uses the SDK's native batch API (max 100 texts per call). Mock returns one vector per input regardless. | Wave A's corpus is tiny; the batch path exercises once the corpus grows. |
+| 7 | Concurrency | Single batch call per file. | Files have ≤ ~50 chunks in the Wave A target. One call per file is fine. |
+| 8 | Table immutability | `REVOKE UPDATE, DELETE ON chunk_embeddings FROM kb_app;` — same pattern as `contextual_chunks` (3b #10) + `chunks` (3a #7). | Re-embedding implies a new model — write a new row with a different `model_id`. UNIQUE `(contextual_chunk_id, model_id)` makes this safe. |
+| 9 | UNIQUE composite key | `(contextual_chunk_id, model_id)`. | A future model upgrade backfills new rows without deleting old ones; Phase 4's HNSW index filters by `model_id` to pick the active vectors. |
+| 10 | Lifecycle state addition | `embedded` (already in 0009's CHECK via forward-compat). Phase 3d adds the terminal `ready`. | Forward-compat convention. |
+| 11 | Task chaining | `contextualize_file_impl()` defers `embed_file(file_id)` in a SEPARATE tx. | Same pattern as 3a → 3b chaining. |
+| 12 | Idempotency | Returns immediately when `lifecycle_state in ('embedded', 'ready', 'failed', 'deleted')`. UNIQUE + `ON CONFLICT DO NOTHING` prevents duplicate rows on replay. | Matches all prior worker stages. |
+| 13 | Failure mode | Embedding API errors → `contextualized → failed` with `event='embedding_failed'`. Payload includes `error_class`, `message`. | Consistent with 3b's error envelope. |
+
+#### Repo layout delta after Phase 3c G4
+
+```
+emerging-kb/
+├── migrations/sql/
+│   └── 0011_chunk_embeddings.sql           ← NEW
+├── src/kb/
+│   ├── embeddings/
+│   │   └── __init__.py                     ← NEW
+│   ├── domain/
+│   │   └── chunk_embeddings.py             ← NEW
+│   └── workers/
+│       └── tasks.py                        ← MUTATED (embed_file_impl + embed_file task + chained-defer)
+└── tests/
+    ├── test_embeddings_unit.py             ← NEW (~7 unit)
+    ├── test_embeddings_worker.py           ← NEW (~6 worker)
+    └── specs/phase_3c.md                   ← NEW
+```
+
+New deps: `google-genai>=0.3.0`. `numpy` already pulled by torch.
+
+#### Endpoint contract delta (api_contracts.md §5.1 #3 + §5.2)
+
+`files.lifecycle_state` enum widens to add `embedded`. Single-line delta in §5.2. No new endpoints, no new error slugs.
+
+#### Phase 3c G5 — what "green" means
+
+`scripts/verify_phase_3c.sh`:
+1. `psql` confirms 0011 applied: table exists + workspace_id + RLS forced + UPDATE/DELETE revoked + UNIQUE constraint.
+2. `psql` confirms `halfvec` type column on `embedding`.
+3. Compose smoke: POST tiny.pdf → file reaches `lifecycle_state='embedded'` via DeterministicMockEmbedder (`model_id='mock-deterministic-v1'`).
+4. `psql` confirms ≥1 `chunk_embeddings` row per contextual_chunk; dim 3072.
+5. Re-deferring is no-op.
+6. `pytest tests/` green: 219 + ~13 new = ~232.
+
+#### Pre-G2 consistency review checklist
+
+- [ ] Architecture §5 step 8 traceability — Phase 3c covers the embed call only; HNSW index is Phase 4.
+- [ ] No leak into 3d territory (no raptor_nodes, no clustering).
+- [ ] No leak into Phase 4 (no HNSW or BM25).
+- [ ] RLS invariant grows from 13 → 14 workspace-scoped tables.
+- [ ] Mock embedder determinism asserted in tests.
+
+#### Sign-off
+
+When Aniket approves this plan, the Phase 3c G1 cell flips 🟡 → ✅ and G2 opens.
+
+---
+
+### 5.10 Phase 3d plan — RAPTOR tree build (placeholder)
+
+> **Status:** ⬜ Not yet drafted. Opens after Phase 3c G5 ✅.
+
+Scope sketch (to be locked at G1 when 3c closes): per-doc RAPTOR tree per architecture §5 step 10. New tables `raptor_nodes` (id, file_id, workspace_id, level, text, embedding halfvec(3072), token_count, model_id) + `raptor_edges` (parent_node_id, child_node_id) — both workspace-scoped, RLS, immutable. Algorithm: leaf nodes = contextual chunks; at each level L, GMM-cluster level-L embeddings via sklearn (n_components=ceil(N/8)), summarize each cluster via `Summarizer` Protocol (real `GeminiSummarizer` with Gemini Flash, mock `IdentitySummarizer` concatenates leaf texts), embed the summary, write a new level-(L+1) node + edges. Terminate when n_clusters == 1 OR level == max_levels=4. Worker stage `raptor_build_file_impl` chained from `embed_file_impl`. Lifecycle terminates at `ready`. Corpus-level RAPTOR deferred to Phase 5+. New deps: `scikit-learn>=1.5.0`. HNSW + BM25 indexes themselves land in Phase 4.
 
 ---
 
@@ -1614,6 +1701,8 @@ Phases 15–24 per `architecture.md` §12. Tracked here only as a reminder of in
 | 2026-05-23 | **Phase 3b G3 ✅ drafted + signed off.** `tests/specs/phase_3b.md` covers the §5.8 surface with 15 tests across 2 new files: `test_contextualization_unit.py` 9 (request shape — system+cache_control+user role split · chunk in user message · response parsing · cache metrics from `usage.cache_*_input_tokens` · IdentityContextualizer empty-prefix + `model_id='identity'` · factory returns Identity when KB_ANTHROPIC_API_KEY unset · 4xx → ContextualizationError · `thinking={'type':'disabled'}` in request · `KB_CONTEXTUAL_MODEL` override), `test_contextualization_worker.py` 6 (chunked→contextualized transition · `contextualization_done` event with cache totals + model_id in payload · idempotency · chunk_file chains contextualize_file via defer · IdentityContextualizer fallback path · REVOKE UPDATE on kb_app). pytest --collect-only confirms 219 total (204 prior + 15 new). All 14 G1 decisions traced to ≥1 test; no scope leak (no embedding/RAPTOR/HNSW/BM25 refs in test sources). **G4 opens.** | Aniket |
 | 2026-05-23 | **Phase 3b G4 ✅ — code landed.** 4 new files + 3 mutated. All 15 new tests + full suite 219/219 in 65.7s. **Two in-G4 fixes**: (1) `test_anthropic_contextualizer_4xx_raises_contextualization_error` constructed `anthropic.APIStatusError` with a hand-built response object missing `.request`; the SDK's `__init__` reads `response.request` and 400'd with AttributeError. Fixed by using a real `httpx.Response` + `httpx.Request` pair so the SDK sees the shape it expects. (2) `test_runner_bootstraps_schema_migrations_on_empty_db` failed on cross-test data pollution — Phase 3b worker tests advance files rows to `lifecycle_state='contextualized'`; when the migrations test later re-runs 0001-0010 from scratch, 0009's CHECK constraint (which didn't include `contextualized`) rejected those existing rows. Fixed by making 0009's CHECK forward-compatible (lists every lifecycle value through Phase 3c: `queued/parsing/parsed/chunked/contextualized/ready/failed/deleted`) and simplifying 0010 to no longer ALTER the CHECK (just CREATE TABLE contextual_chunks). Convention locked: each lifecycle-extending migration writes a CHECK that includes all currently-planned future states; the wire enum still grows one state per sub-phase. Files: `pyproject.toml` (anthropic>=0.40.0 dep — resolved as 0.104.1); `migrations/sql/0009_chunks.sql` MUTATED (forward-compat CHECK); `migrations/sql/0010_contextual_chunks.sql` (CREATE TABLE only); `src/kb/contextualization/__init__.py` (AnthropicContextualizer + IdentityContextualizer + ContextualizedChunk + ContextualizationError + make_contextualizer factory); `src/kb/domain/contextual_chunks.py` (insert_contextual_chunk + read_chunks_for_contextualization + read_doc_text); `src/kb/workers/tasks.py` MUTATED (contextualize_file_impl + contextualize_file Procrastinate task + chunk_file_impl chained-defer). All 14 G1 decisions traced. | Aniket |
 | 2026-05-23 | **Phase 3b G5 ✅ + cross-phase sweep complete.** Authored `scripts/verify_phase_3b.sh` (15 checks): compose smoke + 4 DDL assertions (contextual_chunks table + UNIQUE on chunk_id + RLS forced + kb_app grants restricted + lifecycle CHECK includes contextualized) + E2E PDF upload → parse → chunk → contextualize (`model_id='identity'` via IdentityContextualizer since `KB_ANTHROPIC_API_KEY` unset in compose) + assertion that `contextual_text == chunk text` for identity-fallback path + lifecycle progression string match + idempotent re-defer (one contextualization_done event) + Phase-3b pytest 15. **Zero in-G5 fixes** — verify script ran clean first try. **Cross-phase sweep** ran all 7 prior verify scripts: Phase 0 16/16 · 1a 17/17 · 1b 21/21 · 1c 20/20 · 2a 17/17 · 2b 15/15 · 3a 18/18 · 3b 15/15 (139/139 cumulative). One ANTICIPATED regression caught + fixed in the G4 commit: Phase 3a's verify_phase_3a.sh polled for `lifecycle_state == 'chunked'`, but Phase 3b's chained defer races past `chunked → contextualized` within ~1s of chunk completion. Fixed by widening the accept-set: `chunked | contextualized | ready` all count as chunk-success (forward-compat for 3c). **Phase 3b complete; second Phase 3 sub-phase shipped.** | Aniket |
+| 2026-05-23 | **Phase 3 split refined: 3c → 3c (embedding) + 3d (RAPTOR build).** Architecture §12's Phase 3 listed three pieces; we shipped 3a (chunking) + 3b (contextual retrieval) and now split the remaining piece into two sub-phases per the sub-phase-splits convention (each end-to-end testable; RAPTOR's algorithmic complexity deserves its own G4 debug surface). 3c covers Gemini Embedding 001 calls + chunk_embeddings table (lifecycle: contextualized → embedded). 3d covers per-doc recursive cluster→summarize→re-embed → raptor_nodes + raptor_edges (lifecycle: embedded → ready, the terminal state). Each adds exactly one new lifecycle value, preserving the forward-compat convention. | Aniket |
+| 2026-05-23 | **Phase 3c G1 ✅ + G2 ✅ signed off (single drafting pass — fourth consecutive sub-phase with this rhythm).** G1's 13 decisions are conservative + traceable: #1 model `gemini-embedding-001` per architecture §8 (with `KB_EMBEDDING_MODEL` env override); #2 `halfvec(3072)` storage (pgvector's float16 variant — Phase 4's HNSW supports it natively); #3 `Embedder` Protocol with `GeminiEmbedder` + `DeterministicMockEmbedder` + `make_embedder()` factory keyed on `KB_GEMINI_API_KEY` (mirror of 3b's contextualizer adapter shape); #4 self-disable to mock when no API key — pipeline-completes-without-key beats blocking, alarm on `model_id='mock-deterministic-v1'` in prod; #5 mock embedder uses `sha256(text || ":" || dim_index)` for deterministic L2-normalized vectors so Phase 3d clustering tests can assert cluster shape; #8 immutability via REVOKE UPDATE/DELETE; #9 UNIQUE `(contextual_chunk_id, model_id)` allows safe model upgrades; #10 lifecycle widens to add `embedded` (CHECK already covers it via 0009's forward-compat widening locked at 3b G4 fix #2); #11 separate-tx chained defer matches 3a→3b shape; #13 API errors → `contextualized→failed`. G2 is one contract delta in `api_contracts.md` §5.1 #3 + §5.2 enum row. **G3 opens** — drafting `tests/specs/phase_3c.md` + 2 red skeleton files (~13 tests: 7 unit on Embedder adapter + 6 worker integration). | Aniket |
 
 ---
 
