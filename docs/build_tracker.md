@@ -154,8 +154,8 @@ QA gates this at G1.5b — every prototype page is grep'd for the forbidden voca
 
 ## 1. Now / Next / Blocked
 
-**Now:** Phase 1a G4 — build the schemas API + Idempotency-Key dependency to turn 31 red skeletons green. G1 + G2 + G3 ✅ all signed off 2026-05-23. Post-G3 consistency sweep landed (UUID convention clarified, verify_phase_0 openapi check relaxed, test count corrected).
-**Next:** Phase 1a G5 — verify_phase_1a.sh end-to-end smoke + PR.
+**Now:** Phase 1a — all 5 gates ✅. End-of-phase cross-phase sweep complete. Ready to open PR (`phase-1a/schemas-crud` → `main`).
+**Next:** Phase 1b — schema versioning (G1 plan).
 **Blocked on:** nothing.
 
 ---
@@ -261,7 +261,7 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
 | Phase | Description | G1 Plan | G2 API | G3 Tests | G4 Build | G5 Run | Notes |
 |---|---|---|---|---|---|---|---|
 | **0** | Repo + docker-compose (Postgres+pgvector+pg_search+MinIO+Procrastinate) + lifecycle DDL | ✅ | ✅ | ✅ | ✅ | ✅ | All 5 gates green 2026-05-23. `scripts/verify_phase_0.sh` 16/16 checks pass. Ready to merge. |
-| **1a** | Schema service — **CRUD foundation**: `schemas` table + 5 endpoints (POST/GET-list/GET/PUT/DELETE) | ✅ | ✅ | ✅ | 🟡 | ⬜ | G1+G2+G3 signed off 2026-05-23. 31 red skeletons in `tests/specs/phase_1a.md`. G4 opens. |
+| **1a** | Schema service — **CRUD foundation**: `schemas` table + 5 endpoints (POST/GET-list/GET/PUT/DELETE) | ✅ | ✅ | ✅ | ✅ | ✅ | All 5 gates green 2026-05-23. verify_phase_1a.sh 17/17. verify_phase_0.sh still 16/16. Ready to merge. |
 | **1b** | Schema service — **versioning**: `schema_versions` table; every PUT creates a new version; version list/read/rollback endpoints | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | Builds on 1a. Full JSON snapshots stored; diffs computed on read (architecture §7). Rollback creates a new version cloning the target. |
 | **1c** | Schema service — **hierarchy**: `schema_entities`, `schema_fields`, `schema_relationships` tables; nested CRUD; NL field descriptions; single_parent + cascade_delete constraints | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | Builds on 1a+1b. Re-extraction trigger on rollback stubbed (Phase 6 wires it). domain_vocabulary deferred to Phase 5. |
 | **2** | Parse layer: Docling + Mistral OCR + xlsx + email → raw_pages | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | Internal service; API exposed via upload (phase 10a) |
@@ -517,6 +517,7 @@ No rollback DSL — for DDL we write forward fixes. Standard in DDL-heavy system
 - Initial G1 signed off 2026-05-22 (commit `d50c1c7`).
 - Re-opened 2026-05-23 after gate-transition consistency review; corrections in commit `1ee9738`.
 - Second sign-off 2026-05-23 by Aniket. Plan locked. G2 contracts re-validated and also signed off. G3 opens.
+- Phase 0 fully closed 2026-05-23; PR #1 merged; tag `phase-0-complete`. Local branch deleted.
 
 ---
 
@@ -691,7 +692,7 @@ Phases 15–24 per `architecture.md` §12. Tracked here only as a reminder of in
 | Phase | Spec | Tests | G3 status |
 |---|---|---|---|
 | 0 | [tests/specs/phase_0.md](../tests/specs/phase_0.md) | [test_health.py](../tests/test_health.py) · [test_ready.py](../tests/test_ready.py) · [test_migrations.py](../tests/test_migrations.py) · [test_rls.py](../tests/test_rls.py) · [test_middleware.py](../tests/test_middleware.py) | ✅ signed off 2026-05-23 (49 tests, all green) |
-| 1a | [tests/specs/phase_1a.md](../tests/specs/phase_1a.md) | [test_schemas_crud.py](../tests/test_schemas_crud.py) · [test_schemas_rls.py](../tests/test_schemas_rls.py) · [test_idempotency.py](../tests/test_idempotency.py) | 🟡 drafted · ~25 red skeletons; modules land at G4 |
+| 1a | [tests/specs/phase_1a.md](../tests/specs/phase_1a.md) | [test_schemas_crud.py](../tests/test_schemas_crud.py) · [test_schemas_rls.py](../tests/test_schemas_rls.py) · [test_idempotency.py](../tests/test_idempotency.py) | ✅ 29 tests green (post-G4); pytest authoritative |
 | 1 | tests/specs/phase_1.md | tests/test_phase_1_*.py | ⬜ |
 | ... | | | |
 
@@ -703,7 +704,8 @@ Phases 15–24 per `architecture.md` §12. Tracked here only as a reminder of in
 
 | Phase | Verify script | Last run | Result |
 |---|---|---|---|
-| 0 | [scripts/verify_phase_0.sh](../scripts/verify_phase_0.sh) | 2026-05-23 | ✅ 16/16 (compose smoke + 49 pytest) |
+| 0 | [scripts/verify_phase_0.sh](../scripts/verify_phase_0.sh) | 2026-05-23 (post Phase 1a code) | ✅ 16/16 (still green after Phase 1a's code landed) |
+| 1a | [scripts/verify_phase_1a.sh](../scripts/verify_phase_1a.sh) | 2026-05-23 | ✅ 17/17 (compose smoke + 9 schemas assertions + 29 pytest) |
 | 1 | scripts/verify_phase_1.sh | — | — |
 | ... | | | |
 
@@ -741,6 +743,8 @@ Phases 15–24 per `architecture.md` §12. Tracked here only as a reminder of in
 | 2026-05-23 | **Phase 1a G1 ✅ signed off. G2 drafted.** `api_contracts.md` §2 added: schema resource shape (no workspace_id field on responses — clients know their own); 5 endpoints with per-endpoint error tables using RFC 9457 `type` slugs (`schema-name-conflict`, `not-found`, `validation-error`, `bad-request`, `missing-idempotency-key`); §2.8 explicit out-of-scope list to prevent 1b/1c leak. Placeholder index in api_contracts §3 split Phase 1 row → 1a/1b/1c. | Aniket |
 | 2026-05-23 | **Phase 1a G2 ✅ signed off. G3 drafted.** Created `tests/specs/phase_1a.md` (3 buckets: CRUD 17 · RLS 4 · idempotency 4 = ~25 tests) + 3 red skeleton files (`test_schemas_crud.py`, `test_schemas_rls.py`, `test_idempotency.py`). Per-test workspace UUID fixture pattern (isolated via `X-Test-Workspace` header instead of transaction rollback at HTTP boundary). Imports from `kb.api.schemas` / `kb.api.idempotency` / `kb.domain.schemas` fail at G3 (red, expected). Coverage: every G2 endpoint contract, every error slug, RLS 404-not-403 design, idempotency-key replay semantics including the DELETE replay vs second-call-state distinction. Awaiting sign-off. | Aniket |
 | 2026-05-23 | **Phase 1a G3 ✅ signed off. Post-G3 consistency sweep.** Four drifts fixed: (A) `api_contracts.md` §0.2 broadened — entity IDs are UUIDv4 by default for primary keys (where time-sortability isn't a query pattern), UUIDv7 reserved for transactional event IDs (X-Request-Id, future query_id). Reflects what Phase 0 silently shipped for `audit_log.id` and what Phase 1a chose for `schemas.id` — convention now honest about it. (B) `scripts/verify_phase_0.sh` openapi paths assertion relaxed from `==` to "contains" so later phases mounting routes don't break the Phase 0 verify. `build_tracker.md` §5.1 G5 #5 text updated to match. (C) `scripts/verify_phase_0.sh` pytest step now runs **only Phase 0 test files** explicitly — running `pytest tests/` picked up Phase 1a's red skeletons and falsely failed Phase 0's invariant check. Each phase's verify owns its own scope. (D) Spec test count corrected: claimed ~25, actual 31 (21 + 5 + 5). G1 decision #8 narrative updated to reflect the §0.2 carve-out (no actual value change). Phase 0 verify re-run: 16/16 GREEN. | Aniket |
+| 2026-05-23 | **Phase 1a G4 ✅ — API layer committed.** Commits `bebb102` (0005_schemas.sql + domain layer with pydantic models + repo functions) · `44ec1f0` (errors.py with RFC 9457 helper + 5 custom exceptions, idempotency.py with Header deps + cache helpers, schemas.py router with 5 endpoints, deps.py kb_app_connection async-generator, main.py exception handlers + router mount). One Phase 0 cross-phase drift fixed in the same commit: `test_runner_applies_all_files_in_lexical_order` was asserting exactly 4 migration files; relaxed to "first 4 are Phase 0's, in order" since later phases append files. All 78 tests pass (49 Phase 0 + 29 Phase 1a). | Aniket |
+| 2026-05-23 | **Phase 1a G5 ✅ + end-of-phase cross-phase sweep.** Authored `scripts/verify_phase_1a.sh`; 17/17 checks pass — compose smoke + 9 schemas-surface assertions (table + partial unique index + RLS state, CRUD via curl, 409 on dup, RLS isolation A↔B, idempotency replay, soft delete + DB row remains, openapi paths include /schemas) + 29 pytest. **Cross-phase sweep** per memory entry `feedback_end_of_phase_cross_phase_check.md`: (a) verify_phase_0.sh re-run after Phase 1a code → still 16/16 GREEN; (b) scope-leak grep clean — no `schema_versions` / `current_version_id` / `schema_entities*` / `nl_description` / `INSERT INTO audit_log` in Phase 1a code; (c) verify script for Phase 1a needed one fix during the run (replay byte-comparison → semantic JSON comparison, since PG jsonb doesn't preserve key order); (d) spec test count corrected (31 → 29 — earlier grep counted the `test_workspace` fixture as a test; pytest is the authoritative count source). **Phase 1a complete; ready to open PR.** | Aniket |
 
 ---
 

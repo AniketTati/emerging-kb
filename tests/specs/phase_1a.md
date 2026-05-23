@@ -8,13 +8,13 @@
 
 ## 1. Scope
 
-Every endpoint in api_contracts §2 gets coverage. Every G1 decision (RLS day-1, soft delete via lifecycle_state, partial-unique-on-active name, idempotency POST-required PUT/DELETE-optional, no workspace_id in response) gets test coverage. Three files cover the surface (**31 new tests**, on top of the 49 from Phase 0):
+Every endpoint in api_contracts §2 gets coverage. Every G1 decision (RLS day-1, soft delete via lifecycle_state, partial-unique-on-active name, idempotency POST-required PUT/DELETE-optional, no workspace_id in response) gets test coverage. Three files cover the surface (**29 new tests**, on top of the 49 from Phase 0; pytest's `--collect-only` is the authoritative count):
 
 | File | Tests | Covers |
 |---|---|---|
-| [`tests/test_schemas_crud.py`](../test_schemas_crud.py) | 21 | Happy paths + business errors for POST · GET-list · GET · PUT · DELETE |
+| [`tests/test_schemas_crud.py`](../test_schemas_crud.py) | 20 | Happy paths + business errors for POST · GET-list · GET · PUT · DELETE |
 | [`tests/test_schemas_rls.py`](../test_schemas_rls.py) | 5 | Workspace isolation via the `X-Test-Workspace` header through the middleware + RLS policy |
-| [`tests/test_idempotency.py`](../test_idempotency.py) | 5 | Cross-cutting `Idempotency-Key` behavior backed by Phase 0's `idempotency_keys` table |
+| [`tests/test_idempotency.py`](../test_idempotency.py) | 4 | Cross-cutting `Idempotency-Key` behavior backed by Phase 0's `idempotency_keys` table |
 
 **Out of scope (Phase 1b / 1c / 9):**
 - Version-creation side effect of PUT (1b).
