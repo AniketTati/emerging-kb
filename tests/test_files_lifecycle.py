@@ -77,29 +77,60 @@ async def test_parse_task_transitions_queued_to_parsing_to_parsed(client, test_w
     assert body["lifecycle_state"] == "parsed"
 
 
-async def test_parse_task_failure_writes_failed_lifecycle_event(client, test_workspace):
-    """A parser exception writes a parsing→failed event; lifecycle_state stays 'failed'."""
-    from kb.workers.tasks import parse_file_impl  # G4
+async def test_parse_task_failure_writes_failed_lifecycle_event(
+    client, test_workspace, minio_container
+):
+    """A parser exception writes a parsing→failed event; lifecycle_state='failed'.
 
-    # Stage Mode-B with bytes that AREN'T actually a PDF, but tell the server
-    # mime_type=application/pdf so the dispatcher routes to Docling and Docling
-    # raises ParseError.
-    from kb.config import get_settings
-    settings = get_settings()
-    # (In a real test we'd pre-stage the bad bytes into MinIO via Mode B,
-    # bypassing the multipart magic-byte check that would otherwise reject
-    # at upload time. The G4 build supports this via Mode B JSON.)
+    Pre-stages bytes that start with the PDF magic header (so the upload's
+    mime detection accepts them) but aren't valid PDF content (so Docling's
+    actual parse raises ParseError).
+    """
+    import hashlib
+    import uuid as _uuid
+    from io import BytesIO
 
-    # For G3 spec purposes, assume there's a Mode-B path that lets the worker
-    # see bytes that aren't a valid PDF.
-    # (Skeleton uses a placeholder pre-stage step that lands at G4.)
+    from minio import Minio
 
-    # Pre-stage bad bytes (will be implemented at G4 via the minio test fixture):
-    fid = "<set by G4 pre-stage>"  # marker for the skeleton
-    # Placeholder assertion; G4 implementation will pre-stage properly.
-    # Skeleton check: domain function should raise ParseError; worker
-    # should catch and write the failure event.
-    assert True, "G4 fills in the pre-stage Mode-B flow; spec described in §4.5."
+    from kb.workers.tasks import parse_file_impl
+
+    cfg = minio_container.get_config()
+    minio_client = Minio(
+        cfg["endpoint"], access_key=cfg["access_key"],
+        secret_key=cfg["secret_key"], secure=False,
+    )
+    # Corrupt PDF: magic header present + complete garbage after.
+    bad_pdf = b"%PDF-1.4\nthis is not actually a valid pdf body - corrupt\n%%EOF\n"
+    sha = hashlib.sha256(bad_pdf).hexdigest()
+    bucket = "kb-files"
+    if not minio_client.bucket_exists(bucket):
+        minio_client.make_bucket(bucket)
+    minio_client.put_object(
+        bucket, f"raw_files/{sha}", BytesIO(bad_pdf), length=len(bad_pdf),
+        content_type="application/pdf",
+    )
+
+    # POST via Mode B
+    resp = await client.post(
+        "/files",
+        json={"minio_object_key": f"raw_files/{sha}", "name": "corrupt.pdf"},
+        headers=headers(test_workspace, idempotency_key=str(_uuid.uuid4())),
+    )
+    assert resp.status_code == 201, resp.text
+    fid = resp.json()["id"]
+
+    # Run the worker — Docling will fail
+    await parse_file_impl(fid)
+
+    # Inspect lifecycle
+    get = await client.get(f"/files/{fid}", headers=headers(test_workspace))
+    body = get.json()
+    assert body["lifecycle_state"] == "failed"
+    last = body["lifecycle"][-1]
+    assert last["from_state"] == "parsing"
+    assert last["to_state"] == "failed"
+    assert last["event"] == "parse_failed"
+    assert "error_class" in last["payload"]
 
 
 async def test_parse_task_idempotent_when_already_parsed(client, test_workspace):

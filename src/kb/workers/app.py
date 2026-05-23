@@ -35,3 +35,17 @@ class _LazyConninfoConnector(PsycopgConnector):
 _conninfo = os.environ.get("KB_DATABASE_URL", "")
 connector = _LazyConninfoConnector(conninfo=_conninfo) if _conninfo else _LazyConninfoConnector()
 app = App(connector=connector)
+
+
+def _register_tasks() -> None:
+    """Eagerly import task modules so `@app.task` decorators register them
+    before the Procrastinate worker process discovers tasks.
+
+    Called from module bottom. Avoids the circular import that would occur
+    if `kb.workers.tasks` imported `kb.workers.app` at module top while
+    this module was still executing.
+    """
+    from kb.workers import tasks as _tasks  # noqa: F401
+
+
+_register_tasks()
