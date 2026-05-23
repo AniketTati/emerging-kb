@@ -154,8 +154,8 @@ QA gates this at G1.5b — every prototype page is grep'd for the forbidden voca
 
 ## 1. Now / Next / Blocked
 
-**Now:** Phase 1a G3 — test spec at [tests/specs/phase_1a.md](../tests/specs/phase_1a.md) + 3 red skeleton files (~25 new tests). Awaiting sign-off. G1 ✅ G2 ✅ signed off 2026-05-23.
-**Next:** Phase 1a G4 — build the schemas API + Idempotency-Key dependency to turn the skeletons green.
+**Now:** Phase 1a G4 — build the schemas API + Idempotency-Key dependency to turn 31 red skeletons green. G1 + G2 + G3 ✅ all signed off 2026-05-23. Post-G3 consistency sweep landed (UUID convention clarified, verify_phase_0 openapi check relaxed, test count corrected).
+**Next:** Phase 1a G5 — verify_phase_1a.sh end-to-end smoke + PR.
 **Blocked on:** nothing.
 
 ---
@@ -261,7 +261,7 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
 | Phase | Description | G1 Plan | G2 API | G3 Tests | G4 Build | G5 Run | Notes |
 |---|---|---|---|---|---|---|---|
 | **0** | Repo + docker-compose (Postgres+pgvector+pg_search+MinIO+Procrastinate) + lifecycle DDL | ✅ | ✅ | ✅ | ✅ | ✅ | All 5 gates green 2026-05-23. `scripts/verify_phase_0.sh` 16/16 checks pass. Ready to merge. |
-| **1a** | Schema service — **CRUD foundation**: `schemas` table + 5 endpoints (POST/GET-list/GET/PUT/DELETE) | ✅ | ✅ | 🟡 | ⬜ | ⬜ | G1+G2 signed off 2026-05-23. G3 spec + ~25 red skeletons in `tests/specs/phase_1a.md`. |
+| **1a** | Schema service — **CRUD foundation**: `schemas` table + 5 endpoints (POST/GET-list/GET/PUT/DELETE) | ✅ | ✅ | ✅ | 🟡 | ⬜ | G1+G2+G3 signed off 2026-05-23. 31 red skeletons in `tests/specs/phase_1a.md`. G4 opens. |
 | **1b** | Schema service — **versioning**: `schema_versions` table; every PUT creates a new version; version list/read/rollback endpoints | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | Builds on 1a. Full JSON snapshots stored; diffs computed on read (architecture §7). Rollback creates a new version cloning the target. |
 | **1c** | Schema service — **hierarchy**: `schema_entities`, `schema_fields`, `schema_relationships` tables; nested CRUD; NL field descriptions; single_parent + cascade_delete constraints | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | Builds on 1a+1b. Re-extraction trigger on rollback stubbed (Phase 6 wires it). domain_vocabulary deferred to Phase 5. |
 | **2** | Parse layer: Docling + Mistral OCR + xlsx + email → raw_pages | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | Internal service; API exposed via upload (phase 10a) |
@@ -508,7 +508,7 @@ No rollback DSL — for DDL we write forward fixes. Standard in DDL-heavy system
    - RLS enabled on `audit_log` and `idempotency_keys`: `SELECT relname, relrowsecurity FROM pg_class WHERE relname IN ('audit_log', 'idempotency_keys')` shows `relrowsecurity = t` for both.
    - `\du` includes the `kb_app` role.
 4. As `kb_app` role with `SET app.workspace_id = '<some-uuid>'`: insert into `audit_log` succeeds; SELECT only returns rows matching the set workspace.
-5. `curl http://localhost:8000/openapi.json` returns 200; `paths` contains `/health` and `/ready` (G2 contracts implemented by G4); no other paths.
+5. `curl http://localhost:8000/openapi.json` returns 200; `paths` **contains** `/health` and `/ready` (G2 contracts implemented by G4). (Phase-0 era only checked exact equality; per Phase 1a's consistency sweep, later phases will add `/schemas` etc., so the assertion is "contains", not "equals".)
 6. `curl -i http://localhost:8000/openapi.json` response includes an `X-Request-Id` header (middleware proof).
 7. `pytest tests/` is green (45 tests across health, ready, migrations, RLS, middleware).
 
@@ -555,7 +555,7 @@ Phase 1a is the smallest sub-phase of the Phase 1 split: just `schemas` table + 
 | 5 | Pagination | **Offset + limit** — query `?limit=50&offset=0`, max limit 200 | Cursor pagination is overkill for the schema list (workspaces will have 10s, not 1000s). Phase 8+ can swap to cursor when query endpoints need it. |
 | 6 | Idempotency | **`Idempotency-Key` header required on POST, optional on PUT/DELETE** | POST creates a new resource — without idempotency, a network retry could create duplicates. PUT/DELETE are naturally idempotent at the resource level but the header is still respected (returns cached body) when present. |
 | 7 | Audit-log writes from 1a | **None** | Phase 9 owns the audit-log machinery (hash chain, integrity job, /audit API). Phases 1–8 don't write to it until Phase 9's design pass decides whether to backfill or leave forward-only. Keeps the 1a surface tight. |
-| 8 | UUIDv7 for `id`? | **UUIDv4 from `gen_random_uuid()`** for `schemas.id`, **UUIDv7** for `X-Request-Id` only | Postgres has `gen_random_uuid()` built-in (no `uuid_generate_v7()` until PG 18). Application-generating IDs would force every INSERT to round-trip the UUID. Not worth it for a CRUD primary key; time-sorting on schemas isn't a query pattern. Reserved `uuid_utils.uuid7()` for request IDs where ordering matters. |
+| 8 | UUID flavor for `schemas.id` | **UUIDv4 from `gen_random_uuid()`** per api_contracts §0.2 (broadened 2026-05-23 to allow v4 for PKs where time-sortability isn't a query pattern). UUIDv7 stays reserved for `X-Request-Id` and the future `query_id` where monotonic ordering matters. | Postgres has `gen_random_uuid()` built-in. Schemas aren't queried "most recently created"; they're queried by id/name. PK round-trip via app-generated v7 buys nothing here. Same rationale Phase 0 silently applied to `audit_log.id`; the §0.2 wording is now honest about this. |
 
 #### Repo layout delta after Phase 1a G4
 
@@ -740,6 +740,7 @@ Phases 15–24 per `architecture.md` §12. Tracked here only as a reminder of in
 | 2026-05-23 | **Phase 1a G1 OPEN.** Branched `phase-1a/schemas-crud` from `main`. Plan section §5.2 drafted: `0005_schemas.sql` (workspace-scoped, RLS day-1, partial unique index on (workspace_id, name) WHERE lifecycle_state='active'); 5 endpoints (POST/GET-list/GET/PUT/DELETE) with offset+limit pagination; Idempotency-Key required on POST, optional on PUT/DELETE; soft delete via lifecycle_state; UUIDv4 for `schemas.id` (UUIDv7 reserved for X-Request-Id). Audit-log writes explicitly deferred to Phase 9. Awaiting sign-off. | Aniket |
 | 2026-05-23 | **Phase 1a G1 ✅ signed off. G2 drafted.** `api_contracts.md` §2 added: schema resource shape (no workspace_id field on responses — clients know their own); 5 endpoints with per-endpoint error tables using RFC 9457 `type` slugs (`schema-name-conflict`, `not-found`, `validation-error`, `bad-request`, `missing-idempotency-key`); §2.8 explicit out-of-scope list to prevent 1b/1c leak. Placeholder index in api_contracts §3 split Phase 1 row → 1a/1b/1c. | Aniket |
 | 2026-05-23 | **Phase 1a G2 ✅ signed off. G3 drafted.** Created `tests/specs/phase_1a.md` (3 buckets: CRUD 17 · RLS 4 · idempotency 4 = ~25 tests) + 3 red skeleton files (`test_schemas_crud.py`, `test_schemas_rls.py`, `test_idempotency.py`). Per-test workspace UUID fixture pattern (isolated via `X-Test-Workspace` header instead of transaction rollback at HTTP boundary). Imports from `kb.api.schemas` / `kb.api.idempotency` / `kb.domain.schemas` fail at G3 (red, expected). Coverage: every G2 endpoint contract, every error slug, RLS 404-not-403 design, idempotency-key replay semantics including the DELETE replay vs second-call-state distinction. Awaiting sign-off. | Aniket |
+| 2026-05-23 | **Phase 1a G3 ✅ signed off. Post-G3 consistency sweep.** Four drifts fixed: (A) `api_contracts.md` §0.2 broadened — entity IDs are UUIDv4 by default for primary keys (where time-sortability isn't a query pattern), UUIDv7 reserved for transactional event IDs (X-Request-Id, future query_id). Reflects what Phase 0 silently shipped for `audit_log.id` and what Phase 1a chose for `schemas.id` — convention now honest about it. (B) `scripts/verify_phase_0.sh` openapi paths assertion relaxed from `==` to "contains" so later phases mounting routes don't break the Phase 0 verify. `build_tracker.md` §5.1 G5 #5 text updated to match. (C) `scripts/verify_phase_0.sh` pytest step now runs **only Phase 0 test files** explicitly — running `pytest tests/` picked up Phase 1a's red skeletons and falsely failed Phase 0's invariant check. Each phase's verify owns its own scope. (D) Spec test count corrected: claimed ~25, actual 31 (21 + 5 + 5). G1 decision #8 narrative updated to reflect the §0.2 carve-out (no actual value change). Phase 0 verify re-run: 16/16 GREEN. | Aniket |
 
 ---
 

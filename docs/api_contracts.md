@@ -20,7 +20,7 @@ These apply to every endpoint unless a contract explicitly overrides.
 
 ### 0.2 Identifiers + timestamps
 
-- All entity IDs are **UUIDv7** (time-sortable). Returned as canonical lowercase hex strings.
+- Entity IDs are UUIDs in canonical lowercase form. **UUIDv4** is the default for primary keys (PG's `gen_random_uuid()` is fine when time-sortability isn't a query pattern — e.g. `schemas.id`, `audit_log.id`). **UUIDv7** is required where monotonic-by-creation ordering is queried or compared — e.g. `X-Request-Id` (trace correlation), and the Phase 8+ `query_id` used to thread results through the audit log. Each phase's G1 picks the flavor per table and records it as a decision.
 - All timestamps are **ISO-8601 UTC** with `Z` suffix (`2026-05-22T12:34:56Z`).
 - Pagination cursors are opaque base64 strings — clients do not parse them.
 
@@ -214,7 +214,7 @@ The canonical schema object returned by every endpoint:
 
 | Field | Type | Notes |
 |---|---|---|
-| `id` | string (uuid) | UUIDv4 from `gen_random_uuid()`. Stable across renames. |
+| `id` | string (uuid) | UUIDv4 from `gen_random_uuid()` per §0.2 (time-sort not a query pattern for schemas). Stable across renames. |
 | `name` | string | 1–200 chars. Unique within workspace among `active` schemas. |
 | `description` | string | 0–10000 chars. Empty string default; never `null`. |
 | `lifecycle_state` | string | `"active"` always on responses (deleted rows return 404). |
@@ -416,3 +416,4 @@ Each phase appends its endpoint contracts here at its G2 gate. Index:
 | 2026-05-22 | File created at Phase 0 G2. §0 conventions + §1 Phase 0 contracts (`/health`, `/ready`) drafted. Awaiting sign-off. | Aniket |
 | 2026-05-23 | **Re-validated against re-opened Phase 0 G1.** No contract changes required: `/ready`'s `migrations` check still reads `schema_migrations`; `Idempotency-Key` header is still backed by the `idempotency_keys` table (now workspace-scoped via primary key `(workspace_id, key)` — server-side detail, invisible to clients). `X-Request-Id` header promise in §0.8 is now backed by middleware in G1 plan. | Aniket |
 | 2026-05-23 | **Phase 1a G2 — schemas CRUD contracts drafted.** §2 added with 5 endpoints (POST/GET-list/GET/PUT/DELETE) under `/schemas`. Schema response shape (no `workspace_id` field — clients know their own). Body validation rules. RFC 9457 error slugs per endpoint (`schema-name-conflict`, `not-found`, `validation-error`, `bad-request`, `missing-idempotency-key`). Idempotency: required on POST, optional on PUT/DELETE. §3 placeholder index renumbered + split: Phase 1 row → 1a/1b/1c. §0 placeholder section renumbered to §3; this changelog renumbered to §4. | Aniket |
+| 2026-05-23 | **§0.2 UUID convention broadened (post-G3 consistency sweep).** Old text said "All entity IDs are UUIDv7"; reality is Phase 0 ships `audit_log.id` as v4 and Phase 1a chose v4 for `schemas.id`. Honest replacement: v4 by default for PKs where time-sortability isn't a query pattern; v7 required where monotonic-by-creation ordering is queried (X-Request-Id, future `query_id`). Each phase's G1 picks the flavor per table. §2.1 `id` field annotated to cite this. | Aniket |
