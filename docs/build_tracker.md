@@ -154,8 +154,8 @@ QA gates this at G1.5b — every prototype page is grep'd for the forbidden voca
 
 ## 1. Now / Next / Blocked
 
-**Now:** Phase 1b — all 5 gates ✅. End-of-phase cross-phase sweep complete. Ready to open PR (`phase-1b/schema-versioning` → `main`).
-**Next:** Phase 1c — schema hierarchy (G1 plan).
+**Now:** Phase 1c — all 5 gates ✅. End-of-phase cross-phase sweep complete. Ready to open PR (`phase-1c/schema-hierarchy` → `main`).
+**Next:** Phase 2 — Parse layer (Docling + Mistral OCR + xlsx + email → raw_pages). First worker phase.
 **Blocked on:** nothing.
 
 ---
@@ -263,7 +263,7 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
 | **0** | Repo + docker-compose (Postgres+pgvector+pg_search+MinIO+Procrastinate) + lifecycle DDL | ✅ | ✅ | ✅ | ✅ | ✅ | All 5 gates green 2026-05-23. `scripts/verify_phase_0.sh` 16/16 checks pass. Ready to merge. |
 | **1a** | Schema service — **CRUD foundation**: `schemas` table + 5 endpoints (POST/GET-list/GET/PUT/DELETE) | ✅ | ✅ | ✅ | ✅ | ✅ | All 5 gates green 2026-05-23. verify_phase_1a.sh 17/17. verify_phase_0.sh still 16/16. Ready to merge. |
 | **1b** | Schema service — **versioning**: `schema_versions` table; every PUT creates a new version; version list/read/rollback endpoints | ✅ | ✅ | ✅ | ✅ | ✅ | All 5 gates green 2026-05-23. verify_phase_1b.sh 21/21. verify_phase_1a.sh still 17/17. verify_phase_0.sh still 16/16. pytest 106/106. Ready to merge. |
-| **1c** | Schema service — **hierarchy**: `schema_entities`, `schema_fields`, `schema_relationships` tables; nested CRUD; NL field descriptions; single_parent + cascade_delete constraints | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | Builds on 1a+1b. Re-extraction trigger on rollback stubbed (Phase 6 wires it). domain_vocabulary deferred to Phase 5. |
+| **1c** | Schema service — **hierarchy**: `schema_entities`, `schema_fields`, `schema_relationships` tables; nested CRUD; NL field descriptions; single_parent + cascade_delete constraints | ✅ | ✅ | ✅ | ✅ | ✅ | All 5 gates green 2026-05-23. verify_phase_1c.sh 20/20. verify_phase_1b.sh still 21/21. verify_phase_1a.sh still 17/17. verify_phase_0.sh still 16/16. pytest 142/142. Ready to merge. |
 | **2** | Parse layer: Docling + Mistral OCR + xlsx + email → raw_pages | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | Internal service; API exposed via upload (phase 10a) |
 | **3** | Chunking + Contextual Retrieval + RAPTOR tree build | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | Internal worker |
 | **4** | Indexing: pgvector HNSW + pg_search BM25 on all RAPTOR levels | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | Internal worker |
@@ -791,6 +791,201 @@ When Aniket approves this plan, the Phase 1b G1 cell in §5 flips 🟡 → ✅ a
 
 ---
 
+### 5.4 Phase 1c plan — Schema hierarchy (G1 ✅ SIGNED OFF)
+
+> **Status:** G1 ✅ signed off 2026-05-23 by Aniket. Plan locked. Branch: `phase-1c/schema-hierarchy` off `main` (Phase 1b merged as PR #3; tag `phase-1b-complete`).
+
+#### Scope
+
+Phase 1c layers the **entity-type tree** on top of Phase 1b's versioning. Adds three new tables, 11 nested endpoints, and extends Phase 1b's version-snapshot `body` from `{name, description}` to the full subtree. Every nested CRUD writes a new `schema_versions` row — rollback now restores the entire hierarchy. Foundations for Phase 5 (open extraction) + Phase 6 (schema-driven extraction).
+
+**In scope:**
+- `migrations/sql/0007_schema_hierarchy.sql` — three new workspace-scoped + RLS-day-1 tables: `schema_entities`, `schema_fields`, `schema_relationships`.
+- 11 endpoints under `/schemas/:id/{entities, entities/:eid/fields, relationships}` (entity + field: full CRUD = 4 each; relationship: POST/GET-list/DELETE = 3 — PUT deferred since soft-delete + re-create suffices for typed edges).
+- `nl_description` field on `schema_fields` — the prompt that Phase 6's Gemini extractor will consume.
+- `kind ∈ {contains, part_of, references, associates, attribute_link}` enum on relationships (architecture line 794).
+- `cardinality`, `cascade_delete`, `single_parent` columns — recorded only; Phase 6 enforces during extraction-time row writes.
+- 1b's `schema_versions.body` JSON shape grows to include the full subtree; no DDL change needed (jsonb forward-compatible per 1b decision #6).
+- Rollback path extended: replays entity/field/relationship rows from the snapshot in a single tx.
+- Same patterns (soft-delete via `lifecycle_state`, Idempotency-Key required on POSTs + rollback, RLS day-1 with own `workspace_id` column on every new table).
+
+**Out of scope (deferred):**
+- `extracted_entities` table + `lineage_path` ltree column — Phase 5/6 (the runtime tree, populated by the extraction worker).
+- Helper endpoints `/entities/:id/{descendants, ancestors, siblings, breadcrumb}` — Phase 8 (query phase).
+- DB-level `single_parent` trigger — Phase 6 if extraction-time conflicts arise; 1c records the intent only.
+- Re-extraction trigger on schema change — Phase 6.
+- domain_vocabulary (synonyms, acronyms) — Phase 5.
+- `audit_log` writes on hierarchy mutation — Phase 9.
+- Field-type validation beyond a small core set — Phase 6 when extraction needs richer typing.
+
+#### Decisions (locked at G1)
+
+| # | Decision | Choice | Rationale |
+|---|---|---|---|
+| 1 | New tables vs jsonb columns | **Three new tables** — `schema_entities`, `schema_fields`, `schema_relationships`. Each with own `workspace_id` + own RLS policy. | Foreign keys + UNIQUE constraints + indexed lookup are required for Phase 6 extraction (which joins entities + fields by name + type). Nested jsonb on `schemas` would be cheap to write but slow + brittle to query. Worth one extra migration to do it right. |
+| 2 | Field type enum at 1c | `string / number / boolean / date / datetime` — small core set; CHECK constraint enforces. | Phase 6 may add richer types (currency, email, list_X). Locking 5 now beats inventing 12; expansion is additive. |
+| 3 | NL field description shape | `nl_description text NOT NULL DEFAULT ''`. The prompt Phase 6 sends to Gemini. | Required column makes "empty prompt" explicit (you have to opt out). Not nullable so a corpus-wide grep can identify under-prompted fields. |
+| 4 | Relationship `kind` enum | `contains / part_of / references / associates / attribute_link` per architecture line 794. CHECK constraint. | Verbatim from the locked architecture. `contains` and `part_of` drive Phase 6's lineage_path computation; the others are typed edges in the entity graph (Phase 7 identity resolution + Phase 8 query). |
+| 5 | `single_parent` + `cascade_delete` enforcement | **Recorded only at 1c**; Phase 6 enforces during extraction-time row writes. | Schema-edit-time enforcement would require walking the existing extracted_entities tree, which doesn't exist yet. Recording intent now lets Phase 6 enforce when it has data to enforce against. |
+| 6 | Soft delete on entities/fields/relationships | Same `lifecycle_state` pattern as 1a's `schemas`. Partial unique on `(parent_id, name) WHERE lifecycle_state='active'`. | Consistent with Phase 1a/1b precedent. Deleted rows preserved for audit. |
+| 7 | Every nested CRUD writes a new `schema_versions` row | Yes — the whole-subtree snapshot is the version's `body`. Versions are coarse-grained: one row per schema change, no matter which sub-resource changed. | A 5-version history showing "added entity X · added field Y · added relationship Z · changed field Y's type · rolled back" is what Schema Studio's Versions tab needs. Per-sub-resource version logs would be operationally noisy. |
+| 8 | Rollback restores the full hierarchy | Rollback reads the target version's `body`, soft-deletes all current children entities/fields/relationships, INSERTs fresh rows from the snapshot, writes the new `kind='rollback'` version row. All in one tx. | Maintains the 1b invariant "rollback = clone-forward" — the new version is fully self-contained. Cost: rollback is O(subtree size); for our scale (a few hundred entities + fields per schema) trivial. |
+| 9 | Endpoint URL shape | Nested under `/schemas/:id/`: `/entities`, `/entities/:eid/fields`, `/relationships`. | Resource ownership matches DB FK; no separate "which schema does this entity belong to?" round-trip. |
+| 10 | Idempotency-Key | Required on all POSTs + rollback (unchanged from 1b); optional on PUT/DELETE. | Consistent rule across the API. |
+| 11 | RLS on all 3 new tables | Each carries own `workspace_id` + own `CREATE POLICY` (same `current_setting('app.workspace_id')` predicate). | Belt-and-braces (1a/1b decision #10 continued — invariant grows to 7 workspace-scoped tables). |
+| 12 | Snapshot body shape at 1c | `{name, description, entities: [{name, description, fields: [{name, type, nl_description, is_required}]}], relationships: [{name, kind, from, to, cardinality, cascade_delete, single_parent}]}`. References between entities use entity `name` (not UUID) so the snapshot is portable across rollbacks (a re-created entity gets a new UUID; name stays). | Self-contained + readable + diffable. Phase 6 reads it for extraction prompts. |
+| 13 | Diff format extension | Same `{added, removed, changed}` shape; paths become dotted like `entities.File.fields.line_total.nl_description`. `compute_diff` recurses into the new keys. | The format is unchanged from 1b; only the path depth grows. |
+
+#### Repo layout delta after Phase 1c G4
+
+```
+emerging-kb/
+├── migrations/sql/
+│   └── 0007_schema_hierarchy.sql      ← NEW
+├── src/kb/
+│   ├── api/
+│   │   ├── main.py                    ← include hierarchy_router
+│   │   └── schema_hierarchy.py        ← NEW (9 endpoints; entities · fields · relationships)
+│   └── domain/
+│       ├── schema_hierarchy.py        ← NEW (pydantic + repo functions + snapshot builder)
+│       ├── schema_versions.py         ← MUTATED (compute_diff recurses; snapshot builder accepts subtree)
+│       └── schemas.py                 ← MUTATED (POST + PUT + rollback now write full-subtree snapshot)
+└── tests/
+    ├── test_schema_entities.py        ← NEW (~7 tests)
+    ├── test_schema_fields.py          ← NEW (~7 tests)
+    ├── test_schema_relationships.py   ← NEW (~6 tests)
+    ├── test_schema_hierarchy_versions.py ← NEW (~7 tests — snapshot/rollback/diff on subtree)
+    └── specs/phase_1c.md              ← NEW
+```
+
+#### `0007_schema_hierarchy.sql` shape (locked at G1)
+
+```sql
+-- schema_entities — entity types declared within a schema.
+CREATE TABLE schema_entities (
+    id              uuid         NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
+    schema_id       uuid         NOT NULL REFERENCES schemas(id) ON DELETE CASCADE,
+    workspace_id    uuid         NOT NULL,
+    name            text         NOT NULL CHECK (length(name) BETWEEN 1 AND 200),
+    description     text         NOT NULL DEFAULT '',
+    lifecycle_state text         NOT NULL DEFAULT 'active'
+                                 CHECK (lifecycle_state IN ('active', 'deleted')),
+    created_at      timestamptz  NOT NULL DEFAULT now(),
+    updated_at      timestamptz  NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX schema_entities_schema_name_active_idx
+    ON schema_entities (schema_id, name) WHERE lifecycle_state = 'active';
+CREATE INDEX schema_entities_workspace_idx ON schema_entities (workspace_id);
+ALTER TABLE schema_entities ENABLE ROW LEVEL SECURITY;
+ALTER TABLE schema_entities FORCE ROW LEVEL SECURITY;
+CREATE POLICY schema_entities_workspace_isolation ON schema_entities
+    USING (workspace_id = NULLIF(current_setting('app.workspace_id', true), '')::uuid)
+    WITH CHECK (workspace_id = NULLIF(current_setting('app.workspace_id', true), '')::uuid);
+GRANT SELECT, INSERT, UPDATE, DELETE ON schema_entities TO kb_app;
+
+-- schema_fields — fields on each entity, with NL extraction prompts.
+CREATE TABLE schema_fields (
+    id              uuid         NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
+    entity_id       uuid         NOT NULL REFERENCES schema_entities(id) ON DELETE CASCADE,
+    workspace_id    uuid         NOT NULL,
+    name            text         NOT NULL CHECK (length(name) BETWEEN 1 AND 200),
+    type            text         NOT NULL
+                                 CHECK (type IN ('string','number','boolean','date','datetime')),
+    nl_description  text         NOT NULL DEFAULT '',
+    is_required     boolean      NOT NULL DEFAULT false,
+    lifecycle_state text         NOT NULL DEFAULT 'active'
+                                 CHECK (lifecycle_state IN ('active', 'deleted')),
+    created_at      timestamptz  NOT NULL DEFAULT now(),
+    updated_at      timestamptz  NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX schema_fields_entity_name_active_idx
+    ON schema_fields (entity_id, name) WHERE lifecycle_state = 'active';
+CREATE INDEX schema_fields_workspace_idx ON schema_fields (workspace_id);
+ALTER TABLE schema_fields ENABLE ROW LEVEL SECURITY;
+ALTER TABLE schema_fields FORCE ROW LEVEL SECURITY;
+CREATE POLICY schema_fields_workspace_isolation ON schema_fields
+    USING (workspace_id = NULLIF(current_setting('app.workspace_id', true), '')::uuid)
+    WITH CHECK (workspace_id = NULLIF(current_setting('app.workspace_id', true), '')::uuid);
+GRANT SELECT, INSERT, UPDATE, DELETE ON schema_fields TO kb_app;
+
+-- schema_relationships — typed edges between entity types within a schema.
+CREATE TABLE schema_relationships (
+    id              uuid         NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
+    schema_id       uuid         NOT NULL REFERENCES schemas(id) ON DELETE CASCADE,
+    workspace_id    uuid         NOT NULL,
+    name            text         NOT NULL CHECK (length(name) BETWEEN 1 AND 200),
+    from_entity_id  uuid         NOT NULL REFERENCES schema_entities(id) ON DELETE CASCADE,
+    to_entity_id    uuid         NOT NULL REFERENCES schema_entities(id) ON DELETE CASCADE,
+    kind            text         NOT NULL
+                                 CHECK (kind IN ('contains','part_of','references','associates','attribute_link')),
+    cardinality     text         NOT NULL DEFAULT 'one_to_many'
+                                 CHECK (cardinality IN ('one_to_one','one_to_many','many_to_many')),
+    cascade_delete  boolean      NOT NULL DEFAULT false,
+    single_parent   boolean      NOT NULL DEFAULT true,
+    lifecycle_state text         NOT NULL DEFAULT 'active'
+                                 CHECK (lifecycle_state IN ('active', 'deleted')),
+    created_at      timestamptz  NOT NULL DEFAULT now(),
+    updated_at      timestamptz  NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX schema_relationships_schema_name_active_idx
+    ON schema_relationships (schema_id, name) WHERE lifecycle_state = 'active';
+CREATE INDEX schema_relationships_workspace_idx ON schema_relationships (workspace_id);
+CREATE INDEX schema_relationships_from_idx ON schema_relationships (from_entity_id);
+CREATE INDEX schema_relationships_to_idx ON schema_relationships (to_entity_id);
+ALTER TABLE schema_relationships ENABLE ROW LEVEL SECURITY;
+ALTER TABLE schema_relationships FORCE ROW LEVEL SECURITY;
+CREATE POLICY schema_relationships_workspace_isolation ON schema_relationships
+    USING (workspace_id = NULLIF(current_setting('app.workspace_id', true), '')::uuid)
+    WITH CHECK (workspace_id = NULLIF(current_setting('app.workspace_id', true), '')::uuid);
+GRANT SELECT, INSERT, UPDATE, DELETE ON schema_relationships TO kb_app;
+```
+
+#### Endpoint preview (locked at G1; full contracts at G2)
+
+| Method | Path | Notes |
+|---|---|---|
+| `POST` | `/schemas/:id/entities` | Create entity type. Writes new schema version. |
+| `GET` | `/schemas/:id/entities` | List active entity types in schema. |
+| `PUT` | `/schemas/:id/entities/:eid` | Replace entity name + description. |
+| `DELETE` | `/schemas/:id/entities/:eid` | Soft-delete entity type. |
+| `POST` | `/schemas/:id/entities/:eid/fields` | Create field on entity. |
+| `GET` | `/schemas/:id/entities/:eid/fields` | List active fields on entity. |
+| `PUT` | `/schemas/:id/entities/:eid/fields/:fid` | Replace field name+type+nl_description+is_required. |
+| `DELETE` | `/schemas/:id/entities/:eid/fields/:fid` | Soft-delete field. |
+| `POST` | `/schemas/:id/relationships` | Create typed edge. |
+| `GET` | `/schemas/:id/relationships` | List active relationships. |
+| `DELETE` | `/schemas/:id/relationships/:rid` | Soft-delete relationship. |
+
+(Listing endpoints kept lightweight; PUT on relationships deferred to a later phase if needed — soft-delete + recreate is the easier path here.)
+
+#### Phase 1c G5 — what "green" means
+
+`scripts/verify_phase_1c.sh` lands at G5 and adds to the Phase 0+1a+1b verify checks:
+1. After migrate exits 0: `\dt` includes `schema_entities`, `schema_fields`, `schema_relationships`; RLS forced; partial unique indexes on `(parent_id, name) WHERE lifecycle_state='active'`.
+2. `curl POST /schemas/:id/entities` → 201; subsequent `GET /schemas/:id/versions/:current` body includes the new entity in `entities[]`.
+3. `curl POST .../fields` → 201; version body shows the field nested under its entity.
+4. `curl POST .../relationships` with `kind=contains` → 201; version body shows the edge with `cardinality + cascade_delete + single_parent`.
+5. `curl POST /schemas/:id/versions/:v/rollback` to a pre-hierarchy version → schema's entities/fields/relationships are restored to the snapshot state; row count assertions via superuser psql.
+6. RLS isolation: every new resource 404s for workspace B when created in workspace A.
+7. `pytest tests/` green: 106 (Phase 0+1a+1b) + ~30 new = ~136 total.
+
+#### Pre-G2 consistency review checklist
+
+Before G2 opens (after this plan is signed off), verify:
+- [ ] Architecture line 793–796 listing — verbatim coverage of `schema_entities`, `schema_fields`, `schema_relationships` + kind/cardinality/cascade_delete/single_parent.
+- [ ] No Phase 5 leak: no `domain_vocabulary` references in 1c code.
+- [ ] No Phase 6 leak: no extraction-time enforcement of `cascade_delete` / `single_parent`.
+- [ ] No Phase 8 leak: no lineage helper endpoints.
+- [ ] Phase 1b invariants intact: `schema_versions` table still GRANT SELECT+INSERT only (after the REVOKE from 1b G5).
+- [ ] No `audit_log` writes (Phase 9 owns).
+- [ ] api_contracts §0 conventions all apply unchanged.
+
+#### Sign-off
+
+When Aniket approves this plan, the Phase 1c G1 cell in §5 flips 🟡 → ✅ and Phase 1c G2 opens (9 endpoint contracts landing in `docs/api_contracts.md` §4 — the current §4 placeholder index shifts to §5, changelog to §6). Sign-off recorded in §9.
+
+---
+
 ### Wave B (build if time)
 
 | Phase | Description | G1 | G2 | G3 | G4 | G5 |
@@ -835,7 +1030,7 @@ Phases 15–24 per `architecture.md` §12. Tracked here only as a reminder of in
 | 0 | [tests/specs/phase_0.md](../tests/specs/phase_0.md) | [test_health.py](../tests/test_health.py) · [test_ready.py](../tests/test_ready.py) · [test_migrations.py](../tests/test_migrations.py) · [test_rls.py](../tests/test_rls.py) · [test_middleware.py](../tests/test_middleware.py) | ✅ signed off 2026-05-23 (49 tests, all green) |
 | 1a | [tests/specs/phase_1a.md](../tests/specs/phase_1a.md) | [test_schemas_crud.py](../tests/test_schemas_crud.py) · [test_schemas_rls.py](../tests/test_schemas_rls.py) · [test_idempotency.py](../tests/test_idempotency.py) | ✅ 29 tests green (post-G4); pytest authoritative |
 | 1b | [tests/specs/phase_1b.md](../tests/specs/phase_1b.md) | [test_schema_versions.py](../tests/test_schema_versions.py) · [test_schemas_crud.py](../tests/test_schemas_crud.py) (additive) · [test_idempotency.py](../tests/test_idempotency.py) (additive) | ✅ 28 new tests green (post-G5); suite total 106 |
-| 1c | tests/specs/phase_1c.md | tests/test_schema_hierarchy.py · tests/test_schema_entities_*.py | ⬜ |
+| 1c | [tests/specs/phase_1c.md](../tests/specs/phase_1c.md) | [test_schema_entities.py](../tests/test_schema_entities.py) · [test_schema_fields.py](../tests/test_schema_fields.py) · [test_schema_relationships.py](../tests/test_schema_relationships.py) · [test_schema_hierarchy_versions.py](../tests/test_schema_hierarchy_versions.py) | ✅ 36 new tests green (post-G5); suite total 142 |
 | ... | | | |
 
 ---
@@ -849,7 +1044,7 @@ Phases 15–24 per `architecture.md` §12. Tracked here only as a reminder of in
 | 0 | [scripts/verify_phase_0.sh](../scripts/verify_phase_0.sh) | 2026-05-23 (post Phase 1a code) | ✅ 16/16 (still green after Phase 1a's code landed) |
 | 1a | [scripts/verify_phase_1a.sh](../scripts/verify_phase_1a.sh) | 2026-05-23 (post Phase 1b code) | ✅ 17/17 (compose smoke + 9 schemas assertions + 29 pytest) — still green after Phase 1b code landed |
 | 1b | [scripts/verify_phase_1b.sh](../scripts/verify_phase_1b.sh) | 2026-05-23 | ✅ 21/21 (compose smoke + 5 DDL assertions on schema_versions + 11 HTTP/rollback/RLS curl checks + openapi check + Phase-1b pytest 52) |
-| 1c | scripts/verify_phase_1c.sh | — | — |
+| 1c | [scripts/verify_phase_1c.sh](../scripts/verify_phase_1c.sh) | 2026-05-23 | ✅ 20/20 (compose smoke + 4 DDL assertions on 3 new tables + 10 HTTP/cascade/rollback/RLS curl checks + openapi exposure + Phase-1c pytest 36) |
 | ... | | | |
 
 ---
@@ -899,6 +1094,16 @@ Phases 15–24 per `architecture.md` §12. Tracked here only as a reminder of in
 | 2026-05-23 | **Phase 1b G4 ✅ — code landed (single commit `6a5f896`).** Files: `0006_schema_versions.sql` (workspace-scoped + RLS + UNIQUE (schema_id, version_number) + ALTER schemas ADD current_version_id ON DELETE SET NULL); `kb/domain/schema_versions.py` (VersionSummary/VersionRead pydantic + RollbackNoopError/VersionNotFoundError + compute_diff + list_versions/get_version/insert_version); `kb/domain/schemas.py` mutated (SchemaResponse + current_version; INNER JOIN on schema_versions in reads; create_schema writes v1 atomically; update_schema uses SELECT FOR UPDATE + allocates max(v_n)+1; rollback_to_version new); `kb/api/schema_versions.py` router (3 endpoints, Path ge=1, parent 404-gate); `kb/api/main.py` + handlers for both new exceptions. All 13 G1 decisions traced in commit body. pytest -q tests/ → **106 passed** (49 Phase 0 + 29 Phase 1a kept + 28 Phase 1b new) in 24.87s. | Aniket |
 | 2026-05-23 | **Phase 1b G4 cross-gate sweep — 1 issue found and fixed.** verify_phase_1b.sh step 7 (kb_app GRANTs on schema_versions) caught that 0001's `ALTER DEFAULT PRIVILEGES ... GRANT SELECT, INSERT, UPDATE, DELETE` grants the full CRUD set on every NEW table in `public`, overriding 0006's narrow `GRANT SELECT, INSERT`. Without an explicit REVOKE, an application bug or future maintainer could UPDATE/DELETE a version row and silently mutate audit history — violating invariant §3.1 #1. Fix: added `REVOKE UPDATE, DELETE ON schema_versions FROM kb_app;` to 0006 with a comment explaining the default-privileges interaction. Re-run verify_phase_1b.sh: 21/21 GREEN. | Aniket |
 | 2026-05-23 | **Phase 1b G5 ✅ + end-of-phase cross-phase sweep.** Authored `scripts/verify_phase_1b.sh` (21 checks): compose smoke + 5 DDL invariants (table+UNIQUE constraint+RLS forced+kb_app grants restricted+ON DELETE SET NULL) + 11 HTTP/rollback/RLS/idempotency curl checks + openapi exposure + Phase-1b pytest. **Cross-phase sweep** per memory entry `feedback_end_of_phase_cross_phase_check.md`: (a) verify_phase_0.sh re-run → 16/16 GREEN; verify_phase_1a.sh re-run → 17/17 GREEN; verify_phase_1b.sh → 21/21 GREEN. (b) Scope-leak grep clean — no `schema_entities` / `schema_fields` / `schema_relationships` / `nl_description` / `domain_vocabulary` / rogue `INSERT INTO audit_log` in Phase 1b code (the audit_log INSERTs in test_rls.py are Phase 0's RLS tests on the audit_log table itself, by design). (c) RLS invariant holds — all 4 workspace-scoped tables (audit_log, idempotency_keys, schemas, schema_versions) have their own `workspace_id` column + their own `CREATE POLICY` (belt-and-braces per decision #10). (d) pytest --collect-only confirms 106 total tests, matching the spec. **Phase 1b complete; ready to open PR.** | Aniket |
+| 2026-05-23 | **Phase 1b merged.** PR #3 merged into `main` (merge commit `95f5a4f`). Tag `phase-1b-complete` pushed. Local `phase-1b/schema-versioning` branch deleted. | Aniket |
+| 2026-05-23 | **Phase 1c G1 OPEN.** Branched `phase-1c/schema-hierarchy` from `main`. Plan section §5.4 drafted: `0007_schema_hierarchy.sql` adds three workspace-scoped + RLS-day-1 tables (`schema_entities`, `schema_fields`, `schema_relationships`) per architecture line 793–796 (kind/cardinality/cascade_delete/single_parent). 9 nested CRUD endpoints under `/schemas/:id/{entities, entities/:eid/fields, relationships}`. `nl_description` on fields (Phase 6 extraction prompts). 1b's `schema_versions.body` jsonb expands to include the full subtree; rollback restores entities + fields + relationships in one tx. 13 decisions locked. Out of scope: `extracted_entities` table (Phase 5/6), lineage helper endpoints (Phase 8), `single_parent` enforcement (Phase 6 enforces at extraction time), domain_vocabulary (Phase 5), re-extraction trigger (Phase 6), audit_log writes (Phase 9). Awaiting sign-off. | Aniket |
+| 2026-05-23 | **Phase 1c G1 ✅ signed off. G2 drafted.** Endpoint count corrected 9 → 11 (entity + field full CRUD = 4 each; relationship = POST/GET-list/DELETE = 3; no PUT on relationships — soft-delete + re-create suffices). `api_contracts.md` §4 added with 18 sub-sections: hierarchy invariants (§4.1 — workspace-isolated · parent-scoped soft delete · coarse-grained versioning · atomic mutations · name-resolved cross-refs in snapshots · replay never duplicates), extended schema_versions.body snapshot with entities/fields/relationships (§4.2), diff format extension with nested dotted paths (§4.3), entity surface 4 endpoints (§4.4–§4.8; DELETE cascades to fields + relationships), field surface 4 endpoints (§4.9–§4.13; type enum string/number/boolean/date/datetime), relationship surface 3 endpoints (§4.14–§4.17; kind enum verbatim architecture line 794), out-of-scope §4.18. Old §4 placeholder → §5; old §5 changelog → §6. | Aniket |
+| 2026-05-23 | **Phase 1c post-G2 cross-gate review (G1↔G2).** All 13 G1 decisions traced into §4 cleanly. One nuance tightened: §4.14 now explicit that live relationship objects on the wire reference entities by UUID (`from_entity_id`/`to_entity_id`) while `schema_versions.body` snapshots reference them by name (per invariant §4.1 #5 — rollback that re-creates entities binds relationships by name to the new UUIDs). 3 new error slugs introduced — `entity-name-conflict`, `field-name-conflict`, `relationship-name-conflict` (join 1a/1b's 5; same `<resource>-name-conflict` precedent). | Aniket |
+| 2026-05-23 | **Phase 1c G2 ✅ signed off. G3 opens.** Drafting `tests/specs/phase_1c.md` + new red skeleton files: `test_schema_entities.py`, `test_schema_fields.py`, `test_schema_relationships.py`, `test_schema_hierarchy_versions.py` (subtree snapshot + rollback restoration + nested diff). | Aniket |
+| 2026-05-23 | **Phase 1c G3 drafted.** `tests/specs/phase_1c.md` covers the §4 surface with 36 tests across 4 new files: entities 10 (CRUD + cascade-delete to fields + relationships + RLS), fields 8 (CRUD + type enum + RLS), relationships 8 (CRUD + kind enum + cross-schema FK rejection + RLS), hierarchy_versions 10 (coarse-grained versioning + subtree snapshot shape + rollback restores entities/fields/relationships + nested-path diff). pytest --collect-only confirms 142 total (49 Phase 0 + 29 Phase 1a + 28 Phase 1b + 36 Phase 1c new). Awaiting sign-off. | Aniket |
+| 2026-05-23 | **Phase 1c post-G3 cross-gate review (G1↔G2↔G3).** All 13 G1 decisions traced via tests: type enum CHECK (test_post_validation_rejects_invalid_type), kind enum CHECK (test_post_validation_rejects_invalid_kind), NL description in shape test, recorded-only metadata (cardinality/cascade_delete/single_parent surfaced in test_post_creates_relationship_with_documented_shape), soft-delete via superuser row count, coarse-grained versioning (test_entity_post_bumps_schemas_current_version + 2 siblings), name-resolved cross-refs (test_snapshot_body_includes_relationships_with_names + test_rollback_restores_relationships_by_name_resolution), nested URLs (verbatim), Idempotency-Key (test_post_requires_idempotency_key x3), RLS day-1 (one per file), snapshot body (test_snapshot_body_includes_entities_with_fields), nested diff paths (test_diff_for_added_entity + test_diff_for_changed_field_type). All 3 new slugs asserted. No cross-phase scope leak (grep clean for lineage_path / extracted_entities / domain_vocabulary / audit_log writes). | Aniket |
+| 2026-05-23 | **Phase 1c G3 ✅ signed off. G4 opens.** Build order: (1) `0007_schema_hierarchy.sql` (3 new workspace-scoped + RLS-day-1 tables); (2) `kb/domain/schema_hierarchy.py` (pydantic models + repo functions + subtree builder + name-resolved rollback restorer); (3) extend `kb/domain/schema_versions.py` (recursive compute_diff; subtree snapshot builder); (4) extend `kb/domain/schemas.py` (rollback now uses subtree restorer); (5) `kb/api/schema_hierarchy.py` router with 11 endpoints; (6) wire into `kb/api/main.py` (mount router + 3 new exception handlers for *-name-conflict slugs); (7) extend errors.py with the 3 new domain exceptions. | Aniket |
+| 2026-05-23 | **Phase 1c G4 ✅ — code landed (single commit `a47bcc4`).** 7 files: `0007_schema_hierarchy.sql` (3 new tables + RLS + CHECK enums for type + kind + cardinality); `kb/domain/schema_hierarchy.py` (12 pydantic models + 7 domain exceptions + 11 repo functions + `build_subtree_snapshot` + reconciling `restore_subtree`); `kb/domain/schema_versions.py` mutated (recursive `compute_diff` keyed by name within `entities`/`fields`/`relationships`); `kb/domain/schemas.py` mutated (rollback now calls `restore_subtree`; new `lock_and_assert_active_schema` + `bump_schema_version` helpers); `kb/api/schema_hierarchy.py` router (11 endpoints; each mutating endpoint: lock parent → mutate → bump version); `kb/api/main.py` (mount router + 7 new exception handlers); `tests/test_schema_versions.py` mutated (2 body-shape assertions accept the new {entities: [], relationships: []} keys — Phase 1b's shape is the strict subset). All 13 G1 decisions traced in commit body. **One mid-G4 fix landed in the same commit**: initial `restore_subtree` soft-deleted-all-then-recreated, breaking the rollback tests that expected existing entity UUIDs to survive when the snapshot still includes them by name. Reconciliation algorithm written: keep rows present in both current+snapshot, soft-delete those missing from snapshot, create those missing from current. pytest -q tests/ → **142 passed** in 27.47s. | Aniket |
+| 2026-05-23 | **Phase 1c G5 ✅ + end-of-phase cross-phase sweep.** Authored `scripts/verify_phase_1c.sh` (20 checks): compose smoke + 4 DDL assertions (3 tables exist + RLS forced + kind CHECK enum + type CHECK enum) + 11 HTTP/cascade/rollback/RLS/openapi curl checks + Phase-1c pytest. **Cross-phase sweep** per memory entry `feedback_end_of_phase_cross_phase_check.md`: (a) verify_phase_0.sh re-run → 16/16 GREEN; verify_phase_1a.sh → 17/17 GREEN; verify_phase_1b.sh → 21/21 GREEN; verify_phase_1c.sh → 20/20 GREEN. (b) Scope-leak grep clean — no `extracted_entities` / `lineage_path` / `domain_vocabulary` / `re_extraction` / `enforce.*single_parent` / `/descendants` / `/ancestors` / `/breadcrumb` / rogue `INSERT INTO audit_log` in Phase 1c code. (c) RLS invariant grows from 4 → 7 workspace-scoped tables (audit_log, idempotency_keys, schemas, schema_versions, schema_entities, schema_fields, schema_relationships); each has own `workspace_id` column + own `CREATE POLICY` per the decision-#10 / belt-and-braces convention. (d) pytest --collect-only confirms 142 total tests. **Phase 1c complete; Phase 1 (a/b/c) closed; ready to open PR. Next major phase: Phase 2 (parse layer — first worker phase).** | Aniket |
 
 ---
 

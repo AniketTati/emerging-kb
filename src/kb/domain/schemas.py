@@ -22,6 +22,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from kb.db.pool import Connection
 from kb.domain.schema_versions import insert_version
+# Phase 1c — coarse-grained versioning helpers (decision #7)
+from kb.domain.schema_hierarchy import build_subtree_snapshot, restore_subtree
 
 
 # ---------------------------------------------------------------------------
@@ -138,7 +140,15 @@ async def create_schema(
         raise DuplicateNameError(body.name) from exc
 
     schema_id = str(row[0])
-    snapshot = {"name": body.name, "description": body.description}
+    # Phase 1c: snapshot includes empty entities/relationships arrays so
+    # the body shape is uniform across all versions (Phase 1c diff handles
+    # empty → non-empty cleanly).
+    snapshot = {
+        "name": body.name,
+        "description": body.description,
+        "entities": [],
+        "relationships": [],
+    }
 
     version_id = await insert_version(
         conn,
@@ -253,7 +263,15 @@ async def update_schema(
         # Should be impossible — we held FOR UPDATE — but defensive.
         raise NotFoundError(schema_id)
 
-    snapshot = {"name": body.name, "description": body.description}
+    # Phase 1c: snapshot includes the full subtree (entities + fields +
+    # relationships) so a future rollback can restore the hierarchy.
+    subtree = await build_subtree_snapshot(conn, schema_id)
+    snapshot = {
+        "name": body.name,
+        "description": body.description,
+        "entities": subtree["entities"],
+        "relationships": subtree["relationships"],
+    }
     version_id = await insert_version(
         conn,
         schema_id=schema_id,
@@ -278,6 +296,76 @@ async def update_schema(
         updated_at=_iso(row[5]),
         current_version=new_version,
     )
+
+
+async def lock_and_assert_active_schema(conn: Connection, schema_id: str) -> None:
+    """SELECT FOR UPDATE on the schemas row; raises NotFoundError if not
+    active (or wrong workspace via RLS). Used by every nested CRUD endpoint
+    (decisions #12 + §4.1 #4) to serialize concurrent mutations per-schema.
+    """
+    cur = await conn.execute(
+        "SELECT id FROM schemas WHERE id = %s AND lifecycle_state = 'active' FOR UPDATE",
+        (schema_id,),
+    )
+    if await cur.fetchone() is None:
+        raise NotFoundError(schema_id)
+
+
+async def bump_schema_version(
+    conn: Connection,
+    workspace_id: str,
+    schema_id: str,
+    *,
+    kind: str = "put",
+) -> int:
+    """Write a new schema_versions row whose body is the current subtree snapshot.
+
+    Coarse-grained versioning (decision #7): every nested entity / field /
+    relationship CRUD calls this AFTER its row mutation completes (inside
+    the same tx). Returns the new monotonic `version_number`.
+
+    Caller must already hold `SELECT ... FOR UPDATE` on the schemas row
+    (via `lock_and_assert_active_schema`).
+    """
+    cur = await conn.execute(
+        "SELECT name, description FROM schemas WHERE id = %s",
+        (schema_id,),
+    )
+    schema_row = await cur.fetchone()
+    if schema_row is None:
+        raise NotFoundError(schema_id)
+    name, description = schema_row
+
+    cur = await conn.execute(
+        "SELECT COALESCE(max(version_number), 0) FROM schema_versions WHERE schema_id = %s",
+        (schema_id,),
+    )
+    prior = (await cur.fetchone())[0]
+    new_version = prior + 1
+
+    subtree = await build_subtree_snapshot(conn, schema_id)
+    snapshot = {
+        "name": name,
+        "description": description,
+        "entities": subtree["entities"],
+        "relationships": subtree["relationships"],
+    }
+
+    version_id = await insert_version(
+        conn,
+        schema_id=schema_id,
+        workspace_id=workspace_id,
+        version_number=new_version,
+        body=snapshot,
+        parent_version_number=prior if prior >= 1 else None,
+        kind=kind,
+    )
+
+    await conn.execute(
+        "UPDATE schemas SET current_version_id = %s, updated_at = now() WHERE id = %s",
+        (version_id, schema_id),
+    )
+    return new_version
 
 
 async def soft_delete_schema(conn: Connection, schema_id: str) -> None:
@@ -348,7 +436,13 @@ async def rollback_to_version(
 
     new_version = current_version + 1
 
-    # Update schemas row with the cloned snapshot.
+    # Phase 1c — restore the subtree from the snapshot BEFORE writing the
+    # new version row. The restorer soft-deletes current entities/fields/
+    # relationships and re-inserts from the snapshot (relationship from/to
+    # bind by NAME per §4.1 #5).
+    await restore_subtree(conn, workspace_id, schema_id, target_body)
+
+    # Update schemas row with the cloned snapshot's name/description.
     try:
         cur = await conn.execute(
             "UPDATE schemas SET name = %s, description = %s, updated_at = now() "
@@ -361,8 +455,14 @@ async def rollback_to_version(
         # A name collision on rollback is the same shape as PUT — surface
         # via DuplicateNameError. (Tests don't currently exercise this; it
         # arises when a deleted-then-recreated workspace name was reused
-        # in the interim. Phase 1c hierarchy may also introduce new modes.)
+        # in the interim.)
         raise
+
+    # The body of the new (rollback) version is the snapshot AS IT STANDS
+    # AFTER the restore (i.e., same shape as `target_body`, but built from
+    # the freshly restored rows so any data drift in `target_body` is
+    # corrected). Build it explicitly rather than trusting `target_body`.
+    new_subtree = await build_subtree_snapshot(conn, schema_id)
 
     # Insert the new (rollback) version.
     version_id = await insert_version(
@@ -370,7 +470,7 @@ async def rollback_to_version(
         schema_id=schema_id,
         workspace_id=workspace_id,
         version_number=new_version,
-        body=target_body,
+        body=new_subtree,
         parent_version_number=current_version,
         kind="rollback",
     )

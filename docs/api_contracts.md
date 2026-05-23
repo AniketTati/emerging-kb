@@ -603,7 +603,288 @@ Listed so reviewers can verify nothing leaks from later phases:
 
 ---
 
-## 4. Future phases — placeholders
+## 4. Phase 1c — Schemas hierarchy
+
+Per [build_tracker §5.4](build_tracker.md). Adds the **entity-type tree** to a schema. 11 endpoints (4 entity + 4 field + 3 relationship) nested under `/schemas/:id/`. Every nested CRUD writes a new `schema_versions` row capturing the full subtree (1b's versioning carries Phase 1c's mutations transparently).
+
+### 4.1 Hierarchy model (the invariants every endpoint depends on)
+
+Three new resources nest under a schema:
+- **Entities** — entity types within a schema (e.g., `File`, `Case`, `Note`).
+- **Fields** — typed attributes on an entity (e.g., `File.name` is `string`; `Case.opened_at` is `date`). Carry an `nl_description` that Phase 6's Gemini extractor will use as its prompt.
+- **Relationships** — typed edges between entity types within the same schema (`kind ∈ {contains, part_of, references, associates, attribute_link}`). Carry `cardinality`, `cascade_delete`, `single_parent` metadata that Phase 6 enforces at extraction time (recorded only here).
+
+Invariants (extend §3.1):
+1. **Workspace-isolated.** Each new table has its own `workspace_id` + own RLS policy. Cross-workspace reads/writes return 404, not 403 (same as §2.4 / §3.1 #7).
+2. **Parent-scoped soft delete.** A soft-deleted entity hides its fields too (fields filter on the parent's `lifecycle_state='active'`). A soft-deleted relationship is gone from `GET list`. The rows stay in the DB for audit.
+3. **Coarse-grained versioning.** Every successful entity / field / relationship mutation writes ONE new row to `schema_versions` whose `body` is the full schema subtree snapshot. The version `kind` becomes `'put'` regardless of which sub-resource changed — it's the **schema** that's versioned, not the sub-resource. This keeps the "Versions" tab in the Schema Studio UI showing a clean linear log per schema.
+4. **Atomic mutations.** Each endpoint takes `SELECT ... FOR UPDATE` on the parent `schemas` row (continuing 1b's decision #12) and writes the sub-resource INSERT/UPDATE + the new `schema_versions` row in one transaction.
+5. **Cross-resource references use names in snapshots.** The `body.relationships[*]` entries reference entities by their `name`, not their UUID. A rollback that re-creates entities assigns new UUIDs; the relationships re-bind correctly to the new IDs because they're name-resolved at rollback time.
+6. **Idempotency-Key replay never duplicates a sub-resource.** Same pattern as §3.1 #6: cached body returned; no second sub-resource row; no second `schema_versions` row.
+
+### 4.2 Extended `schema_versions.body` shape (additive to §3.5)
+
+At Phase 1b: `{name, description}`. At Phase 1c the snapshot grows:
+
+```json
+{
+  "name": "LegalCorpus",
+  "description": "Top-level legal documents.",
+  "entities": [
+    {
+      "name": "File",
+      "description": "Case file.",
+      "fields": [
+        {"name": "title", "type": "string", "nl_description": "The file's display title from the document header.", "is_required": true}
+      ]
+    },
+    {
+      "name": "Case",
+      "description": "A case within a file.",
+      "fields": [
+        {"name": "opened_at", "type": "date", "nl_description": "When the case was opened, in ISO date form.", "is_required": false}
+      ]
+    }
+  ],
+  "relationships": [
+    {"name": "file_contains_case", "kind": "contains", "from": "File", "to": "Case", "cardinality": "one_to_many", "cascade_delete": true, "single_parent": true}
+  ]
+}
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `entities` | array | Empty `[]` if no entities yet. Items in `name` order. |
+| `entities[*].fields` | array | Empty `[]` if no fields yet. Items in `name` order. |
+| `relationships` | array | Empty `[]` if no relationships yet. Items in `name` order. `from` / `to` reference entity *names* (per invariant #5). |
+
+The schema response shape itself (§2.1 + §3.2) **does not change** at 1c — the schema object stays `{id, name, description, lifecycle_state, current_version, created_at, updated_at}`. Hierarchy lives at the version-body level. Clients that need the live subtree fetch `GET /schemas/:id/versions/:current`.
+
+### 4.3 Diff format extension (additive to §3.6)
+
+Same `{added, removed, changed}` shape. Paths grow nested-dotted:
+
+- Entity added: `{"path": "entities.File", "value": {...full entity body including fields...}}`.
+- Entity removed: same shape under `removed`.
+- Field added: `{"path": "entities.File.fields.title", "value": {...field...}}`.
+- Field type changed: `{"path": "entities.File.fields.title.type", "old": "string", "new": "datetime"}`.
+- Relationship added: `{"path": "relationships.file_contains_case", "value": {...}}`.
+
+`compute_diff` recurses into `entities[*]` and `entities[*].fields[*]` and `relationships[*]`, keyed by `name` (which is unique within its parent scope). No DDL change; same format extends.
+
+### 4.4 Entity resource shape
+
+```json
+{
+  "id": "0193b1f0-aaaa-7c2a-9c11-9a3f8c1c9c11",
+  "name": "File",
+  "description": "Top-level case file.",
+  "lifecycle_state": "active",
+  "created_at": "2026-05-23T12:00:00Z",
+  "updated_at": "2026-05-23T12:00:00Z"
+}
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | string (uuid) | UUIDv4 (§0.2 broadened). |
+| `name` | string | 1–200 chars. Unique within schema among active entities. |
+| `description` | string | 0–10000 chars. Empty default; never `null`. |
+| `lifecycle_state` | string | Always `"active"` on responses (soft-deleted entities return 404). |
+| `created_at` / `updated_at` | string (ISO-8601 UTC) | Same convention as §2.1. |
+
+No `workspace_id`, no `schema_id` in the response (client knows both — `schema_id` is in the URL path).
+
+### 4.5 `POST /schemas/:id/entities` — create entity
+
+**Auth:** none. **Idempotency:** `Idempotency-Key` **required**.
+
+```http
+POST /schemas/<id>/entities
+Content-Type: application/json
+Idempotency-Key: <client-uuid>
+
+{ "name": "File", "description": "Top-level case file." }
+```
+
+| Body field | Type | Required | Notes |
+|---|---|---|---|
+| `name` | string | yes | 1–200 chars |
+| `description` | string | no | 0–10000 chars; defaults to `""` |
+
+**Success — `201 Created`:** entity object (§4.4) in body. `Location: /schemas/<id>/entities/<eid>` header. Server writes the entity row + new `schema_versions` row in one tx; `schemas.current_version` bumps.
+
+**Errors:**
+
+| Status | When | `type` slug |
+|---|---|---|
+| `400` | missing `Idempotency-Key` / malformed JSON | `missing-idempotency-key`, `bad-request` |
+| `404` | parent schema not found / soft-deleted / wrong workspace | `not-found` |
+| `409` | another active entity with the same name in this schema | `entity-name-conflict` |
+| `422` | validation | `validation-error` |
+
+### 4.6 `GET /schemas/:id/entities` — list entities
+
+`?limit=50&offset=0` (defaults; 1–200 / ≥0). Sort: `created_at DESC, id DESC`. Filters to `lifecycle_state='active'`.
+
+```json
+{ "items": [<entity>, ...], "total": 3, "limit": 50, "offset": 0 }
+```
+
+**Errors:**
+
+| Status | When | `type` slug |
+|---|---|---|
+| `400` | `limit > 200`, `offset < 0` | `bad-request` |
+| `404` | parent schema not found | `not-found` |
+
+### 4.7 `PUT /schemas/:id/entities/:eid` — full-replace name + description
+
+Body same shape as §4.5 POST. `Idempotency-Key` **optional**.
+
+**Success — `200 OK`:** updated entity object with bumped `updated_at`. Writes a new `schema_versions` row.
+
+**Errors:** `404` (entity not found in schema), `409` (name collides with another active entity), `422` (validation).
+
+### 4.8 `DELETE /schemas/:id/entities/:eid` — soft delete
+
+`Idempotency-Key` **optional**. Returns `204 No Content`. Soft-deletes via `lifecycle_state='deleted'`; writes a new `schema_versions` row. Subsequent reads return 404. **Cascades** (application-level): all `schema_fields` belonging to this entity are also soft-deleted in the same tx, and any `schema_relationships` referencing this entity by `from_entity_id` or `to_entity_id` are also soft-deleted.
+
+Note: a re-created entity with the same name gets a new UUID and starts with zero fields. The partial unique index on `(schema_id, name) WHERE lifecycle_state='active'` permits the re-create.
+
+**Errors:** `404`.
+
+### 4.9 Field resource shape
+
+```json
+{
+  "id": "0193b1f0-bbbb-7c2a-9c11-9a3f8c1c9c11",
+  "name": "opened_at",
+  "type": "date",
+  "nl_description": "When the case was opened, in ISO date form.",
+  "is_required": false,
+  "lifecycle_state": "active",
+  "created_at": "...",
+  "updated_at": "..."
+}
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `name` | string | 1–200; unique within entity among active fields. |
+| `type` | string | One of `string`, `number`, `boolean`, `date`, `datetime` (build_tracker decision #2; Phase 6 may extend). |
+| `nl_description` | string | 0–10000. Phase 6's Gemini extractor consumes this as the field's extraction prompt. |
+| `is_required` | bool | Default `false`. Phase 6 enforces; 1c records. |
+
+### 4.10 `POST /schemas/:id/entities/:eid/fields` — create field
+
+`Idempotency-Key` **required**.
+
+```json
+{ "name": "opened_at", "type": "date", "nl_description": "When the case was opened.", "is_required": false }
+```
+
+`type` and `nl_description` required in body; `is_required` defaults to `false`.
+
+**Success — `201`:** field object (§4.9). Writes new schema_versions row.
+
+**Errors:** `400` (idempotency-key missing), `404` (schema OR entity not found), `409` (`field-name-conflict`), `422` (validation — incl. `type` outside the enum).
+
+### 4.11 `GET /schemas/:id/entities/:eid/fields` — list fields
+
+Same pagination as §4.6. Filters to active fields on active entity. `404` if parent entity not active.
+
+### 4.12 `PUT /schemas/:id/entities/:eid/fields/:fid`
+
+Body same shape as POST. `Idempotency-Key` **optional**. `200` on success; writes a new `schema_versions` row.
+
+**Errors:** `404`, `409`, `422`.
+
+### 4.13 `DELETE /schemas/:id/entities/:eid/fields/:fid`
+
+`Idempotency-Key` **optional**. `204` on success; writes a new `schema_versions` row. **No cascade** to anything else (fields have no children).
+
+**Errors:** `404`.
+
+### 4.14 Relationship resource shape
+
+```json
+{
+  "id": "0193b1f0-cccc-7c2a-9c11-9a3f8c1c9c11",
+  "name": "file_contains_case",
+  "from_entity_id": "0193b1f0-aaaa-...",
+  "to_entity_id":   "0193b1f0-eeee-...",
+  "kind": "contains",
+  "cardinality": "one_to_many",
+  "cascade_delete": true,
+  "single_parent": true,
+  "lifecycle_state": "active",
+  "created_at": "...",
+  "updated_at": "..."
+}
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `name` | string | 1–200; unique within schema among active relationships. |
+| `from_entity_id` / `to_entity_id` | uuid | Both must point at active entities **in the same schema**. Cross-schema FK rejected with `422 validation-error`. NOTE: live objects on the wire use entity UUIDs (so clients can PUT/DELETE specific entities). Snapshot bodies in `schema_versions.body` use entity **names** (so a rollback that re-creates the entity gets a new UUID and re-binds by name per invariant §4.1 #5). |
+| `kind` | string | Architecture line 794: `contains`, `part_of`, `references`, `associates`, `attribute_link`. |
+| `cardinality` | string | `one_to_one`, `one_to_many`, `many_to_many`. Default `one_to_many`. |
+| `cascade_delete` | bool | Default `false`. Phase 6 enforces at extraction-time deletion. |
+| `single_parent` | bool | Default `true`. Phase 6 enforces at extraction-time entity assignment for `contains` / `part_of` edges. |
+
+### 4.15 `POST /schemas/:id/relationships` — create typed edge
+
+`Idempotency-Key` **required**.
+
+```json
+{
+  "name": "file_contains_case",
+  "from_entity_id": "0193b1f0-aaaa-...",
+  "to_entity_id":   "0193b1f0-eeee-...",
+  "kind": "contains",
+  "cardinality": "one_to_many",
+  "cascade_delete": true,
+  "single_parent": true
+}
+```
+
+`name`, `from_entity_id`, `to_entity_id`, `kind` are required. `cardinality` defaults to `one_to_many`; `cascade_delete` to `false`; `single_parent` to `true`.
+
+**Success — `201`:** relationship object (§4.14). Writes new schema_versions row.
+
+**Errors:**
+
+| Status | When | `type` slug |
+|---|---|---|
+| `400` | missing Idempotency-Key | `missing-idempotency-key` |
+| `404` | parent schema not found | `not-found` |
+| `409` | another active relationship with same name in this schema | `relationship-name-conflict` |
+| `422` | `kind` outside enum, `cardinality` outside enum, `from_entity_id` or `to_entity_id` doesn't reference an active entity in this schema (different schema → 422) | `validation-error` |
+
+### 4.16 `GET /schemas/:id/relationships`
+
+Same pagination. Filters to active relationships on active schema. `404` if schema not active.
+
+### 4.17 `DELETE /schemas/:id/relationships/:rid`
+
+`Idempotency-Key` **optional**. `204` on success; writes a new `schema_versions` row.
+
+**Errors:** `404`.
+
+### 4.18 Out of scope for Phase 1c
+
+- `PUT /relationships/:rid` — soft-delete + re-create is the path for now; type-edge mutation rare enough that the simpler API wins.
+- `extracted_entities` table + `lineage_path` ltree — **Phase 5/6**.
+- Helper endpoints `/entities/:id/{descendants, ancestors, siblings, breadcrumb}` — **Phase 8**.
+- DB-level enforcement of `single_parent` and `cascade_delete` — **Phase 6** (extraction time).
+- Field type enum extensions (`currency`, `email`, `list_X`, etc.) — **Phase 6** when extraction needs them.
+- `domain_vocabulary` (synonyms, acronyms, definitions) — **Phase 5**.
+- `audit_log` writes on nested mutation — **Phase 9**.
+
+---
+
+## 5. Future phases — placeholders
 
 Each phase appends its endpoint contracts here at its G2 gate. Index:
 
@@ -611,8 +892,8 @@ Each phase appends its endpoint contracts here at its G2 gate. Index:
 |---|---|---|
 | 0 | `/health`, `/ready` | ✅ signed off 2026-05-23 |
 | 1a | `/schemas` CRUD (POST/GET-list/GET/PUT/DELETE) | ✅ signed off 2026-05-23 (§2) |
-| **1b** | `/schemas/:id/versions*` (versioning + rollback) | 🟡 drafted in §3 — awaiting sign-off |
-| 1c | `/schemas/:id/{entities,fields,relationships}` (hierarchy) | ⬜ |
+| 1b | `/schemas/:id/versions*` (versioning + rollback) | ✅ signed off 2026-05-23 (§3) |
+| **1c** | `/schemas/:id/{entities,fields,relationships}` (hierarchy — 11 endpoints) | 🟡 drafted in §4 — awaiting sign-off |
 | 2–7 | Internal worker triggers + admin endpoints (TBD at each phase's G1) | ⬜ |
 | 8 | `/query`, `/chat`, `/chat/:id/stream` | ⬜ |
 | 9 | `/upload/:id/status` (SSE), `/audit` | ⬜ |
@@ -620,7 +901,7 @@ Each phase appends its endpoint contracts here at its G2 gate. Index:
 
 ---
 
-## 5. Change log
+## 6. Change log
 
 | Date | Change | By |
 |---|---|---|
@@ -629,3 +910,4 @@ Each phase appends its endpoint contracts here at its G2 gate. Index:
 | 2026-05-23 | **Phase 1a G2 — schemas CRUD contracts drafted.** §2 added with 5 endpoints (POST/GET-list/GET/PUT/DELETE) under `/schemas`. Schema response shape (no `workspace_id` field — clients know their own). Body validation rules. RFC 9457 error slugs per endpoint (`schema-name-conflict`, `not-found`, `validation-error`, `bad-request`, `missing-idempotency-key`). Idempotency: required on POST, optional on PUT/DELETE. §3 placeholder index renumbered + split: Phase 1 row → 1a/1b/1c. §0 placeholder section renumbered to §3; this changelog renumbered to §4. | Aniket |
 | 2026-05-23 | **§0.2 UUID convention broadened (post-G3 consistency sweep).** Old text said "All entity IDs are UUIDv7"; reality is Phase 0 ships `audit_log.id` as v4 and Phase 1a chose v4 for `schemas.id`. Honest replacement: v4 by default for PKs where time-sortability isn't a query pattern; v7 required where monotonic-by-creation ordering is queried (X-Request-Id, future `query_id`). Each phase's G1 picks the flavor per table. §2.1 `id` field annotated to cite this. | Aniket |
 | 2026-05-23 | **Phase 1b G2 — schemas versioning contracts drafted.** §3 added with 9 sub-sections: versioning model invariants (§3.1), mutated schema object adds `current_version` (§3.2), POST + PUT behavioural deltas (§3.3, §3.4), version resource shape (§3.5), declarative diff format (§3.6), GET list (§3.7), GET one with computed diff (§3.8), POST rollback with `409 rollback-noop` for same-as-current (§3.9), out-of-scope list (§3.10). Old §3 placeholder index → §4; old §4 changelog → §5. | Aniket |
+| 2026-05-23 | **Phase 1c G2 — schemas hierarchy contracts drafted.** §4 added with 18 sub-sections: hierarchy invariants (§4.1 — workspace-isolated, parent-scoped soft delete, coarse-grained versioning, atomic mutations, name-resolved cross-refs in snapshots, replay never duplicates), extended `schema_versions.body` shape with entities/fields/relationships (§4.2), diff format extension with nested dotted paths (§4.3), entity resource shape + 4 endpoints (§4.4–§4.8 — POST/GET-list/PUT/DELETE; DELETE cascades to fields + relationships), field resource shape + 4 endpoints (§4.9–§4.13; type enum string/number/boolean/date/datetime), relationship resource shape + 3 endpoints (§4.14–§4.17; no PUT — soft-delete + re-create path; kind enum verbatim from architecture line 794; cardinality/cascade_delete/single_parent recorded only), out-of-scope (§4.18). 3 new error slugs introduced: `entity-name-conflict`, `field-name-conflict`, `relationship-name-conflict` (join 1a/1b's 5). Old §4 placeholder index → §5; old §5 changelog → §6. | Aniket |
