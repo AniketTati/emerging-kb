@@ -1,9 +1,9 @@
-"""Procrastinate worker tasks — Phase 2a (`parse_file`) + Phase 3a (`chunk_file`).
+"""Procrastinate worker tasks — Phase 2a (`parse_file`) + Phase 3a (`chunk_file`)
++ Phase 3b (`contextualize_file`).
 
-`parse_file(file_id)` and `chunk_file(file_id)` are the wire-level Procrastinate
-tasks. The actual work lives in `parse_file_impl(file_id)` + `chunk_file_impl
-(file_id)` — regular async functions tests call directly without spinning up
-the queue.
+`parse_file(file_id)`, `chunk_file(file_id)`, and `contextualize_file(file_id)`
+are the wire-level Procrastinate tasks. The actual work lives in *_impl
+functions tests call directly without spinning up the queue.
 
 Per build_tracker §5.5 decision #6: 30-min lease. Per §5.5 #7 / §5.7 #9: worker
 sets `app.workspace_id` from the file row before any subsequent query. Per
@@ -21,11 +21,21 @@ import hashlib
 import traceback
 
 from kb.chunking import Chunk, ChunkingError, chunk_pages
+from kb.contextualization import (
+    ContextualizationError,
+    ContextualizedChunk,
+    make_contextualizer,
+)
 from kb.db.pool import open_connection
 from kb.domain.chunks import (
     count_chunks_for_file,
     insert_chunk,
     read_pages_for_chunking,
+)
+from kb.domain.contextual_chunks import (
+    insert_contextual_chunk,
+    read_chunks_for_contextualization,
+    read_doc_text,
 )
 from kb.domain.files import (
     FileNotFoundError,
@@ -320,6 +330,142 @@ async def chunk_file_impl(file_id: str) -> None:
                 },
             )
 
+    # Phase 3b decision #13: chain contextualize_file in a SEPARATE tx so a
+    # Procrastinate-defer failure doesn't roll back the chunked state.
+    try:
+        await procrastinate_app.configure_task(
+            name="contextualize_file"
+        ).defer_async(file_id=file_id)
+    except Exception:  # noqa: BLE001 — best-effort chain
+        traceback.print_exc()
+
+
+# ---------------------------------------------------------------------------
+# Phase 3b — contextualize_file_impl
+# ---------------------------------------------------------------------------
+
+
+async def contextualize_file_impl(file_id: str) -> None:
+    """Run the Anthropic Contextual Retrieval prefix call on every chunk of a
+    'chunked' file → write contextual_chunks → advance to 'contextualized'.
+
+    Per build_tracker §5.8:
+    - decision #6: KB_ANTHROPIC_API_KEY unset → IdentityContextualizer
+      (lifecycle still advances; recall degrades to baseline).
+    - decision #12: lifecycle widens with 'contextualized'.
+    - decision #13: chained from chunk_file_impl via separate-tx defer.
+    - decision #14: API errors → 'chunked→failed'.
+
+    Per-stage idempotency: returns immediately if already 'contextualized'.
+    """
+    from kb.config import get_settings
+    settings = get_settings()
+    db_url = settings.database_url
+
+    # Phase 1: read file row + check idempotency.
+    async with open_connection(db_url) as conn:
+        async with conn.transaction():
+            cur = await conn.execute(
+                "SELECT workspace_id, lifecycle_state FROM files WHERE id = %s",
+                (file_id,),
+            )
+            row = await cur.fetchone()
+            if row is None:
+                raise FileNotFoundError(file_id)
+            workspace_id, lifecycle_state = row
+
+            if lifecycle_state in ("contextualized", "failed", "deleted"):
+                return
+            if lifecycle_state != "chunked":
+                # Not yet ready to contextualize (still parsing/parsed).
+                return
+
+            await conn.execute(
+                "SELECT set_config('app.workspace_id', %s, true)",
+                (str(workspace_id),),
+            )
+            doc_text = await read_doc_text(conn, file_id=file_id)
+            chunk_rows = await read_chunks_for_contextualization(
+                conn, file_id=file_id,
+            )
+
+    if not chunk_rows:
+        await _mark_failed(
+            db_url, file_id, str(workspace_id),
+            error_class="ContextualizationError",
+            message=f"empty chunks for file={file_id}",
+            from_state="chunked",
+            event="contextualization_failed",
+        )
+        return
+
+    # Phase 2: contextualize each chunk (factory picks Anthropic or Identity).
+    contextualizer = make_contextualizer()
+    results: list[tuple[str, str, ContextualizedChunk]] = []
+    try:
+        for chunk_id, chunk_text in chunk_rows:
+            result = await contextualizer.contextualize(
+                doc_text=doc_text, chunk_text=chunk_text,
+            )
+            results.append((chunk_id, chunk_text, result))
+    except ContextualizationError as exc:
+        await _mark_failed(
+            db_url, file_id, str(workspace_id),
+            error_class="ContextualizationError",
+            message=str(exc),
+            from_state="chunked",
+            event="contextualization_failed",
+        )
+        return
+    except Exception as exc:
+        await _mark_failed(
+            db_url, file_id, str(workspace_id),
+            error_class=type(exc).__name__,
+            message=str(exc),
+            from_state="chunked",
+            event="contextualization_failed",
+            traceback_head=traceback.format_exc()[:2000],
+        )
+        return
+
+    # Phase 3: write contextual_chunks + lifecycle event.
+    total_cache_creation = sum(r.cache_creation_input_tokens for _, _, r in results)
+    total_cache_read = sum(r.cache_read_input_tokens for _, _, r in results)
+    model_id = results[0][2].model_id if results else "unknown"
+
+    async with open_connection(db_url) as conn:
+        async with conn.transaction():
+            await conn.execute(
+                "SELECT set_config('app.workspace_id', %s, true)",
+                (str(workspace_id),),
+            )
+            for chunk_id, _, result in results:
+                await insert_contextual_chunk(
+                    conn,
+                    chunk_id=chunk_id,
+                    file_id=file_id,
+                    workspace_id=str(workspace_id),
+                    contextual_prefix=result.contextual_prefix,
+                    contextual_text=result.contextual_text,
+                    model_id=result.model_id,
+                    prefix_token_count=result.prefix_token_count,
+                    cache_creation_input_tokens=result.cache_creation_input_tokens,
+                    cache_read_input_tokens=result.cache_read_input_tokens,
+                )
+            await transition_lifecycle(
+                conn,
+                workspace_id=str(workspace_id),
+                file_id=file_id,
+                to_state="contextualized",
+                event="contextualization_done",
+                payload={
+                    "prefix_count": len(results),
+                    "total_cache_creation_tokens": total_cache_creation,
+                    "total_cache_read_tokens": total_cache_read,
+                    "model_id": model_id,
+                },
+            )
+
 
 # ---------------------------------------------------------------------------
 # Procrastinate task registration
@@ -336,3 +482,9 @@ async def parse_file(file_id: str) -> None:
 async def chunk_file(file_id: str) -> None:
     """Wire-level Procrastinate task. Delegates to the testable impl."""
     await chunk_file_impl(file_id)
+
+
+@procrastinate_app.task(name="contextualize_file", queue="kb", pass_context=False)
+async def contextualize_file(file_id: str) -> None:
+    """Wire-level Procrastinate task. Delegates to the testable impl."""
+    await contextualize_file_impl(file_id)

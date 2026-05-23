@@ -8,15 +8,24 @@
 -- Idempotent so the migration runner's bootstrap test can re-apply.
 
 -- ----------------------------------------------------------------------------
--- 1. Widen files.lifecycle_state CHECK to include 'chunked'
+-- 1. Widen files.lifecycle_state CHECK to include 'chunked' (+ forward-compat).
 -- ----------------------------------------------------------------------------
--- The existing CHECK was named implicitly by Postgres; we drop-by-name with a
--- guard, then re-add with the wider list. (Phase 3b will widen again to add
--- 'contextualized'; 3c will widen to add 'ready'.)
+-- The CHECK lists EVERY lifecycle state we'll eventually use through Phase 3c
+-- ('contextualized' Phase 3b + 'ready' Phase 3c). Listing future values here
+-- doesn't enable them prematurely — no code paths write those states yet —
+-- but it makes re-running the migration runner against a DB that ALREADY has
+-- those values idempotent: tests that re-apply migrations against a polluted
+-- DB no longer trip on a too-narrow CHECK.
+--
+-- This is the forward-compat convention locked at Phase 3a G2: each
+-- sub-phase appends exactly one new state on the wire, but the DB-level
+-- CHECK can be widened ahead of time without behavioural cost.
 
 ALTER TABLE files DROP CONSTRAINT IF EXISTS files_lifecycle_state_check;
 ALTER TABLE files ADD CONSTRAINT files_lifecycle_state_check
-    CHECK (lifecycle_state IN ('queued','parsing','parsed','chunked','failed','deleted'));
+    CHECK (lifecycle_state IN (
+        'queued','parsing','parsed','chunked','contextualized','ready','failed','deleted'
+    ));
 
 -- ----------------------------------------------------------------------------
 -- 2. chunks — immutable, layout-aware token-bounded chunks

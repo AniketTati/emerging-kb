@@ -218,6 +218,8 @@ async def test_contextualizer_factory_returns_identity_when_no_api_key():
 
 
 async def test_anthropic_contextualizer_4xx_raises_contextualization_error():
+    import httpx
+
     import anthropic
 
     from kb.contextualization import (
@@ -225,12 +227,15 @@ async def test_anthropic_contextualizer_4xx_raises_contextualization_error():
         ContextualizationError,
     )
 
-    # anthropic.RateLimitError requires response object; use APIError as a generic.
+    # Construct a real httpx.Response so APIStatusError.__init__ can read
+    # response.request without AttributeError.
+    httpx_request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    httpx_response = httpx.Response(
+        status_code=429, request=httpx_request, content=b'{"error": "rate limit"}',
+    )
     mock_client = _MockAnthropicClient(
         raise_exc=anthropic.APIStatusError(
-            "rate limited",
-            response=type("R", (), {"status_code": 429, "headers": {}, "request_id": "req_test"})(),
-            body=None,
+            "rate limited", response=httpx_response, body={"type": "error"}
         )
     )
     contextualizer = AnthropicContextualizer(client=mock_client, api_key="fake")

@@ -29,6 +29,8 @@ dependencies = [
     "python-multipart>=0.0.12",
     # Phase 3a — chunking (token budgeting via cl100k_base)
     "tiktoken>=0.8.0",
+    # Phase 3b — Anthropic Contextual Retrieval prefix LLM call
+    "anthropic>=0.40.0",
     # Pin torch + torchvision as direct deps so [tool.uv.sources] applies
     # (sources only override packages listed in this project's dependencies).
     "torch>=2.0",
