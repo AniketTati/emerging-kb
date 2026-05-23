@@ -160,7 +160,8 @@ for _ in $(seq 1 180); do
     if [[ -z "$pdf_id" ]]; then break; fi
     s=$(curl -sS "http://localhost:8000/files/$pdf_id" -H "X-Test-Workspace: $WS_A" \
          | python3 -c "import sys,json; print(json.loads(sys.stdin.read()).get('lifecycle_state',''))")
-    if [[ "$s" == "contextualized" ]]; then contextualized=1; break; fi
+    # Phase 3c chained embed_file may race past 'contextualized' to 'embedded'.
+    if [[ "$s" == "contextualized" || "$s" == "embedded" || "$s" == "ready" ]]; then contextualized=1; break; fi
     if [[ "$s" == "failed" ]]; then break; fi
     sleep 2
 done
