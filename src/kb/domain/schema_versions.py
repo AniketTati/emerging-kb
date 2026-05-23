@@ -69,13 +69,16 @@ class RollbackNoopError(Exception):
 
 
 def compute_diff(prior: dict[str, Any] | None, current: dict[str, Any]) -> dict[str, Any] | None:
-    """Compare two snapshot bodies at top-level keys.
+    """Compare two snapshot bodies. Returns {added, removed, changed} or None
+    if `prior` is None (v1).
 
-    Returns {added, removed, changed} or None if `prior` is None (v1).
-
-    Phase 1b only ever sees top-level scalar keys (`name`, `description`).
-    Phase 1c extends the same shape to nested entities/fields/relationships
-    — the recursion lives there, not here.
+    At Phase 1b: only top-level scalar keys (`name`, `description`).
+    At Phase 1c: recurses into `entities` and `relationships` arrays, keyed
+    by `name` (unique within parent scope). Paths become nested-dotted:
+        `entities.File`               — entity added/removed (whole subtree)
+        `entities.File.fields.title`  — field added/removed
+        `entities.File.fields.title.type` — scalar inside field changed
+        `relationships.file_to_case`  — relationship added/removed
     """
     if prior is None:
         return None
@@ -84,18 +87,82 @@ def compute_diff(prior: dict[str, Any] | None, current: dict[str, Any]) -> dict[
     removed: list[dict[str, Any]] = []
     changed: list[dict[str, Any]] = []
 
+    _diff_dict(prior, current, "", added, removed, changed)
+
+    return {"added": added, "removed": removed, "changed": changed}
+
+
+def _diff_dict(
+    prior: dict[str, Any],
+    current: dict[str, Any],
+    prefix: str,
+    added: list[dict[str, Any]],
+    removed: list[dict[str, Any]],
+    changed: list[dict[str, Any]],
+) -> None:
+    """Recursively diff two dicts.
+
+    For known list-of-dict keys (`entities`, `fields`, `relationships`),
+    treat them as name-keyed maps so paths become `entities.<name>.fields.<name>`
+    rather than `entities.0.fields.2` (matches §4.3 spec exactly).
+    """
     prior_keys = set(prior.keys())
     current_keys = set(current.keys())
 
     for k in current_keys - prior_keys:
-        added.append({"path": k, "value": current[k]})
+        added.append({"path": _join(prefix, k), "value": current[k]})
     for k in prior_keys - current_keys:
-        removed.append({"path": k, "value": prior[k]})
-    for k in prior_keys & current_keys:
-        if prior[k] != current[k]:
-            changed.append({"path": k, "old": prior[k], "new": current[k]})
+        removed.append({"path": _join(prefix, k), "value": prior[k]})
 
-    return {"added": added, "removed": removed, "changed": changed}
+    for k in prior_keys & current_keys:
+        p_val, c_val = prior[k], current[k]
+        if p_val == c_val:
+            continue
+
+        # List-of-dicts with `name` keys → diff as a name-keyed map.
+        if k in ("entities", "fields", "relationships") and \
+           isinstance(p_val, list) and isinstance(c_val, list):
+            _diff_name_keyed_list(p_val, c_val, _join(prefix, k),
+                                  added, removed, changed)
+            continue
+
+        # Plain nested dict → recurse.
+        if isinstance(p_val, dict) and isinstance(c_val, dict):
+            _diff_dict(p_val, c_val, _join(prefix, k),
+                       added, removed, changed)
+            continue
+
+        # Scalar change.
+        changed.append({"path": _join(prefix, k), "old": p_val, "new": c_val})
+
+
+def _diff_name_keyed_list(
+    prior_list: list[dict[str, Any]],
+    current_list: list[dict[str, Any]],
+    prefix: str,
+    added: list[dict[str, Any]],
+    removed: list[dict[str, Any]],
+    changed: list[dict[str, Any]],
+) -> None:
+    """Diff two lists of dicts where each item has a 'name' field — treat as
+    name-keyed map so the diff path is human-friendly (`entities.File`, not
+    `entities.0`)."""
+    prior_by_name = {item["name"]: item for item in prior_list if "name" in item}
+    current_by_name = {item["name"]: item for item in current_list if "name" in item}
+
+    for name in current_by_name.keys() - prior_by_name.keys():
+        added.append({"path": _join(prefix, name), "value": current_by_name[name]})
+    for name in prior_by_name.keys() - current_by_name.keys():
+        removed.append({"path": _join(prefix, name), "value": prior_by_name[name]})
+
+    for name in prior_by_name.keys() & current_by_name.keys():
+        if prior_by_name[name] != current_by_name[name]:
+            _diff_dict(prior_by_name[name], current_by_name[name],
+                       _join(prefix, name), added, removed, changed)
+
+
+def _join(prefix: str, key: str) -> str:
+    return f"{prefix}.{key}" if prefix else key
 
 
 # ---------------------------------------------------------------------------

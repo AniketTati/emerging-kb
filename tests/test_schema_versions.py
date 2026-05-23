@@ -179,12 +179,19 @@ async def test_read_v1_has_null_diff_from_prior(client, test_workspace):
 
 
 async def test_read_v1_body_matches_post_body(client, test_workspace):
+    """Phase 1b body shape was {name, description}; Phase 1c extends to include
+    `entities: []` + `relationships: []` (empty at POST time). Test honours both.
+    """
     s = await post_schema(client, test_workspace, name="Snap", description="initial")
     resp = await client.get(
         f"/schemas/{s['id']}/versions/1", headers=headers(test_workspace)
     )
     body = resp.json()["body"]
-    assert body == {"name": "Snap", "description": "initial"}
+    assert body["name"] == "Snap"
+    assert body["description"] == "initial"
+    # Phase 1c: empty subtree arrays present
+    assert body.get("entities", []) == []
+    assert body.get("relationships", []) == []
 
 
 async def test_read_v2_diff_reflects_changed_description(client, test_workspace):
@@ -269,11 +276,16 @@ async def test_rollback_creates_new_version_with_target_body(client, test_worksp
     await put_schema(client, test_workspace, s["id"], name="Roll", description="changed")
     status, _ = await rollback(client, test_workspace, s["id"], 1)
     assert status == 200
-    # v3 exists; its body equals v1's
+    # v3 exists; its body equals v1's (name + description; subtree arrays
+    # empty since no hierarchy was added).
     resp = await client.get(
         f"/schemas/{s['id']}/versions/3", headers=headers(test_workspace)
     )
-    assert resp.json()["body"] == {"name": "Roll", "description": "original"}
+    v3_body = resp.json()["body"]
+    assert v3_body["name"] == "Roll"
+    assert v3_body["description"] == "original"
+    assert v3_body.get("entities", []) == []
+    assert v3_body.get("relationships", []) == []
 
 
 async def test_rollback_response_bumps_current_version(client, test_workspace):

@@ -28,9 +28,19 @@ from kb.api.middleware import (
     WorkspaceMiddleware,
 )
 from kb.api.readiness import router as ready_router
+from kb.api.schema_hierarchy import router as schema_hierarchy_router
 from kb.api.schema_versions import router as schema_versions_router
 from kb.api.schemas import router as schemas_router
 from kb.config import get_settings
+from kb.domain.schema_hierarchy import (
+    EntityNameConflictError,
+    EntityNotFoundError,
+    FieldNameConflictError,
+    FieldNotFoundError,
+    InvalidCrossSchemaReferenceError,
+    RelationshipNameConflictError,
+    RelationshipNotFoundError,
+)
 from kb.domain.schema_versions import RollbackNoopError, VersionNotFoundError
 from kb.domain.schemas import DuplicateNameError, NotFoundError
 from kb.logging import configure_logging, get_logger
@@ -73,6 +83,7 @@ def build_app() -> FastAPI:
     app.include_router(ready_router)
     app.include_router(schemas_router)
     app.include_router(schema_versions_router)
+    app.include_router(schema_hierarchy_router)
 
     # ---- Exception handlers — RFC 9457 problem+json for every 4xx ----
 
@@ -95,6 +106,60 @@ def build_app() -> FastAPI:
         return problem_response(
             req, status_code=409, type_slug="rollback-noop",
             title="Rollback target is already the current version",
+            detail=str(exc),
+        )
+
+    # Phase 1c — schema-hierarchy exceptions
+    @app.exception_handler(EntityNotFoundError)
+    async def _entity_not_found(req: Request, exc: EntityNotFoundError):  # noqa: ARG001
+        return problem_response(
+            req, status_code=404, type_slug="not-found",
+            title="Entity not found", detail=str(exc),
+        )
+
+    @app.exception_handler(FieldNotFoundError)
+    async def _field_not_found(req: Request, exc: FieldNotFoundError):  # noqa: ARG001
+        return problem_response(
+            req, status_code=404, type_slug="not-found",
+            title="Field not found", detail=str(exc),
+        )
+
+    @app.exception_handler(RelationshipNotFoundError)
+    async def _rel_not_found(req: Request, exc: RelationshipNotFoundError):  # noqa: ARG001
+        return problem_response(
+            req, status_code=404, type_slug="not-found",
+            title="Relationship not found", detail=str(exc),
+        )
+
+    @app.exception_handler(EntityNameConflictError)
+    async def _entity_conflict(req: Request, exc: EntityNameConflictError):  # noqa: ARG001
+        return problem_response(
+            req, status_code=409, type_slug="entity-name-conflict",
+            title="Entity name already exists in this schema",
+            detail=str(exc),
+        )
+
+    @app.exception_handler(FieldNameConflictError)
+    async def _field_conflict(req: Request, exc: FieldNameConflictError):  # noqa: ARG001
+        return problem_response(
+            req, status_code=409, type_slug="field-name-conflict",
+            title="Field name already exists on this entity",
+            detail=str(exc),
+        )
+
+    @app.exception_handler(RelationshipNameConflictError)
+    async def _rel_conflict(req: Request, exc: RelationshipNameConflictError):  # noqa: ARG001
+        return problem_response(
+            req, status_code=409, type_slug="relationship-name-conflict",
+            title="Relationship name already exists in this schema",
+            detail=str(exc),
+        )
+
+    @app.exception_handler(InvalidCrossSchemaReferenceError)
+    async def _cross_schema(req: Request, exc: InvalidCrossSchemaReferenceError):  # noqa: ARG001
+        return problem_response(
+            req, status_code=422, type_slug="validation-error",
+            title="Relationship references an entity in a different schema",
             detail=str(exc),
         )
 
