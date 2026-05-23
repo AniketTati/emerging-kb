@@ -28,8 +28,10 @@ from kb.api.middleware import (
     WorkspaceMiddleware,
 )
 from kb.api.readiness import router as ready_router
+from kb.api.schema_versions import router as schema_versions_router
 from kb.api.schemas import router as schemas_router
 from kb.config import get_settings
+from kb.domain.schema_versions import RollbackNoopError, VersionNotFoundError
 from kb.domain.schemas import DuplicateNameError, NotFoundError
 from kb.logging import configure_logging, get_logger
 
@@ -70,6 +72,7 @@ def build_app() -> FastAPI:
     app.include_router(health_router)
     app.include_router(ready_router)
     app.include_router(schemas_router)
+    app.include_router(schema_versions_router)
 
     # ---- Exception handlers — RFC 9457 problem+json for every 4xx ----
 
@@ -78,6 +81,21 @@ def build_app() -> FastAPI:
         return problem_response(
             req, status_code=404, type_slug="not-found",
             title="Resource not found", detail=str(exc),
+        )
+
+    @app.exception_handler(VersionNotFoundError)
+    async def _version_not_found(req: Request, exc: VersionNotFoundError):  # noqa: ARG001
+        return problem_response(
+            req, status_code=404, type_slug="not-found",
+            title="Schema version not found", detail=str(exc),
+        )
+
+    @app.exception_handler(RollbackNoopError)
+    async def _rollback_noop(req: Request, exc: RollbackNoopError):  # noqa: ARG001
+        return problem_response(
+            req, status_code=409, type_slug="rollback-noop",
+            title="Rollback target is already the current version",
+            detail=str(exc),
         )
 
     @app.exception_handler(DuplicateNameError)
