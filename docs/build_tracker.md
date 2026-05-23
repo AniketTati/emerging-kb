@@ -154,8 +154,8 @@ QA gates this at G1.5b — every prototype page is grep'd for the forbidden voca
 
 ## 1. Now / Next / Blocked
 
-**Now:** Phase 1a G2 — contracts for the 5 `/schemas` endpoints drafted in [api_contracts.md §2](api_contracts.md) · awaiting sign-off. G1 ✅ signed off 2026-05-23.
-**Next:** Phase 1a G3 — test specs + red skeletons for schemas CRUD + RLS + idempotency.
+**Now:** Phase 1a G3 — test spec at [tests/specs/phase_1a.md](../tests/specs/phase_1a.md) + 3 red skeleton files (~25 new tests). Awaiting sign-off. G1 ✅ G2 ✅ signed off 2026-05-23.
+**Next:** Phase 1a G4 — build the schemas API + Idempotency-Key dependency to turn the skeletons green.
 **Blocked on:** nothing.
 
 ---
@@ -261,7 +261,7 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
 | Phase | Description | G1 Plan | G2 API | G3 Tests | G4 Build | G5 Run | Notes |
 |---|---|---|---|---|---|---|---|
 | **0** | Repo + docker-compose (Postgres+pgvector+pg_search+MinIO+Procrastinate) + lifecycle DDL | ✅ | ✅ | ✅ | ✅ | ✅ | All 5 gates green 2026-05-23. `scripts/verify_phase_0.sh` 16/16 checks pass. Ready to merge. |
-| **1a** | Schema service — **CRUD foundation**: `schemas` table + 5 endpoints (POST/GET-list/GET/PUT/DELETE) | ✅ | 🟡 | ⬜ | ⬜ | ⬜ | G1 signed off 2026-05-23. G2 contracts drafted in api_contracts §2. |
+| **1a** | Schema service — **CRUD foundation**: `schemas` table + 5 endpoints (POST/GET-list/GET/PUT/DELETE) | ✅ | ✅ | 🟡 | ⬜ | ⬜ | G1+G2 signed off 2026-05-23. G3 spec + ~25 red skeletons in `tests/specs/phase_1a.md`. |
 | **1b** | Schema service — **versioning**: `schema_versions` table; every PUT creates a new version; version list/read/rollback endpoints | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | Builds on 1a. Full JSON snapshots stored; diffs computed on read (architecture §7). Rollback creates a new version cloning the target. |
 | **1c** | Schema service — **hierarchy**: `schema_entities`, `schema_fields`, `schema_relationships` tables; nested CRUD; NL field descriptions; single_parent + cascade_delete constraints | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | Builds on 1a+1b. Re-extraction trigger on rollback stubbed (Phase 6 wires it). domain_vocabulary deferred to Phase 5. |
 | **2** | Parse layer: Docling + Mistral OCR + xlsx + email → raw_pages | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | Internal service; API exposed via upload (phase 10a) |
@@ -690,7 +690,8 @@ Phases 15–24 per `architecture.md` §12. Tracked here only as a reminder of in
 
 | Phase | Spec | Tests | G3 status |
 |---|---|---|---|
-| 0 | [tests/specs/phase_0.md](../tests/specs/phase_0.md) | [test_health.py](../tests/test_health.py) · [test_ready.py](../tests/test_ready.py) · [test_migrations.py](../tests/test_migrations.py) · [test_rls.py](../tests/test_rls.py) · [test_middleware.py](../tests/test_middleware.py) | ✅ signed off 2026-05-23 (49 tests; red until G4 lands code) |
+| 0 | [tests/specs/phase_0.md](../tests/specs/phase_0.md) | [test_health.py](../tests/test_health.py) · [test_ready.py](../tests/test_ready.py) · [test_migrations.py](../tests/test_migrations.py) · [test_rls.py](../tests/test_rls.py) · [test_middleware.py](../tests/test_middleware.py) | ✅ signed off 2026-05-23 (49 tests, all green) |
+| 1a | [tests/specs/phase_1a.md](../tests/specs/phase_1a.md) | [test_schemas_crud.py](../tests/test_schemas_crud.py) · [test_schemas_rls.py](../tests/test_schemas_rls.py) · [test_idempotency.py](../tests/test_idempotency.py) | 🟡 drafted · ~25 red skeletons; modules land at G4 |
 | 1 | tests/specs/phase_1.md | tests/test_phase_1_*.py | ⬜ |
 | ... | | | |
 
@@ -738,6 +739,7 @@ Phases 15–24 per `architecture.md` §12. Tracked here only as a reminder of in
 | 2026-05-23 | **Phase 0 merged.** PR #1 squash-merged into `main`. Tag `phase-0-complete` pushed. Local `phase-0/repo-skeleton` branch deleted. | Aniket |
 | 2026-05-23 | **Phase 1a G1 OPEN.** Branched `phase-1a/schemas-crud` from `main`. Plan section §5.2 drafted: `0005_schemas.sql` (workspace-scoped, RLS day-1, partial unique index on (workspace_id, name) WHERE lifecycle_state='active'); 5 endpoints (POST/GET-list/GET/PUT/DELETE) with offset+limit pagination; Idempotency-Key required on POST, optional on PUT/DELETE; soft delete via lifecycle_state; UUIDv4 for `schemas.id` (UUIDv7 reserved for X-Request-Id). Audit-log writes explicitly deferred to Phase 9. Awaiting sign-off. | Aniket |
 | 2026-05-23 | **Phase 1a G1 ✅ signed off. G2 drafted.** `api_contracts.md` §2 added: schema resource shape (no workspace_id field on responses — clients know their own); 5 endpoints with per-endpoint error tables using RFC 9457 `type` slugs (`schema-name-conflict`, `not-found`, `validation-error`, `bad-request`, `missing-idempotency-key`); §2.8 explicit out-of-scope list to prevent 1b/1c leak. Placeholder index in api_contracts §3 split Phase 1 row → 1a/1b/1c. | Aniket |
+| 2026-05-23 | **Phase 1a G2 ✅ signed off. G3 drafted.** Created `tests/specs/phase_1a.md` (3 buckets: CRUD 17 · RLS 4 · idempotency 4 = ~25 tests) + 3 red skeleton files (`test_schemas_crud.py`, `test_schemas_rls.py`, `test_idempotency.py`). Per-test workspace UUID fixture pattern (isolated via `X-Test-Workspace` header instead of transaction rollback at HTTP boundary). Imports from `kb.api.schemas` / `kb.api.idempotency` / `kb.domain.schemas` fail at G3 (red, expected). Coverage: every G2 endpoint contract, every error slug, RLS 404-not-403 design, idempotency-key replay semantics including the DELETE replay vs second-call-state distinction. Awaiting sign-off. | Aniket |
 
 ---
 
