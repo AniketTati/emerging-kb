@@ -1,0 +1,95 @@
+# Phase 0 stack. `docker compose up -d --build` brings up:
+#   db (paradedb) → minio → migrate (one-shot) → api + worker
+#
+# Healthchecks gate startup; api/worker won't start until migrate completes.
+# Per-developer overrides go in docker-compose.override.yml (gitignored).
+
+services:
+  # NOTE: db + minio do NOT publish host ports by default. The api + worker
+  # containers reach them via the compose-internal network ("db", "minio"
+  # DNS names). Dev workflows that need a host-side psql / S3 client should
+  # add port bindings in `docker-compose.override.yml` (gitignored).
+  db:
+    image: paradedb/paradedb:latest-pg17
+    environment:
+      POSTGRES_USER: ${KB_POSTGRES_USER:-kb}
+      POSTGRES_PASSWORD: ${KB_POSTGRES_PASSWORD:-kb-dev-password}
+      POSTGRES_DB: ${KB_POSTGRES_DB:-kb}
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${KB_POSTGRES_USER:-kb} -d ${KB_POSTGRES_DB:-kb}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${KB_MINIO_ACCESS_KEY:-kb-minio-dev}
+      MINIO_ROOT_PASSWORD: ${KB_MINIO_SECRET_KEY:-kb-minio-dev-secret}
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  migrate:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      KB_DATABASE_URL: postgresql://${KB_POSTGRES_USER:-kb}:${KB_POSTGRES_PASSWORD:-kb-dev-password}@db:5432/${KB_POSTGRES_DB:-kb}
+    command: ["bash", "scripts/bootstrap_db.sh"]
+    restart: "no"
+
+  api:
+    build: .
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      db:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      KB_POSTGRES_HOST: db
+      KB_MINIO_ENDPOINT: minio:9000
+      KB_DB_URL: postgresql://kb_app:${KB_APP_PASSWORD:-kb-app-dev-password}@db:5432/${KB_POSTGRES_DB:-kb}
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test:
+        - "CMD"
+        - "python"
+        - "-c"
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8000/health').read()"
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  worker:
+    build: .
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      db:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      KB_POSTGRES_HOST: db
+      KB_DATABASE_URL: postgresql://${KB_POSTGRES_USER:-kb}:${KB_POSTGRES_PASSWORD:-kb-dev-password}@db:5432/${KB_POSTGRES_DB:-kb}
+    command:
+      - "procrastinate"
+      - "--app=kb.workers.app.app"
+      - "worker"
+
+volumes:
+  pg-data:
+  minio-data:

@@ -154,9 +154,9 @@ QA gates this at G1.5b — every prototype page is grep'd for the forbidden voca
 
 ## 1. Now / Next / Blocked
 
-**Now:** Phase 0 G1 — repo skeleton + docker-compose plan (open).
-**Next:** Phase 0 G2 — API contracts for first endpoints (`/health`, `/ready`) + Phase 1 G1 — Schema service plan.
-**Blocked on:** nothing. Pre-Phase-0 review complete · all 10 prototype screens signed off · wiring inventory done · `docs/ui_design.md` back-ported.
+**Now:** Phase 0 G5 — **GREEN 2026-05-23**. `scripts/verify_phase_0.sh` runs 16 checks end-to-end. PR ready to open. Phase 1 split into **1a/1b/1c** per the discipline (architecture-§12 phasing entry listed four comma-separated deliverables, which is the split-trigger criterion).
+**Next:** (1) Open Phase 0 PR. (2) Open Phase 1a G1 — schemas-table-only CRUD plan.
+**Blocked on:** nothing. Phase 1a branches from `main` after Phase 0 merges.
 
 ---
 
@@ -177,7 +177,7 @@ These exist *before* any phase opens. They define the system as a whole. Each mu
 | Competitive audit (2026 SOTA) | [docs/competitive_audit.md](competitive_audit.md) | ✅ Done | Wave B additions confirmed |
 | Scale/perf audit | [docs/scale_perf_audit.md](scale_perf_audit.md) | ✅ Done | 18 weaknesses named — accepted |
 | **Build Tracker (this file)** | docs/build_tracker.md | 🟡 In review | **You sign off** |
-| API contracts (skeleton) | docs/api_contracts.md | ⬜ Not started | Created when Phase 1 enters G2 |
+| API contracts | [docs/api_contracts.md](api_contracts.md) | ✅ Phase 0 contracts signed off 2026-05-23 | Phase 1 contracts land at Phase 1 G2 |
 | Test specs (per-phase) | tests/specs/ | ⬜ Not started | Created per phase at G3 |
 
 ---
@@ -188,7 +188,8 @@ These exist *before* any phase opens. They define the system as a whole. Each mu
 |---|---|---|
 | **Runtime** | Python 3.12, uv-managed | Modern toolchain, fast resolver, lockfile reproducible |
 | **API framework** | FastAPI | Async, OpenAPI built-in, ecosystem maturity |
-| **DB** | Postgres 17 + pgvector ≥ 0.8 + ParadeDB pg_search | One transactional store; vector + BM25 in same place |
+| **DB** | Postgres 17 + pgvector ≥ 0.8 + ParadeDB pg_search + ltree (built-in) | One transactional store; vector + BM25 + hierarchical labels in same place. Apache AGE deferred (MVP doesn't need Cypher; recursive CTEs cover lineage/chains). |
+| **Test fixtures** | `testcontainers-python[postgres,minio]` ≥ 4.7 + `freezegun` (dev-only) | Hermetic per-session Postgres + MinIO; tests run without a pre-existing docker-compose stack. Freezegun for assertions on timestamps. |
 | **Object store** | MinIO | S3-compatible; runs in docker-compose |
 | **Queue** | Procrastinate | Postgres-backed; one fewer service |
 | **LLM (extraction/plan/gen)** | Gemini 2.5 Flash | Cost/latency target; adapter pattern so swappable |
@@ -259,8 +260,10 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
 
 | Phase | Description | G1 Plan | G2 API | G3 Tests | G4 Build | G5 Run | Notes |
 |---|---|---|---|---|---|---|---|
-| **0** | Repo + docker-compose (Postgres+pgvector+pg_search+MinIO+Procrastinate) + lifecycle DDL | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | No API surface yet — G2 = "health" + "ready" endpoints |
-| **1** | Schema service: CRUD, versioning, NL field descriptions, hierarchy | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | First "real" API phase |
+| **0** | Repo + docker-compose (Postgres+pgvector+pg_search+MinIO+Procrastinate) + lifecycle DDL | ✅ | ✅ | ✅ | ✅ | ✅ | All 5 gates green 2026-05-23. `scripts/verify_phase_0.sh` 16/16 checks pass. Ready to merge. |
+| **1a** | Schema service — **CRUD foundation**: `schemas` table + 5 endpoints (POST/GET-list/GET/PUT/DELETE) | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | First "real" API phase. Workspace-scoped + RLS day-1, Idempotency-Key honored, soft-delete via lifecycle_state. |
+| **1b** | Schema service — **versioning**: `schema_versions` table; every PUT creates a new version; version list/read/rollback endpoints | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | Builds on 1a. Full JSON snapshots stored; diffs computed on read (architecture §7). Rollback creates a new version cloning the target. |
+| **1c** | Schema service — **hierarchy**: `schema_entities`, `schema_fields`, `schema_relationships` tables; nested CRUD; NL field descriptions; single_parent + cascade_delete constraints | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | Builds on 1a+1b. Re-extraction trigger on rollback stubbed (Phase 6 wires it). domain_vocabulary deferred to Phase 5. |
 | **2** | Parse layer: Docling + Mistral OCR + xlsx + email → raw_pages | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | Internal service; API exposed via upload (phase 10a) |
 | **3** | Chunking + Contextual Retrieval + RAPTOR tree build | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | Internal worker |
 | **4** | Indexing: pgvector HNSW + pg_search BM25 on all RAPTOR levels | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | Internal worker |
@@ -278,6 +281,244 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
 | **10g** | UI — Settings (workspace · models & retrieval defaults · auto-discovery · ingestion · cost · API keys · `/swagger` exposure · Effective Config view) | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | `settings.html` |
 | **11** | Public-dataset loader: CUAD + Enron + SEC 10-K subset + scans + xlsx | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | Scripts, not service endpoints |
 | **12** | Eval harness — 45 stratified Q&A (5 × 9 strata) + RAGAS + HHEM + basic Playground sandbox UI | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | `playground.html` (basic single-query + eval matrix) · regression CI |
+
+### 5.1 Phase 0 plan — Repo skeleton + docker-compose (G1 ✅ SIGNED OFF)
+
+> **Status:** G1 ✅ signed off (corrected version) 2026-05-23 by Aniket. Plan locked. Branch: `phase-0/repo-skeleton`.
+>
+> **History:** initial sign-off 2026-05-22 (commit `d50c1c7`) → re-opened 2026-05-23 after gate-transition consistency review surfaced six drift findings against architecture §6/§7/§12 (commit `1ee9738`) → second sign-off this date. The corrections below are the canonical Phase 0 plan.
+>
+> **What changed in the re-open:** workspace-scoped tables now carry `workspace_id` + RLS policies day 1 per architecture §7; `audit_log` ships in its full partitioned shape per architecture §6 (hash trigger deferred to Phase 9); `processing_status` removed (lands at Phase 2 as `file_lifecycle`); column renames to match architecture's canonical names (`ts` → `created_at`); FastAPI middleware added for workspace context + request-id; Phase 0 ↔ Phase 9 split made explicit.
+
+#### Scope
+
+Phase 0 produces the runnable infrastructure that every later phase builds on.
+
+**In scope:**
+- Single-package Python repo layout under `src/kb/`.
+- `docker-compose.yml` bringing up Postgres (pgvector + pg_search), MinIO, a Procrastinate worker container, and the FastAPI app — in one command.
+- Cross-cutting tables that phases 1–8 will write to: `audit_log` (full partitioned shape, hash trigger deferred to Phase 9), `idempotency_keys` (workspace-scoped), `schema_migrations` (infrastructure).
+- RLS policies on every workspace-scoped table from day 1, plus the FastAPI middleware that sets `app.workspace_id` per request.
+- Migration runner — raw SQL files + a thin Python applier.
+- Python project tooling (`uv`, `ruff`, `pyright`, `pytest`).
+- FastAPI app skeleton with middleware mounted (no routes yet — `/health` + `/ready` open at Phase 0 G2).
+
+**Out of scope (deferred):**
+- Any application logic (schema service, parsers, chunkers, indexers, retrieval, extraction, identity, query, UI). Each owns its phase.
+- Phase-specific DDL (schemas, raw_pages, chunks, embeddings, mentions, entities, queries, raptor_nodes). Each phase ships its own `migrations/sql/NNNN_*.sql` at its own G4.
+- Next.js `web/` project — Phase 10a.
+- CI workflows beyond a single smoke check.
+
+#### Decisions (locked at G1; changes require re-opening G1)
+
+| # | Decision | Choice | Rationale |
+|---|---|---|---|
+| 1 | Repo layout | **Single Python package** at `src/kb/` with internal modules (`kb.api`, `kb.workers`, `kb.db`, `kb.storage`). API and worker share one image; differ only by entrypoint. | All later phases share schema/retrieval/eval primitives. Splitting now invents internal API surface that isn't needed. Process separation already happens via different entrypoints + Procrastinate queue, not packages. |
+| 2 | Postgres image | **`paradedb/paradedb:latest-pg17`** | `pg_search` is a ParadeDB extension; the image bundles it with `pgvector`. Stock `postgres:17` + manual install is fragile. |
+| 3 | Migration tool | **Raw SQL files + thin Python runner** (`migrations/runner.py`) tracking applied files in `schema_migrations`. | Architecture is DDL-heavy (extensions, partitions, HNSW, BM25, materialized views). Alembic autogenerate doesn't help with any of that; every migration would be hand-written. Avoids ORM coupling — multiple services use raw SQL. |
+| 4 | Python tooling | **`uv`** (deps + lockfile), **`ruff`** (lint + format), **`pyright`** basic mode (types), **`pytest` + `pytest-asyncio` + `httpx`** (tests). | Modern, fast, no exotic choices. |
+| 5 | Lifecycle DDL scope | **Narrow** — extensions + cross-cutting tables only. Each phase ships its own DDL at its own G4. | Lets table shapes evolve as the code using them gets written. Phase tables aren't pre-locked. |
+| 6 | Row-Level Security (RLS) | **Enabled day 1** on every table that carries `workspace_id`. Policy: `workspace_id = current_setting('app.workspace_id')::uuid`. Set per request via `SET LOCAL` in a FastAPI middleware. MVP runs `workspace_id='default'` but the policies are real from day 1. | Per architecture §7. A dropped `WHERE workspace_id=...` is mathematically unable to leak across workspaces. Retrofitting RLS later is painful — every existing query needs auditing. Free now, expensive later. |
+| 7 | Audit log table shape | **Ship the full partitioned shape at Phase 0**: range-partitioned by month on `created_at`, `workspace_id`+`query_id` indexes, `prev_hash`/`hash` columns. Defer the **hash-chain INSERT trigger + nightly integrity job** to Phase 9 (per architecture §12). | Partitioning is hard to add later without downtime; ship now. Hash trigger is a small additive at Phase 9 that doesn't change the table shape. |
+| 8 | Phase 0 ↔ Phase 9 split | Phase 0 ships **stubs** of `audit_log` and `idempotency_keys` (full table shape, no enrichment). Phases 1–8 write to them. Phase 9 layers on: audit-log hash-chain trigger + integrity job + `GET /audit` read API + SSE lifecycle visibility endpoint. | Reconciles architecture §12 (Phase 9 owns "audit log + lifecycle + idempotency") with build_tracker §5 Phase 0 ("lifecycle DDL"). Lets phases 1–8 actually audit-log as they ship, without blocking on Phase 9. |
+
+#### Repo layout (target after Phase 0 G4)
+
+```
+emerging-kb/
+├── pyproject.toml              ← single uv project
+├── uv.lock
+├── .env.example                ← all env vars documented; real .env gitignored
+├── docker-compose.yml
+├── docker-compose.override.yml ← gitignored; local overrides
+├── Dockerfile                  ← single image; api/worker/migrate = different entrypoints
+├── src/kb/
+│   ├── api/                    ← FastAPI app; entrypoint `kb.api.main:app`
+│   │   ├── main.py             ← app factory; mounts /health, /ready at Phase 0 G2
+│   │   ├── middleware.py       ← workspace context (SET LOCAL app.workspace_id) + X-Request-Id + access log
+│   │   └── deps.py             ← db session, settings, current_workspace_id
+│   ├── workers/                ← Procrastinate worker; entrypoint `kb.workers.run`
+│   │   └── run.py
+│   ├── db/                     ← psycopg async pool; transactions
+│   │   └── pool.py             ← per-request connection; SET LOCAL app.workspace_id before any query
+│   ├── storage/                ← MinIO client
+│   ├── config.py               ← pydantic-settings (env-var-driven; Hydra/OmegaConf lands at Phase 5 when first LLM call arrives)
+│   └── logging.py              ← structlog config (binds request_id, workspace_id)
+├── migrations/
+│   ├── runner.py               ← applies .sql files in lexical order; tracks in schema_migrations; runs as superuser (bypasses RLS for DDL)
+│   └── sql/
+│       ├── 0001_extensions.sql           ← CREATE EXTENSION vector, pg_search, ltree + CREATE ROLE kb_app
+│       ├── 0002_schema_migrations.sql    ← bootstrap migration tracker (no workspace_id — infrastructure)
+│       ├── 0003_audit_log.sql            ← partitioned by month on created_at + workspace_id + hash columns + RLS (hash trigger lands Phase 9)
+│       └── 0004_idempotency_keys.sql     ← (workspace_id, key) primary key + RLS
+├── scripts/
+│   ├── bootstrap_db.sh         ← docker compose up + run migrations
+│   └── verify_phase_0.sh       ← G5 smoke (lands at G5)
+├── tests/
+│   ├── conftest.py             ← lands at G3
+│   └── specs/phase_0.md        ← lands at G3
+└── docs/, prototype/           ← existing
+```
+
+**Reversibility note:** if any module under `src/kb/` later needs its own package (e.g. shared lib, separate deploy target), that's a mechanical extract — cheaper than carrying multi-package scaffolding through 12 phases that may never need it.
+
+#### docker-compose service plan
+
+| Service | Image | Ports | Volumes | Depends on |
+|---|---|---|---|---|
+| `db` | `paradedb/paradedb:latest-pg17` | `5432:5432` | `pg-data:/var/lib/postgresql/data` | — |
+| `minio` | `minio/minio:latest` | `9000:9000` (S3), `9001:9001` (console) | `minio-data:/data` | — |
+| `migrate` | built from `Dockerfile`; entrypoint `python -m migrations.runner` | — | — | `db` (healthy) |
+| `api` | built from `Dockerfile`; entrypoint `uvicorn kb.api.main:app --host 0.0.0.0 --port 8000` | `8000:8000` | — | `migrate` (completed_successfully) |
+| `worker` | built from `Dockerfile`; entrypoint `python -m kb.workers.run` | — | — | `migrate` (completed_successfully) |
+
+**Notes:**
+- Healthchecks: `db` → `pg_isready`; `minio` → HTTP `/minio/health/live`; `api` → `GET /health` once routes land at G2.
+- Single `Dockerfile` for `api`, `worker`, `migrate` — different entrypoints over the same image. Keeps build cache tight.
+- `migrate` runs as a short-lived one-shot init container (Compose `service_completed_successfully` condition gates `api` + `worker`).
+- `.env.example` committed with placeholders. `pg-data/` and `minio-data/` gitignored.
+- No separate broker — Procrastinate uses Postgres directly.
+
+#### Lifecycle DDL — Phase 0 migrations (corrected scope, RLS day-1)
+
+Phase 0 ships **four** migration files. Three carry `workspace_id` + an RLS policy from day 1 per architecture §7. The fourth (`schema_migrations`) is global infrastructure and has no workspace scope.
+
+##### `0001_extensions.sql`
+
+```sql
+CREATE EXTENSION IF NOT EXISTS vector;     -- pgvector ≥ 0.8 (HNSW + halfvec)
+CREATE EXTENSION IF NOT EXISTS pg_search;  -- ParadeDB BM25
+CREATE EXTENSION IF NOT EXISTS ltree;      -- hierarchical labels (Phase 3 doc-chains, Phase 7 lineage_path per architecture §7 / Design 7)
+
+CREATE ROLE kb_app NOLOGIN;                -- application role; RLS applies. Login + password set by env at G4.
+GRANT CONNECT ON DATABASE current_database() TO kb_app;
+GRANT USAGE ON SCHEMA public TO kb_app;
+```
+
+No workspace scope. Runs first; everything else depends on these.
+
+##### `0002_schema_migrations.sql` (no workspace_id — infrastructure)
+
+```sql
+CREATE TABLE schema_migrations (
+  id          text        PRIMARY KEY,           -- filename, e.g. '0003_audit_log.sql'
+  applied_at  timestamptz NOT NULL DEFAULT now()
+);
+```
+
+Used by `migrations/runner.py` to track which files have been applied. No RLS — this is global infrastructure, not workspace data.
+
+##### `0003_audit_log.sql` (full architecture shape, hash trigger deferred)
+
+Architecture §6 lines 691–706 + §7 lines 850. Partitioned by month on `created_at` from day 1 (cannot retrofit cheaply). Hash chain columns present; the **INSERT trigger that fills them, plus the nightly integrity job**, lands at Phase 9.
+
+```sql
+CREATE TABLE audit_log (
+  id            uuid         NOT NULL DEFAULT gen_random_uuid(),
+  workspace_id  uuid         NOT NULL,
+  created_at    timestamptz  NOT NULL DEFAULT now(),
+  actor         text         NOT NULL,           -- user_id or 'system:<service>'
+  action        text         NOT NULL,           -- e.g. 'schema.create', 'query.run', 'extraction.update'
+  entity_type   text,                            -- e.g. 'schema', 'doc', 'entity'
+  entity_id     text,
+  query_id      uuid,                            -- set on query-time audit rows (Phase 8+)
+  payload       jsonb        NOT NULL,
+  prev_hash     bytea,                           -- Phase 9 fills via INSERT trigger
+  hash          bytea,                           -- Phase 9 fills via INSERT trigger
+  PRIMARY KEY (id, created_at)                   -- partition key must be in PK
+) PARTITION BY RANGE (created_at);
+
+-- Initial partitions: current month + next month. A cron creates future months at Phase 9.
+CREATE TABLE audit_log_2026_05 PARTITION OF audit_log
+  FOR VALUES FROM ('2026-05-01') TO ('2026-06-01');
+CREATE TABLE audit_log_2026_06 PARTITION OF audit_log
+  FOR VALUES FROM ('2026-06-01') TO ('2026-07-01');
+
+CREATE INDEX audit_log_ws_created_idx ON audit_log (workspace_id, created_at DESC);
+CREATE INDEX audit_log_ws_query_idx   ON audit_log (workspace_id, query_id);
+
+ALTER TABLE audit_log ENABLE ROW LEVEL SECURITY;
+CREATE POLICY audit_log_workspace_isolation ON audit_log
+  USING (workspace_id = current_setting('app.workspace_id')::uuid);
+
+-- Append-only at the DB-role level. Application role (kb_app) can INSERT/SELECT only.
+-- Migration runs as superuser so this doesn't block DDL.
+REVOKE UPDATE, DELETE ON audit_log FROM PUBLIC;
+```
+
+**Deferred to Phase 9** (do not ship in Phase 0):
+- `INSERT` trigger that computes `prev_hash` and `hash`.
+- Nightly integrity walker job.
+- Partition-rotation cron (creates next month's partition).
+- `GET /audit` API + SSE lifecycle endpoint.
+
+##### `0004_idempotency_keys.sql` (workspace-scoped)
+
+```sql
+CREATE TABLE idempotency_keys (
+  workspace_id  uuid         NOT NULL,
+  key           text         NOT NULL,           -- value from Idempotency-Key header
+  response      jsonb        NOT NULL,
+  status_code   int          NOT NULL,
+  created_at    timestamptz  NOT NULL DEFAULT now(),
+  PRIMARY KEY (workspace_id, key)
+);
+
+CREATE INDEX idempotency_keys_created_idx ON idempotency_keys (created_at);
+
+ALTER TABLE idempotency_keys ENABLE ROW LEVEL SECURITY;
+CREATE POLICY idempotency_keys_workspace_isolation ON idempotency_keys
+  USING (workspace_id = current_setting('app.workspace_id')::uuid);
+```
+
+Phase 1 (schema service) is the first phase to write here. Phase 9 may add a TTL cleanup job.
+
+##### What is **not** shipped at Phase 0
+
+- **`processing_status` / `file_lifecycle`** — removed from Phase 0. Architecture's canonical name is `file_lifecycle`. No `files` exist until Phase 2, so this table lands at Phase 2 (or Phase 9 per architecture §12's reading). Phase 2 G1 makes the call.
+- **`corrections`, `entity_overrides`, `schema_field_overrides`, `regression_set`** — Phase 4 / Phase 9.
+- **`config_overrides`** — Phase 5 when Hydra + OmegaConf land.
+- **Procrastinate's `jobs` table** — Procrastinate's own migrations create this at first worker startup; we don't author its DDL.
+
+Each later phase appends its own `NNNN_<purpose>.sql` files at its own G4. Numbering is global (linear apply order).
+
+#### Migration runner behaviour
+
+`python -m migrations.runner`:
+1. Connect to the configured Postgres **as superuser** (DDL needs it; superuser also bypasses RLS so policies don't block table creation).
+2. Bootstrap: if `schema_migrations` doesn't exist, apply `0002_schema_migrations.sql` and record it. Then proceed.
+3. List `migrations/sql/*.sql` in lexical order.
+4. For each file not yet recorded: run it inside a transaction; on success record `(id=filename, applied_at=now())`.
+5. Idempotent: re-running with no new files does nothing.
+
+**App vs migration role:** the application uses a non-superuser `kb_app` role created at first migration. RLS applies to `kb_app`; superuser (migrations + admin tasks) bypasses RLS. This split is created in `0001_extensions.sql`.
+
+No rollback DSL — for DDL we write forward fixes. Standard in DDL-heavy systems.
+
+#### Phase 0 G5 — what "green" means
+
+`scripts/verify_phase_0.sh` lands at G5 and runs end-to-end:
+
+1. `cp .env.example .env && docker compose up -d --build`
+2. Wait for `db`, `minio`, `api`, `worker` healthy; `migrate` exited 0.
+3. `psql` into `db` as superuser:
+   - `\dx` includes `vector`, `pg_search`, and `ltree`.
+   - `\dt` includes `schema_migrations`, `audit_log`, `idempotency_keys` (only these — no `file_lifecycle`, no `processing_status`).
+   - `audit_log` is partitioned: `\d+ audit_log` shows partitioned table with `audit_log_2026_05` and `audit_log_2026_06` partitions.
+   - RLS enabled on `audit_log` and `idempotency_keys`: `SELECT relname, relrowsecurity FROM pg_class WHERE relname IN ('audit_log', 'idempotency_keys')` shows `relrowsecurity = t` for both.
+   - `\du` includes the `kb_app` role.
+4. As `kb_app` role with `SET app.workspace_id = '<some-uuid>'`: insert into `audit_log` succeeds; SELECT only returns rows matching the set workspace.
+5. `curl http://localhost:8000/openapi.json` returns 200; `paths` contains `/health` and `/ready` (G2 contracts implemented by G4); no other paths.
+6. `curl -i http://localhost:8000/openapi.json` response includes an `X-Request-Id` header (middleware proof).
+7. `pytest tests/` is green (45 tests across health, ready, migrations, RLS, middleware).
+
+#### Sign-off
+
+- Initial G1 signed off 2026-05-22 (commit `d50c1c7`).
+- Re-opened 2026-05-23 after gate-transition consistency review; corrections in commit `1ee9738`.
+- Second sign-off 2026-05-23 by Aniket. Plan locked. G2 contracts re-validated and also signed off. G3 opens.
+
+---
 
 ### Wave B (build if time)
 
@@ -299,11 +540,11 @@ Phases 15–24 per `architecture.md` §12. Tracked here only as a reminder of in
 
 ## 6. API contracts — index
 
-> Filled in as each phase enters G2. Authoritative file: [`docs/api_contracts.md`](api_contracts.md) (created when Phase 0 G2 opens).
+> Filled in as each phase enters G2. Authoritative file: [`docs/api_contracts.md`](api_contracts.md).
 
 | Phase | Endpoints planned | Contract status |
 |---|---|---|
-| 0 | `GET /health`, `GET /ready` | ⬜ |
+| 0 | `GET /health`, `GET /ready` | ✅ signed off 2026-05-23 |
 | 1 | `GET/POST/PUT/DELETE /schema`, `GET /schema/versions`, hierarchy endpoints | ⬜ |
 | 2–7 | Mostly internal workers; admin endpoints TBD at G1 | ⬜ |
 | 8 | `POST /query`, `POST /chat`, `GET /chat/:id/stream` (SSE) | ⬜ |
@@ -320,7 +561,7 @@ Phases 15–24 per `architecture.md` §12. Tracked here only as a reminder of in
 
 | Phase | Spec | Tests | G3 status |
 |---|---|---|---|
-| 0 | tests/specs/phase_0.md | tests/test_phase_0_*.py | ⬜ |
+| 0 | [tests/specs/phase_0.md](../tests/specs/phase_0.md) | [test_health.py](../tests/test_health.py) · [test_ready.py](../tests/test_ready.py) · [test_migrations.py](../tests/test_migrations.py) · [test_rls.py](../tests/test_rls.py) · [test_middleware.py](../tests/test_middleware.py) | ✅ signed off 2026-05-23 (49 tests; red until G4 lands code) |
 | 1 | tests/specs/phase_1.md | tests/test_phase_1_*.py | ⬜ |
 | ... | | | |
 
@@ -332,7 +573,7 @@ Phases 15–24 per `architecture.md` §12. Tracked here only as a reminder of in
 
 | Phase | Verify script | Last run | Result |
 |---|---|---|---|
-| 0 | scripts/verify_phase_0.sh | — | — |
+| 0 | [scripts/verify_phase_0.sh](../scripts/verify_phase_0.sh) | 2026-05-23 | ✅ 16/16 (compose smoke + 49 pytest) |
 | 1 | scripts/verify_phase_1.sh | — | — |
 | ... | | | |
 
@@ -352,6 +593,19 @@ Phases 15–24 per `architecture.md` §12. Tracked here only as a reminder of in
 | 2026-05-22 | Added G1.6 (Wiring inventory) gate. Every interactive element on every screen → planned backend endpoint or marked client-only. `prototype/wiring_inventory.md` produced — ~210 elements audited, ~100 unique endpoints across 16 groups. Becomes the input set for G2. | Aniket |
 | 2026-05-22 | All 10 prototype screens built, QA-passed, signed off. Polish pass applied: doc names → Doc Detail · field pills → Schema Studio · doc-type badges → Schema Studio · query IDs → Audit · cited sources → Doc Detail. Cross-cutting §0.2 rules verified on every screen. | Aniket |
 | 2026-05-22 | Locked design back-ported into `docs/ui_design.md`. Prior version preserved at `docs/archive/ui_design_v1.md`. **Pre-Phase-0 review complete. Phase 0 G1 ready to open.** | Aniket |
+| 2026-05-22 | **Phase 0 G1 OPEN.** Branched `phase-0/repo-skeleton`. Plan section §5.1 drafted: single-package `src/kb/` layout, ParadeDB image (bundles pgvector + pg_search), raw-SQL migration runner, narrow lifecycle DDL (extensions + `schema_migrations`, `audit_log`, `processing_status`, `idempotency_keys`), `uv`/`ruff`/`pyright`/`pytest` tooling, FastAPI skeleton (routes open at G2). Awaiting sign-off. | Aniket |
+| 2026-05-22 | **Phase 0 G1 ✅ SIGNED OFF.** Plan locked. Phase 0 G2 opens — API contracts for `/health` + `/ready` to land in `docs/api_contracts.md`. | Aniket |
+| 2026-05-22 | **Phase 0 G2 drafted.** Created `docs/api_contracts.md` with §0 conventions (RFC 9457 errors, UUIDv7 IDs, ISO-8601 timestamps, idempotency headers, status code map) and §1 Phase 0 contracts: `GET /health` (liveness — process up, no dependency checks) and `GET /ready` (readiness — db + minio + migrations check, 503 with `application/problem+json` on fail, parallel checks with 5s budget). Awaiting sign-off. | Aniket |
+| 2026-05-23 | **Gate-transition consistency review (G1+G2) ran before opening G3.** Six drifts surfaced against `docs/architecture.md`: (A) lifecycle tables had no `workspace_id` + RLS — architecture §7 mandates RLS day 1; (B) no FastAPI workspace middleware; (C) no X-Request-Id middleware (G2 §0.8 promised, G1 omitted); (D) `audit_log` shape under-specified vs architecture §6 (partitioning, hash columns, role grants); (E) `processing_status` was a fabrication — canonical name is `file_lifecycle`, belongs to Phase 2+; (F) Phase 0 ↔ Phase 9 split implicit — needed explicit reconciliation. Tech stack, gate discipline, branch+commit conventions all clean. | Aniket |
+| 2026-05-23 | **Phase 0 G1 re-opened** to apply consistency fixes. §5.1 rewritten: lifecycle DDL shrinks to four files (`0001_extensions`, `0002_schema_migrations`, `0003_audit_log` full partitioned shape, `0004_idempotency_keys` workspace-scoped); RLS day-1 added as decision #6; audit-log shape as #7; Phase 0↔9 split as #8; `src/kb/api/middleware.py` added to layout (workspace context + X-Request-Id); G5 acceptance updated to verify partitions + RLS + request-id header. G2 contracts unchanged (re-validated against revised G1). Awaiting second sign-off. | Aniket |
+| 2026-05-23 | **Phase 0 G1 ✅ and G2 ✅ both signed off.** Corrected §5.1 plan locked. G2 contracts in `docs/api_contracts.md` locked. G3 opens: test specs + red skeletons for `/health`, `/ready`, migration runner, RLS isolation, middleware. | Aniket |
+| 2026-05-23 | **Phase 0 G3 drafted.** Created `tests/specs/phase_0.md` (test spec — 5 buckets, 41 test functions, testcontainers fixture strategy) + 6 skeleton files (`conftest.py`, `test_health.py`, `test_ready.py`, `test_migrations.py`, `test_rls.py`, `test_middleware.py`). Skeletons are RED — they import from `kb.*` modules that land at G4. Every G2 contract has a matching test; every G1 decision (RLS day-1, partitioning, middleware) has a matching test. Awaiting sign-off. | Aniket |
+| 2026-05-23 | **Post-G3 cross-gate consistency sweep (G1↔G2↔G3↔architecture).** Five drifts fixed in one commit: (A) G1 plan §5.1 G5 acceptance #5 was stale post-G2 — said `/openapi.json` returns empty paths, but G4 will mount `/health` + `/ready`; corrected. (B) Spec test count was 41 (claimed) vs 45 (actual recount of first draft); corrected. (C) §3 missing `testcontainers-python` + `freezegun` (test fixtures); added as new row. (D) `ltree` extension missing from `0001_extensions.sql` per architecture §7 (required for Phase 3 doc-chains + Phase 7 lineage_path); added, also added `kb_app` role creation in 0001. §3 DB row updated to include ltree. (E) Unused fixtures (`set_workspace`, `frozen_time`) removed from `conftest.py`. Plus 4 new tests landed: `test_health_returns_json_content_type` (api_contracts §0.1) + 3 per-check timeout tests on `/ready` (api_contracts §1.2 check table). Final test count: 49 (was 45 at G3 first draft). | Aniket |
+| 2026-05-23 | **Phase 0 G3 ✅ signed off.** Spec + 49 red skeletons locked. **G4 opens.** Order of build commits planned: (1) project bootstrap (pyproject.toml, .env.example, .gitignore, Dockerfile); (2) migrations (runner + 4 SQL files); (3) shared modules (config, db pool, logging, storage); (4) FastAPI app + middleware; (5) /health + /ready endpoints + readiness checks; (6) Procrastinate worker entrypoint; (7) docker-compose.yml + scripts/bootstrap_db.sh. Each commit makes some red tests green. | Aniket |
+| 2026-05-23 | **Phase 0 G4 — code landed (5 commits, not yet run).** Commits on `phase-0/repo-skeleton`: `1dec6f5` bootstrap (pyproject, Dockerfile, .env, src/kb stub) · `c0d020c` migrations (runner + 4 SQL) · `18b6ea8` shared modules (config, logging, db pool, storage) · `944c61f` FastAPI app + middleware + /health + /ready · `1dbd08e` worker + compose + bootstrap script + kb_app password wiring. **Tests not yet verified** — local env lacks uv + Python 3.12; will run at G5 (`scripts/verify_phase_0.sh`). G4 cell stays 🟡 until that suite goes green. | Aniket |
+| 2026-05-23 | **Phase 0 G4 debugging pass — all 49 tests pass.** Installed `uv` via Homebrew, ran pytest against fresh paradedb + minio testcontainers, fixed issues surfaced (commit `17baa1c`): PG utility commands (ALTER ROLE, SET LOCAL) don't accept bind parameters → use `psycopg.sql.Literal` + `SELECT set_config(...)`; testcontainer SQLAlchemy-style URLs need stripping for psycopg3; container `.stop()/.start()` in tests reassigns ports and breaks subsequent tests → replaced with monkey-patched check functions; configure_logging now called in build_app (ASGITransport doesn't trigger lifespan); structlog `cache_logger_on_first_use=False` so test-time processor swaps take effect; conftest now sets full MinIO creds + clears lru_caches; 0003/0004 made idempotent (IF NOT EXISTS, DROP POLICY IF EXISTS) so bootstrap test re-application works. Suite runtime ~19s. | Aniket |
+| 2026-05-23 | **Phase 0 G5 ✅ GREEN — full stack verified.** Authored `scripts/verify_phase_0.sh` (commit `f9a73fa`); 16 checks pass end-to-end: docker compose build + up, migrate one-shot exits 0, db/minio/api healthy, vector+pg_search+ltree installed, lifecycle tables + partitions + RLS state correct, kb_app role exists, /health + /ready + /openapi.json + X-Request-Id all behave per contract, pytest 49/49. Additional bug fixes landed in the same commit: Dockerfile missing README+LICENSE COPY (hatchling needs them); base compose was binding db/minio host ports → conflicts with developers' other infra → moved to `docker-compose.override.yml`; Procrastinate v3 PsycopgConnector import was under non-existent `contrib.psycopg` → use `procrastinate.PsycopgConnector` directly; 0002 missing explicit GRANT SELECT on schema_migrations for kb_app (ALTER DEFAULT PRIVILEGES in 0001 doesn't retroactively cover bootstrap-created tables). **Phase 0 complete; ready to open PR.** | Aniket |
+| 2026-05-23 | **Phase 1 split into 1a/1b/1c.** Architecture §12 lists "CRUD, versioning, NL field descriptions, hierarchy" as Phase 1's scope — four distinct deliverables. Per the discipline (sub-phase splits memory entry), each becomes its own G1→G5 cycle with its own branch + PR. 1a = `schemas` CRUD foundation (5 endpoints). 1b = `schema_versions` + versioning endpoints. 1c = `schema_entities` + `schema_fields` + `schema_relationships` hierarchy + NL descriptions. domain_vocabulary deferred to Phase 5; re-extraction trigger on rollback stubbed for Phase 6. | Aniket |
 
 ---
 

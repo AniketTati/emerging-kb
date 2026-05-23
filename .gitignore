@@ -12,13 +12,17 @@ env/
 .ruff_cache/
 .mypy_cache/
 
-# uv
-uv.lock
+# uv — keep the lockfile committed for reproducible builds (build_tracker §3).
+# (No entry here; uv.lock IS tracked.)
 
 # Env / secrets
 .env
 .env.local
 *.secret
+
+# Docker compose local overrides (per-developer, never committed)
+docker-compose.override.yml
+docker-compose.override.yaml
 
 # OS
 .DS_Store
