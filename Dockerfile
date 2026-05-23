@@ -6,7 +6,7 @@
 FROM python:3.12-slim AS builder
 
 # Pin uv via the official image; copies its single static binary.
-COPY --from=ghcr.io/astral-sh/uv:0.5.0 /uv /usr/local/bin/uv
+COPY --from=ghcr.io/astral-sh/uv:0.9.7 /uv /usr/local/bin/uv
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \

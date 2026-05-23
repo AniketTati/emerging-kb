@@ -50,6 +50,19 @@ packages = ["src/kb"]
 [tool.uv]
 package = true
 
+# Phase 2a — force CPU-only torch wheels. Docling pulls in PyTorch; default
+# wheels include ~2 GB of CUDA libraries we don't use (Wave A worker is
+# CPU-only on Linux containers + Mac dev). Saves ~2 GB per image + ~5x
+# faster builds. Switch to GPU when we have a GPU-deployment story.
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu" }]
+torchvision = [{ index = "pytorch-cpu" }]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
