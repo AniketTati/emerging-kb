@@ -240,3 +240,57 @@ async def test_files_isolated_across_workspaces(client, test_workspace):
     )
     resp = await client.get("/files", headers=headers(workspace_b))
     assert resp.json()["total"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Phase 2b additions — xlsx + email mime whitelist + magic sniff
+# (api_contracts §5.5 415 row widened, build_tracker §5.6 decisions #6, #10, #11)
+# ---------------------------------------------------------------------------
+
+
+from pathlib import Path
+
+_FIXTURE_DIR = Path(__file__).parent / "fixtures"
+
+_XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+async def test_post_xlsx_creates_file(client, test_workspace):
+    """POST tiny.xlsx with the right Content-Type → 201 + queued."""
+    xlsx_bytes = (_FIXTURE_DIR / "tiny.xlsx").read_bytes()
+    resp = await client.post(
+        "/files",
+        files={"file": ("test.xlsx", xlsx_bytes, _XLSX_MIME)},
+        headers=headers(test_workspace, idempotency_key=str(uuid.uuid4())),
+    )
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["mime_type"] == _XLSX_MIME
+    assert body["lifecycle_state"] == "queued"
+
+
+async def test_post_email_creates_file(client, test_workspace):
+    """POST tiny.eml with message/rfc822 → 201 + queued."""
+    eml_bytes = (_FIXTURE_DIR / "tiny.eml").read_bytes()
+    resp = await client.post(
+        "/files",
+        files={"file": ("test.eml", eml_bytes, "message/rfc822")},
+        headers=headers(test_workspace, idempotency_key=str(uuid.uuid4())),
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["mime_type"] == "message/rfc822"
+
+
+async def test_post_octet_stream_xlsx_detected_via_magic(client, test_workspace):
+    """POST xlsx with Content-Type=application/octet-stream → magic-sniff
+    routes to the xlsx parser; response mime_type normalized to the xlsx mime
+    (decision #6)."""
+    xlsx_bytes = (_FIXTURE_DIR / "tiny.xlsx").read_bytes()
+    resp = await client.post(
+        "/files",
+        files={"file": ("blob.bin", xlsx_bytes, "application/octet-stream")},
+        headers=headers(test_workspace, idempotency_key=str(uuid.uuid4())),
+    )
+    assert resp.status_code == 201, resp.text
+    # Server-side magic sniff should re-classify to xlsx mime
+    assert resp.json()["mime_type"] == _XLSX_MIME

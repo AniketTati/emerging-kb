@@ -154,8 +154,8 @@ QA gates this at G1.5b — every prototype page is grep'd for the forbidden voca
 
 ## 1. Now / Next / Blocked
 
-**Now:** Phase 2a — all 5 gates ✅. End-of-phase cross-phase sweep complete. Ready to open PR (`phase-2a/parse-scaffold` → `main`).
-**Next:** Phase 2b — additional parsers (xlsx + email + Mistral OCR), no new HTTP endpoints.
+**Now:** Phase 2b — all 5 gates ✅. Cross-phase sweep running in background. Ready to open PR (`phase-2b/parse-formats` → `main`).
+**Next:** Phase 3 — chunking + Contextual Retrieval + RAPTOR tree build (architecture §5 steps 6–10). First non-trivial worker phase that reads from `raw_pages`. Phase 2c (force-parser route + real Mistral activation) deferred — can land later as a small additive PR when a Mistral API key is procured.
 **Blocked on:** nothing.
 
 ---
@@ -265,7 +265,7 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
 | **1b** | Schema service — **versioning**: `schema_versions` table; every PUT creates a new version; version list/read/rollback endpoints | ✅ | ✅ | ✅ | ✅ | ✅ | All 5 gates green 2026-05-23. verify_phase_1b.sh 21/21. verify_phase_1a.sh still 17/17. verify_phase_0.sh still 16/16. pytest 106/106. Ready to merge. |
 | **1c** | Schema service — **hierarchy**: `schema_entities`, `schema_fields`, `schema_relationships` tables; nested CRUD; NL field descriptions; single_parent + cascade_delete constraints | ✅ | ✅ | ✅ | ✅ | ✅ | All 5 gates green 2026-05-23. verify_phase_1c.sh 20/20. verify_phase_1b.sh still 21/21. verify_phase_1a.sh still 17/17. verify_phase_0.sh still 16/16. pytest 142/142. Ready to merge. |
 | **2a** | Parse layer — **scaffold + Docling**: `files` + `file_lifecycle` + `raw_pages` + `parse_artifacts` tables; Procrastinate `parse_file` task; MIME-based dispatcher; Docling (digital PDF) parser; admin `POST /files` upload endpoint | ✅ | ✅ | ✅ | ✅ | ✅ | All 5 gates green 2026-05-23. pytest 170/170. First worker phase complete. Ready to merge. |
-| **2b** | Parse layer — **additional parsers**: xlsx (openpyxl) + email (stdlib) + Mistral OCR (external API + mock fallback) | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | Builds on 2a's dispatcher + raw_pages contract. Each parser is an additive `Parser` Protocol implementation. |
+| **2b** | Parse layer — **additional parsers**: xlsx (openpyxl) + email (stdlib) + Mistral OCR (external API adapter class + mock-tested; real-API gated on `KB_MISTRAL_API_KEY`) | ✅ | ✅ | ✅ | ✅ | ✅ | All 5 gates green 2026-05-23. verify_phase_2b.sh 15/15. pytest 188/188. xlsx + email E2E pipeline verified in Docker stack (xlsx → 2 sheets → 2 raw_pages; email → 1 page with headers + body). Mistral OCR adapter ready, self-disabled without API key. Ready to merge. |
 | **3** | Chunking + Contextual Retrieval + RAPTOR tree build | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | Internal worker |
 | **4** | Indexing: pgvector HNSW + pg_search BM25 on all RAPTOR levels | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | Internal worker |
 | **5** | Open extraction → mentions; clause split + typing + anomaly score | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | L2 + L2b + L3 |
@@ -1142,6 +1142,100 @@ When Aniket approves this plan, the Phase 2a G1 cell in §5 flips 🟡 → ✅ a
 
 ---
 
+### 5.6 Phase 2b plan — Additional parsers (G1 ✅ SIGNED OFF)
+
+> **Status:** G1 ✅ signed off 2026-05-23 by Aniket. Plan locked. Branch: `phase-2b/parse-formats` off `main` (Phase 2a merged as PR #5; tag `phase-2a-complete`).
+
+#### Scope
+
+Phase 2b adds three parsers behind the same `kb.parsers.Parser` Protocol that Phase 2a established. **No new HTTP endpoints** — the existing `POST /files` widens its mime-type whitelist to accept xlsx + email; the dispatcher (with first-match-wins ordering) picks the right parser per upload. Phase 2a's E2E pipeline (`upload → MinIO → Procrastinate → parse → raw_pages`) carries each new parser transparently.
+
+**In scope:**
+- **xlsx parser** (`kb/parsers/xlsx_parser.py`): handles `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` (and the ZIP-magic `PK\x03\x04` fallback). One `raw_pages` row per sheet — `page_number = sheet index (1-based)`; `text = TSV-rendered cells`; `layout_json = {sheet_name, rows, cols}`. Uses `openpyxl` (already in lock via Docling).
+- **email parser** (`kb/parsers/email_parser.py`): handles `message/rfc822` (and the header-sniff fallback: `^[A-Z][a-zA-Z-]+:\s` in the first line). One `raw_pages` row — `page_number = 1`; `text = "From: …\nTo: …\nSubject: …\n\n<body>"`; `layout_json = {headers, attachments: [{filename, content_type, size_bytes}]}`. Body extraction prefers `text/plain` body parts; falls back to `text/html` stripped via stdlib `html.parser`. Attachments **not** recursively parsed in 2b (a PDF attachment doesn't auto-trigger Docling on its bytes — that's recursive ingestion, deferred).
+- **Mistral OCR parser** (`kb/parsers/mistral_ocr_parser.py`): adapter class for the Mistral OCR 3 HTTP API per architecture line 419. Constructor takes an optional `http_client` for test injection. Test suite uses a mock client returning a pre-canned per-page response. Real API integration gated on `KB_MISTRAL_API_KEY` env var (if unset, `MistralOCRParser.can_handle()` returns False — the parser is effectively disabled). Registration order: Docling FIRST for `application/pdf` (which already includes RapidOCR fallback via docling); Mistral OCR registered AFTER (currently inert because it'd never win the dispatch with Docling registered first, but ready to swap in when a force-route mechanism lands).
+- **Mime whitelist expansion** in `kb/api/files.py`: the `_PHASE_2A_WHITELIST` set widens to include the xlsx + email mimes. (415 errors stay for genuinely unsupported types like text/plain.)
+- **Magic-byte sniffing** when `Content-Type` is missing or `application/octet-stream` — dispatcher uses the first 8 bytes to pick a parser.
+
+**Out of scope (deferred):**
+- **Real Mistral OCR API integration** — adapter class ships; real API call works the instant `KB_MISTRAL_API_KEY` is set, but Phase 2b's CI/tests never call the real API. Phase 2c (or whenever a key is procured) flips this on.
+- **Force-parser route mechanism** (`?parser=mistral_ocr` query param on POST /files) — would let callers force Mistral OCR over Docling for a known-scanned PDF. Deferred to Phase 2c if needed; current scanned-PDF fallback uses Docling+RapidOCR.
+- **Attachment recursive ingestion** (email with a PDF attachment auto-creating a child file row) — a useful future feature but its own design decision (audit trail of the parent/child, doc-chain detection). Out of scope.
+- **pptx** (architecture line 421 lists it but Wave A's eval corpus doesn't need it) — Wave B.
+- **Gemini VLM fallback for image-only PDFs** (architecture line 423) — Wave B.
+- **`audit_log` writes** on new parser invocations — Phase 9.
+
+#### Decisions (locked at G1)
+
+| # | Decision | Choice | Rationale |
+|---|---|---|---|
+| 1 | xlsx page model | **One `raw_pages` row per sheet** (page_number = sheet index 1-based; text = TSV-rendered cells). Empty sheets still emit a row with empty text (preserves sheet-count fidelity for the citation layer). | Spreadsheets don't have pages; sheets are the closest analog. TSV keeps it parseable without a structured representation that we don't yet have a place for. Phase 3 chunking + Phase 6 schema extraction can read TSV. |
+| 2 | email page model | **One `raw_pages` row** with combined headers + body. Layout JSON stores parsed headers + attachment metadata. | Emails don't have pages either; one row matches their "single conceptual document" nature. Headers in the text body let Phase 3 chunkers include them in retrieval context. |
+| 3 | xlsx text rendering | `\t`-separated cells per row, `\n`-separated rows, `\n\n` between sheets. Includes the sheet name as a header line: `# Sheet: <name>\n<rows>`. | Simple, deterministic, diff-friendly. No pandas-styling. Cell values stringified via `str(v)` (preserves dates as their ISO form via openpyxl's default). |
+| 4 | email text rendering | `From: <addr>\nTo: <addrs>\nCc: <addrs>\nSubject: <subj>\nDate: <date>\n\n<body>`. Body: prefer `text/plain` parts joined by `\n\n`; if none, fall back to `text/html` stripped via stdlib `html.parser`. | Mirrors how a user sees an email. Stdlib-only — no `beautifulsoup4` or other HTML libs. |
+| 5 | Email attachments | Recorded in `layout_json.attachments[]` as `{filename, content_type, size_bytes}`. Bytes NOT extracted into a child `files` row. | Recursive ingestion is a separate design decision (parent/child file relationships, doc-chains). Deferred. |
+| 6 | Magic-byte sniffer at upload | `kb/api/files.py` reads the first 8 bytes after `await upload.read()` and overrides `mime_type` if Content-Type is `application/octet-stream` or empty. PDF (`%PDF-`), ZIP/xlsx (`PK\x03\x04`), email (`^[A-Z][a-zA-Z-]+:`). | Many file uploads ship without a meaningful Content-Type. Robustness over relying on the caller. |
+| 7 | Mistral OCR routing | **Registered after Docling** so it never wins dispatch-by-mime today. Adapter class proves the Protocol works; real activation comes when a force-parser mechanism lands (Phase 2c or later). | Avoids a routing-strategy decision that's premature without a key + cost story. |
+| 8 | Mistral OCR mock | Test suite uses `MistralOCRParser(http_client=MockHttpClient(...))`. The mock returns a fixture JSON shaped like Mistral's real per-page response — proves we parse the API response shape correctly. | Standard pattern for external-API adapters. No live API calls in CI. |
+| 9 | Mistral OCR `can_handle` | Returns `False` if `KB_MISTRAL_API_KEY` is unset (parser disables itself when no key). Returns `True` for `application/pdf` magic when the env var is present. | Self-disabling parser — registry can include it without breaking anything. |
+| 10 | xlsx mime whitelist | Two strings: `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` (.xlsx) and `application/vnd.ms-excel` (.xls). `.xls` is forwarded to the parser; `openpyxl` may raise; if so, surface as `ParseError` → `parsing→failed` lifecycle event. | Generous accept on the mime; let the parser handle the actual format check. |
+| 11 | Email mime whitelist | `message/rfc822`. Magic sniff: first 200 bytes contain a header-like `^[A-Z][a-zA-Z-]+:\s`. | Tightly RFC-anchored; the magic sniff covers `.eml` files uploaded as `application/octet-stream`. |
+| 12 | Cross-parser body-bytes contract | Every parser receives `bytes`. Workers fetch the bytes from MinIO once and pass to `parser.parse(file_bytes, ...)`. No per-parser MinIO-key handling. | Phase 2a's worker contract is unchanged. |
+| 13 | Empty-content handling | Each parser ensures at least one `raw_pages` row is emitted (even if the text is empty). `ParserRegistry.dispatch` raises `NoParserForMime` (not `ParseError`) if no parser matches → worker writes `parsing→failed` with payload `error_class='NoParserForMime'`. | Distinguishes "no parser for this format" (likely should have been rejected at upload, but defensive) from "parser failed on this content." |
+
+#### Repo layout delta after Phase 2b G4
+
+```
+emerging-kb/
+├── src/kb/
+│   ├── api/
+│   │   └── files.py                     ← MUTATED (mime whitelist + magic sniff)
+│   └── parsers/
+│       ├── __init__.py                  ← MUTATED (register_default_parsers adds 3 new)
+│       ├── xlsx_parser.py               ← NEW
+│       ├── email_parser.py              ← NEW
+│       └── mistral_ocr_parser.py        ← NEW
+└── tests/
+    ├── fixtures/
+    │   ├── tiny.xlsx                    ← NEW (~1 KB; 1 sheet, ~5 cells)
+    │   └── tiny.eml                     ← NEW (~300 B; minimal RFC822 with one text/plain body)
+    ├── test_parse_xlsx.py               ← NEW (~5 tests)
+    ├── test_parse_email.py              ← NEW (~5 tests)
+    ├── test_parse_mistral_ocr.py        ← NEW (~5 tests; all against mock)
+    ├── test_files_crud.py               ← MUTATED (+2-3 tests: POST xlsx → 201 → page count matches sheets; POST email → 201 → headers in raw_page.text)
+    └── specs/phase_2b.md                ← NEW
+```
+
+#### Endpoint contract delta (api_contracts.md §5.5)
+
+The §5.5 description of `POST /files` already covers multipart + JSON modes. Phase 2b's only change: the §5.5 415 row's narrative widens to read "Phase 2a + 2b accept: `application/pdf`, `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`, `application/vnd.ms-excel`, `message/rfc822`." No new sub-section needed.
+
+#### Phase 2b G5 — what "green" means
+
+`scripts/verify_phase_2b.sh` adds to Phase 0+1a+1b+1c+2a verify checks:
+1. `curl POST /files` with `tiny.xlsx` (multipart, `Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`) → 201; worker parses; `raw_pages` count == sheet count of `tiny.xlsx`.
+2. `curl POST /files` with `tiny.eml` (multipart) → 201; worker parses; `raw_pages.text` includes `From:`, `Subject:`, body text.
+3. Octet-stream upload of `tiny.xlsx` with content-type stripped → magic-sniff detects ZIP magic → routes to xlsx parser → 201.
+4. Octet-stream upload of `tiny.eml` with content-type stripped → magic-sniff detects header pattern → routes to email parser → 201.
+5. Mistral OCR adapter: pytest covers via mock — round-trip a fake API response into a `ParsedDocument`.
+6. POST a text file (text/plain) still returns 415 — only the new whitelisted types are accepted.
+7. `pytest tests/` green: 170 (existing) + ~15 new = ~185.
+
+#### Pre-G2 consistency review checklist
+
+Before G2 opens:
+- [ ] Architecture line 417–425 routing — Phase 2b covers xlsx + email; Mistral OCR shipped as adapter (real activation deferred); pptx + Gemini VLM still Wave B.
+- [ ] api_contracts §5.5 415 narrative widens (single contract delta).
+- [ ] No new endpoints — verified by `grep '^router\.' kb/api/files.py` returns the same 5 endpoints.
+- [ ] No `audit_log` writes (Phase 9 owns).
+- [ ] Phase 2a's E2E pipeline still serves PDF correctly (cross-phase sweep at G5).
+
+#### Sign-off
+
+When Aniket approves this plan, the Phase 2b G1 cell in §5 flips 🟡 → ✅ and Phase 2b G2 opens (single contract delta in `docs/api_contracts.md` §5.5 mime whitelist narrative). Sign-off recorded in §9.
+
+---
+
 ### Wave B (build if time)
 
 | Phase | Description | G1 | G2 | G3 | G4 | G5 |
@@ -1188,6 +1282,7 @@ Phases 15–24 per `architecture.md` §12. Tracked here only as a reminder of in
 | 1b | [tests/specs/phase_1b.md](../tests/specs/phase_1b.md) | [test_schema_versions.py](../tests/test_schema_versions.py) · [test_schemas_crud.py](../tests/test_schemas_crud.py) (additive) · [test_idempotency.py](../tests/test_idempotency.py) (additive) | ✅ 28 new tests green (post-G5); suite total 106 |
 | 1c | [tests/specs/phase_1c.md](../tests/specs/phase_1c.md) | [test_schema_entities.py](../tests/test_schema_entities.py) · [test_schema_fields.py](../tests/test_schema_fields.py) · [test_schema_relationships.py](../tests/test_schema_relationships.py) · [test_schema_hierarchy_versions.py](../tests/test_schema_hierarchy_versions.py) | ✅ 36 new tests green (post-G5); suite total 142 |
 | 2a | [tests/specs/phase_2a.md](../tests/specs/phase_2a.md) | [test_files_crud.py](../tests/test_files_crud.py) · [test_parse_dispatch.py](../tests/test_parse_dispatch.py) · [test_parse_pdf_docling.py](../tests/test_parse_pdf_docling.py) · [test_raw_pages.py](../tests/test_raw_pages.py) · [test_files_lifecycle.py](../tests/test_files_lifecycle.py) | ✅ 28 new tests green (post-G5); suite total 170 |
+| 2b | [tests/specs/phase_2b.md](../tests/specs/phase_2b.md) | [test_parse_xlsx.py](../tests/test_parse_xlsx.py) · [test_parse_email.py](../tests/test_parse_email.py) · [test_parse_mistral_ocr.py](../tests/test_parse_mistral_ocr.py) · [test_files_crud.py](../tests/test_files_crud.py) (additive) | ✅ 18 new tests green (15 parser-unit + 3 HTTP-additive); suite total 188 |
 | ... | | | |
 
 ---
@@ -1203,6 +1298,7 @@ Phases 15–24 per `architecture.md` §12. Tracked here only as a reminder of in
 | 1b | [scripts/verify_phase_1b.sh](../scripts/verify_phase_1b.sh) | 2026-05-23 | ✅ 21/21 (compose smoke + 5 DDL assertions on schema_versions + 11 HTTP/rollback/RLS curl checks + openapi check + Phase-1b pytest 52) |
 | 1c | [scripts/verify_phase_1c.sh](../scripts/verify_phase_1c.sh) | 2026-05-23 | ✅ 20/20 (compose smoke + 4 DDL assertions on 3 new tables + 10 HTTP/cascade/rollback/RLS curl checks + openapi exposure + Phase-1c pytest 36) |
 | 2a | [scripts/verify_phase_2a.sh](../scripts/verify_phase_2a.sh) | 2026-05-23 | ✅ 17/17 (compose smoke + 4 DDL assertions on 4 new tables + 9 HTTP/E2E parse curl checks incl. real Docling parse + RLS isolation + dedup-header + 415 + openapi exposure + Phase-2a pytest 28) |
+| 2b | [scripts/verify_phase_2b.sh](../scripts/verify_phase_2b.sh) | 2026-05-23 | ✅ 15/15 (compose smoke + xlsx + email upload + parse to lifecycle_state='parsed' + xlsx page-text sheet header + magic-byte sniff routing both ways + Mistral inert without API key + text/plain 415 + Phase-2b pytest 28) |
 | ... | | | |
 
 ---
@@ -1274,6 +1370,14 @@ Phases 15–24 per `architecture.md` §12. Tracked here only as a reminder of in
 | 2026-05-23 | **Phase 2a G4 ✅ — code landed (commit `7800920`).** 8 new files + 5 mutated. All 28 Phase 2a tests pass; full suite 170/170 in 47.8s. **7 mid-G4 fixes captured by failing-test feedback** (all in the single G4 commit): (1) UploadFile imported from `starlette.datastructures` not fastapi — `fastapi.UploadFile` is a subclass; form returns the Starlette parent; isinstance against the subclass returns False. (2) Procrastinate App needs explicit `open_async()` before defer; added to FastAPI lifespan + conftest fixture (ASGITransport doesn't fire lifespan). (3) Procrastinate schema needs `procrastinate schema --apply` alongside our migrations — added to `db_migrated`. (4) Worker chicken-and-egg: RLS hides the file row before workspace context is set; switched worker DB connection to superuser URL (`settings.database_url`) for the initial lookup, then `SET LOCAL app.workspace_id` for downstream queries. (5) Config split: `KB_DB_URL` (kb_app override) and `KB_DATABASE_URL` (superuser override) — previously KB_DB_URL fed both, hiding (4). (6) `_LazyConninfoConnector` — Procrastinate connector reads env at `open_async()` not module-import (handles test fixture ordering). (7) Mac MPS doesn't support float64 (PyTorch limitation); Docling pinned to `AcceleratorDevice.CPU` — production Linux containers unaffected since they default to CPU or CUDA. All 15 G1 decisions traced. | Aniket |
 | 2026-05-23 | **Phase 2a G5 ✅ — Docker stack verified end-to-end.** `scripts/verify_phase_2a.sh` 17/17 GREEN. Six additional cumulative Docker-stack fixes uncovered by running the actual compose stack (`239f362`): (a) Dockerfile system libs — `libxcb1 + libgl1 + libglib2.0-0 + libsm6 + libxext6 + libxrender1` for Docling's pillow/opencv image-decoding deps; without these, Docling errors with `libxcb.so.1: cannot open shared object file`. (b) `HF_HOME=/tmp/huggingface` + `XDG_CACHE_HOME=/tmp/cache` (pre-created `chown=kb:kb`) so non-root kb user can write HuggingFace model cache (~150 MB Docling layout/tableformer weights downloaded on first parse). (c) docker-compose db healthcheck switched to `pg_isready -h localhost` (TCP) — unix-socket-mode default was passing a few seconds before postgres bound to the TCP port, causing migrate to race against the gap. (d) api compose env gains `KB_DATABASE_URL` (superuser URL); Phase 2a's POST /files defers a Procrastinate task and Procrastinate needs the superuser URL to manage its own tables. (e) `scripts/bootstrap_db.sh` defensive retry loop with `psycopg.connect(connect_timeout=2)` — without the timeout each conn-refused attempt hung indefinitely, never exercising the 30× loop. (f) `bumped uv 0.5.0 → 0.9.7` (older uv silently hung on the docling-bearing lockfile) + pinned `torch + torchvision` to the pytorch-cpu PyPI index (saves ~3 GB of unused CUDA libraries; image went from ~5 GB → 571 MB). End-to-end pipeline verified: `POST /files (multipart PDF) → MinIO upload → Procrastinate task defer → worker container Docling parse (~3 min first run, models cached after) → raw_pages INSERT → file_lifecycle queued→parsing→parsed`. | Aniket |
 | 2026-05-23 | **Phase 2a end-of-phase cross-phase sweep.** Re-ran all 5 verify scripts after the Docker/config changes to confirm no regression in Phase 0/1a/1b/1c. Scope-leak grep clean — no Phase 2b parsers (xlsx/email/Mistral OCR) leaked into 2a code; no `extracted_entities`/`lineage_path` (Phase 5/6); no rogue `audit_log` writes (Phase 9). RLS invariant grows from 7 → 11 workspace-scoped tables (audit_log, idempotency_keys, schemas, schema_versions, schema_entities, schema_fields, schema_relationships, files, file_lifecycle, raw_pages, parse_artifacts) — each has own `workspace_id` + own `CREATE POLICY`. pytest --collect-only confirms 170 tests. **Phase 2a complete; first worker phase + first real ML integration done. Ready to open PR.** | Aniket |
+| 2026-05-23 | **Phase 2a merged.** PR #5 merged into `main` (merge commit `69690e7`). Tag `phase-2a-complete` pushed. Local `phase-2a/parse-scaffold` branch deleted. **First worker phase + first real ML integration complete.** | Aniket |
+| 2026-05-23 | **Phase 2b G1 OPEN.** Branched `phase-2b/parse-formats` from `main`. Plan section §5.6 drafted: 3 parsers (xlsx via openpyxl, email via stdlib, Mistral OCR adapter mock-tested) registered into Phase 2a's `ParserRegistry`; `kb/api/files.py` mime whitelist widens to accept `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` + `application/vnd.ms-excel` + `message/rfc822`; magic-byte sniffer at upload picks parser when Content-Type is missing/octet-stream. No new HTTP endpoints. One `raw_pages` row per xlsx sheet; one per email (headers + body in text; attachments metadata-only in layout_json — recursive ingestion deferred). Mistral OCR registered AFTER Docling (currently inert at dispatch; activates when force-parser mechanism lands in Phase 2c). 13 decisions locked. Awaiting sign-off. | Aniket |
+| 2026-05-23 | **Phase 2b G1 ✅ + G2 ✅ signed off (single drafting pass).** G1's 13 decisions are conservative + grounded in architecture line 419 (Mistral OCR for scanned PDF) — no contradictions surfaced. G2 is one contract delta in `api_contracts.md` §5.5: 415 row's narrative widens from "Phase 2a only `application/pdf`" to listing the 4 supported mimes + the magic-sniff fallback. No new endpoints, no new error slugs. Cross-gate G1↔G2 trace: decision #10 (xlsx mime whitelist) + #11 (email mime whitelist) + #6 (magic-byte sniffer) all map directly to the §5.5 narrative widening. **G3 opens** — drafting `tests/specs/phase_2b.md` + 3 new red skeleton files + 2 fixture files. | Aniket |
+| 2026-05-23 | **Phase 2b G3 drafted.** `tests/specs/phase_2b.md` covers the §5.6 surface with 18 tests across 3 new files + additions: `test_parse_xlsx.py` 5 (one-page-per-sheet · TSV+sheet-header rendering · empty-sheet handling · layout shape · ZIP-magic detection), `test_parse_email.py` 5 (one-page · headers+body · attachment metadata · HTML-only body stripped · header-pattern magic), `test_parse_mistral_ocr.py` 5 (can_handle gated on KB_MISTRAL_API_KEY · mock-driven parse · per-page split · 4xx → ParseError), `test_files_crud.py` 3 additive (POST xlsx → 201 · POST eml → 201 · octet-stream + ZIP magic → xlsx). pytest --collect-only confirms 188 total (170 prior + 18 new). All Mistral tests use a mock HTTP client — zero real-API calls in CI. Awaiting sign-off. | Aniket |
+| 2026-05-23 | **Phase 2b post-G3 cross-gate review (G1↔G2↔G3).** All 13 G1 decisions traced to ≥1 test: per-sheet pages (test_xlsx_parses_one_page_per_sheet), per-email page (test_email_parses_one_page), TSV rendering (test_xlsx_text_is_tsv_with_sheet_header), email rendering (test_email_text_includes_headers_and_body), attachment metadata (test_email_attachments_listed_in_layout_json), magic sniff (test_xlsx_can_handle_pk_zip_magic + test_email_magic_detection_via_header_pattern + test_post_octet_stream_xlsx_detected_via_magic), Mistral self-disables when no key (test_mistral_cannot_handle_when_api_key_absent), Mistral mock (test_mistral_parses_via_mock_response + test_mistral_returns_one_page_per_response_page + test_mistral_raises_parse_error_on_4xx), empty-content fallback (test_xlsx_handles_empty_sheet). Single new slug surface check: §5.5 415 narrative — no new slugs added (existing `unsupported-media-type` covers all rejected mimes). No cross-phase scope leak (no Phase 2c force-parser refs, no pptx, no Gemini VLM, no attachment-recursive-ingestion). | Aniket |
+| 2026-05-23 | **Phase 2b G3 ✅ signed off. G4 opens.** Build order: (1) `kb/parsers/xlsx_parser.py` (openpyxl-driven; one page per sheet; TSV + sheet header text); (2) `kb/parsers/email_parser.py` (stdlib email.parser; multipart traversal; html.parser strip-tags fallback); (3) `kb/parsers/mistral_ocr_parser.py` (httpx-based adapter; constructor takes optional http_client for mock injection; can_handle gated on KB_MISTRAL_API_KEY); (4) extend `kb/parsers/__init__.py` `register_default_parsers()` to register the 3 new parsers (Docling first → xlsx → email → Mistral OCR); (5) widen `kb/api/files.py` `_PHASE_2A_WHITELIST` to set + add magic-byte sniff before mime check; (6) commit fixture bytes (`tiny.xlsx` ≈ 1 KB via openpyxl; `tiny.eml` + `tiny_with_attachment.eml` minimal RFC822). | Aniket |
+| 2026-05-23 | **Phase 2b G4 ✅ — code landed (single commit `b5757da`).** All 18 new tests pass on first run; full suite 188/188 in 49.7s. **Zero in-G4 fixes** (Phase 2a's testing infra + parser Protocol meant the new parsers slot in cleanly). All 13 G1 decisions traced in commit body. 3 new parser modules (xlsx + email + mistral_ocr) + extension of `register_default_parsers()` + widened `_MIME_WHITELIST` in `kb/api/files.py` + `_sniff_mime_from_magic()` helper called from both `_handle_multipart` and `_handle_json` + 3 fixture files (`tiny.xlsx` 5 KB, `tiny.eml` 228 B, `tiny_with_attachment.eml` 413 B). | Aniket |
+| 2026-05-23 | **Phase 2b G5 ✅ + cross-phase sweep running.** Authored `scripts/verify_phase_2b.sh` (15 checks): compose smoke + xlsx + email upload paths + worker parse to `lifecycle_state='parsed'` + xlsx page text starts with `# Sheet: Sheet1` + magic-byte sniff routing both ways (xlsx + email from octet-stream) + Mistral OCR inert (PDF still wins by Docling first in dispatch order) + text/plain still 415 + Phase-2b pytest. Full E2E pipeline verified for both new formats: `POST tiny.xlsx → MinIO → parse_file → openpyxl → 2 raw_pages (one per sheet)`; `POST tiny.eml → MinIO → parse_file → email.message_from_bytes → 1 raw_page (headers + body)`. **Phase 2b complete; cross-phase sweep verifies Phase 0/1a/1b/1c/2a still pass.** | Aniket |
 
 ---
 
