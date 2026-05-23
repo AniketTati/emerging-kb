@@ -31,6 +31,8 @@ dependencies = [
     "tiktoken>=0.8.0",
     # Phase 3b — Anthropic Contextual Retrieval prefix LLM call
     "anthropic>=0.40.0",
+    # Phase 3c — Gemini Embedding 001 (mock-tested in CI; activates with KB_GEMINI_API_KEY)
+    "google-genai>=0.3.0",
     # Pin torch + torchvision as direct deps so [tool.uv.sources] applies
     # (sources only override packages listed in this project's dependencies).
     "torch>=2.0",

@@ -1,9 +1,8 @@
 """Procrastinate worker tasks — Phase 2a (`parse_file`) + Phase 3a (`chunk_file`)
-+ Phase 3b (`contextualize_file`).
++ Phase 3b (`contextualize_file`) + Phase 3c (`embed_file`).
 
-`parse_file(file_id)`, `chunk_file(file_id)`, and `contextualize_file(file_id)`
-are the wire-level Procrastinate tasks. The actual work lives in *_impl
-functions tests call directly without spinning up the queue.
+Wire-level Procrastinate tasks delegate to *_impl functions tests can call
+directly without spinning up the queue.
 
 Per build_tracker §5.5 decision #6: 30-min lease. Per §5.5 #7 / §5.7 #9: worker
 sets `app.workspace_id` from the file row before any subsequent query. Per
@@ -27,6 +26,10 @@ from kb.contextualization import (
     make_contextualizer,
 )
 from kb.db.pool import open_connection
+from kb.domain.chunk_embeddings import (
+    insert_chunk_embedding,
+    read_contextual_chunks_for_embedding,
+)
 from kb.domain.chunks import (
     count_chunks_for_file,
     insert_chunk,
@@ -43,6 +46,7 @@ from kb.domain.files import (
     transition_lifecycle,
 )
 from kb.domain.raw_pages import insert_raw_page
+from kb.embeddings import EmbeddingError, make_embedder
 from kb.parsers import (
     NoParserForMime,
     Page,
@@ -466,6 +470,144 @@ async def contextualize_file_impl(file_id: str) -> None:
                 },
             )
 
+    # Phase 3c decision #11: chain embed_file in a SEPARATE tx so a
+    # Procrastinate-defer failure doesn't roll back the contextualized state.
+    try:
+        await procrastinate_app.configure_task(
+            name="embed_file"
+        ).defer_async(file_id=file_id)
+    except Exception:  # noqa: BLE001 — best-effort chain
+        traceback.print_exc()
+
+
+# ---------------------------------------------------------------------------
+# Phase 3c — embed_file_impl
+# ---------------------------------------------------------------------------
+
+
+async def embed_file_impl(file_id: str) -> None:
+    """Embed every contextual_chunks row for a 'contextualized' file → write
+    chunk_embeddings → advance lifecycle to 'embedded'.
+
+    Per build_tracker §5.9:
+    - decision #4: KB_GEMINI_API_KEY unset → DeterministicMockEmbedder
+      (lifecycle still advances; clustering quality degrades for Phase 3d).
+    - decision #10: lifecycle widens with 'embedded'.
+    - decision #11: chained from contextualize_file_impl via separate-tx defer.
+    - decision #13: API errors → 'contextualized→failed'.
+
+    Per-stage idempotency: returns immediately if already 'embedded' or beyond.
+    """
+    from kb.config import get_settings
+    settings = get_settings()
+    db_url = settings.database_url
+
+    # Phase 1: read file row + check idempotency.
+    async with open_connection(db_url) as conn:
+        async with conn.transaction():
+            cur = await conn.execute(
+                "SELECT workspace_id, lifecycle_state FROM files WHERE id = %s",
+                (file_id,),
+            )
+            row = await cur.fetchone()
+            if row is None:
+                raise FileNotFoundError(file_id)
+            workspace_id, lifecycle_state = row
+
+            if lifecycle_state in ("embedded", "ready", "failed", "deleted"):
+                return
+            if lifecycle_state != "contextualized":
+                # Not yet ready to embed.
+                return
+
+            await conn.execute(
+                "SELECT set_config('app.workspace_id', %s, true)",
+                (str(workspace_id),),
+            )
+            ctx_rows = await read_contextual_chunks_for_embedding(
+                conn, file_id=file_id,
+            )
+
+    if not ctx_rows:
+        await _mark_failed(
+            db_url, file_id, str(workspace_id),
+            error_class="EmbeddingError",
+            message=f"empty contextual_chunks for file={file_id}",
+            from_state="contextualized",
+            event="embedding_failed",
+        )
+        return
+
+    # Phase 2: batch-embed (factory picks Gemini or Mock).
+    embedder = make_embedder()
+    texts = [text for _, text in ctx_rows]
+    try:
+        results = await embedder.embed_batch(texts)
+    except EmbeddingError as exc:
+        await _mark_failed(
+            db_url, file_id, str(workspace_id),
+            error_class="EmbeddingError",
+            message=str(exc),
+            from_state="contextualized",
+            event="embedding_failed",
+        )
+        return
+    except Exception as exc:
+        await _mark_failed(
+            db_url, file_id, str(workspace_id),
+            error_class=type(exc).__name__,
+            message=str(exc),
+            from_state="contextualized",
+            event="embedding_failed",
+            traceback_head=traceback.format_exc()[:2000],
+        )
+        return
+
+    if len(results) != len(ctx_rows):
+        await _mark_failed(
+            db_url, file_id, str(workspace_id),
+            error_class="EmbeddingError",
+            message=(
+                f"embedder returned {len(results)} vectors for "
+                f"{len(ctx_rows)} chunks"
+            ),
+            from_state="contextualized",
+            event="embedding_failed",
+        )
+        return
+
+    # Phase 3: write chunk_embeddings + lifecycle event.
+    dim = results[0].dim
+    model_id = results[0].model_id
+
+    async with open_connection(db_url) as conn:
+        async with conn.transaction():
+            await conn.execute(
+                "SELECT set_config('app.workspace_id', %s, true)",
+                (str(workspace_id),),
+            )
+            for (ctx_id, _), embedding in zip(ctx_rows, results, strict=True):
+                await insert_chunk_embedding(
+                    conn,
+                    contextual_chunk_id=ctx_id,
+                    file_id=file_id,
+                    workspace_id=str(workspace_id),
+                    vector=embedding.vector,
+                    model_id=embedding.model_id,
+                )
+            await transition_lifecycle(
+                conn,
+                workspace_id=str(workspace_id),
+                file_id=file_id,
+                to_state="embedded",
+                event="embedding_done",
+                payload={
+                    "embedding_count": len(results),
+                    "dim": dim,
+                    "model_id": model_id,
+                },
+            )
+
 
 # ---------------------------------------------------------------------------
 # Procrastinate task registration
@@ -488,3 +630,9 @@ async def chunk_file(file_id: str) -> None:
 async def contextualize_file(file_id: str) -> None:
     """Wire-level Procrastinate task. Delegates to the testable impl."""
     await contextualize_file_impl(file_id)
+
+
+@procrastinate_app.task(name="embed_file", queue="kb", pass_context=False)
+async def embed_file(file_id: str) -> None:
+    """Wire-level Procrastinate task. Delegates to the testable impl."""
+    await embed_file_impl(file_id)
