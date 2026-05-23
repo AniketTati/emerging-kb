@@ -1,7 +1,16 @@
 """Schema domain layer — pydantic models + DB-level repo functions.
 
-Phase 1a scope. Phase 1b will reuse these by wrapping `update_schema` with the
-"always create a new version" trigger and adding version-table queries.
+Phase 1a + 1b:
+- POST creates v1 atomically in `schema_versions` (decision #3).
+- PUT serializes per-schema via `SELECT ... FOR UPDATE`, allocates the next
+  monotonic version_number, inserts a new `schema_versions` row, and bumps
+  `schemas.current_version_id` — all in one tx (decision #12).
+- Soft delete (1a) leaves versions in place but unreachable via the API.
+- Rollback lives in `kb.api.schema_versions` (router-level) since it bridges
+  schemas + schema_versions; the version INSERT goes through `insert_version`.
+
+`current_version` (int) is surfaced in every read/write response by joining
+the schemas row to its current `schema_versions` row.
 """
 
 from __future__ import annotations
@@ -12,6 +21,7 @@ from typing import Annotated
 from pydantic import BaseModel, ConfigDict, Field
 
 from kb.db.pool import Connection
+from kb.domain.schema_versions import insert_version
 
 
 # ---------------------------------------------------------------------------
@@ -36,12 +46,14 @@ class SchemaResponse(BaseModel):
     """Schema object as returned by every read/write endpoint.
 
     NB: no `workspace_id` field — api_contracts §2.1 design call.
+    `current_version` added in Phase 1b (api_contracts §3.2).
     """
 
     id: str
     name: str
     description: str
     lifecycle_state: str
+    current_version: int
     created_at: str
     updated_at: str
 
@@ -77,7 +89,7 @@ def _iso(ts: datetime) -> str:
 
 
 def _row_to_response(row: tuple) -> SchemaResponse:
-    """(id, name, description, lifecycle_state, created_at, updated_at) → SchemaResponse."""
+    """(id, name, description, lifecycle_state, created_at, updated_at, current_version) → SchemaResponse."""
     return SchemaResponse(
         id=str(row[0]),
         name=row[1],
@@ -85,29 +97,73 @@ def _row_to_response(row: tuple) -> SchemaResponse:
         lifecycle_state=row[3],
         created_at=_iso(row[4]),
         updated_at=_iso(row[5]),
+        current_version=row[6],
     )
 
 
-_COLUMNS = "id, name, description, lifecycle_state, created_at, updated_at"
+# JOIN against schema_versions so every read includes current_version.
+# Phase 1b invariant: schemas.current_version_id is NEVER NULL after any
+# successful mutation (decision #3); an INNER JOIN makes this an enforced
+# read-side check — a corrupt row with NULL pointer would simply be invisible.
+_SELECT_COLUMNS = (
+    "s.id, s.name, s.description, s.lifecycle_state, "
+    "s.created_at, s.updated_at, v.version_number"
+)
+_FROM_JOIN = (
+    "FROM schemas s "
+    "JOIN schema_versions v ON s.current_version_id = v.id"
+)
 
 
 async def create_schema(
     conn: Connection, workspace_id: str, body: SchemaCreate
 ) -> SchemaResponse:
-    """INSERT a new active schema. Raises `DuplicateNameError` on (workspace, name) collision."""
+    """INSERT a new active schema + v1 atomically.
+
+    Decision #3: POST creates v1 in the same tx. The schema row's
+    `current_version_id` is updated to point at v1 before this returns.
+    Raises `DuplicateNameError` on (workspace, name) collision.
+    """
     import psycopg
 
     try:
         cur = await conn.execute(
-            f"INSERT INTO schemas (workspace_id, name, description) "
-            f"VALUES (%s, %s, %s) "
-            f"RETURNING {_COLUMNS}",
+            "INSERT INTO schemas (workspace_id, name, description) "
+            "VALUES (%s, %s, %s) "
+            "RETURNING id, name, description, lifecycle_state, created_at, updated_at",
             (workspace_id, body.name, body.description),
         )
         row = await cur.fetchone()
     except psycopg.errors.UniqueViolation as exc:
         raise DuplicateNameError(body.name) from exc
-    return _row_to_response(row)
+
+    schema_id = str(row[0])
+    snapshot = {"name": body.name, "description": body.description}
+
+    version_id = await insert_version(
+        conn,
+        schema_id=schema_id,
+        workspace_id=workspace_id,
+        version_number=1,
+        body=snapshot,
+        parent_version_number=None,
+        kind="post",
+    )
+
+    await conn.execute(
+        "UPDATE schemas SET current_version_id = %s WHERE id = %s",
+        (version_id, schema_id),
+    )
+
+    return SchemaResponse(
+        id=schema_id,
+        name=row[1],
+        description=row[2],
+        lifecycle_state=row[3],
+        created_at=_iso(row[4]),
+        updated_at=_iso(row[5]),
+        current_version=1,
+    )
 
 
 async def list_schemas(
@@ -115,9 +171,9 @@ async def list_schemas(
 ) -> SchemaListResponse:
     """List active schemas in the workspace (RLS auto-filters), sorted created_at DESC."""
     cur = await conn.execute(
-        f"SELECT {_COLUMNS} FROM schemas "
-        f"WHERE lifecycle_state = 'active' "
-        f"ORDER BY created_at DESC, id DESC "
+        f"SELECT {_SELECT_COLUMNS} {_FROM_JOIN} "
+        f"WHERE s.lifecycle_state = 'active' "
+        f"ORDER BY s.created_at DESC, s.id DESC "
         f"LIMIT %s OFFSET %s",
         (limit, offset),
     )
@@ -143,8 +199,8 @@ async def get_schema(conn: Connection, schema_id: str) -> SchemaResponse:
     tell "exists but you can't see it" from "doesn't exist" (api_contracts §2.4).
     """
     cur = await conn.execute(
-        f"SELECT {_COLUMNS} FROM schemas "
-        f"WHERE id = %s AND lifecycle_state = 'active'",
+        f"SELECT {_SELECT_COLUMNS} {_FROM_JOIN} "
+        f"WHERE s.id = %s AND s.lifecycle_state = 'active'",
         (schema_id,),
     )
     row = await cur.fetchone()
@@ -154,17 +210,39 @@ async def get_schema(conn: Connection, schema_id: str) -> SchemaResponse:
 
 
 async def update_schema(
-    conn: Connection, schema_id: str, body: SchemaUpdate
+    conn: Connection, workspace_id: str, schema_id: str, body: SchemaUpdate
 ) -> SchemaResponse:
-    """Full-replace name + description. Bumps updated_at. Phase 1b wraps this
-    with the version-creation trigger."""
+    """Full-replace name + description AND insert a new version row, all in one tx.
+
+    Decision #12: server serializes per-schema by taking
+    `SELECT ... FOR UPDATE` on the schemas row first, so concurrent PUTs
+    can't race the `(schema_id, version_number)` UNIQUE constraint.
+    Decision #4: response carries the bumped `current_version`.
+    """
     import psycopg
 
+    # Lock the schema row + ensure it's active and visible (RLS).
+    cur = await conn.execute(
+        "SELECT id FROM schemas WHERE id = %s AND lifecycle_state = 'active' FOR UPDATE",
+        (schema_id,),
+    )
+    if await cur.fetchone() is None:
+        raise NotFoundError(schema_id)
+
+    # Allocate the next version_number under the row lock.
+    cur = await conn.execute(
+        "SELECT COALESCE(max(version_number), 0) FROM schema_versions WHERE schema_id = %s",
+        (schema_id,),
+    )
+    prior_version = (await cur.fetchone())[0]
+    new_version = prior_version + 1
+
+    # Apply the update to schemas (catches name collision under the same lock).
     try:
         cur = await conn.execute(
-            f"UPDATE schemas SET name = %s, description = %s, updated_at = now() "
-            f"WHERE id = %s AND lifecycle_state = 'active' "
-            f"RETURNING {_COLUMNS}",
+            "UPDATE schemas SET name = %s, description = %s, updated_at = now() "
+            "WHERE id = %s AND lifecycle_state = 'active' "
+            "RETURNING id, name, description, lifecycle_state, created_at, updated_at",
             (body.name, body.description, schema_id),
         )
         row = await cur.fetchone()
@@ -172,12 +250,43 @@ async def update_schema(
         raise DuplicateNameError(body.name) from exc
 
     if row is None:
+        # Should be impossible — we held FOR UPDATE — but defensive.
         raise NotFoundError(schema_id)
-    return _row_to_response(row)
+
+    snapshot = {"name": body.name, "description": body.description}
+    version_id = await insert_version(
+        conn,
+        schema_id=schema_id,
+        workspace_id=workspace_id,
+        version_number=new_version,
+        body=snapshot,
+        parent_version_number=prior_version,
+        kind="put",
+    )
+
+    await conn.execute(
+        "UPDATE schemas SET current_version_id = %s WHERE id = %s",
+        (version_id, schema_id),
+    )
+
+    return SchemaResponse(
+        id=str(row[0]),
+        name=row[1],
+        description=row[2],
+        lifecycle_state=row[3],
+        created_at=_iso(row[4]),
+        updated_at=_iso(row[5]),
+        current_version=new_version,
+    )
 
 
 async def soft_delete_schema(conn: Connection, schema_id: str) -> None:
-    """Set lifecycle_state='deleted'. Raises `NotFoundError` if already deleted or missing."""
+    """Set lifecycle_state='deleted'. Raises `NotFoundError` if already deleted or missing.
+
+    Phase 1b note: versions remain in the table (immutable) but become
+    unreachable via the API — `get_schema` filters by `lifecycle_state='active'`
+    so any version lookup that joins through the parent will 404.
+    """
     cur = await conn.execute(
         "UPDATE schemas SET lifecycle_state = 'deleted', updated_at = now() "
         "WHERE id = %s AND lifecycle_state = 'active' "
@@ -187,3 +296,96 @@ async def soft_delete_schema(conn: Connection, schema_id: str) -> None:
     row = await cur.fetchone()
     if row is None:
         raise NotFoundError(schema_id)
+
+
+async def rollback_to_version(
+    conn: Connection,
+    workspace_id: str,
+    schema_id: str,
+    target_version: int,
+) -> SchemaResponse:
+    """Clone-forward rollback (decision #5).
+
+    Locks the schemas row (FOR UPDATE) so concurrent PUTs serialize behind
+    this rollback. If `target_version == current_version` raises
+    `RollbackNoopError` (decision #13). Returns the updated schema with
+    the bumped `current_version`.
+    """
+    from kb.domain.schema_versions import RollbackNoopError, VersionNotFoundError
+
+    # Lock parent schema row + confirm active + visible.
+    cur = await conn.execute(
+        "SELECT s.id, v.version_number "
+        "FROM schemas s "
+        "JOIN schema_versions v ON s.current_version_id = v.id "
+        "WHERE s.id = %s AND s.lifecycle_state = 'active' FOR UPDATE OF s",
+        (schema_id,),
+    )
+    row = await cur.fetchone()
+    if row is None:
+        raise NotFoundError(schema_id)
+    current_version = row[1]
+
+    if target_version == current_version:
+        raise RollbackNoopError(
+            f"schema={schema_id} target={target_version} is the current version"
+        )
+
+    # Read the target version's body.
+    cur = await conn.execute(
+        "SELECT body FROM schema_versions WHERE schema_id = %s AND version_number = %s",
+        (schema_id, target_version),
+    )
+    target_row = await cur.fetchone()
+    if target_row is None:
+        raise VersionNotFoundError(f"schema={schema_id} version={target_version}")
+    target_body = target_row[0]
+    # psycopg returns jsonb as dict, but be defensive
+    if isinstance(target_body, str):
+        import json
+
+        target_body = json.loads(target_body)
+
+    new_version = current_version + 1
+
+    # Update schemas row with the cloned snapshot.
+    try:
+        cur = await conn.execute(
+            "UPDATE schemas SET name = %s, description = %s, updated_at = now() "
+            "WHERE id = %s AND lifecycle_state = 'active' "
+            "RETURNING id, name, description, lifecycle_state, created_at, updated_at",
+            (target_body["name"], target_body["description"], schema_id),
+        )
+        updated_row = await cur.fetchone()
+    except Exception:
+        # A name collision on rollback is the same shape as PUT — surface
+        # via DuplicateNameError. (Tests don't currently exercise this; it
+        # arises when a deleted-then-recreated workspace name was reused
+        # in the interim. Phase 1c hierarchy may also introduce new modes.)
+        raise
+
+    # Insert the new (rollback) version.
+    version_id = await insert_version(
+        conn,
+        schema_id=schema_id,
+        workspace_id=workspace_id,
+        version_number=new_version,
+        body=target_body,
+        parent_version_number=current_version,
+        kind="rollback",
+    )
+
+    await conn.execute(
+        "UPDATE schemas SET current_version_id = %s WHERE id = %s",
+        (version_id, schema_id),
+    )
+
+    return SchemaResponse(
+        id=str(updated_row[0]),
+        name=updated_row[1],
+        description=updated_row[2],
+        lifecycle_state=updated_row[3],
+        created_at=_iso(updated_row[4]),
+        updated_at=_iso(updated_row[5]),
+        current_version=new_version,
+    )

@@ -111,3 +111,59 @@ async def test_delete_with_idempotency_key_replays(client, test_workspace):
         "with the same Idempotency-Key, second DELETE should replay the cached 204; "
         "without the key, it would be 404 (already-deleted)"
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 1b addition — rollback Idempotency-Key replay
+# (api_contracts §3.9 + build_tracker §5.3 decision #8 + §3.1 invariant #6)
+# ---------------------------------------------------------------------------
+
+
+async def test_rollback_with_same_idempotency_key_replays_cached_response(
+    client, test_workspace, db_superuser
+):
+    """Rollback replay returns cached body WITHOUT writing a new version row.
+
+    Setup: POST (v1) + PUT (v2). First rollback to v1 → 200 with v3 in body.
+    Second rollback with SAME key → 200 with identical body, AND
+    `SELECT count(*) FROM schema_versions WHERE schema_id=...` stays at 3
+    (no v4 written). Asserts decision #8 + §3.1 invariant #6.
+    """
+    # v1
+    create = await client.post(
+        "/schemas",
+        json={"name": "ReplayMe", "description": "original"},
+        headers=headers(test_workspace, idempotency_key=str(uuid.uuid4())),
+    )
+    sid = create.json()["id"]
+    # v2
+    await client.put(
+        f"/schemas/{sid}",
+        json={"name": "ReplayMe", "description": "changed"},
+        headers=headers(test_workspace, idempotency_key=str(uuid.uuid4())),
+    )
+    # rollback to v1 → produces v3
+    rollback_key = str(uuid.uuid4())
+    r1 = await client.post(
+        f"/schemas/{sid}/versions/1/rollback",
+        json={},
+        headers=headers(test_workspace, idempotency_key=rollback_key),
+    )
+    assert r1.status_code == 200
+    assert r1.json()["current_version"] == 3
+
+    # replay with same key — must NOT create a v4
+    r2 = await client.post(
+        f"/schemas/{sid}/versions/1/rollback",
+        json={},
+        headers=headers(test_workspace, idempotency_key=rollback_key),
+    )
+    assert r2.status_code == 200
+    assert r2.json() == r1.json(), "replay must return identical body"
+
+    # Verify via superuser (bypasses RLS): exactly 3 rows for this schema.
+    row = await db_superuser.fetchrow(
+        "SELECT count(*) FROM schema_versions WHERE schema_id = %s",
+        uuid.UUID(sid),
+    )
+    assert row[0] == 3, "replay must not write a new schema_versions row"

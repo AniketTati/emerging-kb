@@ -144,7 +144,7 @@ async def put_schema(
                 headers={"X-Idempotent-Replay": "true"},
             )
 
-    schema = await update_schema(conn, schema_id, body)
+    schema = await update_schema(conn, workspace_id, schema_id, body)
     body_dict = schema.model_dump()
     await cache_response(conn, workspace_id, idem_key, body=body_dict, status_code=200)
     return JSONResponse(content=body_dict, status_code=200)
