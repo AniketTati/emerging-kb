@@ -154,8 +154,8 @@ QA gates this at G1.5b — every prototype page is grep'd for the forbidden voca
 
 ## 1. Now / Next / Blocked
 
-**Now:** Phase 2b G1 — additional parsers plan (drafted 2026-05-23; awaiting sign-off). Branch: `phase-2b/parse-formats` off `main`. Phase 2a merged as PR #5; tag `phase-2a-complete` at the merge commit.
-**Next:** Phase 2b G2 — minimal contract delta (mime whitelist expansion in `api_contracts.md §5.5`).
+**Now:** Phase 2b G3 — test spec + red skeleton files (`tests/test_parse_xlsx.py`, `tests/test_parse_email.py`, `tests/test_parse_mistral_ocr.py` + 2 fixture files + mutations to `tests/test_files_crud.py`). Branch: `phase-2b/parse-formats`.
+**Next:** Phase 2b G4 — build (3 parsers + dispatcher registration + mime whitelist + magic sniff).
 **Blocked on:** nothing.
 
 ---
@@ -265,7 +265,7 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
 | **1b** | Schema service — **versioning**: `schema_versions` table; every PUT creates a new version; version list/read/rollback endpoints | ✅ | ✅ | ✅ | ✅ | ✅ | All 5 gates green 2026-05-23. verify_phase_1b.sh 21/21. verify_phase_1a.sh still 17/17. verify_phase_0.sh still 16/16. pytest 106/106. Ready to merge. |
 | **1c** | Schema service — **hierarchy**: `schema_entities`, `schema_fields`, `schema_relationships` tables; nested CRUD; NL field descriptions; single_parent + cascade_delete constraints | ✅ | ✅ | ✅ | ✅ | ✅ | All 5 gates green 2026-05-23. verify_phase_1c.sh 20/20. verify_phase_1b.sh still 21/21. verify_phase_1a.sh still 17/17. verify_phase_0.sh still 16/16. pytest 142/142. Ready to merge. |
 | **2a** | Parse layer — **scaffold + Docling**: `files` + `file_lifecycle` + `raw_pages` + `parse_artifacts` tables; Procrastinate `parse_file` task; MIME-based dispatcher; Docling (digital PDF) parser; admin `POST /files` upload endpoint | ✅ | ✅ | ✅ | ✅ | ✅ | All 5 gates green 2026-05-23. pytest 170/170. First worker phase complete. Ready to merge. |
-| **2b** | Parse layer — **additional parsers**: xlsx (openpyxl) + email (stdlib) + Mistral OCR (external API adapter class + mock-tested; real-API gated on `KB_MISTRAL_API_KEY`) | 🟡 | ⬜ | ⬜ | ⬜ | ⬜ | G1 plan drafted 2026-05-23 (§5.6). Each parser is an additive `Parser` Protocol implementation; mime whitelist expands in `POST /files`; no new HTTP endpoints. |
+| **2b** | Parse layer — **additional parsers**: xlsx (openpyxl) + email (stdlib) + Mistral OCR (external API adapter class + mock-tested; real-API gated on `KB_MISTRAL_API_KEY`) | ✅ | ✅ | 🟡 | ⬜ | ⬜ | G1+G2 ✅ signed off 2026-05-23 (§5.6 + api_contracts §5.5 415 narrative widens — single contract delta, no new endpoints/slugs). G3 drafting now. |
 | **3** | Chunking + Contextual Retrieval + RAPTOR tree build | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | Internal worker |
 | **4** | Indexing: pgvector HNSW + pg_search BM25 on all RAPTOR levels | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | Internal worker |
 | **5** | Open extraction → mentions; clause split + typing + anomaly score | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | L2 + L2b + L3 |
@@ -1142,9 +1142,9 @@ When Aniket approves this plan, the Phase 2a G1 cell in §5 flips 🟡 → ✅ a
 
 ---
 
-### 5.6 Phase 2b plan — Additional parsers (G1 🟡 IN REVIEW)
+### 5.6 Phase 2b plan — Additional parsers (G1 ✅ SIGNED OFF)
 
-> **Status:** G1 drafted 2026-05-23 by Aniket. Awaiting sign-off. Branch: `phase-2b/parse-formats` off `main` (Phase 2a merged as PR #5; tag `phase-2a-complete`).
+> **Status:** G1 ✅ signed off 2026-05-23 by Aniket. Plan locked. Branch: `phase-2b/parse-formats` off `main` (Phase 2a merged as PR #5; tag `phase-2a-complete`).
 
 #### Scope
 
@@ -1370,6 +1370,7 @@ Phases 15–24 per `architecture.md` §12. Tracked here only as a reminder of in
 | 2026-05-23 | **Phase 2a end-of-phase cross-phase sweep.** Re-ran all 5 verify scripts after the Docker/config changes to confirm no regression in Phase 0/1a/1b/1c. Scope-leak grep clean — no Phase 2b parsers (xlsx/email/Mistral OCR) leaked into 2a code; no `extracted_entities`/`lineage_path` (Phase 5/6); no rogue `audit_log` writes (Phase 9). RLS invariant grows from 7 → 11 workspace-scoped tables (audit_log, idempotency_keys, schemas, schema_versions, schema_entities, schema_fields, schema_relationships, files, file_lifecycle, raw_pages, parse_artifacts) — each has own `workspace_id` + own `CREATE POLICY`. pytest --collect-only confirms 170 tests. **Phase 2a complete; first worker phase + first real ML integration done. Ready to open PR.** | Aniket |
 | 2026-05-23 | **Phase 2a merged.** PR #5 merged into `main` (merge commit `69690e7`). Tag `phase-2a-complete` pushed. Local `phase-2a/parse-scaffold` branch deleted. **First worker phase + first real ML integration complete.** | Aniket |
 | 2026-05-23 | **Phase 2b G1 OPEN.** Branched `phase-2b/parse-formats` from `main`. Plan section §5.6 drafted: 3 parsers (xlsx via openpyxl, email via stdlib, Mistral OCR adapter mock-tested) registered into Phase 2a's `ParserRegistry`; `kb/api/files.py` mime whitelist widens to accept `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` + `application/vnd.ms-excel` + `message/rfc822`; magic-byte sniffer at upload picks parser when Content-Type is missing/octet-stream. No new HTTP endpoints. One `raw_pages` row per xlsx sheet; one per email (headers + body in text; attachments metadata-only in layout_json — recursive ingestion deferred). Mistral OCR registered AFTER Docling (currently inert at dispatch; activates when force-parser mechanism lands in Phase 2c). 13 decisions locked. Awaiting sign-off. | Aniket |
+| 2026-05-23 | **Phase 2b G1 ✅ + G2 ✅ signed off (single drafting pass).** G1's 13 decisions are conservative + grounded in architecture line 419 (Mistral OCR for scanned PDF) — no contradictions surfaced. G2 is one contract delta in `api_contracts.md` §5.5: 415 row's narrative widens from "Phase 2a only `application/pdf`" to listing the 4 supported mimes + the magic-sniff fallback. No new endpoints, no new error slugs. Cross-gate G1↔G2 trace: decision #10 (xlsx mime whitelist) + #11 (email mime whitelist) + #6 (magic-byte sniffer) all map directly to the §5.5 narrative widening. **G3 opens** — drafting `tests/specs/phase_2b.md` + 3 new red skeleton files + 2 fixture files. | Aniket |
 
 ---
 
