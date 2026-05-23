@@ -115,14 +115,34 @@ def global_registry() -> ParserRegistry:
 
 
 def register_default_parsers() -> None:
-    """Register Phase 2a's parsers into the global registry.
+    """Register the default parsers into the global registry.
+
+    Order matters — `ParserRegistry.dispatch()` returns the FIRST parser
+    whose `can_handle()` is True. Registration order:
+
+    1. DoclingParser            — Phase 2a — application/pdf
+    2. XLSXParser               — Phase 2b — application/vnd.openxml...sheet + ZIP magic
+    3. EmailParser              — Phase 2b — message/rfc822 + header magic
+    4. MistralOCRParser         — Phase 2b — application/pdf BUT self-disabled
+                                  when KB_MISTRAL_API_KEY is unset; even when set,
+                                  Docling wins dispatch by registration order
+                                  (Phase 2c will add a force-parser route).
 
     Idempotent — re-call is a no-op (checks before registering).
     """
     from kb.parsers.docling_parser import DoclingParser
+    from kb.parsers.email_parser import EmailParser
+    from kb.parsers.mistral_ocr_parser import MistralOCRParser
+    from kb.parsers.xlsx_parser import XLSXParser
 
-    # Don't double-register
-    for existing in _GLOBAL_REGISTRY._parsers:  # noqa: SLF001 — internal access OK in same module
-        if isinstance(existing, DoclingParser):
-            return
+    # Don't double-register — keyed on parser class.
+    existing_types = {
+        type(p) for p in _GLOBAL_REGISTRY._parsers  # noqa: SLF001 — same module
+    }
+    if DoclingParser in existing_types:
+        return  # already initialized
+
     _GLOBAL_REGISTRY.register(DoclingParser())
+    _GLOBAL_REGISTRY.register(XLSXParser())
+    _GLOBAL_REGISTRY.register(EmailParser())
+    _GLOBAL_REGISTRY.register(MistralOCRParser())

@@ -58,7 +58,14 @@ from kb.workers.tasks import parse_file
 router = APIRouter(prefix="/files", tags=["files"])
 
 
-_PHASE_2A_WHITELIST = {"application/pdf"}
+# Phase 2a + 2b accepted mime types.
+_MIME_WHITELIST = {
+    "application/pdf",
+    # Phase 2b — xlsx + email
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.ms-excel",  # .xls — let the parser handle format detection
+    "message/rfc822",
+}
 
 
 def _check_pagination(limit: int, offset: int) -> None:
@@ -69,11 +76,33 @@ def _check_pagination(limit: int, offset: int) -> None:
 
 
 def _check_mime_allowed(mime_type: str) -> None:
-    if mime_type not in _PHASE_2A_WHITELIST:
+    if mime_type not in _MIME_WHITELIST:
         raise UnsupportedMediaTypeError(
-            f"mime_type={mime_type!r} not in Phase 2a whitelist; "
-            f"supported: {sorted(_PHASE_2A_WHITELIST)}"
+            f"mime_type={mime_type!r} not accepted; "
+            f"supported: {sorted(_MIME_WHITELIST)}"
         )
+
+
+def _sniff_mime_from_magic(file_bytes: bytes, default: str) -> str:
+    """Phase 2b decision #6: when Content-Type is missing or generic
+    (application/octet-stream), classify the file by its magic bytes.
+
+    Returns a mime from the whitelist, or `default` if no magic matches
+    (caller will then 415 it via _check_mime_allowed).
+    """
+    head = file_bytes[:8]
+    if head.startswith(b"%PDF-"):
+        return "application/pdf"
+    if head.startswith(b"PK\x03\x04"):
+        # ZIP — Phase 2b treats this as xlsx. Other ZIP formats (pptx, docx)
+        # not yet supported; the xlsx parser will surface as ParseError if
+        # the ZIP isn't actually an Excel workbook.
+        return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    # Email RFC822 header pattern in first ~200 bytes
+    import re
+    if re.search(rb"^[A-Z][a-zA-Z-]+:\s", file_bytes[:200], re.MULTILINE):
+        return "message/rfc822"
+    return default
 
 
 def _check_size_allowed(size_bytes: int) -> None:
@@ -152,11 +181,17 @@ async def _handle_multipart(
         raise BadRequestError("multipart 'name' must be 1-500 chars")
 
     mime_type = upload.content_type or "application/octet-stream"
-    _check_mime_allowed(mime_type)
 
     # Read body — enforce size limit
     file_bytes = await upload.read()
     _check_size_allowed(len(file_bytes))
+
+    # Phase 2b decision #6: magic-byte sniff when caller didn't send a useful
+    # Content-Type. Lets octet-stream uploads route to the right parser.
+    if mime_type in ("application/octet-stream", ""):
+        mime_type = _sniff_mime_from_magic(file_bytes, default=mime_type)
+
+    _check_mime_allowed(mime_type)
 
     content_sha = sha256_hex(file_bytes)
 
@@ -196,7 +231,10 @@ async def _handle_json(
     content_sha = sha256_hex(file_bytes)
 
     # Re-derive mime_type from the magic bytes; Mode B doesn't carry it explicitly.
-    mime_type = "application/pdf" if file_bytes.startswith(b"%PDF-") else "application/octet-stream"
+    # Phase 2b decision #6: Mode B doesn't carry mime explicitly — sniff
+    # from magic bytes. Supports PDF, xlsx, email; falls back to octet-stream
+    # (which then 415s via _check_mime_allowed).
+    mime_type = _sniff_mime_from_magic(file_bytes, default="application/octet-stream")
     _check_mime_allowed(mime_type)
 
     return await _create_or_dedup(
