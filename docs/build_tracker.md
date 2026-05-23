@@ -154,8 +154,8 @@ QA gates this at G1.5b — every prototype page is grep'd for the forbidden voca
 
 ## 1. Now / Next / Blocked
 
-**Now:** Phase 1b G1 — schema versioning plan (drafted 2026-05-23; awaiting sign-off). Branch: `phase-1b/schema-versioning` off `main`. Phase 1a merged to main as PR #2; tag `phase-1a-complete` at the merge commit.
-**Next:** Phase 1b G2 — `/schemas/:id/versions*` endpoint contracts.
+**Now:** Phase 1b G3 — drafting `tests/specs/phase_1b.md` + red skeleton files. Branch: `phase-1b/schema-versioning`.
+**Next:** Phase 1b G4 — build (DDL + domain + router + main wiring).
 **Blocked on:** nothing.
 
 ---
@@ -262,7 +262,7 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
 |---|---|---|---|---|---|---|---|
 | **0** | Repo + docker-compose (Postgres+pgvector+pg_search+MinIO+Procrastinate) + lifecycle DDL | ✅ | ✅ | ✅ | ✅ | ✅ | All 5 gates green 2026-05-23. `scripts/verify_phase_0.sh` 16/16 checks pass. Ready to merge. |
 | **1a** | Schema service — **CRUD foundation**: `schemas` table + 5 endpoints (POST/GET-list/GET/PUT/DELETE) | ✅ | ✅ | ✅ | ✅ | ✅ | All 5 gates green 2026-05-23. verify_phase_1a.sh 17/17. verify_phase_0.sh still 16/16. Ready to merge. |
-| **1b** | Schema service — **versioning**: `schema_versions` table; every PUT creates a new version; version list/read/rollback endpoints | 🟡 | ⬜ | ⬜ | ⬜ | ⬜ | G1 plan drafted 2026-05-23 (§5.3); awaiting sign-off. Full JSON snapshots stored; diffs computed on read (architecture §7 / line 788). Rollback clones snapshot as new current version. |
+| **1b** | Schema service — **versioning**: `schema_versions` table; every PUT creates a new version; version list/read/rollback endpoints | ✅ | ✅ | 🟡 | ⬜ | ⬜ | G1 ✅ + G2 ✅ signed off 2026-05-23 (§5.3 + api_contracts §3 — 13 decisions locked; cross-gate G1↔G2 review tightened decision #12 with FOR-UPDATE serialization + added decision #13 rollback-noop 409). G3 drafting now. |
 | **1c** | Schema service — **hierarchy**: `schema_entities`, `schema_fields`, `schema_relationships` tables; nested CRUD; NL field descriptions; single_parent + cascade_delete constraints | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | Builds on 1a+1b. Re-extraction trigger on rollback stubbed (Phase 6 wires it). domain_vocabulary deferred to Phase 5. |
 | **2** | Parse layer: Docling + Mistral OCR + xlsx + email → raw_pages | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | Internal service; API exposed via upload (phase 10a) |
 | **3** | Chunking + Contextual Retrieval + RAPTOR tree build | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | Internal worker |
@@ -650,9 +650,9 @@ When Aniket approves this plan, the Phase 1a G1 cell in §5 flips ⬜ → ✅ an
 
 ---
 
-### 5.3 Phase 1b plan — Schema versioning (G1 🟡 IN REVIEW)
+### 5.3 Phase 1b plan — Schema versioning (G1 ✅ SIGNED OFF)
 
-> **Status:** G1 drafted 2026-05-23 by Aniket. Awaiting sign-off. Branch: `phase-1b/schema-versioning` off `main` (Phase 1a merged as PR #2; tag `phase-1a-complete`).
+> **Status:** G1 ✅ signed off 2026-05-23 by Aniket. Plan locked. Branch: `phase-1b/schema-versioning` off `main` (Phase 1a merged as PR #2; tag `phase-1a-complete`).
 
 #### Scope
 
@@ -690,7 +690,8 @@ Phase 1b layers an **immutable version history** on top of the Phase 1a CRUD sur
 | 9 | DELETE behaviour | **Unchanged from 1a** — soft-delete the schema; versions stay in the DB but become unreachable via the API (GET on the parent or any version → 404). No per-version delete endpoint. | Versions are an audit trail. Deleting one would defeat the purpose. The parent schema's `lifecycle_state='deleted'` is the cascade gate. |
 | 10 | RLS on `schema_versions` | **Own `workspace_id` column + day-1 RLS policy**, mirroring 1a. NOT relying on the parent schema's RLS via FK. | Cross-phase invariant: every workspace-scoped table has its own `workspace_id` and its own policy. Belt-and-braces — a join-bug that crosses workspaces is impossible at the policy layer, not just the app layer. |
 | 11 | `schemas.current_version_id` FK constraint | **`ON DELETE SET NULL`**, NOT `CASCADE`. | A version is never hard-deleted in 1b (see #9), so the ON DELETE clause is defensive. Phase 9's eventual purge job (if any) would need the FK to relax, not cascade — preserving the schema row matters more than the pointer integrity. |
-| 12 | Concurrent PUT handling | **Last-writer-wins** — both PUTs commit, each becomes its own version. The race is detectable at read time (`version_number` jumped by more than 1 since you last read). UI surfaces the diff at Phase 10d; backend doesn't enforce. | Optimistic locking via `If-Match` is a UX feature, not a data-integrity feature. The version log loses no data; the only thing at risk is "did the user mean to overwrite the change they didn't see?" — and that's a UI decision. |
+| 12 | Concurrent PUT handling | **Last-writer-wins, serialized per-schema** — both PUTs commit, each becomes its own version. Server uses `SELECT ... FOR UPDATE` on the `schemas` row inside the mutation tx so two concurrent PUTs serialize cleanly (no `UNIQUE (schema_id, version_number)` constraint violation on the second one — it sees `max+1` after the first commits). From the client's view: both succeed, version_numbers are contiguous, no "diff conflict" surfaced backend-side. | Optimistic locking via `If-Match` is a UX feature, not a data-integrity feature. The version log loses no data; the only thing at risk is "did the user mean to overwrite the change they didn't see?" — and that's a UI decision (Phase 10d). The row-level lock keeps the allocation race out of the contract entirely. |
+| 13 | Rollback no-op handling | **409 `rollback-noop`** — `POST /schemas/:id/versions/:v/rollback` where `v == current_version` returns `409` (not 200 with a fresh-but-identical version row). | A no-op rollback creates pure log noise. Misclicks shouldn't pollute the audit trail. The slug name is opt-in: clients that *want* to clone the head forward can simply `PUT` the current body. |
 
 #### Repo layout delta after Phase 1b G4
 
@@ -887,6 +888,9 @@ Phases 15–24 per `architecture.md` §12. Tracked here only as a reminder of in
 | 2026-05-23 | **Phase 1a G5 ✅ + end-of-phase cross-phase sweep.** Authored `scripts/verify_phase_1a.sh`; 17/17 checks pass — compose smoke + 9 schemas-surface assertions (table + partial unique index + RLS state, CRUD via curl, 409 on dup, RLS isolation A↔B, idempotency replay, soft delete + DB row remains, openapi paths include /schemas) + 29 pytest. **Cross-phase sweep** per memory entry `feedback_end_of_phase_cross_phase_check.md`: (a) verify_phase_0.sh re-run after Phase 1a code → still 16/16 GREEN; (b) scope-leak grep clean — no `schema_versions` / `current_version_id` / `schema_entities*` / `nl_description` / `INSERT INTO audit_log` in Phase 1a code; (c) verify script for Phase 1a needed one fix during the run (replay byte-comparison → semantic JSON comparison, since PG jsonb doesn't preserve key order); (d) spec test count corrected (31 → 29 — earlier grep counted the `test_workspace` fixture as a test; pytest is the authoritative count source). **Phase 1a complete; ready to open PR.** | Aniket |
 | 2026-05-23 | **Phase 1a merged.** PR #2 merged into `main` (merge commit `c5cfc08`). Tag `phase-1a-complete` pushed. Local `phase-1a/schemas-crud` branch deleted. | Aniket |
 | 2026-05-23 | **Phase 1b G1 OPEN.** Branched `phase-1b/schema-versioning` from `main`. Plan section §5.3 drafted: `0006_schema_versions.sql` adds `schema_versions` table (workspace-scoped, RLS day-1, immutable — GRANT SELECT+INSERT only) and a nullable `current_version_id` FK on `schemas`; 3 new endpoints (list, read with diff, rollback) + 2 mutated 1a endpoints (POST/PUT now write a version row in-tx and return `current_version`); full JSON snapshots per architecture §7 line 788; rollback = clone-forward as new current version; monotonic integer `version_number` per schema. Out of scope: optimistic locking via If-Match (Phase 10d UI), `created_by` (auth phase), re-extraction trigger (Phase 6), entity/field/relationship snapshots (Phase 1c — `body jsonb` is forward-compatible). 12 decisions locked. Awaiting sign-off. | Aniket |
+| 2026-05-23 | **Phase 1b G1 ✅ signed off. G2 drafted.** `api_contracts.md` §3 added (renumbered: old §3 placeholders → §4, old §4 changelog → §5). §3.1 versioning-model invariants (append-only, atomic with mutation, schema-exists ⇒ ≥1 version, monotonic int per schema, rollback = clone-forward, replay never duplicates, workspace-isolated). §3.2 mutated schema object adds `current_version: int`. §3.3/§3.4 POST/PUT behavioural deltas. §3.5 version object shape. §3.6 declarative diff format (not strict RFC 6902). §3.7 list versions (newest-first, lightweight summary). §3.8 read one with computed `diff_from_prior`. §3.9 rollback with `409 rollback-noop` for same-as-current target + Idempotency-Key required. §3.10 out-of-scope list. New slug introduced: `rollback-noop` (joins 1a's 4 slugs). | Aniket |
+| 2026-05-23 | **Phase 1b post-G2 cross-gate review (G1↔G2).** All 12 G1 decisions traced into §3 cleanly. Two tightenings landed: (A) decision #12 expanded — "last-writer-wins" was correct but didn't address the `version_number` allocation race. Locked: server serializes per-schema via `SELECT ... FOR UPDATE` on the parent row inside the mutation tx, so contiguous numbers always assigned and the UNIQUE `(schema_id, version_number)` constraint is never raced. §3.4 contract amended to match. (B) new decision #13 — `409 rollback-noop` for `v == current_version` (derived from §3.9 contract; G1 hadn't preempted this UX call; locked at G2). | Aniket |
+| 2026-05-23 | **Phase 1b G2 ✅ signed off.** §3 contracts locked. **G3 opens** — drafting `tests/specs/phase_1b.md` + 3 red skeleton files: `test_schema_versions.py` (list + read-with-diff + rollback + concurrency), `test_schemas_crud.py` mutations (POST returns current_version=1; PUT bumps it), `test_idempotency.py` mutations (rollback Idempotency-Key replay). | Aniket |
 
 ---
 
