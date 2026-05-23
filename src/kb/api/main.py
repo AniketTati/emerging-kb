@@ -11,9 +11,16 @@ from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
+from starlette.requests import Request
 
 from kb import __version__
 from kb.api.deps import current_workspace_id
+from kb.api.errors import (
+    BadRequestError,
+    MissingIdempotencyKeyError,
+    problem_response,
+)
 from kb.api.health import router as health_router
 from kb.api.middleware import (
     AccessLogMiddleware,
@@ -21,7 +28,9 @@ from kb.api.middleware import (
     WorkspaceMiddleware,
 )
 from kb.api.readiness import router as ready_router
+from kb.api.schemas import router as schemas_router
 from kb.config import get_settings
+from kb.domain.schemas import DuplicateNameError, NotFoundError
 from kb.logging import configure_logging, get_logger
 
 
@@ -60,9 +69,48 @@ def build_app() -> FastAPI:
 
     app.include_router(health_router)
     app.include_router(ready_router)
+    app.include_router(schemas_router)
 
-    # Test-only debug endpoint — excluded from OpenAPI (G1 G5 #5 acceptance:
-    # /openapi.json paths contains only /health and /ready).
+    # ---- Exception handlers — RFC 9457 problem+json for every 4xx ----
+
+    @app.exception_handler(NotFoundError)
+    async def _not_found(req: Request, exc: NotFoundError):  # noqa: ARG001
+        return problem_response(
+            req, status_code=404, type_slug="not-found",
+            title="Resource not found", detail=str(exc),
+        )
+
+    @app.exception_handler(DuplicateNameError)
+    async def _dup_name(req: Request, exc: DuplicateNameError):  # noqa: ARG001
+        return problem_response(
+            req, status_code=409, type_slug="schema-name-conflict",
+            title="Schema name already exists in this workspace",
+            detail=str(exc),
+        )
+
+    @app.exception_handler(MissingIdempotencyKeyError)
+    async def _missing_idem(req: Request, exc: MissingIdempotencyKeyError):  # noqa: ARG001
+        return problem_response(
+            req, status_code=400, type_slug="missing-idempotency-key",
+            title="Idempotency-Key header is required for this method",
+        )
+
+    @app.exception_handler(BadRequestError)
+    async def _bad_request(req: Request, exc: BadRequestError):
+        return problem_response(
+            req, status_code=400, type_slug="bad-request",
+            title="Bad request", detail=exc.detail,
+        )
+
+    @app.exception_handler(RequestValidationError)
+    async def _validation(req: Request, exc: RequestValidationError):
+        return problem_response(
+            req, status_code=422, type_slug="validation-error",
+            title="Request body or parameters failed validation",
+            detail=str(exc.errors()),
+        )
+
+    # Test-only debug endpoint — excluded from OpenAPI.
     @app.get("/_debug/workspace", include_in_schema=False)
     async def _debug_workspace() -> dict[str, str]:
         ws = current_workspace_id()

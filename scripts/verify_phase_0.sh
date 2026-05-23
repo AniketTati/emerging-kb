@@ -213,20 +213,31 @@ else
     fail "X-Request-Id header missing"
 fi
 
-step "curl: /openapi.json paths contains only /health and /ready"
+step "curl: /openapi.json paths contains /health and /ready"
 paths=$(curl -fsS http://localhost:8000/openapi.json | python3 -c "import sys,json; print(','.join(sorted(json.loads(sys.stdin.read())['paths'].keys())))")
-if [[ "$paths" == "/health,/ready" ]]; then
-    ok "openapi paths: $paths"
+# "Contains" (not "equals") — later phases legitimately add /schemas, /chat, etc.
+# Phase 0's responsibility is only that ITS paths are present and mounted via middleware.
+if [[ ",$paths," == *",/health,"* && ",$paths," == *",/ready,"* ]]; then
+    ok "openapi paths include /health + /ready: $paths"
 else
-    fail "expected /health,/ready — got: $paths"
+    fail "expected /health and /ready in paths — got: $paths"
 fi
 
 # ----------------------------------------------------------------------------
 # Stack 2: pytest over testcontainers
 # ----------------------------------------------------------------------------
 
-step "pytest (full suite over testcontainers)"
-if uv run pytest tests/ -q >/tmp/kb-verify-pytest.log 2>&1; then
+step "pytest (Phase 0 test files only, over testcontainers)"
+# Each phase's verify runs ITS tests — later phases' in-progress red skeletons
+# don't count against Phase 0's invariant check.
+phase_0_tests=(
+    tests/test_health.py
+    tests/test_ready.py
+    tests/test_migrations.py
+    tests/test_rls.py
+    tests/test_middleware.py
+)
+if uv run pytest "${phase_0_tests[@]}" -q >/tmp/kb-verify-pytest.log 2>&1; then
     ok "pytest: $(tail -1 /tmp/kb-verify-pytest.log)"
 else
     fail "pytest failed (see /tmp/kb-verify-pytest.log)"
