@@ -921,7 +921,7 @@ Per [build_tracker §5.5](build_tracker.md). Five endpoints under `/files`. Firs
 | `mime_type` | string | From upload's Content-Type or sniffed from magic bytes. |
 | `size_bytes` | int | Raw byte count. |
 | `doc_type` | string \| null | Always `null` at Phase 2a (classifier lands in a later phase). |
-| `lifecycle_state` | enum | `queued/parsing/parsed/chunked/contextualized/embedded/failed` (Phase 3d will add the terminal `ready`) — `deleted` returns 404 on reads. |
+| `lifecycle_state` | enum | `queued/parsing/parsed/chunked/contextualized/embedded/raptor_building/ready/failed` — `deleted` returns 404 on reads. Terminal success state is `ready` (Phase 3d). Each parsing→…→ready transition appends an entry to `lifecycle` history (§5.3). |
 
 No `workspace_id`, no `object_key` in response — `object_key` is a server-internal detail (clients don't read MinIO directly).
 
@@ -937,6 +937,13 @@ No `workspace_id`, no `object_key` in response — `object_key` is a server-inte
     {"from_state": "parsing", "to_state": "parsed",  "event": "parse_done",  "payload": {"parser": "docling", "pages": 12},"created_at": "..."}
     // Phase 2c: `parser` enum widens to `docling | xlsx | email | gemini_ocr | mistral_ocr`.
     // `payload.provenance` may also be set when Phase 2c's strategy/escalation runs (see raw_pages.layout_json.provenance).
+    // Phase 3a/3b/3c/3d (subsequent events on a single file's lifecycle history):
+    //   parsed → chunked            event=chunking_done           payload={chunk_count}
+    //   chunked → contextualized    event=contextualization_done  payload={prefix_count, model_id, cache_creation_input_tokens, cache_read_input_tokens}
+    //   contextualized → embedded   event=embedding_done          payload={embedded_count, model_id, dim}
+    //   embedded → raptor_building  event=raptor_build_started    payload={leaf_count}
+    //   raptor_building → ready     event=raptor_build_done       payload={leaf_count, levels_built, total_summarizer_calls, summarizer_model_id, embedder_model_id}
+    // Failures at any stage: <prior_state> → failed, event=<stage>_failed, payload={error_class, message, ...}
   ]
 }
 ```
