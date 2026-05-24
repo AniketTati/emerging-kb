@@ -26,7 +26,8 @@ ALTER TABLE files DROP CONSTRAINT IF EXISTS files_lifecycle_state_check;
 ALTER TABLE files ADD CONSTRAINT files_lifecycle_state_check
     CHECK (lifecycle_state IN (
         'queued','parsing','parsed','chunked','contextualized','embedded',
-        'raptor_building','ready','failed','deleted'
+        'raptor_building','mentions_extracting','fields_extracting',
+        'units_extracting','ready','failed','deleted'
     ));
 
 -- ----------------------------------------------------------------------------

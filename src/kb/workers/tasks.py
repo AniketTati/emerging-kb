@@ -1093,12 +1093,13 @@ async def raptor_build_file_impl(file_id: str) -> None:
                             child_node_id=child_node_id,
                         )
 
-            # Finally, transition to ready.
+            # Phase 5a §5.12.1 #7: transition to mentions_extracting (was 'ready'
+            # in 3d; Phase 5a inserts mentions → fields → units before ready).
             await transition_lifecycle(
                 conn,
                 workspace_id=str(workspace_id),
                 file_id=file_id,
-                to_state="ready",
+                to_state="mentions_extracting",
                 event="raptor_build_done",
                 payload={
                     "leaf_count": len(leaves),
@@ -1106,6 +1107,478 @@ async def raptor_build_file_impl(file_id: str) -> None:
                     "total_summarizer_calls": total_summarizer_calls,
                     "summarizer_model_id": summarizer_model_id,
                     "embedder_model_id": embedder_model_id,
+                },
+            )
+
+    # Phase 5a §5.12.1 #7: chain extract_mentions_file in a SEPARATE tx so a
+    # Procrastinate-defer failure doesn't roll back the successful raptor build.
+    # Matches the 3a→3b, 3b→3c, 3c→3d chaining shape.
+    try:
+        await procrastinate_app.configure_task(
+            name="extract_mentions_file"
+        ).defer_async(file_id=file_id)
+    except Exception:  # noqa: BLE001 — best-effort chain
+        traceback.print_exc()
+
+
+# ---------------------------------------------------------------------------
+# Phase 5a — extract_mentions_file_impl
+# ---------------------------------------------------------------------------
+
+
+async def extract_mentions_file_impl(file_id: str) -> None:
+    """Extract mentions for a `mentions_extracting` file → write
+    extracted_mentions rows → advance lifecycle to `fields_extracting`.
+
+    Per build_tracker §5.12.1:
+    - decision #1: per-`contextual_chunks` granularity.
+    - decision #4: nullable start/end/confidence (LLM may omit).
+    - decision #5: immutable storage; re-extract = DELETE+INSERT in same tx.
+    - decision #8: at-start idempotency via DELETE existing.
+    - decision #9: asyncio.Semaphore(KB_MENTIONS_CONCURRENCY=4) per file.
+
+    Per-stage idempotency: returns immediately if already past
+    mentions_extracting.
+    """
+    import os
+
+    from kb.config import get_settings
+    from kb.domain.mentions import (
+        delete_mentions_for_file,
+        insert_mention,
+        read_contextual_chunks_for_file,
+    )
+    from kb.extraction.mentions import MentionExtractionError, make_mention_extractor
+
+    settings = get_settings()
+    db_url = settings.database_url
+
+    # Phase 1: state check.
+    async with open_connection(db_url) as conn:
+        async with conn.transaction():
+            cur = await conn.execute(
+                "SELECT workspace_id, lifecycle_state FROM files WHERE id = %s",
+                (file_id,),
+            )
+            row = await cur.fetchone()
+            if row is None:
+                raise FileNotFoundError(file_id)
+            workspace_id, lifecycle_state = row
+
+            if lifecycle_state in (
+                "fields_extracting", "units_extracting", "ready",
+                "failed", "deleted",
+            ):
+                return
+            if lifecycle_state != "mentions_extracting":
+                # Out-of-order or pre-Phase-5 stuck file; skip.
+                return
+
+            await conn.execute(
+                "SELECT set_config('app.workspace_id', %s, true)",
+                (str(workspace_id),),
+            )
+            chunks = await read_contextual_chunks_for_file(conn, file_id=file_id)
+
+    # Phase 2: build extractor + extract per chunk under semaphore.
+    extractor = make_mention_extractor()
+    concurrency = int(os.environ.get("KB_MENTIONS_CONCURRENCY") or 4)
+    semaphore = asyncio.Semaphore(concurrency)
+
+    # Use the joined contextual_text as both doc context AND chunk text. The
+    # contextual prefix from 3b already gives intra-doc context; a few-chunk
+    # join would help but adds cost without clear win at Wave A scale.
+    async def _extract_one(cc_id: str, cc_text: str):
+        async with semaphore:
+            try:
+                result = await extractor.extract(
+                    doc_text=cc_text, chunk_text=cc_text
+                )
+                return cc_id, result
+            except MentionExtractionError as exc:
+                # Single-chunk failure shouldn't fail the whole file —
+                # log and return empty so other chunks proceed.
+                traceback.print_exc()
+                return cc_id, None
+
+    results = await asyncio.gather(*(
+        _extract_one(cc_id, cc_text) for cc_id, cc_text in chunks
+    ))
+
+    # Phase 3: atomic DB write — DELETE existing + INSERT all new in one tx.
+    total_inserted = 0
+    model_id_used = ""
+    async with open_connection(db_url) as conn:
+        async with conn.transaction():
+            await conn.execute(
+                "SELECT set_config('app.workspace_id', %s, true)",
+                (str(workspace_id),),
+            )
+            await delete_mentions_for_file(conn, file_id=file_id)
+
+            for cc_id, result in results:
+                if result is None:
+                    continue
+                model_id_used = result.model_id
+                for mention in result.mentions:
+                    await insert_mention(
+                        conn,
+                        contextual_chunk_id=cc_id,
+                        file_id=file_id,
+                        workspace_id=str(workspace_id),
+                        mention_text=mention.mention_text,
+                        mention_type=mention.mention_type,
+                        start_offset=mention.start_offset,
+                        end_offset=mention.end_offset,
+                        confidence=mention.confidence,
+                        model_id=result.model_id,
+                    )
+                    total_inserted += 1
+
+            await transition_lifecycle(
+                conn,
+                workspace_id=str(workspace_id),
+                file_id=file_id,
+                to_state="fields_extracting",
+                event="mentions_extracted",
+                payload={
+                    "mention_count": total_inserted,
+                    "chunk_count": len(chunks),
+                    "model_id": model_id_used or "identity",
+                },
+            )
+
+    # Phase 5b §5.12.2 #8: chain extract_fields_file.
+    try:
+        await procrastinate_app.configure_task(
+            name="extract_fields_file"
+        ).defer_async(file_id=file_id)
+    except Exception:  # noqa: BLE001
+        traceback.print_exc()
+
+
+# ---------------------------------------------------------------------------
+# Phase 5b — extract_fields_file_impl
+# ---------------------------------------------------------------------------
+
+
+async def extract_fields_file_impl(file_id: str) -> None:
+    """Classify doc-type → propose fields → cluster across workspace+doc_type
+    → check promotion thresholds → promote if crossed → advance lifecycle to
+    `units_extracting`.
+
+    Per build_tracker §5.12.2 (11 locked decisions).
+
+    Per-stage idempotency: returns immediately if already past fields_extracting.
+    """
+    from kb.config import get_settings
+    from kb.domain.fields import (
+        count_docs_of_doctype,
+        delete_proposed_fields_for_file,
+        insert_proposed_field,
+        mark_inferred_field_promoted,
+        read_proposed_fields_for_doctype,
+        update_file_inferred_doc_type,
+        upsert_inferred_schema_field,
+    )
+    from kb.extraction.fields import FieldExtractionError, make_field_extractor
+    from kb.extraction.promotion import (
+        PromotionThresholds,
+        cluster_fields_for_doctype,
+        ensure_auto_schema_entity,
+        promote_field,
+        should_promote,
+    )
+
+    settings = get_settings()
+    db_url = settings.database_url
+
+    # Phase 1: state check + read full doc text for classifier/proposer input.
+    async with open_connection(db_url) as conn:
+        async with conn.transaction():
+            cur = await conn.execute(
+                "SELECT workspace_id, lifecycle_state FROM files WHERE id = %s",
+                (file_id,),
+            )
+            row = await cur.fetchone()
+            if row is None:
+                raise FileNotFoundError(file_id)
+            workspace_id, lifecycle_state = row
+
+            if lifecycle_state in ("units_extracting", "ready", "failed", "deleted"):
+                return
+            if lifecycle_state != "fields_extracting":
+                return
+
+            await conn.execute(
+                "SELECT set_config('app.workspace_id', %s, true)",
+                (str(workspace_id),),
+            )
+            # Concat raw_pages text as the doc context for classify + propose.
+            cur = await conn.execute(
+                "SELECT text FROM raw_pages WHERE file_id = %s ORDER BY page_number",
+                (file_id,),
+            )
+            page_rows = await cur.fetchall()
+            doc_text = "\n\n".join(r[0] for r in page_rows if r[0])
+
+    # Phase 2: classify + propose (LLM calls).
+    extractor = make_field_extractor()
+    try:
+        cls = await extractor.classify(doc_text=doc_text)
+        doc_type = cls.doc_type or "unknown"
+        proposal = await extractor.propose(doc_text=doc_text)
+    except FieldExtractionError:
+        # Don't block the chain on extractor failure — log + advance with
+        # doc_type='unknown' + no fields. Phase 9 will re-run via admin endpoint.
+        traceback.print_exc()
+        doc_type = "unknown"
+        proposal = None
+        cls = None
+
+    # Phase 3: atomic DB write — DELETE existing proposals + INSERT new +
+    # update doc_type + recompute clusters + check promotions.
+    async with open_connection(db_url) as conn:
+        async with conn.transaction():
+            await conn.execute(
+                "SELECT set_config('app.workspace_id', %s, true)",
+                (str(workspace_id),),
+            )
+
+            await update_file_inferred_doc_type(
+                conn, file_id=file_id, doc_type=doc_type,
+            )
+            await delete_proposed_fields_for_file(conn, file_id=file_id)
+
+            n_proposed = 0
+            if proposal is not None:
+                for f in proposal.fields:
+                    await insert_proposed_field(
+                        conn,
+                        file_id=file_id,
+                        workspace_id=str(workspace_id),
+                        inferred_doc_type=doc_type,
+                        field_name=f.field_name,
+                        field_description=f.field_description,
+                        value_text=f.value_text,
+                        value_type=f.value_type,
+                        is_pii=f.is_pii,
+                        model_id=proposal.model_id,
+                    )
+                    n_proposed += 1
+
+            # Cross-doc clustering: read all proposed_fields for this
+            # (workspace, doc_type) — including the rows we just inserted.
+            proposed_per_doc = await read_proposed_fields_for_doctype(
+                conn, workspace_id=str(workspace_id), inferred_doc_type=doc_type,
+            )
+            n_docs = await count_docs_of_doctype(
+                conn, workspace_id=str(workspace_id), inferred_doc_type=doc_type,
+            )
+            clusters = cluster_fields_for_doctype(
+                proposed_per_doc=proposed_per_doc,
+                total_docs_of_type=n_docs,
+            )
+
+            # UPSERT inferred_schema_fields rows + check promotion.
+            thresholds = PromotionThresholds.from_env()
+            promotion_count = 0
+            schema_entity_id: str | None = None
+            for cluster in clusters:
+                inferred_id = await upsert_inferred_schema_field(
+                    conn,
+                    workspace_id=str(workspace_id),
+                    inferred_doc_type=doc_type,
+                    canonical_name=cluster.canonical_name,
+                    description=cluster.description,
+                    value_type=cluster.value_type,
+                    n_docs_observed=cluster.n_docs_observed,
+                    prevalence=cluster.prevalence,
+                    stability=cluster.stability,
+                    value_type_confidence=cluster.value_type_confidence,
+                )
+                if should_promote(cluster, thresholds):
+                    # Lazy-create schema_entity only when we need it.
+                    if schema_entity_id is None:
+                        _, schema_entity_id = await ensure_auto_schema_entity(
+                            conn,
+                            workspace_id=str(workspace_id),
+                            doc_type=doc_type,
+                        )
+                    schema_field_id = await promote_field(
+                        conn,
+                        workspace_id=str(workspace_id),
+                        schema_entity_id=schema_entity_id,
+                        canonical_name=cluster.canonical_name,
+                        description=cluster.description,
+                        value_type=cluster.value_type,
+                    )
+                    await mark_inferred_field_promoted(
+                        conn,
+                        inferred_field_id=inferred_id,
+                        promoted_schema_field_id=schema_field_id,
+                    )
+                    promotion_count += 1
+
+            await transition_lifecycle(
+                conn,
+                workspace_id=str(workspace_id),
+                file_id=file_id,
+                to_state="units_extracting",
+                event="fields_extracted",
+                payload={
+                    "doc_type": doc_type,
+                    "field_count": n_proposed,
+                    "n_clusters": len(clusters),
+                    "promotions": promotion_count,
+                    "model_id": (cls.model_id if cls else "identity"),
+                },
+            )
+
+    # Phase 5c §5.12.3 #6: chain extract_atomic_units_file.
+    try:
+        await procrastinate_app.configure_task(
+            name="extract_atomic_units_file"
+        ).defer_async(file_id=file_id)
+    except Exception:  # noqa: BLE001
+        traceback.print_exc()
+
+
+# ---------------------------------------------------------------------------
+# Phase 5c — extract_atomic_units_file_impl
+# ---------------------------------------------------------------------------
+
+
+async def extract_atomic_units_file_impl(file_id: str) -> None:
+    """Dispatch a doc-type-aware plugin → write atomic_units rows → JIT
+    anomaly scoring → advance lifecycle to `ready`.
+
+    Per build_tracker §5.12.3 (10 locked decisions).
+    """
+    from kb.config import get_settings
+    from kb.domain.atomic_units import (
+        delete_atomic_units_for_file,
+        insert_atomic_unit,
+        read_existing_unit_parameters,
+        update_atomic_unit_rarity,
+    )
+    from kb.extraction.anomaly import score_units_jit
+    from kb.extraction.plugins import FileMeta, dispatch
+
+    settings = get_settings()
+    db_url = settings.database_url
+
+    # Phase 1: state check + read file metadata + raw_pages.
+    file_meta: FileMeta | None = None
+    raw_pages: list[tuple[int, str, dict]] = []
+    workspace_id_str = ""
+    async with open_connection(db_url) as conn:
+        async with conn.transaction():
+            cur = await conn.execute(
+                "SELECT workspace_id, lifecycle_state, mime_type, name, "
+                "inferred_doc_type FROM files WHERE id = %s",
+                (file_id,),
+            )
+            row = await cur.fetchone()
+            if row is None:
+                raise FileNotFoundError(file_id)
+            workspace_id, lifecycle_state, mime_type, name, inferred_doc_type = row
+
+            if lifecycle_state in ("ready", "failed", "deleted"):
+                return
+            if lifecycle_state != "units_extracting":
+                return
+
+            workspace_id_str = str(workspace_id)
+            file_meta = FileMeta(
+                file_id=file_id,
+                workspace_id=workspace_id_str,
+                mime_type=mime_type,
+                inferred_doc_type=inferred_doc_type,
+                name=name,
+            )
+
+            await conn.execute(
+                "SELECT set_config('app.workspace_id', %s, true)",
+                (workspace_id_str,),
+            )
+            cur = await conn.execute(
+                "SELECT page_number, text, layout_json FROM raw_pages "
+                "WHERE file_id = %s ORDER BY page_number",
+                (file_id,),
+            )
+            page_rows = await cur.fetchall()
+            raw_pages = [(int(p[0]), p[1] or "", p[2] or {}) for p in page_rows]
+
+    if file_meta is None:
+        return
+
+    plugin = dispatch(file_meta)
+    units = []
+    if plugin is not None:
+        doc_text = "\n\n".join(p[1] for p in raw_pages if p[1])
+        try:
+            units = await plugin.extract(
+                file_meta=file_meta, doc_text=doc_text, raw_pages=raw_pages,
+            )
+        except Exception:  # noqa: BLE001
+            traceback.print_exc()
+            units = []
+
+    # Phase 2: atomic write — DELETE existing + INSERT new + JIT anomaly.
+    async with open_connection(db_url) as conn:
+        async with conn.transaction():
+            await conn.execute(
+                "SELECT set_config('app.workspace_id', %s, true)",
+                (workspace_id_str,),
+            )
+            await delete_atomic_units_for_file(conn, file_id=file_id)
+
+            unit_type = plugin.UNIT_TYPE if plugin is not None else ""
+            model_id_used = "identity" if not units else (
+                "rows" if plugin is dispatch(file_meta) and plugin.UNIT_TYPE == "row"
+                else "gemini-2.5-flash"
+            )
+
+            inserted_ids: list[str] = []
+            inserted_params: list[dict] = []
+            for u in units:
+                uid = await insert_atomic_unit(
+                    conn,
+                    file_id=file_id,
+                    workspace_id=workspace_id_str,
+                    unit_type=u.unit_type,
+                    parameters=u.parameters,
+                    anchor_chunk_id=u.anchor_chunk_id,
+                    rarity_score=None,
+                    model_id=model_id_used,
+                )
+                inserted_ids.append(uid)
+                inserted_params.append(u.parameters)
+
+            # JIT anomaly: read all units for this (workspace, unit_type)
+            # AFTER insert, score new units, UPDATE their rarity_score.
+            if units and unit_type:
+                historical = await read_existing_unit_parameters(
+                    conn, workspace_id=workspace_id_str, unit_type=unit_type,
+                )
+                scores = score_units_jit(inserted_params, historical)
+                for uid, sc in zip(inserted_ids, scores, strict=True):
+                    if sc is not None:
+                        await update_atomic_unit_rarity(
+                            conn, unit_id=uid, rarity_score=float(sc),
+                        )
+
+            await transition_lifecycle(
+                conn,
+                workspace_id=workspace_id_str,
+                file_id=file_id,
+                to_state="ready",
+                event="atomic_units_extracted",
+                payload={
+                    "unit_type": unit_type or "none",
+                    "unit_count": len(units),
+                    "plugin": plugin.__class__.__name__ if plugin else "none",
                 },
             )
 
@@ -1147,11 +1620,46 @@ async def embed_file(file_id: str) -> None:
 async def raptor_build_file(file_id: str) -> None:
     """Wire-level Procrastinate task. Delegates to the testable impl.
 
-    Phase 3d: builds the per-doc RAPTOR tree (L2+ summary nodes + edges)
-    from an 'embedded' file's contextual_chunks + chunk_embeddings.
-    Lifecycle transitions: embedded → raptor_building → ready (or failed).
+    Phase 3d + 5a: builds the per-doc RAPTOR tree (L2+ summary nodes + edges)
+    from an 'embedded' file's contextual_chunks + chunk_embeddings, then
+    chains extract_mentions_file. Lifecycle: embedded → raptor_building →
+    mentions_extracting (or failed).
     """
     await raptor_build_file_impl(file_id)
+
+
+@procrastinate_app.task(name="extract_mentions_file", queue="kb", pass_context=False)
+async def extract_mentions_file(file_id: str) -> None:
+    """Wire-level Procrastinate task. Delegates to the testable impl.
+
+    Phase 5a: extracts mentions via LLM NER → extracted_mentions rows;
+    chains extract_fields_file. Lifecycle: mentions_extracting →
+    fields_extracting (or failed).
+    """
+    await extract_mentions_file_impl(file_id)
+
+
+@procrastinate_app.task(name="extract_fields_file", queue="kb", pass_context=False)
+async def extract_fields_file(file_id: str) -> None:
+    """Wire-level Procrastinate task. Delegates to the testable impl.
+
+    Phase 5b: classifies doc-type, proposes emergent fields, clusters across
+    workspace+doc_type, auto-promotes if thresholds cross. Chains
+    extract_atomic_units_file. Lifecycle: fields_extracting →
+    units_extracting (or failed).
+    """
+    await extract_fields_file_impl(file_id)
+
+
+@procrastinate_app.task(name="extract_atomic_units_file", queue="kb", pass_context=False)
+async def extract_atomic_units_file(file_id: str) -> None:
+    """Wire-level Procrastinate task. Delegates to the testable impl.
+
+    Phase 5c: dispatches a doc-type-aware plugin (clauses / transactions /
+    rows / none) → atomic_units rows with JIT anomaly scoring → final
+    transition to `ready`. Last stage in the ingestion chain.
+    """
+    await extract_atomic_units_file_impl(file_id)
 
 
 # ---------------------------------------------------------------------------

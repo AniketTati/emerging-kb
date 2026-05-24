@@ -230,7 +230,10 @@ async def test_raptor_build_writes_raptor_build_done_lifecycle_event(
 
     resp = await client.get(f"/files/{fid}", headers=headers(test_workspace))
     body = resp.json()
-    assert body["lifecycle_state"] == "ready"
+    # Phase 5a §5.12.1 #7: after raptor_build, lifecycle now advances to
+    # mentions_extracting (was 'ready' before Phase 5a). The 'ready' terminal
+    # state moves to after Phase 5c's atomic_units extraction.
+    assert body["lifecycle_state"] == "mentions_extracting"
 
     events = body["lifecycle"]
     event_pairs = [(e["from_state"], e["to_state"], e["event"]) for e in events]
@@ -239,7 +242,7 @@ async def test_raptor_build_writes_raptor_build_done_lifecycle_event(
     assert ("embedded", "raptor_building", "raptor_build_started") in event_pairs, (
         f"missing raptor_build_started; got {event_pairs}"
     )
-    assert ("raptor_building", "ready", "raptor_build_done") in event_pairs, (
+    assert ("raptor_building", "mentions_extracting", "raptor_build_done") in event_pairs, (
         f"missing raptor_build_done; got {event_pairs}"
     )
 
