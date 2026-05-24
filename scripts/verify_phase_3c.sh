@@ -156,7 +156,7 @@ for _ in $(seq 1 180); do
     # embedding-success. Same forward-compat pattern as 3a/3b widened
     # earlier — every accept-set writes all currently-planned future
     # states (mirrors the 0009 CHECK convention from 3b G4 fix #2).
-    if [[ "$s" == "embedded" || "$s" == "raptor_building" || "$s" == "ready" ]]; then embedded=1; break; fi
+    if [[ "$s" == "embedded" || "$s" == "raptor_building" || "$s" == "mentions_extracting" || "$s" == "fields_extracting" || "$s" == "units_extracting" || "$s" == "ready" ]]; then embedded=1; break; fi
     if [[ "$s" == "failed" ]]; then break; fi
     sleep 2
 done

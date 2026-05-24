@@ -163,7 +163,7 @@ for _ in $(seq 1 120); do
             | python3 -c "import sys,json; print(json.loads(sys.stdin.read()).get('lifecycle_state',''))")
     # Phase 3a chained chunk_file may race past 'parsed' to 'chunked' before
     # this loop polls. Any post-parse state counts as parse-success.
-    if [[ "$state" == "parsed" || "$state" == "chunked" || "$state" == "contextualized" || "$state" == "embedded" || "$state" == "raptor_building" || "$state" == "ready" ]]; then parsed=1; break; fi
+    if [[ "$state" == "parsed" || "$state" == "chunked" || "$state" == "contextualized" || "$state" == "embedded" || "$state" == "raptor_building" || "$state" == "mentions_extracting" || "$state" == "fields_extracting" || "$state" == "units_extracting" || "$state" == "ready" ]]; then parsed=1; break; fi
     if [[ "$state" == "failed" ]]; then break; fi
     sleep 5
 done

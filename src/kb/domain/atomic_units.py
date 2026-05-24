@@ -1,0 +1,78 @@
+"""Phase 5c — atomic_units repo."""
+
+from __future__ import annotations
+
+import json
+from typing import Any
+
+from kb.db.pool import Connection
+
+
+async def delete_atomic_units_for_file(
+    conn: Connection, *, file_id: str
+) -> int:
+    cur = await conn.execute(
+        "DELETE FROM atomic_units WHERE file_id = %s", (file_id,),
+    )
+    return cur.rowcount or 0
+
+
+async def insert_atomic_unit(
+    conn: Connection,
+    *,
+    file_id: str,
+    workspace_id: str,
+    unit_type: str,
+    parameters: dict[str, Any],
+    anchor_chunk_id: str | None,
+    rarity_score: float | None,
+    model_id: str,
+) -> str:
+    cur = await conn.execute(
+        "INSERT INTO atomic_units "
+        "(file_id, workspace_id, unit_type, parameters, anchor_chunk_id, "
+        "rarity_score, model_id) "
+        "VALUES (%s, %s, %s, %s::jsonb, %s, %s, %s) "
+        "RETURNING id::text",
+        (
+            file_id, workspace_id, unit_type, json.dumps(parameters),
+            anchor_chunk_id, rarity_score, model_id,
+        ),
+    )
+    return (await cur.fetchone())[0]
+
+
+async def read_existing_unit_parameters(
+    conn: Connection,
+    *,
+    workspace_id: str,
+    unit_type: str,
+) -> list[dict[str, Any]]:
+    """Read all `parameters` dicts for (workspace, unit_type) — used as the
+    historical corpus for anomaly centroid."""
+    cur = await conn.execute(
+        "SELECT parameters FROM atomic_units "
+        "WHERE workspace_id = %s AND unit_type = %s",
+        (workspace_id, unit_type),
+    )
+    rows = await cur.fetchall()
+    return [r[0] for r in rows]
+
+
+async def update_atomic_unit_rarity(
+    conn: Connection, *, unit_id: str, rarity_score: float | None,
+) -> None:
+    await conn.execute(
+        "UPDATE atomic_units SET rarity_score = %s WHERE id = %s",
+        (rarity_score, unit_id),
+    )
+
+
+async def count_atomic_units_for_file(
+    conn: Connection, *, file_id: str,
+) -> int:
+    cur = await conn.execute(
+        "SELECT count(*) FROM atomic_units WHERE file_id = %s",
+        (file_id,),
+    )
+    return (await cur.fetchone())[0]
