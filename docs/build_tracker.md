@@ -283,6 +283,7 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
 | **8** | Query planner + rewriting + parallel retrieval + RRF + rerank + CRAG + Astute generation (parent — split into 8a-f) | ✅ | — | ⬜ | ⬜ | ⬜ | G1 ✅ split-locked at §5.15. Each sub-phase has its own G1→G5 cycle. |
 | **8a** | Query rewriting (Step-Back + HyDE + Query2Doc) | ✅ | — | ✅ | ✅ | ✅ | All gates green 2026-05-25 (§5.15.1, 10 decisions). 421/421 pytest. verify_phase_8a.sh 8/8. Cross-phase sweep 17/17. Branch `phase-8a/query-rewriter`. |
 | **8b** | 6-channel parallel retrieval (BM25 chunks/raptor + dense chunks/raptor + mentions exact + atomic units rarity) + RRF fusion | ✅ | — | ✅ | ✅ | ✅ | All gates green 2026-05-25 (§5.15.2, 12 decisions). 441/441 pytest. verify_phase_8b.sh 9/9. Cross-phase sweep 18/18. Branch `phase-8b/retrieval-channels`. |
+| **8c** | Reranker (Cohere Rerank 3.5 default · mxbai-rerank-large-v2 local fallback · Identity passthrough) | ✅ | — | ✅ | ✅ | ✅ | All gates green 2026-05-25 (§5.15.3, 12 decisions). 456/456 pytest. Cross-phase sweep 19/19 GREEN. Branch `phase-8c/rerank`. |
 | **9** | Audit log + lifecycle visibility + idempotency | 🟡 | — | ⬜ | ⬜ | ⬜ | G1 DRAFT at §5.16. SSE for Upload status + Chat replay + GET /audit. |
 | **10a** | UI — Upload (drag-drop · live per-doc per-stage status via SSE) | 🟡 | — | ⬜ | ⬜ | ⬜ | G1 DRAFT at §5.17. Next.js 15 per architecture. |
 | **10b** | UI — Chat (front door · streamed answers · right-side citation cards · plan inspector) + universal Doc Detail slide-in panel | 🟡 | — | ⬜ | ⬜ | ⬜ | G1 DRAFT at §5.17. |
@@ -2533,6 +2534,61 @@ When Aniket approves this plan, the Phase 4 G1 cell in §5 flips ⬜ → ✅ and
 - [ ] No new lifecycle states.
 - [ ] No leak into 8c (no rerank).
 - [ ] No leak into 8d/8e (no CRAG, no generation).
+
+---
+
+### 5.15.3 Phase 8c plan — Reranker (Cohere + mxbai + Identity) (G1 🟡 DRAFTED)
+
+> **Status:** G1 plan drafted 2026-05-25. Per architecture line 197 + 904 (Cohere Rerank 3.5 default, mxbai-rerank-large-v2 fallback). Cross-encoder rerank of post-RRF top-30 → top-10 returned to chat.
+
+**Scope (in / out):**
+
+**In scope:**
+- `src/kb/query/rerank.py`: `Reranker` Protocol · 3-impl factory (`CohereReranker` + `MxBaiReranker` + `IdentityReranker`) · `make_reranker()` reads `KB_RERANKER ∈ {cohere, mxbai, identity, auto}`.
+- `CohereReranker` uses `cohere.AsyncClientV2.rerank()` with `rerank-english-v3.0` model (configurable via `KB_COHERE_RERANK_MODEL`). Requires `KB_COHERE_API_KEY`.
+- `MxBaiReranker` uses `sentence-transformers.CrossEncoder("mixedbread-ai/mxbai-rerank-large-v2")` — local CPU/GPU. Lazy-loaded singleton at class level.
+- `IdentityReranker` is passthrough — returns top-K of input order unchanged (no LLM call).
+- `auto` selector probes `KB_COHERE_API_KEY` → falls back to Identity (mxbai is heavy local dep; explicit opt-in via `KB_RERANKER=mxbai`).
+- Cohere/mxbai errors → fall back to Identity-style passthrough (don't fail the query).
+- Output schema: reranker returns at most `top_k` Hits with updated `score` (reranker's relevance score) + metadata gains `rerank: 'cohere' | 'mxbai'`.
+- `pyproject.toml` adds `cohere>=5.0` as an optional dep (extras `[rerank]`); won't break baseline install.
+
+**Out of scope (deferred):**
+- Per-query reranker tuning (top_n, max_chunks_per_doc, return_documents) — defaults only in Wave A.
+- Multi-language rerankers (rerank-multilingual-v3.0) — Wave B.
+- BGE / GTE rerankers — Wave B.
+- HTTP surface (8f).
+- Reranker latency profiling / SLO — Phase 12.
+- Caching reranker calls — Wave B.
+
+**Decisions locked at G1:**
+
+| # | Decision | Choice | Rationale |
+|---|---|---|---|
+| 1 | Default reranker | **Cohere Rerank 3.5** (model `rerank-english-v3.0`). Architecture line 197 + 904. | Best-in-class cross-encoder per architecture. Hosted API → no local GPU req. |
+| 2 | Fallback chain | `auto`: Cohere (if `KB_COHERE_API_KEY`) → Identity (no rerank). mxbai is opt-in via `KB_RERANKER=mxbai`. | mxbai requires `sentence-transformers` (heavy ~500MB dep); don't make it the auto-fallback. |
+| 3 | mxbai model | `mixedbread-ai/mxbai-rerank-large-v2` per architecture line 904. Lazy-loaded class-level singleton. | Architecture-cited local fallback. Loading the model once per process avoids latency on first rerank. |
+| 4 | Factory selector | `KB_RERANKER ∈ {cohere, mxbai, identity, auto}`. Same pattern as 3b-bis/3d/5a/5b/5c/6/7/8a. | Consistency. |
+| 5 | Cohere model override | `KB_COHERE_RERANK_MODEL` env, default `rerank-english-v3.0`. | Matches existing `KB_*_MODEL` env convention (3b-bis, 5b, etc.). |
+| 6 | Top_K return | Reranker takes `top_k` parameter (configured by caller — Phase 8f orchestrator passes 10). | Phase 8f decides the user-facing K; rerank is a pure transform. |
+| 7 | Error handling | Cohere API error / mxbai import failure / model load failure → fall back to passthrough (`hits[:top_k]`). | Reranking is quality boost; query should still complete. |
+| 8 | Document field | Cohere/mxbai see `Hit.snippet` (already truncated to 500 chars per 8b decision #11). | Phase 8b ensured snippets are clean + bounded. |
+| 9 | Score replacement | Reranked Hit's `score` = reranker's relevance_score (0..1 for Cohere; cross-encoder logits for mxbai). Metadata `rerank` key indicates which engine. | Downstream (Phase 8d CRAG, 8e generate) consume score for confidence assessment. |
+| 10 | Empty input | Empty `hits` → return `[]` immediately (no API call). | Avoid wasted Cohere API call on empty fusion result. |
+| 11 | Cohere SDK choice | `cohere.AsyncClientV2` (v2 API). Optional dep `cohere>=5.0`; if not installed, falls back to passthrough. | Cohere v5+ SDK is the current stable; AsyncClientV2 is the async path. |
+| 12 | mxbai loaded lazily at class level | `MxBaiReranker._model = None` class attribute; first rerank call initializes via `CrossEncoder(...)`. | Avoids the ~500MB model load at import time. |
+
+**Files (G3/G4):**
+- `src/kb/query/rerank.py` — 3-impl factory + Reranker Protocol
+- `pyproject.toml` — `cohere>=5.0` as optional dep in `[project.optional-dependencies] rerank`
+- `tests/specs/phase_8c.md` — test spec
+- `tests/test_query_rerank_unit.py` — pure-function + mocked Cohere/mxbai tests (~12)
+- `scripts/verify_phase_8c.sh` — module-level (no E2E full-stack)
+
+**Phase 8c G5 — what "green" means:**
+- `scripts/verify_phase_8c.sh` standalone — 6-8 checks (worker imports, Identity passthrough, factory matrix, mocked Cohere path returns reranked output).
+- Full pytest: prior 441 still GREEN + new ≥12 Phase 8c tests GREEN.
+- Cross-phase sweep across all 19 verify scripts: 19/19 GREEN.
 
 ---
 
