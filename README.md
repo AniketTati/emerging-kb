@@ -4,9 +4,46 @@
 >
 > **An alternative to Glean, NotebookLM, Hebbia** for teams that need to keep their data on their own infrastructure. Built on Postgres + pgvector + ParadeDB. Domain-agnostic. MIT-licensed.
 
-**Status:** planning / pre-build (as of 2026-05-22). Architecture, UI (10-surface IA via clickable prototype at [`prototype/`](prototype/)), wiring inventory (~100 endpoints), and all nine tier-1 gap designs are locked. Phase 0 G1 ready to open.
+**Status (2026-05-24):** **Wave A ingestion + per-doc & corpus RAPTOR shipped.** Files flow end-to-end (`POST /files` → `parsing → parsed → chunked → contextualized → embedded → raptor_building → ready`), corpus-level RAPTOR builds on demand (`POST /corpus/raptor/rebuild`). 286/286 pytest in ~80s; 12 Docker-stack verify scripts, 205 checks, all GREEN. Branch `phase-3/chunking-raptor` (PR #7). Phase 4 (retrieval — HNSW + BM25 + tree-aware query) is next on its own branch.
 
-**Public brief:** [`docs/problem_statement.md`](docs/problem_statement.md) · **Contributing:** [`CONTRIBUTING.md`](CONTRIBUTING.md)
+The architecture / UI / 9 tier-1 gap designs / wiring inventory below describe the **full target system**; check the [`docs/build_tracker.md`](docs/build_tracker.md) §5 "Build phases" table for what's currently shipped vs. roadmap.
+
+**Public brief:** [`docs/problem_statement.md`](docs/problem_statement.md) · **Build log:** [`docs/build_tracker.md`](docs/build_tracker.md) · **Contributing:** [`CONTRIBUTING.md`](CONTRIBUTING.md)
+
+---
+
+## Quick start (what ships today, Wave A)
+
+```bash
+# 1. Copy env template + add your Gemini API key
+cp .env.example .env
+echo "KB_GEMINI_API_KEY=your-key-here" >> .env
+# Optional (otherwise Identity fallback runs for contextualization/summarization):
+# echo "KB_ANTHROPIC_API_KEY=your-anthropic-key" >> .env
+
+# 2. Bring up the full stack (Postgres + MinIO + worker + API)
+docker compose up --build -d
+
+# 3. Upload a file — the worker chains parse → chunk → contextualize → embed → RAPTOR
+curl -X POST http://localhost:8000/files \
+  -H "X-Test-Workspace: 11111111-1111-1111-1111-111111111111" \
+  -H "Idempotency-Key: $(uuidgen)" \
+  -F "file=@tests/fixtures/tiny.pdf;type=application/pdf"
+
+# 4. Watch the lifecycle progress (each transition appended to history)
+curl http://localhost:8000/files/<id> -H "X-Test-Workspace: 11111111-1111-1111-1111-111111111111"
+
+# 5. Trigger corpus-level RAPTOR rebuild across the workspace
+curl -X POST http://localhost:8000/corpus/raptor/rebuild \
+  -H "X-Test-Workspace: 11111111-1111-1111-1111-111111111111" \
+  -H "Content-Type: application/json" -d '{}'
+
+# 6. Run the full pytest + verify suite
+uv sync && uv run pytest tests/
+./scripts/verify_phase_3e.sh   # any one of the 12 verify_phase_*.sh scripts
+```
+
+**Retrieval is NOT yet implemented** — Phase 4 adds `/query`, HNSW + BM25 indexes, and tree-aware planning. Today you can ingest and inspect the persisted RAPTOR tree directly via SQL on `raptor_nodes` + `raptor_edges`.
 
 ---
 
@@ -64,15 +101,24 @@ Adding a new doc type = registering a small plug-in (classifier + extractor + pa
 
 ## Locked decisions
 
-| Decision | Choice |
-|---|---|
-| Demo corpus | Mixed public datasets — **CUAD** (legal contracts) + **Enron** (corporate emails) + **SEC 10-K** (financial filings) + scanned variants + one xlsx. ~80–100 docs. No domain lock-in. |
-| Storage | **Postgres 17** + pgvector ≥ 0.8 + ParadeDB pg_search + MinIO + Procrastinate (Python PG-backed queue). One transactional store. |
-| LLMs | **Gemini 2.5 Flash** (extraction, planning, generation); **Gemini Embedding 001** (embeddings); **Cohere Rerank 3.5** (reranker); adapter-swappable. |
-| Parsers | **Docling** (digital PDF), **Mistral OCR 3** (scanned), openpyxl (xlsx), Gemini Flash VLM (last-resort). |
-| Wave A (built) | Core ingest + retrieval + **8-of-10 UI surfaces** (chat front door · upload · explore · schema studio · dashboard · audit · settings + `/swagger` · doc-detail panel · basic playground for eval) + 45-question eval (5 per stratum × 9 strata, incl. aggregation, chain-aware, conflict-resolution). |
-| Wave B (built, polish + 2026 SOTA parity) | NotebookLM-style artifacts + HippoRAG-2 graph + four competitive-audit-driven additions: **B1** batch query mode (Hebbia spreadsheet pattern), **B2** opt-in `deep_research` agentic loop (Search-o1 style, capped at 5 hops + cost ceiling), **B3** DSPy prompt optimization layer, **B4** multi-agent decomposition for complex Q-mode queries. See `docs/competitive_audit.md`. |
-| Wave C (cited only) | HalluGraph, ColPali, LazyGraphRAG, audio overview, permissions, temporal validity. |
+Status column distinguishes what's **shipped today** vs. planned. Single source of truth for shipped vs. roadmap: [`docs/build_tracker.md`](docs/build_tracker.md) §5.
+
+| Decision | Choice | Status |
+|---|---|---|
+| Demo corpus | Mixed public datasets — **CUAD** (legal contracts) + **Enron** (corporate emails) + **SEC 10-K** (financial filings) + scanned variants + one xlsx. ~80–100 docs. No domain lock-in. | Planned (Wave A demo) |
+| Storage | **Postgres 17 (ParadeDB)** + pgvector ≥ 0.8 + ParadeDB pg_search + MinIO + Procrastinate (Python PG-backed queue). One transactional store. | ✅ Shipped (Phase 0) — pg_search not yet exercised; lands at Phase 4 |
+| LLM — contextualization (RAPTOR + per-chunk prefix) | **Gemini 2.5 Flash** (default) + **Anthropic Claude Opus 4.7** (alt) + Identity fallback. Factory selector `KB_CONTEXTUALIZER`. | ✅ Shipped (Phases 3b + 3b-bis) |
+| LLM — summarization (RAPTOR cluster summaries) | **Gemini 2.5 Flash** (default) + Anthropic + Identity. Factory selector `KB_SUMMARIZER`. | ✅ Shipped (Phase 3d) |
+| Embeddings | **Gemini Embedding 001** (3072-dim halfvec) + DeterministicMockEmbedder (CI). | ✅ Shipped (Phase 3c) |
+| Reranker | **Cohere Rerank 3.5** | ⬜ Planned (Phase 4) — not in `pyproject.toml` yet |
+| Extraction / planning / generation LLM | **Gemini 2.5 Flash + Pro** | ⬜ Planned (Phase 5+) — not yet shipped |
+| Parsers | **Docling** (digital PDF, default) · **Gemini 2.5 Flash VLM** (scanned PDF, auto-routed via pre-flight text-layer sniff or `?parser=gemini`) · **openpyxl** (xlsx) · stdlib `email` (eml) · **Mistral OCR 3** (alt adapter — present + tested, but inert without `KB_MISTRAL_API_KEY`). Strategy selector `KB_PARSER_STRATEGY ∈ {auto, docling_first, gemini_first, gemini_only}`. | ✅ Shipped (Phases 2a + 2b + 2c) |
+| RAPTOR — per-doc tree | AgglomerativeClustering (cosine) → 3-impl Summarizer adapter → embed → recursive. `raptor_building` lifecycle state, `ready` terminal. Stored in `raptor_nodes` (`scope='per_doc'`) + `raptor_edges` (discriminated child FK — points at raptor_nodes for L3+ OR contextual_chunks for L2 leaves). | ✅ Shipped (Phase 3d) |
+| RAPTOR — corpus-level tree | UMAP+GaussianMixture (paper-correct for N=100K scale; AC's O(N²) infeasible). Explicit `POST /corpus/raptor/rebuild`. Reuses 3d's tables (`scope='corpus'`, `file_id NULL` — forward-compat columns landed at 3d's `0012` migration, no separate migration). Heterogeneous doc-root source (per-doc raptor root for multi-leaf files; contextual_chunks for singleton-leaf files). | ✅ Shipped (Phase 3e) |
+| Retrieval (HNSW + BM25 + tree-aware query) | Phase 4 — next branch | ⬜ Planned |
+| Wave A (planned scope) | Core ingest + retrieval + **8-of-10 UI surfaces** + 45-question eval. **Today shipped: ingestion + per-doc & corpus RAPTOR only.** Retrieval, UI, and eval suite are roadmap. | 🟡 Partial — ingestion done; retrieval + UI + eval roadmap |
+| Wave B (build if time) | NotebookLM-style artifacts + HippoRAG-2 graph + four competitive-audit-driven additions: **B1** batch query mode (Hebbia spreadsheet pattern), **B2** opt-in `deep_research` agentic loop (Search-o1 style, capped at 5 hops + cost ceiling), **B3** DSPy prompt optimization layer, **B4** multi-agent decomposition. See `docs/competitive_audit.md`. | ⬜ Planned |
+| Wave C (cited only) | HalluGraph, ColPali, LazyGraphRAG, audio overview, permissions, temporal validity. | ⬜ Cited only |
 
 Full rationale in [`docs/architecture.md` §15](docs/architecture.md).
 
@@ -163,29 +209,43 @@ Full traces in [`docs/architecture.md` §10](docs/architecture.md) and [`docs/wa
     └── wiring_inventory.md              ← every interactive element → planned API endpoint (G1.6)
 ```
 
-**Planned layout once Phase 0 starts** (deliberately not scaffolded yet — folders will be created when the code lands):
+**Shipped layout** (Wave A — what's actually in the repo today):
 
 ```
 .
-├── README.md                            ← will be rewritten as build/run instructions
-├── docker-compose.yml                   ← Postgres + pgvector + pg_search + MinIO + Procrastinate
-├── Makefile
+├── README.md                            ← this file
+├── docker-compose.yml                   ← ParadeDB (Postgres+pgvector+pg_search) + MinIO + migrate + API + worker
 ├── pyproject.toml                       ← uv-managed Python project
-├── config/                              ← layered YAML config + per-domain schemas
-├── db/
-│   ├── migrations/                      ← Postgres DDL (versioned)
-│   └── seed/                            ← demo corpus loader
-├── docker/                              ← any non-trivial Dockerfile customizations
-├── src/kb/                              ← FastAPI service
-│   ├── api/                             ← routes
-│   ├── core/                            ← business logic (planner, retrievers, judges)
-│   └── adapters/                        ← parsers, LLM, storage, embeddings
-├── web/                                 ← Next.js 15 UI
-├── scripts/                             ← bootstrap, seed, eval, demo-cache warmer
-├── eval/                                ← 45 stratified Q&A + RAGAS + regression set
+├── .env.example                         ← copy to .env; documents every KB_* env var
+├── migrations/sql/                      ← Postgres DDL (0001..0012; versioned, idempotent)
+├── src/kb/                              ← FastAPI service + Procrastinate worker
+│   ├── api/                             ← routes (health, files, schemas, corpus)
+│   ├── parsers/                         ← Docling, GeminiOCR, MistralOCR, openpyxl, email + dispatcher
+│   ├── chunking/                        ← layout-aware token-bounded chunker
+│   ├── contextualization/               ← 3-impl Contextualizer Protocol (Anthropic / Gemini / Identity)
+│   ├── summarization/                   ← 3-impl Summarizer Protocol (Anthropic / Gemini / Identity)
+│   ├── embeddings/                      ← GeminiEmbedder + DeterministicMockEmbedder
+│   ├── raptor/                          ← per-doc clustering (3d) + corpus.py (UMAP+GMM, 3e)
+│   ├── domain/                          ← pydantic + SQL repo per table
+│   ├── workers/                         ← Procrastinate tasks (parse_file, chunk_file, contextualize_file,
+│   │                                        embed_file, raptor_build_file, raptor_build_corpus)
+│   ├── storage/                         ← MinIO client wrapper
+│   └── config.py                        ← pydantic-settings; reads env from .env
+├── scripts/
+│   ├── verify_phase_*.sh                ← 12 Docker-stack verify scripts (one per shipped phase)
+│   └── bootstrap_db.sh                  ← migration runner
 ├── tests/
-└── docs/                                ← planning docs above + future build docs
+│   ├── fixtures/                        ← tiny.pdf / tiny.xlsx / tiny.eml / tiny_scanned.pdf
+│   ├── specs/phase_*.md                 ← per-phase test specs (drives the G3 red-skeleton gate)
+│   └── test_*.py                        ← 286 tests across 38 files
+└── docs/
+    ├── build_tracker.md                 ← canonical plan/decision log (~2400 lines, 12+ sub-phases)
+    ├── api_contracts.md                 ← REST API spec (single source of truth)
+    ├── architecture.md                  ← system architecture (aspirational + shipped)
+    └── ...                              ← see Reading order below
 ```
+
+**Planned (Phase 4+):** `web/` (Next.js 15 UI), `eval/` (45-question regression suite), `config/` (Hydra layered config — currently env-only).
 
 ---
 

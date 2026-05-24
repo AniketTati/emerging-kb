@@ -152,7 +152,7 @@ for _ in $(seq 1 240); do
     if [[ -z "$pdf_id" ]]; then break; fi
     s=$(curl -sS "http://localhost:8000/files/$pdf_id" -H "X-Test-Workspace: $WS_A" \
          | python3 -c "import sys,json; print(json.loads(sys.stdin.read()).get('lifecycle_state',''))")
-    if [[ "$s" == "parsed" || "$s" == "chunked" || "$s" == "contextualized" || "$s" == "embedded" || "$s" == "ready" ]]; then parsed=1; break; fi
+    if [[ "$s" == "parsed" || "$s" == "chunked" || "$s" == "contextualized" || "$s" == "embedded" || "$s" == "raptor_building" || "$s" == "ready" ]]; then parsed=1; break; fi
     if [[ "$s" == "failed" ]]; then break; fi
     sleep 2
 done
@@ -192,7 +192,7 @@ for _ in $(seq 1 180); do
     if [[ -z "$scan_id" ]]; then break; fi
     s=$(curl -sS "http://localhost:8000/files/$scan_id" -H "X-Test-Workspace: $WS_A" \
          | python3 -c "import sys,json; print(json.loads(sys.stdin.read()).get('lifecycle_state',''))")
-    if [[ "$s" == "parsed" || "$s" == "chunked" || "$s" == "contextualized" || "$s" == "embedded" || "$s" == "ready" ]]; then parsed=1; break; fi
+    if [[ "$s" == "parsed" || "$s" == "chunked" || "$s" == "contextualized" || "$s" == "embedded" || "$s" == "raptor_building" || "$s" == "ready" ]]; then parsed=1; break; fi
     if [[ "$s" == "failed" ]]; then break; fi
     sleep 2
 done

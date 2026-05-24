@@ -162,7 +162,7 @@ for _ in $(seq 1 60); do
          | python3 -c "import sys,json; print(json.loads(sys.stdin.read()).get('lifecycle_state',''))")
     # Phase 3a chained chunk_file may race past 'parsed' to 'chunked' before
     # this loop polls. Any post-parse state counts as parse-success.
-    if [[ "$s" == "parsed" || "$s" == "chunked" || "$s" == "contextualized" || "$s" == "ready" ]]; then parsed=1; break; fi
+    if [[ "$s" == "parsed" || "$s" == "chunked" || "$s" == "contextualized" || "$s" == "embedded" || "$s" == "raptor_building" || "$s" == "ready" ]]; then parsed=1; break; fi
     if [[ "$s" == "failed" ]]; then break; fi
     sleep 2
 done
@@ -190,7 +190,7 @@ for _ in $(seq 1 30); do
          | python3 -c "import sys,json; print(json.loads(sys.stdin.read()).get('lifecycle_state',''))")
     # Phase 3a chained chunk_file may race past 'parsed' to 'chunked' before
     # this loop polls. Any post-parse state counts as parse-success.
-    if [[ "$s" == "parsed" || "$s" == "chunked" || "$s" == "contextualized" || "$s" == "ready" ]]; then parsed=1; break; fi
+    if [[ "$s" == "parsed" || "$s" == "chunked" || "$s" == "contextualized" || "$s" == "embedded" || "$s" == "raptor_building" || "$s" == "ready" ]]; then parsed=1; break; fi
     if [[ "$s" == "failed" ]]; then break; fi
     sleep 2
 done
