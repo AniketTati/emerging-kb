@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -29,6 +30,13 @@ logger = logging.getLogger(__name__)
 MIGRATIONS_DIR: Path = Path(__file__).parent / "sql"
 
 _BOOTSTRAP_FILE = "0002_schema_migrations.sql"
+
+# Migration files starting with `-- @no-transaction` are applied statement-
+# by-statement under autocommit (no BEGIN/COMMIT wrap). Required for
+# `CREATE INDEX CONCURRENTLY`, which Postgres rejects inside a transaction.
+# First introduced for Phase 4's 0013_indexes.sql; will also be used by
+# Phase 14 (HippoRAG graph indexes) and any later CONCURRENTLY work.
+_NO_TX_PRAGMA = re.compile(r"^\s*--\s*@no-transaction\b", re.MULTILINE)
 
 
 def run_migrations(database_url: str) -> None:
@@ -101,16 +109,55 @@ def _list_migration_files() -> list[Path]:
     return sorted(p for p in MIGRATIONS_DIR.glob("*.sql") if p.is_file())
 
 
+def _split_sql_statements(text: str) -> list[str]:
+    """Naive but sufficient SQL splitter for migration files: splits on `;` at
+    end-of-line. Skips empty / comment-only fragments. Doesn't handle dollar-
+    quoted strings or `;` inside string literals — fine for our migration
+    set (DDL only; no procedural code with embedded semicolons)."""
+    statements: list[str] = []
+    buf: list[str] = []
+    for line in text.splitlines():
+        buf.append(line)
+        if line.rstrip().endswith(";"):
+            stmt = "\n".join(buf).strip()
+            non_comment = "\n".join(
+                ln for ln in stmt.splitlines() if not ln.lstrip().startswith("--")
+            ).strip()
+            if non_comment:
+                statements.append(stmt)
+            buf = []
+    return statements
+
+
 def _apply_one(conn: psycopg.Connection, path: Path) -> None:
-    """Apply a single .sql file inside a transaction; record on success."""
-    sql = path.read_text()
+    """Apply a single .sql file; record on success.
+
+    Default: file content runs inside one transaction; on error the file is
+    rolled back and NOT recorded.
+
+    `-- @no-transaction` pragma: statements run individually under autocommit
+    (no surrounding BEGIN/COMMIT). Required for `CREATE INDEX CONCURRENTLY`,
+    which Postgres rejects inside a transaction block. Mid-file failure
+    leaves the file UNrecorded (the schema_migrations INSERT is sequenced
+    after all statements), but earlier successful statements remain applied
+    — that's inherent to CONCURRENTLY (you can't rollback a built index).
+    """
+    sql_text = path.read_text()
     logger.info("applying migration: %s", path.name)
-    with conn.transaction():
-        conn.execute(sql)
+    if _NO_TX_PRAGMA.search(sql_text):
+        for stmt in _split_sql_statements(sql_text):
+            conn.execute(stmt)
         conn.execute(
             "INSERT INTO schema_migrations (id) VALUES (%s) ON CONFLICT (id) DO NOTHING",
             (path.name,),
         )
+    else:
+        with conn.transaction():
+            conn.execute(sql_text)
+            conn.execute(
+                "INSERT INTO schema_migrations (id) VALUES (%s) ON CONFLICT (id) DO NOTHING",
+                (path.name,),
+            )
 
 
 def _main() -> int:

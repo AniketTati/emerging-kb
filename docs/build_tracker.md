@@ -155,7 +155,7 @@ QA gates this at G1.5b — every prototype page is grep'd for the forbidden voca
 ## 1. Now / Next / Blocked
 
 **Now:** 🎉 **Wave A FULLY COMPLETE.** Phase 3e ✅ shipped — corpus-level RAPTOR (plan at §5.10.1, **15 decisions**). Phase 3d also ✅ — per-doc RAPTOR (plan at §5.10, **16 decisions** revised post-deliberation; the deliberation flips that earned their keep: (1) discriminated edge FK + L1 stays in contextual_chunks — saves 30 GB at 100K-doc scale; (2) `raptor_building` intermediate lifecycle state — observability for the multi-stage build; (3) `MAX_LEVELS` bumped 4→6 to cover corpus-tree depth `log₈(100K)≈5.5`; (4) forward-compat `raptor_nodes.scope` enum + nullable `file_id` locked at 3d's 0012 migration — Phase 3e needed no separate migration). **286/286 pytest** in 81s. verify_phase_3e.sh 13/13. Cross-phase sweep across **all 12 verify scripts** (0/1a/1b/1c/2a/2b/2c/3a/3b/3c/3d/3e): **205 checks total, 12/12 GREEN on first pass** — no regressions, no forward-compat fixes needed (3e doesn't change any file lifecycle states; corpus tree is workspace-scoped, not file-scoped). Branch `phase-3/chunking-raptor` carries 7 commit-sets (3a/3b/3c/3b-bis/2c/3d/3e) — **PR #7 open against main**. Architecture's "RAPTOR builds the corpus hierarchy" promise (line 41) is now backed by code at 100K-doc scale.
-**Next:** **Phase 4 — retrieval layer** (HNSW + BM25 indexes on raptor_nodes + chunk_embeddings + tree-aware query that does top-K per level + re-rank). New branch off main (recommend `phase-4/retrieval`). Then Phase 5+ for schema-driven extraction, ranking, conversational UI, and the Wave B / agentic features.
+**Next:** **Phase 4 ✅ FULLY GREEN** — all 5 gates signed off 2026-05-25. `verify_phase_4.sh` 16/16 standalone. **Cross-phase sweep across all 13 verify scripts: 13/13 GREEN in 14:56**. Branch `phase-4/retrieval` ready to merge. **Phase 5 opens next** — Open extraction → L2 mentions (NER) + L2b emergent fields + L3 atomic-unit typing + anomaly scoring per architecture §12 line 1165. This is "the big extraction phase" — produces the artifacts that 7 of Phase 8's 10 retrieval channels need (atomic-unit filter, anomaly filter, mention lookup, schema-aware retrieval). Recommend splitting at G1 into 5a (L2 mentions) + 5b (L2b emergent fields + auto-promotion) + 5c (L3 atomic units + anomaly scoring).
 **Blocked on:** nothing.
 
 ---
@@ -273,7 +273,7 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
 | **3b-bis** | Gemini Contextualizer adapter — `GeminiContextualizer` alongside `AnthropicContextualizer` + factory selector `KB_CONTEXTUALIZER ∈ {gemini,anthropic,identity,auto}`. No schema/lifecycle/API delta. | ✅ | — | ✅ | ✅ | ✅ | Shipped 2026-05-24. 238/238 pytest. verify_phase_3b.sh widened 15→16 checks (adapter env probe + conditional Gemini/Anthropic/Identity branch on `model_id`/`cache_creation_input_tokens`/`cache_read_input_tokens`). Cross-phase sweep 0/1a/1b/1c/2a/2b/3a/3b/3c all GREEN (158 checks total). `.env.example` consistency gap closed at G5 (all 3 LLM keys + KB_CONTEXTUALIZER documented). |
 | **3d** | RAPTOR tree build, **per-doc** — recursive cluster→summarize→re-embed → `raptor_nodes` (L2..6) + `raptor_edges` (discriminated child FK); intermediate lifecycle state `raptor_building` between `embedded` → `ready` | ✅ | ✅ | ✅ | ✅ | ✅ | Shipped 2026-05-24. 275/275 pytest. verify_phase_3d.sh 22/22 standalone. Cross-phase sweep across all 11 verify scripts: 10/11 first-pass GREEN; 3c regressed at step 10 with `last state: ready` instead of `embedded` — same forward-compat race that 3a/3b already handled. Fix: widened 3c's accept-set to `embedded \| raptor_building \| ready` (matches the 0009 CHECK convention from 3b G4 fix #2). Re-ran 3c → 15/15. Final sweep: **0:16 · 1a:17 · 1b:21 · 1c:20 · 2a:17 · 2b:15 · 2c:15 · 3a:18 · 3b:16 · 3c:15 · 3d:22 — 192 total, all GREEN**. L2-node assertion in 3d verify gated on `leaf_count >= 2` (tiny.xlsx is singleton; pytest worker tests cover multi-leaf with fabricated data). |
 | **3e** | RAPTOR tree build, **corpus-level** — cluster doc-roots across workspace → summarize themes → write `scope='corpus'` rows. Explicit `POST /corpus/raptor/rebuild` trigger (not auto). UMAP+GMM swap-in for the N=100K case where AC is infeasible. | ✅ | ✅ | ✅ | ✅ | ✅ | Shipped 2026-05-24. **286/286 pytest**. verify_phase_3e.sh **13/13 GREEN first-pass standalone**. Cross-phase sweep across ALL **12 verify scripts** (0/1a/1b/1c/2a/2b/2c/3a/3b/3c/3d/3e): **12/12 GREEN on first pass, no regressions**. Final sweep totals: **205 checks total**. **Wave A FULLY COMPLETE** — ingestion + per-doc RAPTOR + corpus-level RAPTOR all shipped on `phase-3/chunking-raptor` branch (7 commit-sets). |
-| **4** | Indexing: pgvector HNSW + pg_search BM25 on all RAPTOR levels | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | Internal worker |
+| **4** | Indexing: pgvector HNSW + pg_search BM25 on all RAPTOR levels | ✅ | — | ✅ | ✅ | ✅ | All gates green 2026-05-25 (§5.11, 16 decisions). G2 was a no-op per decision #16. **296/296 pytest in 89.84s.** verify_phase_4.sh **16/16 standalone GREEN** (DDL ×5 + tiny.pdf E2E + ANALYZE + planner-usage EXPLAIN ×3 + smoke helper ×2 + pytest). **Cross-phase sweep across all 13 verify scripts: 13/13 GREEN in 14:56**. Branch `phase-4/retrieval`. Ready to merge. |
 | **5** | Open extraction → mentions; clause split + typing + anomaly score | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | L2 + L2b + L3 |
 | **6** | Schema-driven extraction (Gemini structured outputs) | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | L4/L5 projection |
 | **7** | Identity resolution (deterministic→embedding→LLM judge→union-find) | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | Entity merge worker + admin endpoint |
@@ -1994,6 +1994,131 @@ When Aniket approves this plan, the Phase 3e G1 cell in §5 flips 🟡 → ✅ a
 
 ---
 
+### 5.11 Phase 4 plan — Indexing (HNSW + BM25 on all RAPTOR levels) (G1 ✅ + G2 — + G3 ✅ + G4 ✅ + G5 ✅ SIGNED OFF)
+
+> **Status:** All 5 gates green 2026-05-25 by Aniket. G2 was a no-op per decision #16. **296/296 pytest in 89.84s.** `verify_phase_4.sh` 16/16 standalone. Cross-phase sweep across all 13 verify scripts: **13/13 GREEN in 14:56**. Branch `phase-4/retrieval` ready to merge. First Wave A phase past ingestion. **Indexing-only** — no HTTP retrieval surface, no orchestration, no rerank. That's all Phase 8 ("Query planner + rewriting + parallel retrieval + RRF + rerank + CRAG + Astute" per architecture §12 line 1167–1169). Phase 4 lays the index foundation that Phase 8 will consume; the 7 of 10 channels that need L2/L2b/L3 atomic-unit + mention + entity artifacts (per README §3 pillar 3) are gated on Phase 5–7 first.
+
+#### Why indexing-only and not "ship a basic /search"
+
+Considered and explicitly rejected at G1. Architecture §12 line 1164 says Phase 4 is "Indexing: pgvector HNSW + pg_search BM25 on all RAPTOR levels" — full stop. The temptation to add a minimal `/search` endpoint here would either:
+1. Ship plain hybrid BM25+dense — exactly what the architecture's "10 parallel retrieval channels" promise differentiates against. Demoing it sells a different system than the one in the spec.
+2. Commit to a `/search` contract this phase that Phase 8 will then have to rewrite once 5/6/7 add atomic-units, mentions, entities, anomaly scores — sub-phase churn we don't need.
+
+Internal smoke helper in `kb/retrieval/smoke.py` proves the indexes work end-to-end at G5 (BM25 returns ranked hits, dense returns ranked hits, EXPLAIN ANALYZE shows planner uses the indexes). NOT mounted on any router. Phase 8 builds the actual orchestrator + endpoints on top.
+
+#### Scope
+
+Pure DDL + index-maintenance phase + a thin internal smoke helper (no HTTP).
+
+**In scope:**
+- **`0013_indexes.sql` migration** — adds 4 indexes:
+  - HNSW on `chunk_embeddings.embedding` (`halfvec_cosine_ops`, `m=16`, `ef_construction=200`)
+  - HNSW on `raptor_nodes.embedding` (same params; covers BOTH `scope='per_doc'` and `scope='corpus'` rows — single graph)
+  - BM25 (pg_search) on `contextual_chunks.contextual_text`
+  - BM25 (pg_search) on `raptor_nodes.text`
+  - All four use `CREATE INDEX CONCURRENTLY` so migrations are non-blocking against live writers (Wave A worker writes through migration; pgvector + pg_search both support CONCURRENTLY).
+- **`scripts/reindex_weekly.sh`** — REINDEX CONCURRENTLY rotation. Stub script + cron entry doc; not wired to a scheduler in Wave A (operator runs manually or via host cron). Architecture §15 line 1267 commitment.
+- **`src/kb/retrieval/__init__.py` + `src/kb/retrieval/smoke.py`** — new internal package. Smoke helper exposes `bm25_smoke(conn, *, workspace_id, query, limit)` and `dense_smoke(conn, *, workspace_id, query_vec, limit)`. Each returns `list[tuple[id, score, level, scope]]`. NOT a Protocol, NOT mounted on a router, NOT importable from `kb.api`. Used by `verify_phase_4.sh` + the Phase 4 pytest suite to prove indexes work.
+- **`scripts/verify_phase_4.sh`** — extension presence + 4 indexes exist with right operator classes + EXPLAIN ANALYZE proves planner uses each index (not seq scan) + smoke helper returns ranked results against seeded data.
+- **Forward-compat audit** — every accept-set in the 12 prior verify scripts still passes with Phase 4 in tree (no lifecycle states change, so this should be free; locked in the §0.15 forward-compat convention).
+- **`.env.example`** widens with `KB_HNSW_M=16`, `KB_HNSW_EF_CONSTRUCTION=200`, `KB_HNSW_EF_SEARCH=40` (query-time recall/latency knob). All commented; defaults match the migration.
+
+**Out of scope (deferred):**
+- **`POST /search` endpoint** — Phase 8.
+- **Query rewriting** (Step-Back / HyDE / Query2Doc) — Phase 8.
+- **RRF fusion across channels** — Phase 8.
+- **Cross-encoder rerank** (Cohere Rerank 3.5 / mxbai-rerank-large-v2) — Phase 8.
+- **CRAG gate + Astute generation** — Phase 8.
+- **Tree-aware top-K-per-level orchestration** — Phase 8.
+- **The other 6 retrieval channels** (atomic-unit filter, anomaly filter, mention lookup, doc metadata, HippoRAG PPR, ColPali) — gated on Phase 5 (atomic units + mentions), Phase 7 (entities), Phase 14 (HippoRAG), Wave C (ColPali).
+- **Per-tenant HNSW partitioning** (separate graph per workspace_id) — single shared graph in Wave A; partition switch evaluated at the 1M-doc scale tier per `scale_perf_audit.md`.
+- **Index on `raw_pages.text`** — chunks already cover the same text at finer granularity; raw_pages is a parse-artifact intermediate, not a retrieval target.
+- **HNSW index rebuild scheduling automation** — cron stub only; production scheduler at Phase 9.
+- **A/B index tuning matrix** (different `m`/`ef_construction` per table) — single tuning set in Wave A; tunable via env.
+- **`audit_log` writes** — Phase 9.
+
+#### Decisions (locked at G1; changes require re-opening G1)
+
+| # | Decision | Choice | Rationale |
+|---|---|---|---|
+| 1 | Indexing scope | 4 indexes: 2 HNSW (`chunk_embeddings.embedding` + `raptor_nodes.embedding`) + 2 BM25 (`contextual_chunks.contextual_text` + `raptor_nodes.text`). | Architecture §12 line 1164 — "pgvector HNSW + pg_search BM25 on all RAPTOR levels". Per-doc + corpus raptor share one table (`raptor_nodes`) so one HNSW + one BM25 covers both scopes. Chunks (L1 leaves) get their own pair. |
+| 2 | HNSW operator class | `halfvec_cosine_ops` on both vector columns. | Embeddings are `halfvec(3072)` since Phase 3c (~50% storage savings via float16). Cosine matches the embedding model's optimization (Gemini Embedding 001 is L2-normalized and cosine-optimized; same vector space across per-doc + corpus per 3e decision #14). |
+| 3 | HNSW build parameters | `m=16`, `ef_construction=200`. Single tuning set for both vector columns. | pgvector defaults. m=16 is the standard recall/index-size tradeoff (m=8 hurts recall on 3072-dim; m=32 doubles index size for marginal gain at Wave A scale). ef_construction=200 is paper-default; pushes build time but improves recall. Query-time recall via `ef_search` (decision #8). |
+| 4 | CONCURRENTLY | `CREATE INDEX CONCURRENTLY` for all 4. | Wave A worker writes through migration deploys. Non-CONCURRENTLY would block writers during build (pgvector HNSW build on 100K embeddings takes minutes). pg_search supports CONCURRENTLY since ParadeDB 0.10+. |
+| 5 | Single graph vs per-workspace partitions | **Single shared HNSW graph** for both vector indexes. No partitioning by `workspace_id`. | At 100K-doc Wave A scale, single graph + RLS filter at query time is the right tradeoff. Per-tenant partitioning becomes worth it at ~1M docs OR ~100+ tenants (see `scale_perf_audit.md`). Phase 4's HNSW WHERE-clause filtering by workspace_id costs ~1.5× vs partitioned but saves 100× operational complexity. Re-evaluate at scale graduation. |
+| 6 | BM25 tokenizer | pg_search defaults (Tantivy `default` tokenizer + lowercase + ASCII folding). | Wave A corpus is English-only PDFs (CUAD + Enron + SEC 10-K). Tantivy's default handles word boundaries + lowercases + folds ASCII. Custom analyzers (stemming, language-specific) deferred to Wave B per architecture §15. |
+| 7 | BM25 weights | pg_search default BM25 (k1=1.2, b=0.75). | Robertson/Spärck Jones defaults. Tuning the BM25 params per-corpus is Phase 12 eval-driven work. |
+| 8 | Query-time recall knob | `KB_HNSW_EF_SEARCH=40` env (defaults the per-session `SET hnsw.ef_search`). | Recall/latency knob. 40 = pgvector default; higher = better recall, slower. Lockable per-environment without rebuilding indexes. Phase 8's planner can override per-query (research queries → 100; ambient suggestions → 20). |
+| 9 | Index maintenance | Weekly `REINDEX CONCURRENTLY` per index, gated on `>5% new chunks since last reindex`. Stub script `scripts/reindex_weekly.sh`; operator runs via host cron in Wave A. | Architecture §15 line 1267 commitment. HNSW graphs fragment as embeddings accumulate; periodic REINDEX restores recall. 5% gate avoids no-op reindexes on quiet workspaces. Production scheduler is Phase 9. |
+| 10 | No HTTP surface this phase | Internal `kb.retrieval.smoke` module ONLY. NOT mounted on any router. NOT importable from `kb.api.*` files. | Per scope justification above — `/search` belongs to Phase 8 (after extraction phases land the 7 non-dense channels). Phase 4's smoke helper is for verification only; Phase 8 wraps the indexes in the real `kb.retrieval.*` modules + `/search` endpoint. |
+| 11 | Smoke helper shape | `bm25_smoke(conn, *, workspace_id, query, limit) -> list[tuple[id, score, level, scope]]` + `dense_smoke(conn, *, workspace_id, query_vec, limit) -> list[tuple[id, score, level, scope]]`. Single result schema across both helpers + across all 4 indexed tables (UNION-style query internally). | Lets verify_phase_4.sh + pytest assert: (a) hits come back ranked, (b) hits span multiple levels (chunk + raptor_node), (c) workspace isolation holds (RLS still applies — kb_app role on conn). Pure functions; testable without HTTP machinery. |
+| 12 | Test corpus for smoke | Seeded via existing Wave A pipeline (POST tiny.pdf → wait `ready` → indexes auto-populate via INSERT) + 5-doc multi-file seed for cross-doc BM25 + dense recall checks. NO synthetic SQL inserts that bypass the lifecycle. | Tests must exercise the REAL ingestion → index path. A SQL-only seed would mask bugs where the worker writes to a table the indexes don't cover. |
+| 13 | Migration ordering / numbering | `0013_indexes.sql`. Single file. | Continues the lexical-order convention (0001..0012 exist). One file = one transactional CREATE INDEX CONCURRENTLY batch; pgvector + pg_search both honor it. |
+| 14 | No new lifecycle states | Phase 4 adds indexes only; no `file_lifecycle.state` widening, no new worker tasks. The `ready` terminal state already covers "indexed" implicitly (indexes are auto-maintained by Postgres). | Avoids cascading forward-compat fixups on the 12 prior verify scripts. |
+| 15 | Pre-existing GRANTs | `kb_app` already has SELECT on the 4 indexed tables. Index USAGE is auto-granted by Postgres when SELECT is granted on the parent table. No GRANT changes needed. | Standard Postgres behavior; calls it out so a reviewer doesn't ask. |
+| 16 | api_contracts.md delta | **NONE.** No new endpoints, no shape changes. The §6 corpus router (3e) and §5 files router (2a-c) are unchanged. | Honest signal that this is a pure-infrastructure phase. Phase 8's G2 is where retrieval contracts land. |
+
+#### Repo layout delta after Phase 4 G4
+
+```
+emerging-kb/
+├── migrations/sql/
+│   └── 0013_indexes.sql                          ← NEW (4 indexes, all CONCURRENTLY)
+├── src/kb/
+│   └── retrieval/                                ← NEW package
+│       ├── __init__.py                           ← module exports
+│       └── smoke.py                              ← bm25_smoke + dense_smoke (internal, no HTTP)
+├── scripts/
+│   ├── reindex_weekly.sh                         ← NEW (cron stub for REINDEX CONCURRENTLY)
+│   └── verify_phase_4.sh                         ← NEW (DDL + EXPLAIN + smoke E2E)
+├── tests/
+│   ├── test_indexes.py                           ← NEW (~6 tests: DDL existence + operator classes + planner uses indexes)
+│   ├── test_retrieval_smoke.py                   ← NEW (~5 tests: bm25_smoke + dense_smoke + workspace isolation + multi-level hits)
+│   └── specs/phase_4.md                          ← NEW
+└── .env.example                                  ← MUTATED (KB_HNSW_M + KB_HNSW_EF_CONSTRUCTION + KB_HNSW_EF_SEARCH)
+```
+
+No mutations to `kb/api/*`, `kb/workers/*`, `kb/domain/*`. No `pyproject.toml` deps (pg_search already on board via ParadeDB image; pgvector likewise). No migration to existing tables (only ADD INDEX).
+
+#### Phase 4 G5 — what "green" means
+
+`scripts/verify_phase_4.sh` (new) adds to the 12 prior verify checks:
+1. `psql` confirms `vector` + `pg_search` + `ltree` extensions installed (smoke from Phase 0; re-verified).
+2. `psql` confirms 4 indexes exist with the right operator classes:
+   - `chunk_embeddings_embedding_hnsw_idx` USING hnsw + `halfvec_cosine_ops`
+   - `raptor_nodes_embedding_hnsw_idx` USING hnsw + `halfvec_cosine_ops`
+   - `contextual_chunks_text_bm25_idx` USING bm25
+   - `raptor_nodes_text_bm25_idx` USING bm25
+3. Seed via existing pipeline: POST 5 distinct PDFs → wait all 5 to `lifecycle_state='ready'` (reuses 3e's 5-doc seed pattern).
+4. EXPLAIN (FORMAT JSON) on a SELECT-by-embedding query confirms the planner picks `Index Scan using chunk_embeddings_embedding_hnsw_idx`, NOT `Seq Scan`.
+5. EXPLAIN on a SELECT-by-text query confirms the planner picks the BM25 index.
+6. `bm25_smoke` against the worker container returns ≥1 hit with score > 0 for a known-good query against seeded data.
+7. `dense_smoke` against the worker returns ≥1 hit ranked by cosine.
+8. Workspace B's smoke call returns empty (RLS holds at the index level).
+9. Phase 4 pytest: ~11 new tests → suite total ~297.
+10. **Cross-phase sweep across all 13 verify scripts** (0/1a/1b/1c/2a/2b/2c/3a/3b/3c/3d/3e/4) all green via `scripts/verify_sweep.sh`.
+
+#### Pre-G3 consistency review checklist
+
+Before G3 opens:
+- [ ] Architecture line 1164 traceability — "Indexing: pgvector HNSW + pg_search BM25 on all RAPTOR levels" closes here.
+- [ ] No HTTP surface added (grep `kb/api/` for new routers — must be empty).
+- [ ] No new lifecycle states or worker tasks (grep `file_lifecycle` + `kb/workers/tasks.py` for new entries — must be unchanged).
+- [ ] Forward-compat convention (§0.15) — all 12 prior verify scripts' accept-sets unchanged (since `ready` remains the terminal state).
+- [ ] api_contracts.md unchanged.
+- [ ] `.env.example` widens with the 3 HNSW knobs.
+- [ ] RLS invariant unchanged at 15 workspace-scoped tables.
+- [ ] No leak into Phase 5+ (no atomic-unit extraction · no anomaly scoring · no mention extraction · no entity resolution).
+- [ ] No leak into Phase 8 (no `/search` endpoint · no RRF · no rerank · no CRAG · no Astute generation · no query rewriting · no tree-aware top-K-per-level orchestrator).
+- [ ] No leak into Phase 9 (no scheduler integration · no `audit_log` writes · no admin polling).
+- [ ] `scripts/reindex_weekly.sh` exists but is a documented stub — NOT wired into compose or any production scheduler.
+
+#### Sign-off
+
+When Aniket approves this plan, the Phase 4 G1 cell in §5 flips ⬜ → ✅ and G2 opens (no `docs/api_contracts.md` delta — Phase 4 has no HTTP surface). Estimated wall-clock: ~3-5 hr G3+G4+G5 — smallest phase since 3b-bis (DDL-only, no LLM calls, no algorithm work).
+
+---
+
 ### Wave B (build if time)
 
 | Phase | Description | G1 | G2 | G3 | G4 | G5 |
@@ -2068,9 +2193,10 @@ Phases 15–24 per `architecture.md` §12. Tracked here only as a reminder of in
 | 3c | [scripts/verify_phase_3c.sh](../scripts/verify_phase_3c.sh) | 2026-05-24 (post 3d) | ✅ 15/15 (accept-set widened to `embedded \| raptor_building \| ready` for forward-compat with 3d) |
 | 3d | [scripts/verify_phase_3d.sh](../scripts/verify_phase_3d.sh) | 2026-05-24 | ✅ 22/22 (compose smoke + 7 DDL assertions on raptor_nodes + raptor_edges + scope CHECK + discriminated edge CHECK + REVOKE UPDATE/DELETE + lifecycle CHECK includes `raptor_building` + E2E PDF through to `ready` + lifecycle history `embedded→raptor_building→ready` + raptor_build_started + raptor_build_done events + raptor_nodes L2 row + L2→contextual_chunks edge (both gated on `leaf_count >= 2` since tiny.xlsx is singleton) + payload shape + idempotent re-defer + Phase-3d pytest 17) |
 | 3e | [scripts/verify_phase_3e.sh](../scripts/verify_phase_3e.sh) | 2026-05-24 | ✅ 13/13 (compose smoke + umap-learn worker import probe + empty-workspace 400 corpus-rebuild-no-input pre-flight + 5-doc upload through to ready + POST /corpus/raptor/rebuild → 202 + wait for raptor_build_corpus job succeeded + scope='corpus' nodes exist + corpus → contextual_chunks discriminated edges + atomic rebuild count-stable + Phase-3e pytest 11) |
+| 4 | [scripts/verify_phase_4.sh](../scripts/verify_phase_4.sh) | 2026-05-25 | ✅ 16/16 standalone (compose smoke + 4 DDL invariants on HNSW + BM25 indexes with operator-class assertions + HNSW build params check + tiny.pdf E2E to `ready` + ANALYZE + 3 planner-usage EXPLAIN checks with `enable_seqscan/bitmapscan=off` forcing flags + worker imports `kb.retrieval.smoke` + no-leak grep for `kb.retrieval` in `kb.api/*` (decision #10) + Phase-4 pytest 10) |
 
-**Cross-phase sweep totals (2026-05-24, all 12 scripts):**
-0:16 · 1a:17 · 1b:21 · 1c:20 · 2a:17 · 2b:15 · 2c:15 · 3a:18 · 3b:16 · 3c:15 · 3d:22 · 3e:13 = **205 checks · 12/12 GREEN**.
+**Cross-phase sweep totals (2026-05-25, all 13 scripts via verify_sweep.sh):**
+0:24s · 1a:17s · 1b:17s · 1c:18s · 2a:47s · 2b:16s · 2c:27s · 3a:50s · 3b:41s · 3c:42s · 3d:53s · 3e:59s · 4:14s = **13/13 GREEN in 14:56 total**.
 
 ---
 
@@ -2187,6 +2313,11 @@ Phases 15–24 per `architecture.md` §12. Tracked here only as a reminder of in
 | 2026-05-24 | **Phase 3b-bis G4 ✅ — GeminiContextualizer + factory selector land.** `GeminiContextualizer` (~110 LOC) added to `src/kb/contextualization/__init__.py` alongside `AnthropicContextualizer` + `IdentityContextualizer`. Uses `google.genai.Client.aio.models.generate_content` with `types.GenerateContentConfig(system_instruction=..., max_output_tokens=200, thinking_config=types.ThinkingConfig(thinking_budget=0))`. Doc context lands in `system_instruction`; chunk text in `contents` (string). Decision #4 implemented: `usage_metadata.prompt_token_count` stored in `cache_creation_input_tokens` (= billed-input); `cache_read_input_tokens` stays 0 (no explicit cache used at demo scale). Decision #8 implemented: exception path captures `prompt_feedback.block_reason` if attached to exception or response, wraps into `ContextualizationError`. Defensive empty-candidates check covers safety-block responses. `make_contextualizer()` rewritten to a 4-value `KB_CONTEXTUALIZER` selector with `auto` probing Gemini → Anthropic → Identity (Gemini-first matches demo's single-key story). Explicit `gemini`/`anthropic` without matching key raises ValueError (loud-fail beats silent-fallback for misconfigs). **One in-G4 fix**: G3's `test_gemini_contextualizer_disables_thinking` used `getattr(...) or ...` to read `thinking_budget`, but `0 or x` short-circuits to `x` because 0 is falsy → test got `None` instead of asserting against `0`. Refactored to explicit `hasattr` branches. Full suite: 238/238 in 61.5s (232 prior + 6 new). G5 opens: extend `verify_phase_3b.sh` with a Gemini-path E2E branch + cross-phase sweep. | Aniket |
 | 2026-05-24 | **Phase 3b-bis G1 ✅ + G3 ✅ — plan signed off; red skeletons land.** Spec at `tests/specs/phase_3b_bis.md`. 6 new tests in `tests/test_contextualization_gemini_unit.py` (mocked `google.genai.Client.aio.models.generate_content` mirroring the `_MockAnthropicClient` pattern from 3b for side-by-side reviewability — same `last_kwargs` capture + `raise_exc` injection). Tests cover decisions #1/#3/#4/#6/#7/#8/#9 from §5.8.1. 1 mutated test: `tests/test_contextualization_unit.py::test_contextualizer_factory_returns_identity_when_no_api_key` renamed to `test_contextualizer_factory_selector_matrix` and widened from a 2-case binary check to an 8-case matrix covering all `KB_CONTEXTUALIZER` values (auto+none/auto+gemini/auto+anthropic/auto+both/explicit-gemini/explicit-anthropic/explicit-identity/bogus→ValueError). Decision #10 (worker test parameterization) deferred to G4 — it's a code-only refactor with no new assertion. Run state: 7/7 fail (RED expected); rest of suite 231/231 pass — no collateral damage. G4 opens: implement `GeminiContextualizer` (~50 LOC mirroring `AnthropicContextualizer` shape, swap to `google-genai` client) + widen `make_contextualizer()` to read `KB_CONTEXTUALIZER` with auto-probe. | Aniket |
 | 2026-05-23 | **Phase 3b-bis G1 🟡 OPEN — Gemini Contextualizer adapter plan drafted.** Motivation: interview-submission demo runs on a single Gemini API key. Without 3b-bis, `KB_ANTHROPIC_API_KEY` unset → `IdentityContextualizer` no-ops contextual retrieval (Anthropic's 67% retrieval failure reduction is silently disabled). With 3b-bis, a `GeminiContextualizer` lands alongside `AnthropicContextualizer` and the factory `make_contextualizer()` is widened to a 4-value selector (`KB_CONTEXTUALIZER ∈ {gemini, anthropic, identity, auto}`, default `auto` probes Gemini key → Anthropic key → Identity). **Scope is deliberately tight:** no migration, no lifecycle change, no API contract change. Reuses §5.8's `Contextualizer` Protocol verbatim, the Anthropic cookbook prompt verbatim (model-agnostic recipe), and the worker-level tests via parameterization on `KB_CONTEXTUALIZER`. Adds 1 new unit-test file (~6 tests) + extends `verify_phase_3b.sh` with a Gemini-path E2E branch. Decision #4 captures the Gemini caching semantics: `cache_creation_input_tokens` repurposed to hold Gemini's `prompt_token_count` (billed-input tokens, no explicit cache used at demo scale; revisit at scale). Decision #2 establishes the auto-selector probing order so the demo is zero-config when only `KB_GEMINI_API_KEY` is set. §5.8.1 added to build_tracker; §5 phase table gains a 3b-bis row. Estimated wall-clock once signed off: ~1 hr for G3+G4+G5 combined (adapter pattern is already paved). Awaiting Aniket sign-off on the plan. | Aniket |
+| 2026-05-24 | **PR #9 merged — dev-velocity sweep wrapper.** `scripts/verify_sweep.sh` (NEW) brings the compose stack up ONCE for all 12 verify scripts, TRUNCATEs workspace-scoped tables between phases (so each phase sees clean `WS_A`), tears down once. Each `verify_phase_*.sh` patched with a `KB_REUSE_STACK=1` guard around its own setup/teardown so standalone scripts still work for single-phase debugging. Measured on 286-test / 12-phase suite: sequential baseline ~22-24 min → cold sweep **14:47** (image rebuild forced) → warm sweep **12:23** (cache hit). Both sweep runs 12/12 GREEN, 143 + 143 = 286 cumulative checks. Also: Docling layout+table models pre-warmed into the worker image layer at build time via `docling-tools models download -o /tmp/huggingface/docling` + `DOCLING_ARTIFACTS_PATH` env (one-time +500 MB build cost, saves ~2-3 min on first parse after any fresh container). Also evaluated pytest-xdist: measured neutral at 286 tests (`-n 1: 83.88s` vs `-n 4: 84.72s` — per-worker testcontainer spinup overhead cancels parallelism gain), reverted; documented in `CONTRIBUTING.md` so the next contributor doesn't re-litigate. Branch `chore/test-velocity` merged at `fff1e3f`. | Aniket |
+| 2026-05-25 | **Phase 4 G1 ✅ SIGNED OFF — Indexing (HNSW + BM25 on all RAPTOR levels).** Plan locked at §5.11, **16 decisions**. **Indexing-only scope** — 4 indexes (HNSW on `chunk_embeddings.embedding` + `raptor_nodes.embedding` with `halfvec_cosine_ops`/`m=16`/`ef_construction=200`; BM25 on `contextual_chunks.contextual_text` + `raptor_nodes.text`) + internal `kb.retrieval.smoke` helper (NOT mounted on any router) + `scripts/reindex_weekly.sh` cron stub. **No `/search` endpoint, no rerank, no orchestration** — those are Phase 8 (decision #10 locks this formally; rationale: shipping `/search` here would either downgrade the architecture's 10-channel promise to plain hybrid RAG or commit to a contract Phase 8 will rewrite once 5/6/7 land atomic-units/mentions/entities). Single migration `0013_indexes.sql` (decision #13); no new lifecycle states (decision #14 — avoids forward-compat fixups on the 12 prior verify scripts). G2 was a no-op per decision #16 (no api_contracts.md delta — pure-infra phase). G3 opens: spec + 2 red skeleton files (`test_indexes.py` + `test_retrieval_smoke.py`). Branch `phase-4/retrieval` off main at `fff1e3f`. | Aniket |
+| 2026-05-25 | **Phase 4 G3 ✅ SIGNED OFF — spec + 13 red tests land.** Spec at `tests/specs/phase_4.md` (5 sections: scope · fixture strategy · decision→test mapping · out-of-scope assertions · exit criteria). 2 new test files: `tests/test_indexes.py` (8 tests — 5 DDL invariants + 3 planner-usage) + `tests/test_retrieval_smoke.py` (5 tests — bm25_smoke + dense_smoke ranked results · multi-level hits · workspace RLS isolation · empty-for-unknown-workspace). RED-state breakdown at G3: **12 fail (RED expected) + 1 regression-guard pre-passes** — `test_kb_app_can_query_indexed_tables` covers decision #15 ("no GRANT changes; kb_app already has SELECT, index USAGE auto-granted") which is true both pre- and post-Phase-4 by design; spec §5 documents this honestly. Failure modes: 4 × DDL tests with `pg_indexes` empty assertion · 3 × planner tests with seq-scan-in-plan assertion · 5 × smoke tests with `ModuleNotFoundError: No module named 'kb.retrieval'`. Existing 286 tests still GREEN in 88.54s — no collateral damage. **Decision traceability:** every G1 decision with assertable behavior maps to ≥1 test (or is structural — #5/#6/#7/#8/#9 are operational/config and covered at G5 via `verify_phase_4.sh`). G4 opens: `0013_indexes.sql` + `kb/retrieval/smoke.py` + `reindex_weekly.sh`. | Aniket |
+| 2026-05-25 | **Phase 4 G5 ✅ SIGNED OFF — Phase 4 fully green; all 5 gates closed.** `scripts/verify_phase_4.sh` lands with 16 checks (standalone): 4 DDL invariants on the 4 indexes (USING clause + operator class + key_field) + 1 HNSW params check (m=16 + ef_construction=200) + tiny.pdf E2E to `ready` + ANALYZE + 3 planner-usage EXPLAIN checks (HNSW for chunk_embeddings KNN + HNSW for raptor_nodes KNN + BM25 for contextual_chunks text search — all forced via `SET enable_seqscan=off enable_bitmapscan=off`, the same approach pytest used but which failed there because btree won at fixture scale; at full-stack scale with ANALYZE stats the forcing flags + index choice work) + 2 smoke-helper checks (worker imports `kb.retrieval.smoke` + grep proves `kb.retrieval` not leaked into `kb.api/*` per decision #10) + Phase-4 pytest (10/10 over testcontainers). **Standalone: 16/16 GREEN.** Also updated `scripts/verify_sweep.sh` to include `4` in its phase list. **Cross-phase sweep across all 13 verify scripts via `verify_sweep.sh`: 13/13 GREEN in 14:56 total** (per-phase: 0:24s · 1a:17s · 1b:17s · 1c:18s · 2a:47s · 2b:16s · 2c:27s · 3a:50s · 3b:41s · 3c:42s · 3d:53s · 3e:59s · 4:14s — Phase 4 is fastest because the indexes are auto-populated when the worker writes through the pipeline, no separate build step). One small in-G5 fix: sweep wrapper's `ALL_PHASES` array initially missing `4` — added. Branch `phase-4/retrieval` ready for PR. **Phase 5 opens next** — open extraction (L2 mentions + L2b emergent fields + L3 atomic units + anomaly scoring) per architecture §12 line 1165; recommend G1 split into 5a/5b/5c. | Aniket |
+| 2026-05-25 | **Phase 4 G4 ✅ SIGNED OFF — indexes + smoke helper land.** Commits this gate: (1) `migrations/runner.py` — `@no-transaction` pragma support. Postgres rejects `CREATE INDEX CONCURRENTLY` inside transaction blocks; pragma marker `-- @no-transaction` at the top of a migration file makes `_apply_one` run statements under autocommit (no surrounding `BEGIN`/`COMMIT`). On mid-file failure the file stays UNrecorded but earlier-applied CONCURRENTLY statements remain (inherent to CONCURRENTLY — you can't rollback a built index). Reusable infrastructure; Phase 14 HippoRAG graph indexes will use the same path. (2) `migrations/sql/0013_indexes.sql` — 4 CONCURRENTLY indexes: HNSW on `chunk_embeddings.embedding` + `raptor_nodes.embedding` (both `halfvec_cosine_ops`/`m=16`/`ef_construction=200`); BM25 on `contextual_chunks.contextual_text` + `raptor_nodes.text` (pg_search defaults: Tantivy default tokenizer, Robertson k1=1.2/b=0.75). (3) `src/kb/retrieval/__init__.py` + `src/kb/retrieval/smoke.py` — internal helpers `bm25_smoke(conn, *, workspace_id, query, limit)` + `dense_smoke(conn, *, workspace_id, query_vec, limit)` returning `list[tuple[id, score, level, scope]]`. Both UNION-combine contextual_chunks (level=1, scope='leaf') + raptor_nodes (level 2..6, scope per_doc/corpus); workspace_id filter holds redundantly with kb_app RLS. NOT mounted on any router; NOT importable from `kb.api.*`. (4) `scripts/reindex_weekly.sh` — host-cron stub for weekly `REINDEX CONCURRENTLY` rotation; not wired into compose (production scheduler is Phase 9). **In-G4 fixes:** (a) seed `content_sha` widened from arbitrary string to `hashlib.sha256(...).hexdigest()` (files table's 64-char CHECK constraint). (b) **3 planner-usage tests dropped** — at pytest fixture scale (~200 rows) the planner correctly prefers a btree index-scan + in-memory sort over HNSW; HNSW only wins above ~5K rows per workspace AND with ANALYZE stats up to date. Even forcing `SET LOCAL enable_seqscan=off enable_bitmapscan=off`, btree `chunk_embeddings_workspace_idx` won. Planner-usage moved to G5 `verify_phase_4.sh` where it runs against the full ingestion pipeline + ANALYZE. Spec `tests/specs/phase_4.md` updated to reflect 10 tests instead of 13. **296/296 pytest in 89.84s.** G5 opens. | Aniket |
 
 ---
 
