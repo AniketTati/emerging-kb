@@ -282,6 +282,7 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
 | **7** | Identity resolution (deterministic→embedding→LLM judge→union-find) | ✅ | — | ✅ | ✅ | ✅ | All gates green 2026-05-25 (§5.14, 14 decisions). 407/407 pytest. verify_phase_7.sh 16/16. Cross-phase sweep 16/16 GREEN. Branch `phase-7/identity-resolution`. |
 | **8** | Query planner + rewriting + parallel retrieval + RRF + rerank + CRAG + Astute generation (parent — split into 8a-f) | ✅ | — | ⬜ | ⬜ | ⬜ | G1 ✅ split-locked at §5.15. Each sub-phase has its own G1→G5 cycle. |
 | **8a** | Query rewriting (Step-Back + HyDE + Query2Doc) | ✅ | — | ✅ | ✅ | ✅ | All gates green 2026-05-25 (§5.15.1, 10 decisions). 421/421 pytest. verify_phase_8a.sh 8/8. Cross-phase sweep 17/17. Branch `phase-8a/query-rewriter`. |
+| **8b** | 6-channel parallel retrieval (BM25 chunks/raptor + dense chunks/raptor + mentions exact + atomic units rarity) + RRF fusion | ✅ | — | ✅ | ✅ | ✅ | All gates green 2026-05-25 (§5.15.2, 12 decisions). 441/441 pytest. verify_phase_8b.sh 9/9. Cross-phase sweep 18/18. Branch `phase-8b/retrieval-channels`. |
 | **9** | Audit log + lifecycle visibility + idempotency | 🟡 | — | ⬜ | ⬜ | ⬜ | G1 DRAFT at §5.16. SSE for Upload status + Chat replay + GET /audit. |
 | **10a** | UI — Upload (drag-drop · live per-doc per-stage status via SSE) | 🟡 | — | ⬜ | ⬜ | ⬜ | G1 DRAFT at §5.17. Next.js 15 per architecture. |
 | **10b** | UI — Chat (front door · streamed answers · right-side citation cards · plan inspector) + universal Doc Detail slide-in panel | 🟡 | — | ⬜ | ⬜ | ⬜ | G1 DRAFT at §5.17. |
@@ -2463,6 +2464,75 @@ When Aniket approves this plan, the Phase 4 G1 cell in §5 flips ⬜ → ✅ and
 - `migrations/sql/0019_query_audit.sql` — `query_log` table (one row per query for replayability per architecture §14)
 - Tests: `test_query_*.py`
 - `scripts/verify_phase_8.sh`
+
+---
+
+### 5.15.2 Phase 8b plan — 6-channel parallel retrieval + RRF fusion (G1 🟡 DRAFTED)
+
+> **Status:** G1 plan drafted 2026-05-25. Per architecture §6 step 7-8 (parallel channels + RRF). 6 of the 10 channels in architecture's full vision land in Wave A; 4 deferred to Wave B/C (see scope-out below).
+
+**Scope (in / out):**
+
+**In scope:**
+- `src/kb/query/channels.py`: 6 async channel functions, each takes `(conn, workspace_id, query|query_vec, limit)` and returns `list[Hit]`:
+  1. `bm25_chunks_channel` — pg_search `@@@` over `contextual_chunks.contextual_text` (uses Phase 4 BM25 index).
+  2. `bm25_raptor_channel` — pg_search `@@@` over `raptor_nodes.text` (uses Phase 4 BM25 index).
+  3. `dense_chunks_channel` — pgvector `<=>` cosine over `chunk_embeddings.embedding` (uses Phase 4 HNSW).
+  4. `dense_raptor_channel` — pgvector `<=>` over `raptor_nodes.embedding`.
+  5. `mentions_exact_channel` — case-insensitive `mention_text LIKE` over `extracted_mentions` (Phase 5a output); links back to the contextual_chunk that mentioned it.
+  6. `atomic_units_rarity_channel` — high-rarity `atomic_units.rarity_score` from Phase 5c; query-keyword filter for unit_type when "clause"/"transaction"/"row" appears in query.
+- `src/kb/query/rrf.py`: `Hit` dataclass + `rrf_fuse(channels, k=60)` implementing Cormack-Clarke-Buettcher 2009. Dedupe by `(id, kind)`; sum reciprocal-rank scores across channels.
+- `run_all_channels(conn, workspace_id, query, query_vec, limit)` async coordinator that fans out to 6 channels in parallel via `asyncio.gather(return_exceptions=True)` — channel failure ⇒ empty list for that channel (doesn't fail the query).
+
+**Out of scope (deferred):**
+- HippoRAG PPR channel — Wave B Phase 14 (needs graph index first).
+- ColPali visual channel — Wave C.
+- Doc-chain channel — Wave B (Design 3 not built).
+- Anomaly-filter channel (separate from atomic-unit rarity) — Wave B.
+- Identity-resolved entity expansion at query time — Wave B (Phase 7 entities exist; the query-time join is its own complexity).
+- HNSW query-time `ef_search` per-query tuning — env-only in Wave A.
+- Score normalization across channels — RRF uses ranks, not raw scores; explicit normalization is Wave B.
+- Result diversity (MMR) — Wave B Phase B3.
+- Multi-vector retrieval (ColBERT-style) — Wave C.
+- HTTP surface — Phase 8f.
+
+**Decisions locked at G1:**
+
+| # | Decision | Choice | Rationale |
+|---|---|---|---|
+| 1 | 6 Wave A channels | bm25_chunks · bm25_raptor · dense_chunks · dense_raptor · mentions_exact · atomic_units_rarity | All 4 channels needing artifacts that exist post-Phase-7 (chunks via 3a, raptor via 3d/3e, mentions via 5a + 7, atomic units via 5c). |
+| 2 | Top-K per channel | **20** | Cormack et al. RRF paper finds top-20 per channel is plenty for k=60; below that, recall drops; above 20, fusion noise increases. |
+| 3 | RRF k constant | **60** | Paper default; pgvector + pg_search ranks both start at 1 so k=60 keeps the reciprocal weights well-distributed. |
+| 4 | Parallel execution | `asyncio.gather(*tasks, return_exceptions=True)` — failed channels degrade to `[]` and don't abort the query. | Resilience: a stale BM25 index shouldn't kill a dense query. |
+| 5 | Hit deduplication | by `(id, kind)` tuple — RRF sums scores per unique item. Same `contextual_chunk_id` from BM25 and Dense channels collapses to one Hit with summed RRF score. | Standard RRF. Same item appearing in multiple channels = stronger signal. |
+| 6 | Hit shape | `Hit(id, kind, score, snippet, metadata: dict)` where `kind ∈ {'chunk', 'raptor_node', 'atomic_unit'}` and metadata carries `file_id`, `level`, `scope`, `channel`, optional `matched_mention` / `unit_type`. | Phase 8e (Astute generation) consumes `metadata` for citation envelopes. |
+| 7 | mentions_exact channel: how to surface | When mention text matches, return the `contextual_chunk_id` (Hit.kind='chunk') that contains the mention. Score = 1.0 (deterministic match), metadata records `matched_mention` + `matched_type` for explainability. | Phase 8e's citation envelope wants the chunk context, not the bare mention. Matches the "mention lookup" channel intent in architecture §6 step 7. |
+| 8 | atomic_units_rarity: query-keyword routing | If query mentions "clause" / "transaction" / "row", filter `unit_type` accordingly. Else: top across all unit_types by rarity. | Keyword-based intent routing is a Wave A heuristic; Wave B's query planner (architecture §6 step 5) does proper intent classification. |
+| 9 | Query-vector embedding | Use Phase 3c `make_embedder()` for the original variant. Other 3 rewrites (step_back, hyde, query2doc) get separate embeddings (single batch call). All 4 variants run through all 6 channels (so up to 6*4=24 parallel queries per user query). | Each rewrite has a different semantic profile; embedding them separately is the standard HyDE recipe. Batch call keeps embedding cost low. |
+| 10 | Channel-level pre-filtering | Workspace-scoped — every channel has `WHERE workspace_id = %s` filter even though kb_app RLS would enforce it. Belt-and-braces. | Matches §0.15 RLS-day-1 convention. |
+| 11 | Snippet truncation | `snippet[:500]` for downstream display. | Phase 8e + UI render constraint. |
+| 12 | Error swallowing scope | Per-channel: SQL exceptions caught + logged; channel returns `[]`. **NOT** swallowed at the orchestrator (`asyncio.gather` returns exceptions for inspection) | Single channel failure → degraded recall, not query failure. Total failure (e.g., DB down) propagates. |
+
+**Files (G3/G4):**
+- `src/kb/query/rrf.py` — Hit dataclass + rrf_fuse + DEFAULT_K=60
+- `src/kb/query/channels.py` — 6 channel functions + run_all_channels coordinator
+- `tests/specs/phase_8b.md` — test spec
+- `tests/test_query_rrf_unit.py` — pure-function RRF tests (~8)
+- `tests/test_query_channels_unit.py` — channel SQL tests against testcontainers (~8)
+- `scripts/verify_phase_8b.sh` — end-to-end with seeded chunks
+
+**Phase 8b G5 — what "green" means:**
+- `scripts/verify_phase_8b.sh` standalone — 8-10 checks (worker imports, seed 5 docs through full Phase 5/7 chain, run all 6 channels against query "test", verify each channel returns hits, RRF fusion deduplicates).
+- Full pytest: prior 421 still GREEN + new ≥16 Phase 8b tests GREEN.
+- Cross-phase sweep across all 18 verify scripts (0..7 + 8a + 8b): 18/18 GREEN.
+
+**Pre-G3 consistency review checklist:**
+- [ ] Architecture §6 step 7 + 8 traceability (parallel channels + RRF).
+- [ ] No DB migration (Phase 8b reads existing tables).
+- [ ] No HTTP surface (8f).
+- [ ] No new lifecycle states.
+- [ ] No leak into 8c (no rerank).
+- [ ] No leak into 8d/8e (no CRAG, no generation).
 
 ---
 
