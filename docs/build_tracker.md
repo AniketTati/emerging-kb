@@ -154,7 +154,7 @@ QA gates this at G1.5b — every prototype page is grep'd for the forbidden voca
 
 ## 1. Now / Next / Blocked
 
-**Now:** 🎉 **Wave A FULLY COMPLETE.** Phase 3e ✅ shipped — corpus-level RAPTOR. **286/286 pytest** in 81s. verify_phase_3e.sh 13/13. Cross-phase sweep across **all 12 verify scripts** (0/1a/1b/1c/2a/2b/2c/3a/3b/3c/3d/3e): **205 checks total, 12/12 GREEN on first pass** — no regressions, no forward-compat fixes needed (3e doesn't change any file lifecycle states; corpus tree is workspace-scoped, not file-scoped). Branch `phase-3/chunking-raptor` carries 7 commit-sets (3a/3b/3c/3b-bis/2c/3d/3e) ready to merge. Architecture's "RAPTOR builds the corpus hierarchy" promise (line 41) is now backed by code. Plan at §5.10, **16 decisions** (revised post-deliberation). Three deliberation flips: (1) discriminated edge FK + L1 stays in contextual_chunks — saves 30 GB at 100K-doc scale; (2) `raptor_building` intermediate lifecycle state — observability for the multi-stage build; (3) sharpened Identity Summarizer framing — no-key smoke path only, not CI semantic coverage. Forward-compat: `raptor_nodes.scope` enum + nullable `file_id` locked NOW so Phase 3e (corpus-level RAPTOR) needs no migration. Bumped `MAX_LEVELS` 4→6 to cover corpus-tree depth (`log₈(100K)≈5.5`).
+**Now:** 🎉 **Wave A FULLY COMPLETE.** Phase 3e ✅ shipped — corpus-level RAPTOR (plan at §5.10.1, **15 decisions**). Phase 3d also ✅ — per-doc RAPTOR (plan at §5.10, **16 decisions** revised post-deliberation; the deliberation flips that earned their keep: (1) discriminated edge FK + L1 stays in contextual_chunks — saves 30 GB at 100K-doc scale; (2) `raptor_building` intermediate lifecycle state — observability for the multi-stage build; (3) `MAX_LEVELS` bumped 4→6 to cover corpus-tree depth `log₈(100K)≈5.5`; (4) forward-compat `raptor_nodes.scope` enum + nullable `file_id` locked at 3d's 0012 migration — Phase 3e needed no separate migration). **286/286 pytest** in 81s. verify_phase_3e.sh 13/13. Cross-phase sweep across **all 12 verify scripts** (0/1a/1b/1c/2a/2b/2c/3a/3b/3c/3d/3e): **205 checks total, 12/12 GREEN on first pass** — no regressions, no forward-compat fixes needed (3e doesn't change any file lifecycle states; corpus tree is workspace-scoped, not file-scoped). Branch `phase-3/chunking-raptor` carries 7 commit-sets (3a/3b/3c/3b-bis/2c/3d/3e) — **PR #7 open against main**. Architecture's "RAPTOR builds the corpus hierarchy" promise (line 41) is now backed by code at 100K-doc scale.
 **Next:** **Phase 4 — retrieval layer** (HNSW + BM25 indexes on raptor_nodes + chunk_embeddings + tree-aware query that does top-K per level + re-rank). New branch off main (recommend `phase-4/retrieval`). Then Phase 5+ for schema-driven extraction, ranking, conversational UI, and the Wave B / agentic features.
 **Blocked on:** nothing.
 
@@ -289,7 +289,7 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
 | **11** | Public-dataset loader: CUAD + Enron + SEC 10-K subset + scans + xlsx | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | Scripts, not service endpoints |
 | **12** | Eval harness — 45 stratified Q&A (5 × 9 strata) + RAGAS + HHEM + basic Playground sandbox UI | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | `playground.html` (basic single-query + eval matrix) · regression CI |
 
-### 5.1 Phase 0 plan — Repo skeleton + docker-compose (G1 ✅ SIGNED OFF)
+### 5.1 Phase 0 plan — Repo skeleton + docker-compose (G1 ✅ + G2 ✅ + G3 ✅ + G4 ✅ + G5 ✅ SIGNED OFF)
 
 > **Status:** G1 ✅ signed off (corrected version) 2026-05-23 by Aniket. Plan locked. Branch: `phase-0/repo-skeleton`.
 >
@@ -528,7 +528,7 @@ No rollback DSL — for DDL we write forward fixes. Standard in DDL-heavy system
 
 ---
 
-### 5.2 Phase 1a plan — Schema CRUD foundation (G1 ✅ SIGNED OFF)
+### 5.2 Phase 1a plan — Schema CRUD foundation (G1 ✅ + G2 ✅ + G3 ✅ + G4 ✅ + G5 ✅ SIGNED OFF)
 
 > **Status:** G1 ✅ signed off 2026-05-23 by Aniket. Plan locked. Branch: `phase-1a/schemas-crud`.
 
@@ -657,7 +657,7 @@ When Aniket approves this plan, the Phase 1a G1 cell in §5 flips ⬜ → ✅ an
 
 ---
 
-### 5.3 Phase 1b plan — Schema versioning (G1 ✅ SIGNED OFF)
+### 5.3 Phase 1b plan — Schema versioning (G1 ✅ + G2 ✅ + G3 ✅ + G4 ✅ + G5 ✅ SIGNED OFF)
 
 > **Status:** G1 ✅ signed off 2026-05-23 by Aniket. Plan locked. Branch: `phase-1b/schema-versioning` off `main` (Phase 1a merged as PR #2; tag `phase-1a-complete`).
 
@@ -798,7 +798,7 @@ When Aniket approves this plan, the Phase 1b G1 cell in §5 flips 🟡 → ✅ a
 
 ---
 
-### 5.4 Phase 1c plan — Schema hierarchy (G1 ✅ SIGNED OFF)
+### 5.4 Phase 1c plan — Schema hierarchy (G1 ✅ + G2 ✅ + G3 ✅ + G4 ✅ + G5 ✅ SIGNED OFF)
 
 > **Status:** G1 ✅ signed off 2026-05-23 by Aniket. Plan locked. Branch: `phase-1c/schema-hierarchy` off `main` (Phase 1b merged as PR #3; tag `phase-1b-complete`).
 
@@ -993,7 +993,7 @@ When Aniket approves this plan, the Phase 1c G1 cell in §5 flips 🟡 → ✅ a
 
 ---
 
-### 5.5 Phase 2a plan — Parse-layer scaffold + Docling (G1 ✅ SIGNED OFF)
+### 5.5 Phase 2a plan — Parse-layer scaffold + Docling (G1 ✅ + G2 ✅ + G3 ✅ + G4 ✅ + G5 ✅ SIGNED OFF)
 
 > **Status:** G1 ✅ signed off 2026-05-23 by Aniket. Plan locked. Branch: `phase-2a/parse-scaffold` off `main` (Phase 1c merged as PR #4; tag `phase-1c-complete`).
 >
@@ -1148,7 +1148,7 @@ When Aniket approves this plan, the Phase 2a G1 cell in §5 flips 🟡 → ✅ a
 
 ---
 
-### 5.6 Phase 2b plan — Additional parsers (G1 ✅ SIGNED OFF)
+### 5.6 Phase 2b plan — Additional parsers (G1 ✅ + G2 ✅ + G3 ✅ + G4 ✅ + G5 ✅ SIGNED OFF)
 
 > **Status:** G1 ✅ signed off 2026-05-23 by Aniket. Plan locked. Branch: `phase-2b/parse-formats` off `main` (Phase 2a merged as PR #5; tag `phase-2a-complete`).
 
@@ -1675,7 +1675,7 @@ When Aniket approves this plan, §5 gains a new row for Phase 3b-bis, G1 flips �
 
 ---
 
-### 5.9 Phase 3c plan — Embedding (G1 ✅ + G2 ✅ + G3 ✅ + G4 ✅ SIGNED OFF)
+### 5.9 Phase 3c plan — Embedding (G1 ✅ + G2 ✅ + G3 ✅ + G4 ✅ + G5 ✅ SIGNED OFF)
 
 > **Status:** G1–G4 all green 2026-05-23. Plan + contract delta + 13 red skeletons + working implementation locked. 13/13 new tests green; full suite 232/232 in 70s. Branch: `phase-3/chunking-raptor` (third commit-set).
 
@@ -1775,7 +1775,7 @@ When Aniket approves this plan, the Phase 3c G1 cell flips 🟡 → ✅ and G2 o
 
 #### Scope
 
-Per-doc RAPTOR tree (Sarthi et al. 2024, [arXiv:2401.18059](https://arxiv.org/abs/2401.18059)) over Phase 3b's `contextual_chunks` + Phase 3c's `chunk_embeddings`. Algorithm: leaves are contextual chunks; at each level L, cluster the L-level embeddings, summarize each cluster via a `Summarizer` adapter, embed the summary, write a new (L+1)-level node + parent→child edges. Terminate when `n_clusters == 1` OR `level == max_levels=4`. Corpus-level RAPTOR (one tree across all docs) deferred to Phase 5+.
+Per-doc RAPTOR tree (Sarthi et al. 2024, [arXiv:2401.18059](https://arxiv.org/abs/2401.18059)) over Phase 3b's `contextual_chunks` + Phase 3c's `chunk_embeddings`. Algorithm: leaves are contextual chunks; at each level L, cluster the L-level embeddings, summarize each cluster via a `Summarizer` adapter, embed the summary, write a new (L+1)-level node + parent→child edges. Terminate when `n_clusters == 1` OR `level > max_levels` (default 6 — bumped from 4 at the post-deliberation flip; see decision #3 below) OR `n_at_level ≤ branching_factor`. Corpus-level RAPTOR ships at Phase 3e on the same `raptor_nodes` table via the forward-compat `scope` column.
 
 **In scope:**
 - **`0012_raptor.sql` migration** — two new tables (both workspace-scoped + RLS day-1 + immutable: REVOKE UPDATE, DELETE on kb_app) + a lifecycle CHECK widen:
@@ -2062,9 +2062,15 @@ Phases 15–24 per `architecture.md` §12. Tracked here only as a reminder of in
 | 2a | [scripts/verify_phase_2a.sh](../scripts/verify_phase_2a.sh) | 2026-05-23 | ✅ 17/17 (compose smoke + 4 DDL assertions on 4 new tables + 9 HTTP/E2E parse curl checks incl. real Docling parse + RLS isolation + dedup-header + 415 + openapi exposure + Phase-2a pytest 28) |
 | 2b | [scripts/verify_phase_2b.sh](../scripts/verify_phase_2b.sh) | 2026-05-23 | ✅ 15/15 (compose smoke + xlsx + email upload + parse to lifecycle_state='parsed' + xlsx page-text sheet header + magic-byte sniff routing both ways + Mistral inert without API key + text/plain 415 + Phase-2b pytest 28) |
 | 3a | [scripts/verify_phase_3a.sh](../scripts/verify_phase_3a.sh) | 2026-05-23 | ✅ 18/18 (compose smoke + 4 DDL assertions on chunks table + lifecycle CHECK + 4 E2E PDF/xlsx/email parse-to-chunked + idempotent re-defer + Phase-3a pytest 16) |
-| 3b | [scripts/verify_phase_3b.sh](../scripts/verify_phase_3b.sh) | 2026-05-23 | ✅ 15/15 (compose smoke + 4 DDL assertions on contextual_chunks + lifecycle CHECK + E2E PDF parse-chunk-contextualize + model_id='identity' check + identity-fallback contextual_text=chunk_text + lifecycle progression assert + idempotent re-defer + Phase-3b pytest 15) |
-| 3c | [scripts/verify_phase_3c.sh](../scripts/verify_phase_3c.sh) | 2026-05-23 | ✅ 15/15 (compose smoke + 5 DDL assertions on chunk_embeddings: table + UNIQUE on (contextual_chunk_id, model_id) + RLS forced + kb_app grants restricted + halfvec column type + lifecycle CHECK includes `embedded` + E2E PDF parse → chunk → contextualize → embed via DeterministicMockEmbedder fallback (KB_GEMINI_API_KEY unset in compose) + model_id='mock-deterministic-v1' assertion + lifecycle history substring match for contextualized→embedded + idempotent re-defer + Phase-3c pytest 13) |
-| ... | | | |
+| 2c | [scripts/verify_phase_2c.sh](../scripts/verify_phase_2c.sh) | 2026-05-24 | ✅ 15/15 (compose smoke + pypdfium2 worker import probe + KB_PARSER_STRATEGY env probe + digital→Docling E2E + provenance JSON on raw_pages + provenance in lifecycle parse_done + scanned→soft-Docling-fallback when no Gemini key + caller override `?parser=docling` + 400 invalid-parser-override + Phase-2c pytest 18) |
+| 3a | [scripts/verify_phase_3a.sh](../scripts/verify_phase_3a.sh) | 2026-05-24 (post 3e) | ✅ 18/18 (re-green after 3c forward-compat accept-set widening + 3d/3e land) |
+| 3b | [scripts/verify_phase_3b.sh](../scripts/verify_phase_3b.sh) | 2026-05-24 (post 3b-bis) | ✅ 16/16 (widened 15→16 at 3b-bis: added KB_CONTEXTUALIZER env probe + conditional Gemini/Anthropic/Identity branch on `model_id`/`cache_creation_input_tokens`/`cache_read_input_tokens`) |
+| 3c | [scripts/verify_phase_3c.sh](../scripts/verify_phase_3c.sh) | 2026-05-24 (post 3d) | ✅ 15/15 (accept-set widened to `embedded \| raptor_building \| ready` for forward-compat with 3d) |
+| 3d | [scripts/verify_phase_3d.sh](../scripts/verify_phase_3d.sh) | 2026-05-24 | ✅ 22/22 (compose smoke + 7 DDL assertions on raptor_nodes + raptor_edges + scope CHECK + discriminated edge CHECK + REVOKE UPDATE/DELETE + lifecycle CHECK includes `raptor_building` + E2E PDF through to `ready` + lifecycle history `embedded→raptor_building→ready` + raptor_build_started + raptor_build_done events + raptor_nodes L2 row + L2→contextual_chunks edge (both gated on `leaf_count >= 2` since tiny.xlsx is singleton) + payload shape + idempotent re-defer + Phase-3d pytest 17) |
+| 3e | [scripts/verify_phase_3e.sh](../scripts/verify_phase_3e.sh) | 2026-05-24 | ✅ 13/13 (compose smoke + umap-learn worker import probe + empty-workspace 400 corpus-rebuild-no-input pre-flight + 5-doc upload through to ready + POST /corpus/raptor/rebuild → 202 + wait for raptor_build_corpus job succeeded + scope='corpus' nodes exist + corpus → contextual_chunks discriminated edges + atomic rebuild count-stable + Phase-3e pytest 11) |
+
+**Cross-phase sweep totals (2026-05-24, all 12 scripts):**
+0:16 · 1a:17 · 1b:21 · 1c:20 · 2a:17 · 2b:15 · 2c:15 · 3a:18 · 3b:16 · 3c:15 · 3d:22 · 3e:13 = **205 checks · 12/12 GREEN**.
 
 ---
 

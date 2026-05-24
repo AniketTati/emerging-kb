@@ -894,17 +894,20 @@ All adapter-swappable via **Hydra + OmegaConf** (Design 9). Config layering: per
 
 
 
-| Stage | Default (API-first, laptop-friendly) | Offline fallback |
-|---|---|---|
-| Extraction LLM | Gemini 2.5 Flash (structured outputs, 1M context, cheap) | Llama-3.3-70B / Qwen3-32B |
-| Hard-query LLM | Gemini 2.5 Pro (planner for complex, ER judge on edge cases) | Qwen3-72B |
-| Embeddings | Gemini Embedding 001 (#1 commercial MTEB, 68.32) | bge-m3 or Qwen3-Embedding-8B (70.58 MTEB, open) |
-| Reranker | Cohere Rerank 3.5 | mxbai-rerank-large-v2 |
-| Digital PDF parser | Docling (IBM, MIT, layout-aware, tables) | — |
-| Scanned PDF parser | Mistral OCR 3 (top quality + speed, 2025) | Tesseract last-resort |
-| OCR fallback (visual) | Gemini 2.5 Flash VLM | — |
-| Clause typer | LLaMA-3.3-70B few-shot OR DeBERTa-v3 fine-tune on CUAD | — |
-| Faithfulness gate | HHEM-2.1 + HalluGraph | RAGAS faithfulness |
+> **Shipped reality vs. this table (2026-05-24):** This stack table is the **full target**. What Wave A actually ships is narrower — see [`docs/build_tracker.md`](build_tracker.md) §5 "Build phases" for the canonical shipped/planned split. Per-row status footnoted below.
+
+| Stage | Default (API-first, laptop-friendly) | Offline fallback | Shipped? |
+|---|---|---|---|
+| Extraction LLM | Gemini 2.5 Flash (structured outputs, 1M context, cheap) | Llama-3.3-70B / Qwen3-32B | ⬜ Planned (Phase 5+) |
+| Hard-query LLM | Gemini 2.5 Pro (planner for complex, ER judge on edge cases) | Qwen3-72B | ⬜ Planned (Phase 5+) |
+| Embeddings | Gemini Embedding 001 (#1 commercial MTEB, 68.32) | bge-m3 or Qwen3-Embedding-8B (70.58 MTEB, open) | ✅ Phase 3c (GeminiEmbedder + DeterministicMockEmbedder fallback) |
+| Reranker | Cohere Rerank 3.5 | mxbai-rerank-large-v2 | ⬜ Planned (Phase 4 retrieval) — no `cohere` dep yet in pyproject |
+| Digital PDF parser | Docling (IBM, MIT, layout-aware, tables) | — | ✅ Phase 2a |
+| Scanned PDF parser | **Gemini 2.5 Flash VLM** (Phase 2c — strategy-aware dispatch via text-layer sniff; primary for scanned). Mistral OCR 3 adapter present + tested, but inert without `KB_MISTRAL_API_KEY`. Original target was Mistral OCR 3 first; Gemini won the demo path for the single-API-key story. | Tesseract via Docling's RapidOCR fallback (also already active) | ✅ Phase 2c (`KB_PARSER_STRATEGY ∈ {auto, docling_first, gemini_first, gemini_only}`) |
+| OCR fallback (visual) | Gemini 2.5 Flash VLM (folded into Scanned PDF parser row above) | — | ✅ Phase 2c |
+| Contextualization (RAPTOR per-chunk prefix + cluster summaries) | Anthropic Claude Opus 4.7 (default for contextualization) OR Gemini 2.5 Flash (default for summarization) + Identity fallback. Adapters: `KB_CONTEXTUALIZER` (3b/3b-bis) + `KB_SUMMARIZER` (3d/3e). | Identity = no-key smoke path | ✅ Phases 3b + 3b-bis + 3d |
+| Clause typer | LLaMA-3.3-70B few-shot OR DeBERTa-v3 fine-tune on CUAD | — | ⬜ Planned (Phase 5+ atomic units) |
+| Faithfulness gate | HHEM-2.1 + HalluGraph | RAGAS faithfulness | ⬜ Planned (Phase 6+ judges) |
 
 **On the Gemini Flash question — directly:** the architecture decisions in §2–§7 matter ~10× more than the LLM choice. Gemini 2.5 Flash is excellent for extraction, planning, and generation; 1M context is genuinely usable; structured outputs are reliable. We make every model call go through an `LLMAdapter` and can A/B with Sonnet/GPT-5 per-stage if needed.
 
