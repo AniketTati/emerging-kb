@@ -196,20 +196,84 @@ async def test_identity_contextualizer_returns_empty_prefix():
     assert result.cache_read_input_tokens == 0
 
 
-async def test_contextualizer_factory_returns_identity_when_no_api_key():
+async def test_contextualizer_factory_selector_matrix():
+    """Phase 3b-bis decision #2: KB_CONTEXTUALIZER ∈ {gemini, anthropic, identity, auto}.
+
+    Default `auto` probes Gemini key → Anthropic key → Identity in that order
+    (Gemini-first matches the demo's "one API key, Gemini" default story).
+    Explicit values override the probe.
+    """
     from kb.contextualization import (
         AnthropicContextualizer,
+        GeminiContextualizer,
         IdentityContextualizer,
         make_contextualizer,
     )
 
-    with _env(KB_ANTHROPIC_API_KEY=None):
-        ctxer = make_contextualizer()
-        assert isinstance(ctxer, IdentityContextualizer)
+    # `auto` (default) + no keys → Identity.
+    with _env(
+        KB_CONTEXTUALIZER=None,
+        KB_GEMINI_API_KEY=None,
+        KB_ANTHROPIC_API_KEY=None,
+    ):
+        assert isinstance(make_contextualizer(), IdentityContextualizer)
 
-    with _env(KB_ANTHROPIC_API_KEY="fake-key"):
-        ctxer = make_contextualizer()
-        assert isinstance(ctxer, AnthropicContextualizer)
+    # `auto` + Gemini-only → Gemini (Gemini-first probe order).
+    with _env(
+        KB_CONTEXTUALIZER=None,
+        KB_GEMINI_API_KEY="fake-gemini",
+        KB_ANTHROPIC_API_KEY=None,
+    ):
+        assert isinstance(make_contextualizer(), GeminiContextualizer)
+
+    # `auto` + Anthropic-only → Anthropic.
+    with _env(
+        KB_CONTEXTUALIZER=None,
+        KB_GEMINI_API_KEY=None,
+        KB_ANTHROPIC_API_KEY="fake-anthropic",
+    ):
+        assert isinstance(make_contextualizer(), AnthropicContextualizer)
+
+    # `auto` + both keys set → Gemini wins (Gemini-first probe).
+    with _env(
+        KB_CONTEXTUALIZER=None,
+        KB_GEMINI_API_KEY="fake-gemini",
+        KB_ANTHROPIC_API_KEY="fake-anthropic",
+    ):
+        assert isinstance(make_contextualizer(), GeminiContextualizer)
+
+    # Explicit `gemini` → Gemini (key required).
+    with _env(
+        KB_CONTEXTUALIZER="gemini",
+        KB_GEMINI_API_KEY="fake-gemini",
+        KB_ANTHROPIC_API_KEY=None,
+    ):
+        assert isinstance(make_contextualizer(), GeminiContextualizer)
+
+    # Explicit `anthropic` → Anthropic (key required).
+    with _env(
+        KB_CONTEXTUALIZER="anthropic",
+        KB_GEMINI_API_KEY=None,
+        KB_ANTHROPIC_API_KEY="fake-anthropic",
+    ):
+        assert isinstance(make_contextualizer(), AnthropicContextualizer)
+
+    # Explicit `identity` → Identity (ignores any keys).
+    with _env(
+        KB_CONTEXTUALIZER="identity",
+        KB_GEMINI_API_KEY="fake-gemini",
+        KB_ANTHROPIC_API_KEY="fake-anthropic",
+    ):
+        assert isinstance(make_contextualizer(), IdentityContextualizer)
+
+    # Unknown selector value → ValueError.
+    with _env(
+        KB_CONTEXTUALIZER="bogus",
+        KB_GEMINI_API_KEY=None,
+        KB_ANTHROPIC_API_KEY=None,
+    ):
+        with pytest.raises(ValueError):
+            make_contextualizer()
 
 
 # ===========================================================================

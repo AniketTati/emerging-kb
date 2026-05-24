@@ -154,9 +154,9 @@ QA gates this at G1.5b — every prototype page is grep'd for the forbidden voca
 
 ## 1. Now / Next / Blocked
 
-**Now:** Phase 3c ✅ — G1/G2/G3/G4/G5 all green. verify_phase_3c.sh 15/15 + cross-phase sweep across 0/1a/1b/1c/2a/2b/3a/3b/3c all GREEN (3a accept-set widened to also accept `embedded` for forward-compat with Phase 3c's chained-defer; same pattern as 3b's prior widening). Suite 232/232 via testcontainers; full Docker-stack 0→3c reverified on the same branch.
-**Next:** Phase 3d — RAPTOR tree build (clustering + summarization of L1 contextual chunks → tree nodes). Opens on same branch.
-**Blocked on:** nothing.
+**Now:** Phase 3b-bis G1 ✅ + G3 ✅ + G4 🟡 OPEN. G3 RED: 6 new Gemini-adapter unit tests + 1 mutated factory test (binary → 4-value `KB_CONTEXTUALIZER` selector matrix). 231/231 existing + 1 intentional fail. Spec at `tests/specs/phase_3b_bis.md`. G4: implement `GeminiContextualizer` + widen `make_contextualizer()`.
+**Next:** Phase 3b-bis G4 (code) → G5 (verify_phase_3b.sh extension + cross-phase sweep). Then Phase 3d (RAPTOR). Phase 1c-bis (GeminiOCRParser) gated on demo-corpus answer.
+**Blocked on:** corpus answer (for Phase 1c-bis scoping — non-blocking for 3b-bis).
 
 ---
 
@@ -269,6 +269,7 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
 | **3a** | Chunking — late chunking of `raw_pages` → `chunks` table (layout-aware, token-bounded, cross-page joining); worker stage `chunk_file`; new lifecycle state `chunked` | ✅ | ✅ | ✅ | ✅ | ✅ | All 5 gates green 2026-05-23. verify_phase_3a.sh 18/18. Cross-phase sweep: 0/1a/1b/1c/2a/2b all still green (124/124 cumulative checks). pytest 204/204. Ready to merge. |
 | **3b** | Contextual Retrieval — Anthropic Claude per-chunk prefix with prompt-cached doc context; `contextual_chunks` table; worker stage `contextualize_file` | ✅ | ✅ | ✅ | ✅ | ✅ | All 5 gates green 2026-05-23. verify_phase_3b.sh 15/15. Cross-phase sweep: 0/1a/1b/1c/2a/2b/3a/3b all green (139/139 cumulative checks). pytest 219/219. Ready to merge. |
 | **3c** | Embedding — Gemini Embedding 001 on contextual chunks → `chunk_embeddings` (`halfvec(3072)`); worker stage `embed_file`; new lifecycle state `embedded` | ✅ | ✅ | ✅ | ✅ | ✅ | First embedding call; gated on `KB_GEMINI_API_KEY` with DeterministicMockEmbedder for CI. 13/13 new tests green; suite 232/232. verify_phase_3c.sh 15/15 + cross-phase sweep 0/1a/1b/1c/2a/2b/3a/3b/3c all GREEN. One sweep fix: 3a's accept-set widened to also accept `embedded` (Phase 3c chained-defer races past `chunked` before the script polls — same forward-compat pattern handled at 3b). |
+| **3b-bis** | Gemini Contextualizer adapter — `GeminiContextualizer` alongside `AnthropicContextualizer` + factory selector `KB_CONTEXTUALIZER ∈ {gemini,anthropic,identity,auto}`. No schema/lifecycle/API delta. | ✅ | — | ✅ | 🟡 | ⬜ | Additive adapter (no G2). G3 RED 7/7: 6 new tests in test_contextualization_gemini_unit.py + 1 mutated factory test in test_contextualization_unit.py (widened from binary to 4-value selector matrix). Full suite: 231/231 + 1 intentional fail. G4 open: implement `GeminiContextualizer` + widen factory. |
 | **3d** | RAPTOR tree build — per-doc recursive cluster→summarize→re-embed → `raptor_nodes` + `raptor_edges`; lifecycle terminates at `ready` | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | GMM clustering via sklearn; Gemini Flash summarizer with IdentitySummarizer fallback; corpus-level RAPTOR deferred (per-doc only in Wave A) |
 | **4** | Indexing: pgvector HNSW + pg_search BM25 on all RAPTOR levels | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | Internal worker |
 | **5** | Open extraction → mentions; clause split + typing + anomaly score | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | L2 + L2b + L3 |
@@ -1441,6 +1442,90 @@ When Aniket approves this plan, the Phase 3b G1 cell in §5 flips 🟡 → ✅ a
 
 ---
 
+### 5.8.1 Phase 3b-bis plan — Gemini Contextualizer adapter (G1 ✅ + G3 ✅ + G4 🟡 OPEN)
+
+> **Status:** G1 opens 2026-05-23. Additive adapter for the `Contextualizer` Protocol locked at 5.8 — no schema delta, no lifecycle delta, no API contract delta. **Motivation:** interview-submission demo runs on a single API key. Shipping a second real implementation alongside `AnthropicContextualizer` turns "BYO Anthropic key or contextual retrieval no-ops" into "Gemini-only pipeline by default, Anthropic as an alternative adapter" — proves the §5.8 adapter pattern under load instead of just on paper. Same `phase-3/chunking-raptor` branch.
+
+#### Scope
+
+A new `GeminiContextualizer` class in `kb/contextualization/__init__.py` implementing the existing `Contextualizer` Protocol (`async contextualize(*, doc_text, chunk_text) -> ContextualizedChunk`). The factory `make_contextualizer()` widens from binary (Anthropic vs Identity) to **selector-driven** (Anthropic, Gemini, Identity, auto-detect).
+
+**In scope:**
+- **`GeminiContextualizer(api_key=..., client=None, model="gemini-2.5-flash", concurrency=8)`** — uses `google.genai.Client.aio.models.generate_content` (the same `google-genai` package already added at Phase 3c G4 for embeddings; no new dep). System instruction carries the full doc; user content carries the chunk + 50-100 token prefix instruction (verbatim from the Anthropic cookbook prompt, since the recipe is model-agnostic).
+- **Factory selector `make_contextualizer()` widened** — reads `KB_CONTEXTUALIZER` env var with values `gemini` | `anthropic` | `identity` | `auto` (default `auto`). `auto` probes: `KB_GEMINI_API_KEY` set → Gemini; elif `KB_ANTHROPIC_API_KEY` set → Anthropic; else → Identity. Existing behavior preserved when `KB_CONTEXTUALIZER` is unset and only the Anthropic key is set.
+- **Cache-metrics columns reused with documented semantics for Gemini.** `cache_creation_input_tokens` is repurposed to hold Gemini's `usage_metadata.prompt_token_count` (= billed input tokens, no caching used). `cache_read_input_tokens` stays 0 for the Gemini path. This keeps the schema additive (no migration) and makes cost reporting work for either provider — `total_input_tokens = sum(cache_creation) + sum(cache_read)` is the right aggregate for both.
+- **`model_id`** column stores `'gemini-2.5-flash'` literal for Gemini-path rows (mirrors `'claude-opus-4-7'` / `'identity'` for the other two adapters).
+- **Tests** — `tests/test_contextualization_gemini_unit.py` (~6 tests: GeminiContextualizer with mocked `google.genai.Client.aio.models.generate_content`, prompt shape assertion, response parsing, error handling, concurrency cap, factory selector matrix). Reuses the existing worker-level tests in `test_contextualization_worker.py` by parameterizing on `KB_CONTEXTUALIZER`.
+- **`scripts/verify_phase_3b.sh` extension** — adds a Gemini-path E2E branch: if `KB_GEMINI_API_KEY` is set in the compose env, the verify also asserts `model_id='gemini-2.5-flash'` on the contextual_chunks row produced by `tiny.pdf`. The existing Identity-fallback path remains the default for `KB_GEMINI_API_KEY` unset.
+
+**Out of scope (deferred):**
+- **Gemini explicit context caching** — Gemini's `client.caches.create()` API requires ≥4K tokens of cached content and TTL management; valuable at scale, but adds API surface area + a code path for cache-miss/expire/refresh. For the interview demo (small doc count, single-digit pages), pass full doc context inline every call. Cost stays trivial. Revisit when corpus grows.
+- **`GeminiOCRParser`** (replacement for Mistral OCR) — Phase 1c-bis territory. Decided separately based on whether the demo corpus includes scanned PDFs.
+- **Reusing this adapter for Phase 3d RAPTOR cluster summarization** — that's 3d's plan; Phase 3b-bis just ensures the LLM client is wired through `google-genai` so 3d can reuse it.
+- New migration (`contextual_chunks` schema is unchanged).
+- New endpoint or contract delta.
+
+#### Decisions (locked at G1; changes require re-opening G1)
+
+| # | Decision | Choice | Rationale |
+|---|---|---|---|
+| 1 | LLM model | **`gemini-2.5-flash`** (default; configurable via `KB_CONTEXTUAL_MODEL` env, same var Anthropic adapter respects). | Matches architecture §8 (Gemini 2.5 Flash for short-context tasks). Flash is the cost-equivalent of Claude Haiku — small, fast, instruction-tuned, well-suited to the 50-100 token rewriting task. Pro reserved for RAPTOR L3 atomic-unit extraction (later phases) where reasoning depth matters. |
+| 2 | Adapter selector | New env var `KB_CONTEXTUALIZER` with values `gemini` \| `anthropic` \| `identity` \| `auto`. Default `auto`: probe Gemini key → Anthropic key → Identity in that order. | Single var beats two booleans. `auto` keeps the demo zero-config when one key is set; explicit override available for tests + CI cross-cuts. Gemini-first probe ordering matches the demo's "one API key, Gemini" story. |
+| 3 | Prompt template | **Verbatim from §5.8 decision #7** (Anthropic cookbook prompt). System: `"Here is the full document for context:\n\n<document>\n{doc_text}\n</document>"`. User: `"Here is a chunk from that document:\n\n<chunk>\n{chunk_text}\n</chunk>\n\nProvide a short (50-100 token) context line that situates this chunk within the document. Return ONLY the context line, no preamble."`. | Recipe is model-agnostic; deviating means re-running Anthropic's published eval against Gemini, which is out of scope. Keeps fair head-to-head if/when we benchmark both. |
+| 4 | Caching strategy | **No explicit caching for Gemini path** in 3b-bis. Pass full doc inline on every call. `cache_creation_input_tokens` column stores Gemini's `prompt_token_count` (billed-input tokens; equivalent semantics: "tokens we paid to process this call"). `cache_read_input_tokens` stays `0`. | Gemini explicit cache (`client.caches.create()`) requires ≥4K tokens of doc + TTL management. Adds surface area for a demo where total inference cost is < $0.01/doc anyway. Document the difference; revisit at scale. |
+| 5 | Per-chunk concurrency | `asyncio.Semaphore(8)` — same as Anthropic adapter. Configurable via `KB_CONTEXTUAL_CONCURRENCY` (shared env var). | Same throughput-vs-rate-limit reasoning. Gemini Flash free tier is 15 RPM / 1M TPM — 8-way concurrency stays under at our doc sizes. |
+| 6 | Output token budget | `max_output_tokens=200` via `generation_config={"max_output_tokens": 200}`. Same upper bound as Anthropic adapter. | Identical task, identical budget. |
+| 7 | Thinking / reasoning mode | **Disabled.** Gemini 2.5 Flash supports `thinking_config={"thinking_budget": 0}` (per google-genai SDK). Set explicitly. | Contextual prefix is a short-description task. Same reasoning as Anthropic decision #9. Burning thinking tokens for a 50-token output is wasteful. |
+| 8 | Failure mode | Gemini API errors (4xx, 5xx, network) → `chunked → failed` with `event='contextualization_failed'`. Payload includes `error_class`, `message`, and the response's `prompt_feedback.block_reason` if present (safety blocks). | Mirrors Anthropic decision #14, adapted to Gemini's error surface. `prompt_feedback` is Gemini-specific; capture it for debugging RAI/safety blocks. |
+| 9 | model_id literal | `'gemini-2.5-flash'` stored verbatim in `contextual_chunks.model_id`. Future model upgrades store new literal (e.g., `'gemini-3.0-flash'`). | Same audit pattern as Anthropic (`'claude-opus-4-7'`) and Identity (`'identity'`). Dashboards filter by `model_id` for cost + provider attribution. |
+| 10 | Test parameterization | Worker-level tests (`test_contextualization_worker.py`) parameterize over `KB_CONTEXTUALIZER ∈ {anthropic, gemini, identity}` using `pytest.mark.parametrize` + mocked clients. Avoids duplicating 6 worker tests three times. | Single source of truth for "the worker glue works regardless of adapter." Unit tests (`test_contextualization_gemini_unit.py`) cover adapter-specific behavior. |
+
+#### Repo layout delta after Phase 3b-bis G4
+
+```
+emerging-kb/
+├── src/kb/contextualization/
+│   └── __init__.py                          ← MUTATED (add GeminiContextualizer + widen make_contextualizer factory)
+├── tests/
+│   └── test_contextualization_gemini_unit.py  ← NEW (~6 unit tests)
+│       test_contextualization_worker.py     ← MUTATED (parameterize over adapter)
+└── scripts/
+    └── verify_phase_3b.sh                   ← MUTATED (Gemini-path E2E branch)
+```
+
+No new SQL migration. No new domain module. No new worker task — the existing `contextualize_file_impl` is adapter-agnostic; it just calls `make_contextualizer()`.
+
+#### Endpoint contract delta
+
+**None.** Phase 3b-bis is purely internal — same `Contextualizer` Protocol, same `contextual_chunks` schema, same lifecycle states, same task surface.
+
+#### Phase 3b-bis G5 — what "green" means
+
+`scripts/verify_phase_3b.sh` (extended) adds:
+1. New step: `psql` confirms `KB_GEMINI_API_KEY` is propagated to the worker container (`docker compose exec worker env | grep KB_GEMINI_API_KEY`).
+2. New step: `POST tiny.pdf` → file reaches `lifecycle_state='contextualized'`, and `contextual_chunks.model_id='gemini-2.5-flash'` for at least one row (proves the auto-selector picked Gemini).
+3. New step: `psql` confirms `cache_creation_input_tokens > 0` (Gemini billed-input tokens recorded) and `cache_read_input_tokens = 0` for Gemini rows (documents the no-cache semantics).
+4. Existing Identity-path branch preserved (runs when `KB_GEMINI_API_KEY` is unset).
+5. `pytest tests/` green: 232 (existing) + ~6 new = ~238.
+6. Cross-phase sweep `verify_phase_{0..3c}.sh` all green (verifies no regression on prior phases).
+
+#### Pre-G3 consistency review checklist
+
+Before G3 opens:
+- [ ] §5.8 decision #1 (Anthropic = default) updated to read "configurable via `KB_CONTEXTUALIZER`; default `auto`." Old behavior is one branch of the selector.
+- [ ] §5.8 decision #5 (adapter pattern) updated to list three real adapters: Anthropic, Gemini, Identity.
+- [ ] §5.8 decision #11 (cache metrics) updated to document the Gemini-path semantics for `cache_creation_input_tokens` (= prompt_token_count) and `cache_read_input_tokens` (= 0).
+- [ ] Architecture §8 stack-table entry for "LLMs" already covers Gemini 2.5 Flash — no edit needed.
+- [ ] `.env.example` updated alongside G4 to mention `KB_CONTEXTUALIZER` + `KB_GEMINI_API_KEY` (this is the consistency-sweep gap from the May-23 review).
+- [ ] No leak into Phase 3d territory (RAPTOR clustering / summarization — separate phase, will reuse google-genai client).
+- [ ] No leak into Phase 1c-bis (Gemini OCR adapter — separate phase, decided based on demo corpus).
+
+#### Sign-off
+
+When Aniket approves this plan, §5 gains a new row for Phase 3b-bis, G1 flips 🟡 → ✅, and G3 opens (skip G2 — no API contract delta, no migration). Estimated wall-clock: ~1 hour for G3 + G4 + G5 combined given the adapter pattern is already paved.
+
+---
+
 ### 5.9 Phase 3c plan — Embedding (G1 ✅ + G2 ✅ + G3 ✅ + G4 ✅ SIGNED OFF)
 
 > **Status:** G1–G4 all green 2026-05-23. Plan + contract delta + 13 red skeletons + working implementation locked. 13/13 new tests green; full suite 232/232 in 70s. Branch: `phase-3/chunking-raptor` (third commit-set).
@@ -1709,6 +1794,8 @@ Phases 15–24 per `architecture.md` §12. Tracked here only as a reminder of in
 | 2026-05-23 | **Phase 3c G4 ✅ — code landed.** 4 new files + 3 mutated. All 13 new tests + full suite 232/232 in 70.3s. **One in-G4 fix**: 0009's forward-compat CHECK list (added at 3b G4 fix #2) included `'ready'` but skipped the in-between `'embedded'` state. Insert into `files` of `lifecycle_state='embedded'` 400'd with CheckViolation. Fixed by extending the CHECK list to include every state through the terminal `ready`: `queued/parsing/parsed/chunked/contextualized/embedded/ready/failed/deleted`. Convention reinforced: every lifecycle-extending migration writes a CHECK with all currently-planned future states. Files: `pyproject.toml` + `uv.lock` (google-genai>=0.3.0 — resolved as 2.6.0); `migrations/sql/0009_chunks.sql` MUTATED (added `'embedded'` to CHECK); `migrations/sql/0011_chunk_embeddings.sql` (CREATE TABLE with halfvec(3072) + RLS + REVOKE + UNIQUE); `src/kb/embeddings/__init__.py` (Embedder Protocol + GeminiEmbedder via google-genai.aio.models.embed_content + DeterministicMockEmbedder using sha256(text||':'||dim) + L2-normalize + make_embedder factory); `src/kb/domain/chunk_embeddings.py` (insert_chunk_embedding with halfvec literal cast + read_contextual_chunks_for_embedding); `src/kb/workers/tasks.py` MUTATED (embed_file_impl + embed_file Procrastinate task + contextualize_file_impl chained-defer). All 13 G1 decisions traced. | Aniket |
 | 2026-05-23 | **Phase 3c G5 🟡 — verify script authored, Docker-stack run blocked on host disk pressure.** Authored `scripts/verify_phase_3c.sh` (15 checks): compose smoke + 5 DDL assertions (chunk_embeddings table + UNIQUE + RLS forced + kb_app grants restricted + `halfvec` column type + lifecycle CHECK includes `embedded`) + E2E PDF parse → chunk → contextualize → embed (with `model_id='mock-deterministic-v1'` via DeterministicMockEmbedder since `KB_GEMINI_API_KEY` is unset in compose) + lifecycle progression assert + idempotent re-defer + Phase-3c pytest 13. Also widened Phase 3b's verify accept-set: `contextualized | embedded | ready` all count as contextualize-success (forward-compat for 3d). **Docker-stack execution deferred** — host disk hit 88% / ~2 GB free during 3c development; OrbStack daemon stopped. pytest suite remains authoritative + green at 232/232; the Docker-stack run validates ops-stack behavior but does not change the merge bar (Phase 3a + 3b shipped under the same gate). **Action for user**: free ~5-10 GB → restart Docker (OrbStack) → run `./scripts/verify_phase_3c.sh` + cross-phase sweep → flip G5 to ✅. | Aniket |
 | 2026-05-23 | **Phase 3c G5 ✅ — disk reclaimed, full sweep green.** User freed disk (76 GB free, up from 2 GB); OrbStack restarted (Docker 29.4.0). `./scripts/verify_phase_3c.sh` returned 15/15. Cross-phase sweep across all 9 verify scripts (0/1a/1b/1c/2a/2b/3a/3b/3c): 8/9 GREEN on first pass; 3a tripped 3 checks with `last state: embedded` instead of `chunked` — same forward-compat race that 3b's accept-set already handled. Fix: widened 3a's accept-set so `chunked | contextualized | embedded | ready` all count as chunking-success (with comment updated to cite Phase 3b/3c chain). Re-ran 3a → 18/18. Final sweep: **0:16/16 · 1a:17/17 · 1b:21/21 · 1c:20/20 · 2a:17/17 · 2b:15/15 · 3a:18/18 · 3b:15/15 · 3c:15/15 — all GREEN**. Convention reinforced (matches 0009 CHECK convention): every accept-set in a verify script writes all currently-planned future states. Phase 3c officially shipped. | Aniket |
+| 2026-05-24 | **Phase 3b-bis G1 ✅ + G3 ✅ — plan signed off; red skeletons land.** Spec at `tests/specs/phase_3b_bis.md`. 6 new tests in `tests/test_contextualization_gemini_unit.py` (mocked `google.genai.Client.aio.models.generate_content` mirroring the `_MockAnthropicClient` pattern from 3b for side-by-side reviewability — same `last_kwargs` capture + `raise_exc` injection). Tests cover decisions #1/#3/#4/#6/#7/#8/#9 from §5.8.1. 1 mutated test: `tests/test_contextualization_unit.py::test_contextualizer_factory_returns_identity_when_no_api_key` renamed to `test_contextualizer_factory_selector_matrix` and widened from a 2-case binary check to an 8-case matrix covering all `KB_CONTEXTUALIZER` values (auto+none/auto+gemini/auto+anthropic/auto+both/explicit-gemini/explicit-anthropic/explicit-identity/bogus→ValueError). Decision #10 (worker test parameterization) deferred to G4 — it's a code-only refactor with no new assertion. Run state: 7/7 fail (RED expected); rest of suite 231/231 pass — no collateral damage. G4 opens: implement `GeminiContextualizer` (~50 LOC mirroring `AnthropicContextualizer` shape, swap to `google-genai` client) + widen `make_contextualizer()` to read `KB_CONTEXTUALIZER` with auto-probe. | Aniket |
+| 2026-05-23 | **Phase 3b-bis G1 🟡 OPEN — Gemini Contextualizer adapter plan drafted.** Motivation: interview-submission demo runs on a single Gemini API key. Without 3b-bis, `KB_ANTHROPIC_API_KEY` unset → `IdentityContextualizer` no-ops contextual retrieval (Anthropic's 67% retrieval failure reduction is silently disabled). With 3b-bis, a `GeminiContextualizer` lands alongside `AnthropicContextualizer` and the factory `make_contextualizer()` is widened to a 4-value selector (`KB_CONTEXTUALIZER ∈ {gemini, anthropic, identity, auto}`, default `auto` probes Gemini key → Anthropic key → Identity). **Scope is deliberately tight:** no migration, no lifecycle change, no API contract change. Reuses §5.8's `Contextualizer` Protocol verbatim, the Anthropic cookbook prompt verbatim (model-agnostic recipe), and the worker-level tests via parameterization on `KB_CONTEXTUALIZER`. Adds 1 new unit-test file (~6 tests) + extends `verify_phase_3b.sh` with a Gemini-path E2E branch. Decision #4 captures the Gemini caching semantics: `cache_creation_input_tokens` repurposed to hold Gemini's `prompt_token_count` (billed-input tokens, no explicit cache used at demo scale; revisit at scale). Decision #2 establishes the auto-selector probing order so the demo is zero-config when only `KB_GEMINI_API_KEY` is set. §5.8.1 added to build_tracker; §5 phase table gains a 3b-bis row. Estimated wall-clock once signed off: ~1 hr for G3+G4+G5 combined (adapter pattern is already paved). Awaiting Aniket sign-off on the plan. | Aniket |
 
 ---
 
