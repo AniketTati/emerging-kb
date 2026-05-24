@@ -40,7 +40,7 @@ DB_PSQL() {
 }
 
 # Selected phases — default to all 12 in order; CLI args can subset.
-ALL_PHASES=(0 1a 1b 1c 2a 2b 2c 3a 3b 3c 3d 3e 4 5 6 7 8a 8b 8c)
+ALL_PHASES=(0 1a 1b 1c 2a 2b 2c 3a 3b 3c 3d 3e 4 5 6 7 8a 8b 8c 8d)
 if (( $# > 0 )); then
     PHASES=("$@")
 else
