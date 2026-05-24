@@ -180,7 +180,7 @@ for _ in $(seq 1 180); do
     s=$(curl -sS "http://localhost:8000/files/$pdf_id" -H "X-Test-Workspace: $WS_A" \
          | python3 -c "import sys,json; print(json.loads(sys.stdin.read()).get('lifecycle_state',''))")
     # Phase 3c chained embed_file may race past 'contextualized' to 'embedded'.
-    if [[ "$s" == "contextualized" || "$s" == "embedded" || "$s" == "raptor_building" || "$s" == "mentions_extracting" || "$s" == "fields_extracting" || "$s" == "units_extracting" || "$s" == "ready" ]]; then contextualized=1; break; fi
+    if [[ "$s" == "contextualized" || "$s" == "embedded" || "$s" == "raptor_building" || "$s" == "mentions_extracting" || "$s" == "fields_extracting" || "$s" == "units_extracting" || "$s" == "entities_extracting" || "$s" == "ready" ]]; then contextualized=1; break; fi
     if [[ "$s" == "failed" ]]; then break; fi
     sleep 2
 done
