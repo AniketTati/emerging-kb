@@ -1569,16 +1569,236 @@ async def extract_atomic_units_file_impl(file_id: str) -> None:
                             conn, unit_id=uid, rarity_score=float(sc),
                         )
 
+            # Phase 6 §5.13 #9: transition to entities_extracting (was 'ready'
+            # in 5c; Phase 6 inserts schema-driven extraction before ready).
             await transition_lifecycle(
                 conn,
                 workspace_id=workspace_id_str,
                 file_id=file_id,
-                to_state="ready",
+                to_state="entities_extracting",
                 event="atomic_units_extracted",
                 payload={
                     "unit_type": unit_type or "none",
                     "unit_count": len(units),
                     "plugin": plugin.__class__.__name__ if plugin else "none",
+                },
+            )
+
+    # Phase 6 §5.13 #1: chain extract_schema_entities_file in a SEPARATE tx.
+    try:
+        await procrastinate_app.configure_task(
+            name="extract_schema_entities_file"
+        ).defer_async(file_id=file_id)
+    except Exception:  # noqa: BLE001
+        traceback.print_exc()
+
+
+# ---------------------------------------------------------------------------
+# Phase 6 — extract_schema_entities_file_impl
+# ---------------------------------------------------------------------------
+
+
+async def extract_schema_entities_file_impl(file_id: str) -> None:
+    """Run Gemini structured-output extraction per active schema_entity for
+    the file's inferred_doc_type. Write extracted_entities rows with
+    per-field citations + lineage_path. Advance lifecycle to `ready`.
+
+    Per build_tracker §5.13 (13 locked decisions).
+
+    Per-stage idempotency: returns immediately if already at `ready`.
+    """
+    import os
+
+    from kb.config import get_settings
+    from kb.domain.extracted_entities import (
+        count_extracted_entities_for_file,
+        delete_extracted_entities_for_file,
+        insert_extracted_entity,
+        read_active_schemas_for_doctype,
+        read_contextual_chunks_for_extraction,
+        read_schema_entities_with_fields,
+        update_lineage,
+    )
+    from kb.extraction.entities import (
+        SchemaEntityRequest,
+        SchemaExtractionError,
+        build_chunk_indexed_text,
+        make_schema_driven_extractor,
+    )
+    from kb.extraction.lineage import assign_lineage_for_entity
+
+    settings = get_settings()
+    db_url = settings.database_url
+
+    # Phase 1: state check + read schemas + chunks.
+    inferred_doc_type: str | None = None
+    workspace_id_str = ""
+    schemas_with_entities: list[dict] = []
+    chunks: list[tuple[str, str]] = []
+
+    async with open_connection(db_url) as conn:
+        async with conn.transaction():
+            cur = await conn.execute(
+                "SELECT workspace_id, lifecycle_state, inferred_doc_type "
+                "FROM files WHERE id = %s",
+                (file_id,),
+            )
+            row = await cur.fetchone()
+            if row is None:
+                raise FileNotFoundError(file_id)
+            workspace_id, lifecycle_state, inferred_doc_type = row
+
+            if lifecycle_state in ("ready", "failed", "deleted"):
+                return
+            if lifecycle_state != "entities_extracting":
+                return
+
+            workspace_id_str = str(workspace_id)
+            await conn.execute(
+                "SELECT set_config('app.workspace_id', %s, true)",
+                (workspace_id_str,),
+            )
+
+            # No matching schema? Decision #4: no-op advance to ready.
+            if not inferred_doc_type:
+                inferred_doc_type = "unknown"
+            active_schemas = await read_active_schemas_for_doctype(
+                conn,
+                workspace_id=workspace_id_str,
+                inferred_doc_type=inferred_doc_type,
+            )
+            for schema_id, schema_name in active_schemas:
+                entities = await read_schema_entities_with_fields(
+                    conn, schema_id=schema_id,
+                )
+                for e in entities:
+                    e["schema_id"] = schema_id
+                    e["schema_name"] = schema_name
+                    schemas_with_entities.append(e)
+
+            if schemas_with_entities:
+                chunks = await read_contextual_chunks_for_extraction(
+                    conn, file_id=file_id,
+                )
+
+    # Phase 2: LLM calls (parallel under semaphore).
+    extractor = make_schema_driven_extractor()
+    concurrency = int(os.environ.get("KB_ENTITY_CONCURRENCY") or 4)
+    semaphore = asyncio.Semaphore(concurrency)
+    chunk_indexed_text = build_chunk_indexed_text(chunks) if chunks else ""
+
+    async def _extract_one(entity_def: dict):
+        async with semaphore:
+            request = SchemaEntityRequest(
+                schema_entity_name=entity_def["entity_name"],
+                schema_entity_description=entity_def.get("entity_description") or "",
+                field_defs=entity_def["field_defs"],
+                chunk_indexed_text=chunk_indexed_text,
+            )
+            try:
+                result = await extractor.extract(request=request)
+                return entity_def, result
+            except SchemaExtractionError:
+                traceback.print_exc()
+                return entity_def, None
+
+    results: list[tuple[dict, Any]] = []
+    if schemas_with_entities and chunks:
+        results = await asyncio.gather(*(
+            _extract_one(ed) for ed in schemas_with_entities
+        ))
+
+    # Phase 3: atomic write — DELETE existing + INSERT new + lineage in one tx.
+    total_inserted = 0
+    model_id_used = "identity"
+    async with open_connection(db_url) as conn:
+        async with conn.transaction():
+            await conn.execute(
+                "SELECT set_config('app.workspace_id', %s, true)",
+                (workspace_id_str,),
+            )
+            await delete_extracted_entities_for_file(conn, file_id=file_id)
+
+            # PASS 1: insert all entities (no lineage yet).
+            inserted: list[tuple[str, str]] = []  # (entity_id, schema_entity_id)
+            for entity_def, result in results:
+                if result is None or not result.instances:
+                    continue
+                model_id_used = result.model_id
+                schema_entity_id = entity_def["entity_id"]
+                for instance in result.instances:
+                    # Resolve chunk_index → contextual_chunk_id.
+                    citation_map: dict[str, str] = {}
+                    for field_name, chunk_index in (instance.citations or {}).items():
+                        if 0 <= chunk_index < len(chunks):
+                            citation_map[field_name] = chunks[chunk_index][0]
+                    eid = await insert_extracted_entity(
+                        conn,
+                        schema_entity_id=schema_entity_id,
+                        file_id=file_id,
+                        workspace_id=workspace_id_str,
+                        fields=instance.fields,
+                        citations=citation_map,
+                        model_id=result.model_id,
+                    )
+                    inserted.append((eid, schema_entity_id))
+                    total_inserted += 1
+
+            # PASS 2: topologically sort `inserted` so parents come BEFORE
+            # children, then assign lineage in that order. Otherwise Clause
+            # (whose parent is Doc) could be processed before Doc when
+            # schema_entity created_at timestamps tie — Doc's lineage_path
+            # would still be NULL when Clause queries it.
+            cur = await conn.execute(
+                "SELECT to_entity_id::text, from_entity_id::text "
+                "FROM schema_relationships "
+                "WHERE workspace_id = %s AND kind = 'contains' "
+                "AND lifecycle_state = 'active'",
+                (workspace_id_str,),
+            )
+            parent_se_map: dict[str, str] = {
+                child: parent for child, parent in await cur.fetchall()
+            }
+
+            def _depth(seid: str, memo: dict[str, int]) -> int:
+                if seid in memo:
+                    return memo[seid]
+                if seid not in parent_se_map:
+                    memo[seid] = 0
+                    return 0
+                memo[seid] = 1 + _depth(parent_se_map[seid], memo)
+                return memo[seid]
+
+            depth_memo: dict[str, int] = {}
+            inserted.sort(key=lambda t: _depth(t[1], depth_memo))
+
+            # PASS 3: assign lineage (parents now guaranteed to have lineage_path).
+            for entity_id, schema_entity_id in inserted:
+                parent_id, lineage_path = await assign_lineage_for_entity(
+                    conn,
+                    workspace_id=workspace_id_str,
+                    file_id=file_id,
+                    entity_id=entity_id,
+                    schema_entity_id=schema_entity_id,
+                )
+                await update_lineage(
+                    conn,
+                    entity_id=entity_id,
+                    parent_entity_id=parent_id,
+                    lineage_path=lineage_path,
+                )
+
+            await transition_lifecycle(
+                conn,
+                workspace_id=workspace_id_str,
+                file_id=file_id,
+                to_state="ready",
+                event="schema_entities_extracted",
+                payload={
+                    "entity_count": total_inserted,
+                    "schema_entity_calls": len(results),
+                    "inferred_doc_type": inferred_doc_type,
+                    "model_id": model_id_used,
                 },
             )
 
@@ -1655,11 +1875,24 @@ async def extract_fields_file(file_id: str) -> None:
 async def extract_atomic_units_file(file_id: str) -> None:
     """Wire-level Procrastinate task. Delegates to the testable impl.
 
-    Phase 5c: dispatches a doc-type-aware plugin (clauses / transactions /
-    rows / none) → atomic_units rows with JIT anomaly scoring → final
-    transition to `ready`. Last stage in the ingestion chain.
+    Phase 5c + 6: dispatches a doc-type-aware plugin (clauses / transactions /
+    rows / none) → atomic_units rows with JIT anomaly scoring → chains
+    extract_schema_entities_file. Lifecycle: units_extracting →
+    entities_extracting (or failed).
     """
     await extract_atomic_units_file_impl(file_id)
+
+
+@procrastinate_app.task(name="extract_schema_entities_file", queue="kb", pass_context=False)
+async def extract_schema_entities_file(file_id: str) -> None:
+    """Wire-level Procrastinate task. Delegates to the testable impl.
+
+    Phase 6: runs Gemini structured-output extraction per active schema_entity
+    for the file's inferred_doc_type → extracted_entities rows with per-field
+    citations + lineage_path ltree → final transition to `ready`. Last stage
+    in the ingestion chain.
+    """
+    await extract_schema_entities_file_impl(file_id)
 
 
 # ---------------------------------------------------------------------------

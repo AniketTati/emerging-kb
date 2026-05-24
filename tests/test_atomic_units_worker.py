@@ -112,7 +112,7 @@ async def test_extract_atomic_units_xlsx_writes_rows(client, db_url_superuser):
         cur = await conn.execute(
             "SELECT lifecycle_state FROM files WHERE id = %s", (file_id,),
         )
-        assert (await cur.fetchone())[0] == "ready"
+        assert (await cur.fetchone())[0] == "entities_extracting"
 
         cur = await conn.execute(
             "SELECT count(*), unit_type FROM atomic_units "
@@ -146,7 +146,7 @@ async def test_extract_atomic_units_unknown_doctype_advances_with_no_units(
         cur = await conn.execute(
             "SELECT lifecycle_state FROM files WHERE id = %s", (file_id,),
         )
-        assert (await cur.fetchone())[0] == "ready"
+        assert (await cur.fetchone())[0] == "entities_extracting"
 
         cur = await conn.execute(
             "SELECT count(*) FROM atomic_units WHERE file_id = %s", (file_id,),

@@ -278,7 +278,7 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
 | **5a** | Mention extraction — NER over contextual_chunks → `extracted_mentions` | ✅ | — | ✅ | ✅ | ✅ | §5.12.1 (11 decisions). 13/13 5a pytest. Lifecycle adds `mentions_extracting`. |
 | **5b** | Emergent fields + doc-type classifier + auto-promotion to typed schema | ✅ | — | ✅ | ✅ | ✅ | §5.12.2 (11 decisions). 18/18 5b pytest. Lifecycle adds `fields_extracting`. Auto-promotion writes to existing `schema_fields` with `auto_promoted=true`. |
 | **5c** | Atomic units + per-type rarity / anomaly scoring (clauses + transactions + rows plugins) | ✅ | — | ✅ | ✅ | ✅ | §5.12.3 (10 decisions). 19/19 5c pytest. Lifecycle adds `units_extracting`; final transitions to `ready`. |
-| **6** | Schema-driven extraction (Gemini structured outputs) | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | L4/L5 projection |
+| **6** | Schema-driven extraction (Gemini structured outputs) + lineage paths | ✅ | — | ✅ | ✅ | ✅ | All gates green 2026-05-25. 370/370 pytest. verify_phase_6.sh 10/10. Cross-phase sweep 15/15 GREEN. Branch `phase-6/schema-extraction`. |
 | **7** | Identity resolution (deterministic→embedding→LLM judge→union-find) | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | Entity merge worker + admin endpoint |
 | **8** | Query planner + rewriting (Step-Back + HyDE + Query2Doc) + parallel retrieval + RRF + rerank + CRAG gate + Astute generation | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | The big one — split into sub-phases at G1 |
 | **9** | Audit log + lifecycle visibility + idempotency | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | SSE endpoint for upload-page status |
@@ -2215,6 +2215,56 @@ When Aniket approves this plan, the Phase 4 G1 cell in §5 flips ⬜ → ✅ and
 **Phase 5 G5 — what "green" means:**
 - `scripts/verify_phase_5.sh` — single end-to-end script. Uploads a contract PDF (CUAD sample or tiny.pdf as proxy), waits through chain to `ready`, asserts: `extracted_mentions` rows exist · `proposed_fields` rows exist · `inferred_schema_fields` row(s) exist · `atomic_units` rows exist with rarity_score · doc_type classified on `files.inferred_doc_type`.
 - Cross-phase sweep across all **14 verify scripts** (0/1a/1b/1c/2a/2b/2c/3a/3b/3c/3d/3e/4/5) GREEN.
+
+---
+
+### 5.13 Phase 6 plan — Schema-driven extraction + lineage paths (G1 ✅ SIGNED OFF · G2 — no-op)
+
+> **Status:** G1 ✅ + G2 — signed off 2026-05-25. Single Phase (no sub-split — lineage assignment is a 50-line extension on top of extraction). Per user direction: build end-to-end, decisions chosen by Claude per architecture §5 steps 18 + 18.5 + Design 7 (lineage ltree).
+>
+> **Architecture mapping:**
+> - Step 18 — schema-driven extraction. Gemini structured outputs against active schemas matching the file's `inferred_doc_type` → `extracted_entities` table with per-field citations.
+> - Step 18.5 — lineage path assignment. Walk `schema_relationships.kind='contains'` to find parent schema_entity → look up most-recently-created matching extracted_entity in the same file → compute `lineage_path = parent.lineage_path || entity.id` (ltree).
+>
+> **Worker chain extension:** `units_extracting → entities_extracting → ready`. Phase 6 inserts ONE new state between 5c and ready.
+>
+> **What "phase 6 complete" means:** uploading a contract PDF through the chain produces `extracted_entities` rows whose `fields` jsonb contains typed values (per the auto-promoted schema from Phase 5b) with `citations` jsonb mapping field-name → contextual_chunk_id, and whose `lineage_path` ltree captures the parent chain.
+
+**Decisions locked:**
+
+| # | Decision | Choice | Rationale |
+|---|---|---|---|
+| 1 | Auto-chained (not explicit trigger) | YES — runs per-doc, automatically after 5c. | Per architecture step 18 ("runs ONLY on docs whose classified type matches"); explicit trigger is for corpus-wide rebuilds (Phase 3e), not per-doc extraction. |
+| 2 | LLM | **Gemini 2.5 Flash** structured outputs (`response_schema`) for typed JSON. 3-impl factory: `KB_ENTITY_EXTRACTOR ∈ {gemini, anthropic, identity, auto}`. Identity returns `[]` (CI / no-key). | Mirrors 5a/5b/5c factory pattern. Gemini's response_schema is the cleanest way to constrain output to the schema_fields types. |
+| 3 | Schema source | Active `schemas` in workspace whose **name matches** either `auto:<inferred_doc_type>` (auto-promoted by 5b) OR a user-created schema. Each schema's `schema_entities` provides the entity types. | Both auto-promoted and user-defined schemas drive extraction. Phase 1a-c built the user-creation path; 5b added auto-promotion. |
+| 4 | No-matching-schema path | If the file's `inferred_doc_type` has no active schema, extract_schema_entities is a NO-OP — advances `entities_extracting → ready` without writing any extracted_entities. Worker doesn't fail. | Handwritten notes, unknown doc-types, etc. shouldn't block ingestion. They just don't get typed extraction. |
+| 5 | Citation granularity | Per-field **chunk_id** citations (not char spans). Worker passes chunk-numbered text (`[CHUNK_0] ... [CHUNK_1] ...`) to the LLM; LLM cites by chunk_index per field; worker resolves chunk_index → `contextual_chunks.id`. | Char-span citations are Wave B (would need offset-aware LLM + extra parsing). Chunk-level citations meet the README "cited responses" promise and are robust to LLM imprecision. |
+| 6 | Multi-instance entities | LLM returns a LIST per schema_entity (`{instances: [{...}, ...]}`). Each instance → one `extracted_entities` row. Schema_entity-by-schema_entity LLM calls (parallelized via `asyncio.Semaphore(KB_ENTITY_CONCURRENCY=4)`). | Contracts have many clauses, statements have many transactions. One-LLM-call-per-entity-type lets each call use a tight `response_schema` constrained to that entity's fields. |
+| 7 | Lineage assignment | Done in same tx as extraction. For each extracted_entity, look up parent via `schema_relationships.kind='contains' AND to_entity_id = my_schema_entity_id`. Find the most-recently-created `extracted_entities` row in the SAME file whose `schema_entity_id = relationship.from_entity_id`. Set `parent_entity_id` + `lineage_path = parent.lineage_path || entity_id`. If no parent found, `lineage_path = entity_id` (root). | Architecture Design 7 verbatim. Wave A simplification: pick the most-recently-created parent in the same file (most contracts have one root). Wave B / Phase 7 add proper resolution when multiple parents are plausible. |
+| 8 | Storage shape | `extracted_entities(id, schema_entity_id FK, file_id FK, workspace_id, parent_entity_id NULL FK self, lineage_path ltree NULL, fields jsonb, citations jsonb, model_id, created_at)`. RLS day-1; REVOKE UPDATE on `kb_app` (immutable; re-extract = DELETE+INSERT in tx). | `fields` = `{field_name: value}`. `citations` = `{field_name: contextual_chunk_id}`. Standard pattern. |
+| 9 | Lifecycle widening | Add `entities_extracting`. CHECK widens to include it. Worker chain: 5c's end-state changes from `ready` → `entities_extracting`. 6 transitions to `ready`. Forward-compat: just this one state added (don't know what Phase 7+ will need yet). | Same surgical pattern as 5a's lifecycle change. |
+| 10 | Idempotency | At start: DELETE existing extracted_entities WHERE file_id; then INSERT new ones in same tx. | Re-running task = same output. |
+| 11 | Re-extract on schema change | **Deferred to Phase 9** admin endpoint. Wave A only runs Phase 6 for NEW uploads; existing files at `ready` stay as-is even if a new field gets auto-promoted later. | Schema-versioning re-extraction is a Phase 9 admin operation (already deferred there per architecture). |
+| 12 | ltree extension | Already enabled in `0001_extensions.sql` (Phase 0). | Pre-existing; nothing to add. |
+| 13 | Per-entity concurrency | `asyncio.Semaphore(KB_ENTITY_CONCURRENCY=4)` per file (parallel LLM calls across schema_entities). | Free-tier safe; bump for paid tier. |
+
+**Files:**
+- `migrations/sql/0017_extracted_entities.sql` — new table + lifecycle CHECK widening
+- Widen `0009_chunks.sql` + `0012_raptor.sql` + `0014_mentions.sql` CHECK to include `entities_extracting` (forward-compat, §0.15)
+- `src/kb/extraction/entities.py` — `SchemaDrivenExtractor` Protocol + Gemini/Anthropic/Identity impls + factory
+- `src/kb/extraction/lineage.py` — `compute_lineage_path()` walks schema_relationships
+- `src/kb/domain/extracted_entities.py` — repo
+- `src/kb/workers/tasks.py` — change 5c end-state to `entities_extracting` + add `extract_schema_entities_file_impl` + register task
+- `tests/test_entities_unit.py` + `tests/test_entities_worker.py` + `tests/test_lineage_unit.py`
+- Update `tests/test_atomic_units_worker.py` — assertion `ready` → `entities_extracting` (matches lifecycle change)
+- `scripts/verify_phase_6.sh` — end-to-end check (POST tiny.xlsx, wait `ready`, assert extracted_entities + lineage)
+- Widen `scripts/verify_phase_5.sh` lifecycle assertions
+- Widen 6 prior verify scripts (2a/2b/2c/3a/3b/3c/3d) accept-sets to include `entities_extracting`
+- Add `6` to `scripts/verify_sweep.sh` ALL_PHASES + `extracted_entities` to TRUNCATE list
+
+**Phase 6 G5 — what "green" means:**
+- `scripts/verify_phase_6.sh` standalone covers: extracted_entities table + RLS + lifecycle CHECK widening + ltree extension + tiny.xlsx E2E to `ready` + lifecycle history contains `entities_extracting → ready` transition + Phase 6 pytest.
+- Cross-phase sweep across all **15 verify scripts** (0/1a/1b/1c/2a/2b/2c/3a/3b/3c/3d/3e/4/5/6) GREEN.
 
 ---
 
