@@ -155,7 +155,7 @@ QA gates this at G1.5b — every prototype page is grep'd for the forbidden voca
 ## 1. Now / Next / Blocked
 
 **Now:** 🎉 **Wave A FULLY COMPLETE.** Phase 3e ✅ shipped — corpus-level RAPTOR (plan at §5.10.1, **15 decisions**). Phase 3d also ✅ — per-doc RAPTOR (plan at §5.10, **16 decisions** revised post-deliberation; the deliberation flips that earned their keep: (1) discriminated edge FK + L1 stays in contextual_chunks — saves 30 GB at 100K-doc scale; (2) `raptor_building` intermediate lifecycle state — observability for the multi-stage build; (3) `MAX_LEVELS` bumped 4→6 to cover corpus-tree depth `log₈(100K)≈5.5`; (4) forward-compat `raptor_nodes.scope` enum + nullable `file_id` locked at 3d's 0012 migration — Phase 3e needed no separate migration). **286/286 pytest** in 81s. verify_phase_3e.sh 13/13. Cross-phase sweep across **all 12 verify scripts** (0/1a/1b/1c/2a/2b/2c/3a/3b/3c/3d/3e): **205 checks total, 12/12 GREEN on first pass** — no regressions, no forward-compat fixes needed (3e doesn't change any file lifecycle states; corpus tree is workspace-scoped, not file-scoped). Branch `phase-3/chunking-raptor` carries 7 commit-sets (3a/3b/3c/3b-bis/2c/3d/3e) — **PR #7 open against main**. Architecture's "RAPTOR builds the corpus hierarchy" promise (line 41) is now backed by code at 100K-doc scale.
-**Next:** **Phase 5 ✅ FULLY GREEN** — all 3 sub-phases (5a + 5b + 5c) shipped end-to-end 2026-05-25 on `phase-5/extraction`. **346/346 pytest in 87.29s** · `verify_phase_5.sh` 16/16 standalone · cross-phase sweep across all **14 verify scripts GREEN**. Worker chain extends `raptor_building → mentions_extracting → fields_extracting → units_extracting → ready` (3 new lifecycle states). 3 new migrations (0014/0015/0016). 3 new tables (`extracted_mentions`, `proposed_fields`, `inferred_schema_fields`, `atomic_units`). 2 column adds (`files.inferred_doc_type`, `schema_fields.auto_promoted`). 50 new tests across 6 test files. Auto-promotion to typed schema works end-to-end (5 docs of same doc-type → field auto-INSERTed into `schema_fields` with `auto_promoted=true`). Plugin registry covers clauses/transactions/rows (Wave A demo corpus: CUAD + bank statements + vendor xlsx). **Phase 6 opens next** — schema-driven extraction (Gemini structured outputs against the auto-promoted + user-defined schema → `extracted_entities` table). Per architecture §12 line 1166.
+**Next:** **Phase 7 ✅ FULLY GREEN** — identity resolution shipped end-to-end 2026-05-25 on `phase-7/identity-resolution` (built on `phase-6/schema-extraction` base). **407/407 pytest in 87s** · `verify_phase_7.sh` 16/16 standalone · cross-phase sweep across all **16 verify scripts GREEN**. Worker chain extends `entities_extracting → identity_resolving → ready` (one new lifecycle state). New migration 0018_entities.sql with `entities` + `mention_to_entity` tables, HNSW partial index on `entities.embedding`, UNIQUE index on `(workspace_id, lower(canonical_name), entity_type)` for stage-a deterministic match. 37 new tests across 3 files including dedicated embedding-blocking coverage. **Phase 8 opens next** — "the big one" per architecture §12 line 1167. Split at G1 into 8a/8b/8c/8d/8e/8f (query rewriting · 10-channel retrieval · rerank · CRAG gate · Astute generation · HTTP endpoints).
 **Blocked on:** nothing.
 
 ---
@@ -279,11 +279,11 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
 | **5b** | Emergent fields + doc-type classifier + auto-promotion to typed schema | ✅ | — | ✅ | ✅ | ✅ | §5.12.2 (11 decisions). 18/18 5b pytest. Lifecycle adds `fields_extracting`. Auto-promotion writes to existing `schema_fields` with `auto_promoted=true`. |
 | **5c** | Atomic units + per-type rarity / anomaly scoring (clauses + transactions + rows plugins) | ✅ | — | ✅ | ✅ | ✅ | §5.12.3 (10 decisions). 19/19 5c pytest. Lifecycle adds `units_extracting`; final transitions to `ready`. |
 | **6** | Schema-driven extraction (Gemini structured outputs) + lineage paths | ✅ | — | ✅ | ✅ | ✅ | All gates green 2026-05-25. 370/370 pytest. verify_phase_6.sh 10/10. Cross-phase sweep 15/15 GREEN. Branch `phase-6/schema-extraction`. |
-| **7** | Identity resolution (deterministic→embedding→LLM judge→union-find) | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | Entity merge worker + admin endpoint |
-| **8** | Query planner + rewriting (Step-Back + HyDE + Query2Doc) + parallel retrieval + RRF + rerank + CRAG gate + Astute generation | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | The big one — split into sub-phases at G1 |
-| **9** | Audit log + lifecycle visibility + idempotency | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | SSE endpoint for upload-page status |
-| **10a** | UI — Upload (drag-drop · live per-doc per-stage status via SSE) | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | Next.js page + tests · matches `prototype/upload.html` |
-| **10b** | UI — Chat (front door · streamed answers · right-side citation cards · plan inspector) + universal Doc Detail slide-in panel | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | `chat.html` + `doc-detail.html` |
+| **7** | Identity resolution (deterministic→embedding→LLM judge→union-find) | ✅ | — | ✅ | ✅ | ✅ | All gates green 2026-05-25 (§5.14, 14 decisions). 407/407 pytest. verify_phase_7.sh 16/16. Cross-phase sweep 16/16 GREEN. Branch `phase-7/identity-resolution`. |
+| **8** | Query planner + rewriting (Step-Back + HyDE + Query2Doc) + parallel retrieval + RRF + rerank + CRAG gate + Astute generation | 🟡 | — | ⬜ | ⬜ | ⬜ | G1 DRAFT at §5.15 — split into 8a-f. Per architecture "the big one"; treat each sub-phase as its own G1→G5 cycle. |
+| **9** | Audit log + lifecycle visibility + idempotency | 🟡 | — | ⬜ | ⬜ | ⬜ | G1 DRAFT at §5.16. SSE for Upload status + Chat replay + GET /audit. |
+| **10a** | UI — Upload (drag-drop · live per-doc per-stage status via SSE) | 🟡 | — | ⬜ | ⬜ | ⬜ | G1 DRAFT at §5.17. Next.js 15 per architecture. |
+| **10b** | UI — Chat (front door · streamed answers · right-side citation cards · plan inspector) + universal Doc Detail slide-in panel | 🟡 | — | ⬜ | ⬜ | ⬜ | G1 DRAFT at §5.17. |
 | **10c** | UI — Explore (Knowledge Explorer: search + left-rail facets · progressive expansion) | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | `explore.html` |
 | **10d** | UI — Schema Studio (6 tabs: Typed · Inferred · Collisions · Vocabulary · Lineage · Versions · schema-swap affordance) | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | `schema-studio.html` · covers Designs 6 / 7 / 9 UI surfaces |
 | **10e** | UI — Dashboard (counts + sparklines · live "what just learned" SSE feed · needs-attention · ingestion/query/cost cards) | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | `dashboard.html` |
@@ -2268,6 +2268,169 @@ When Aniket approves this plan, the Phase 4 G1 cell in §5 flips ⬜ → ✅ and
 
 ---
 
+### 5.14 Phase 7 plan — Identity resolution (G1 ✅ + G2 — + G3 ✅ + G4 ✅ + G5 ✅ SIGNED OFF)
+
+> **Status:** All gates green 2026-05-25. 407/407 pytest in 87s. verify_phase_7.sh 16/16 standalone. Cross-phase sweep across all 16 verify scripts: 16/16 GREEN. Per architecture §5 step 15: deterministic-key match → embedding blocking → LLM-judge → cascading-create. Resolves `extracted_mentions` (Wave A scope) to a canonical `entities` directory. Decision #14 explicitly defers persistent union-find clustering to Wave B (per-file cascade-on-insert is the equivalent for Wave A scope).
+
+**Scope (in / out):**
+
+**In scope:**
+- New table `entities` — workspace-scoped canonical entity directory with HNSW-indexed embedding for cross-doc nearest-neighbor.
+- New table `mention_to_entity` — every extracted_mention links to exactly one canonical entity.
+- New lifecycle state `identity_resolving` between `entities_extracting` and `ready`.
+- New worker stage `resolve_identities_file_impl(file_id)` chained after `extract_schema_entities_file_impl`. Pipeline:
+  1. **Deterministic** match — lowercased `canonical_name + entity_type` against the workspace's existing entities. O(1) via UNIQUE index.
+  2. **Embedding blocking** — embed the mention text via the Phase 3c factory; HNSW nearest-neighbor in `entities` with `entity_type` filter; auto-match if cosine ≥ 0.92.
+  3. **LLM judge** — borderline cosine ∈ [0.85, 0.92] → 3-impl factory (`KB_IDENTITY_JUDGE`) returns same/different.
+  4. **Create new** — no match → INSERT into `entities` + link.
+- Per-call idempotency: DELETE existing `mention_to_entity` rows for this file's mentions, then re-resolve.
+- HNSW index on `entities.embedding` (`halfvec_cosine_ops`, `m=16`, `ef_construction=200` — same params as Phase 4).
+- Forward-compat: `0009 + 0012 + 0014 + 0017` lifecycle CHECK widened to include `identity_resolving`.
+- 6 verify scripts widened (`2a/2b/2c/3a/3b/3c` accept-sets include `identity_resolving`).
+- 1 test fix: `test_entities_worker.py` updated to assert end-state `identity_resolving` (was `ready`).
+- New: `scripts/verify_phase_7.sh` covering DDL invariants + RLS + HNSW index + end-to-end (xlsx through chain to `ready` with 0 mentions → 0 entities, well-formed) + pytest.
+
+**Out of scope (deferred):**
+- `extracted_entities` resolution → Wave B. Typed entities have a fields-jsonb that needs schema-aware similarity; defer until Phase 8 informs the algorithm.
+- Cross-workspace identity → Wave C. Permissions model dependent.
+- Identity-update audit_log writes → Phase 9.
+- Re-resolution endpoint (`POST /entities/resolve`) → Phase 9 admin surface.
+- Persistent union-find clustering (Wave B) — Wave A re-runs are per-file so chains form across files via shared canonical_name match.
+- ColPali / image-mention resolution — Wave C.
+
+**Decisions locked at G1 (changes require re-opening G1):**
+
+| # | Decision | Choice | Rationale |
+|---|---|---|---|
+| 1 | Trigger | Auto-chained after `extract_schema_entities_file_impl` (Phase 6). Lifecycle: `entities_extracting → identity_resolving → ready`. | Per-doc trigger consistent with prior chained phases (3a→3b→3c→3d→5a→5b→5c→6). |
+| 2 | Wave A scope | Resolve `extracted_mentions` only. `extracted_entities` typed-row resolution deferred. | Mention resolution unblocks Phase 8's mentions_exact channel. Typed-row resolution needs Phase 8 retrieval feedback. |
+| 3 | Algorithm | 4 stages: (a) deterministic exact lowercased name+type; (b) embedding nearest-neighbor in entities table (cosine ≥ 0.92 = auto-match); (c) LLM-judge on borderline cosine ∈ [0.85, 0.92]; (d) else create new entity. | Industry-standard ER cascade (deterministic-first to avoid LLM costs on easy cases; embeddings handle alias variants; LLM only for borderline). |
+| 4 | Storage — `entities` | `entities(id uuid PK, workspace_id uuid, canonical_name text, entity_type text, embedding halfvec(3072) NULL, mention_count int DEFAULT 1, created_at, updated_at)`. RLS day-1. UPDATEable (mention_count + updated_at refresh; name occasionally if Phase 9 admin renames). | Workspace-scoped canonical directory. `mention_count` precomputed for ranking. Embedding nullable so deterministic-only path doesn't gate on embedder availability. |
+| 5 | Storage — `mention_to_entity` | `mention_to_entity(mention_id uuid PK FK→extracted_mentions ON DELETE CASCADE, entity_id uuid FK→entities ON DELETE CASCADE, workspace_id uuid, confidence real, resolved_method text CHECK IN ('deterministic','embedding','llm_judge','identity'), created_at)`. RLS. Immutable (REVOKE UPDATE). | One mention → one entity (PK on mention_id enforces). CASCADE on mention deletion keeps tables coherent. Re-run is DELETE+INSERT (decision #8). |
+| 6 | LLM judge | 3-impl factory `KB_IDENTITY_JUDGE ∈ {gemini, anthropic, identity, auto}`. `auto` probes Gemini → Anthropic → Identity. Identity (Noop) always returns False (create new). | Same factory pattern as 3b-bis/3d/5a/5b/5c/6. Identity-False fallback is the safe choice: false-positives in identity resolution corrupt the cross-doc graph; false-negatives just create duplicate entities that can be merged later. |
+| 7 | Embedding model | Reuses Phase 3c's `make_embedder()`. Mention text → 3072-d halfvec. Same vector space as chunks/raptor. | One embedding model end-to-end keeps Phase 4 HNSW + Phase 8 dense channels coherent. |
+| 8 | Idempotency | At start: DELETE existing `mention_to_entity` WHERE mention_id IN (file's mentions); recompute resolutions in same tx. `entities` table is NOT deleted (cross-file canonical entities persist). | Re-running task = idempotent for this file's links; existing entities from other files preserved. Matches 5a/5c idempotency pattern. |
+| 9 | Lifecycle state | New: `identity_resolving`. CHECK widened in `0018_entities.sql`. Forward-compat: included in `0009/0012/0014/0017` widening per §0.15 convention. | Single new state. Worker chain extends by one stage. |
+| 10 | HNSW index on entities | Yes — `entities.embedding` gets HNSW with `halfvec_cosine_ops`, `m=16`, `ef_construction=200`. `WHERE embedding IS NOT NULL` partial index since embedding is nullable. | Step (b) needs nearest-neighbor at workspace-scale. Same params as Phase 4's chunk + raptor HNSW. |
+| 11 | Deterministic match collation | Lowercased name comparison + exact type match. UNIQUE index on `(workspace_id, lower(canonical_name), entity_type)` enforces. | "ACME Corp" and "acme corp" should collapse to one entity. Case-folded match is the cheapest way; full Unicode normalization (NFC) deferred to Wave B if international docs surface. |
+| 12 | Concurrency | Sequential per file (no semaphore). Embedder batch-call already parallelizes embedding generation; per-mention DB lookups are cheap (HNSW). | Per-file mention counts are O(100); sequential resolution is sub-second. Workspace-wide parallel resolution = Wave B. |
+| 13 | Audit log | Single lifecycle event `identities_resolved` with payload `{mention_count, deterministic, embedding, llm_judge, new}` counts. Per-mention audit deferred to Phase 9. | Consistent with prior phases' summary-payload pattern. |
+| 14 | Union-find clustering | **Wave A SKIP — equivalent outcome via cascading match BEFORE create.** The architecture §5 step 15 calls for "union-find clusters". Wave A's per-file trigger doesn't run global union-find; instead, each new mention cascades deterministic → embedding → LLM-judge and only creates a new entity if all match-stages fail. This collapses duplicates AT INSERT TIME for the per-file pipeline. **What it doesn't catch**: if two entities were created independently in early files (before either's embedding was strong enough to attract the other), they stay split. Wave B adds a workspace-wide periodic `re_resolve_workspace_impl` cron that runs proper union-find across `entities` rows + merges where LLM-judge agrees. Documented here so the Wave A simplification isn't a hidden skip. | Per-file trigger has different scope from workspace-wide re-cluster. Cheap-cascade-on-insert is the equivalent for the per-file case. Persistent union-find is its own complexity (requires Tarjan/Kruskal-style data structure or recursive CTE on entity pairs) that deserves its own G1 in Wave B. |
+
+**Files (planned at G3+G4):**
+- `migrations/sql/0018_entities.sql` — entities + mention_to_entity + lifecycle widening + HNSW + UNIQUE indexes
+- `migrations/sql/0009_chunks.sql` + `0012_raptor.sql` + `0014_mentions.sql` + `0017_extracted_entities.sql` — forward-compat widen CHECK to include `identity_resolving`
+- `src/kb/identity/__init__.py` — package docstring
+- `src/kb/identity/judge.py` — LLM judge factory (Gemini/Anthropic/Noop + parse_judgment helper)
+- `src/kb/identity/resolve.py` — algorithm constants (`EMBEDDING_HIGH_THRESHOLD=0.92`, `EMBEDDING_LOW_THRESHOLD=0.85`) + `ResolutionResult` dataclass
+- `src/kb/domain/entities.py` — repo (find_entity_deterministic, find_entity_by_embedding, insert_entity, increment_mention_count, delete_mention_to_entity_for_file, insert_mention_to_entity, read_mentions_for_file, count_*)
+- `src/kb/workers/tasks.py` — chain modification (Phase 6 end-state `ready` → `identity_resolving`) + `resolve_identities_file_impl` + Procrastinate task registration
+- `tests/specs/phase_7.md` — test spec
+- `tests/test_identity_unit.py` — pure-function tests (thresholds + JSON parser + Noop + factory matrix + Mention-embedder integration)
+- `tests/test_identity_worker.py` — testcontainer integration (4 algorithm stages + idempotency + cross-doc reuse + state guards + empty-mentions edge case)
+- `tests/test_entities_worker.py` — updated assertion `ready` → `identity_resolving`
+- 6 prior verify scripts (2a/2b/2c/3a/3b/3c) — accept-sets widened to include `identity_resolving`
+- `scripts/verify_phase_7.sh` — standalone end-to-end (compose smoke + DDL + RLS + HNSW + xlsx E2E to `ready` + lifecycle history check + Phase-7 pytest)
+- `scripts/verify_sweep.sh` — add `7` to ALL_PHASES + `entities`/`mention_to_entity` to inter-phase TRUNCATE
+
+**Phase 7 G5 — what "green" means:**
+- `scripts/verify_phase_7.sh` standalone: 12-15 checks GREEN.
+- Full pytest: prior 370 still GREEN + new ≥20 Phase 7 tests GREEN.
+- Cross-phase sweep across all 16 verify scripts (`0/1a/1b/1c/2a/2b/2c/3a/3b/3c/3d/3e/4/5/6/7`): 16/16 GREEN.
+
+**Pre-G3 consistency review checklist:**
+- [ ] Architecture §5 step 15 traceability.
+- [ ] Forward-compat: 0009 + 0012 + 0014 + 0017 widened.
+- [ ] No api_contracts.md delta (no HTTP surface this phase).
+- [ ] RLS invariant: 2 new workspace-scoped tables (entities + mention_to_entity).
+- [ ] All 4 algorithm stages covered by at least one test.
+- [ ] Identity-fallback path tested (CI without LLM key).
+- [ ] No leak into Phase 8 territory (no /search, no rerank, no CRAG).
+- [ ] No leak into Phase 9 (no admin re-resolve endpoint, no audit_log writes).
+- [ ] `audit_log` writes deferred to Phase 9.
+
+---
+
+### 5.15 Phase 8 plan — Query layer (split into 8a-f) (G1 🟡 DRAFT)
+
+> **Status:** Sub-phase split sketched per architecture §12 "the big one — split into sub-phases at G1". Each sub-phase 8a→8f is its own G1→G5 cycle (matching Phase 5's a/b/c split discipline). DO NOT treat this as signed off — each sub-phase G1 needs its own decisions table + scope + tests-spec + PR. Earlier rush-cut shipped 7 modules + 0 tests; that code was reverted. Restart from 8a properly.
+
+**Sub-phase split:**
+
+| Sub | Scope | Files |
+|---|---|---|
+| **8a** | Query rewriting: Step-Back · HyDE · Query2Doc per architecture §6 step 4. Single LLM call returns all 3 rewrites. | `kb/query/rewriter.py` |
+| **8b** | Parallel retrieval — 6 channels for Wave A (BM25 chunks · BM25 raptor · dense chunks · dense raptor · mentions exact · atomic_units rarity). RRF fusion (k=60). Skips: HippoRAG PPR (no graph yet) · ColPali (Wave C) · doc-chain (Design 3 not built) · anomaly-filter (Wave B). | `kb/query/channels.py` + `kb/query/rrf.py` |
+| **8c** | Rerank — Cohere Rerank 3.5 default; `mxbai-rerank-large-v2` local fallback; identity passthrough if both missing. 3-impl factory `KB_RERANKER`. | `kb/query/rerank.py` |
+| **8d** | CRAG gate — Gemini judges relevance of top-K post-rerank; if low → fallback path (just return BM25 top-K with low-confidence flag). | `kb/query/crag.py` |
+| **8e** | Astute generation — Gemini answer with chunk + entity + atomic-unit citations. Refusal mode when CRAG-gate fails. | `kb/query/generate.py` |
+| **8f** | HTTP surface — `POST /search` + `POST /chat` (non-streaming for Wave A; SSE streaming added at Phase 9) + `kb/api/query.py` router. | `kb/api/query.py` + `api/main.py` |
+
+**Decisions locked across all of Phase 8:**
+
+| # | Decision | Choice |
+|---|---|---|
+| 1 | LLM for rewriting + CRAG + generation | Gemini 2.5 Flash. Factory `KB_QUERY_LLM ∈ {gemini, anthropic, identity, auto}`. |
+| 2 | Top-K per channel (pre-fusion) | 20 |
+| 3 | Top-K post-fusion (pre-rerank) | 30 |
+| 4 | Top-K post-rerank (returned to chat) | 10 |
+| 5 | CRAG threshold | 0.5 average relevance score across top-10 |
+| 6 | Refusal copy | "I couldn't find sufficient evidence to answer." + raw top-3 chunks shown |
+| 7 | Conversational context | Not yet — first turn only in Wave A. Design 8 multi-turn lands in Phase 10b polish. |
+
+**Files:**
+- `src/kb/query/{__init__,rewriter,channels,rrf,rerank,crag,generate}.py`
+- `src/kb/api/query.py` (`POST /search` + `POST /chat`)
+- `migrations/sql/0019_query_audit.sql` — `query_log` table (one row per query for replayability per architecture §14)
+- Tests: `test_query_*.py`
+- `scripts/verify_phase_8.sh`
+
+---
+
+### 5.16 Phase 9 plan — Audit + lifecycle visibility + idempotency (G1 🟡 DRAFT)
+
+**In scope (Wave A — minimum needed to unblock UI):**
+- `GET /upload/:file_id/status` SSE — streams lifecycle events as they land (Upload UI consumes this).
+- `GET /audit` — list past queries (uses Phase 8's `query_log` table). Simple paginated list.
+- `GET /chat/:query_id/stream` SSE — re-stream a past query's generation (Wave A: returns the cached answer; future: re-run).
+
+**Out of scope (deferred to Phase 9b in Wave B):**
+- Hash-chained audit_log (architecture §6 mentions hash trigger — already deferred from Phase 0).
+- Re-extraction admin endpoints.
+
+**Files:**
+- `src/kb/api/sse.py` (`GET /upload/:id/status` + `GET /chat/:qid/stream`)
+- `src/kb/api/audit.py` (`GET /audit`)
+- Tests: `test_sse_unit.py` + `test_audit_unit.py`
+
+---
+
+### 5.17 Phase 10a + 10b plan — Upload + Chat UI (G1 🟡 DRAFT — Next.js per architecture)
+
+**Stack:** Next.js 15 (App Router) + Tailwind + lucide-react icons. Light theme default. Locked at architecture §7 line 178.
+
+**10a — Upload page (`/upload`):**
+- Drag-drop zone → POST `/files` with the file as multipart.
+- Live status table per `prototype/upload.html` design: one row per uploaded file, columns Name · Status (badge) · Pages · Chunks · RAPTOR · Mentions · Fields · Units · Entities · Time.
+- SSE connection to `/upload/:id/status` updates status badges in real-time as lifecycle events arrive.
+
+**10b — Chat page (`/chat`):**
+- Left sidebar: conversation list (Wave A: in-memory single conversation; persistence deferred).
+- Center: chat thread (user → assistant). User textarea + send button (cmd+enter).
+- Right side: citation cards — one per cited chunk with snippet + doc name + RAPTOR-level badge.
+- POST `/chat` returns answer + citations + per-cite snippet. Non-streaming in Wave A (streaming via SSE is a follow-up polish).
+
+**Files:**
+- `web/` — Next.js app (new top-level directory)
+- `web/app/upload/page.tsx`
+- `web/app/chat/page.tsx`
+- `web/components/{StatusTable, CitationCard, MessageBubble, ...}.tsx`
+- `web/lib/api.ts` — backend client (fetch wrappers + SSE)
+- `docker-compose.yml` — add `web` service
+- FastAPI CORS config to allow Next.js dev server
+
+---
+
 ### Wave B (build if time)
 
 | Phase | Description | G1 | G2 | G3 | G4 | G5 |
@@ -2344,6 +2507,11 @@ Phases 15–24 per `architecture.md` §12. Tracked here only as a reminder of in
 | 3e | [scripts/verify_phase_3e.sh](../scripts/verify_phase_3e.sh) | 2026-05-24 | ✅ 13/13 (compose smoke + umap-learn worker import probe + empty-workspace 400 corpus-rebuild-no-input pre-flight + 5-doc upload through to ready + POST /corpus/raptor/rebuild → 202 + wait for raptor_build_corpus job succeeded + scope='corpus' nodes exist + corpus → contextual_chunks discriminated edges + atomic rebuild count-stable + Phase-3e pytest 11) |
 | 4 | [scripts/verify_phase_4.sh](../scripts/verify_phase_4.sh) | 2026-05-25 | ✅ 16/16 standalone (compose smoke + 4 DDL invariants on HNSW + BM25 indexes with operator-class assertions + HNSW build params check + tiny.pdf E2E to `ready` + ANALYZE + 3 planner-usage EXPLAIN checks with `enable_seqscan/bitmapscan=off` forcing flags + worker imports `kb.retrieval.smoke` + no-leak grep for `kb.retrieval` in `kb.api/*` (decision #10) + Phase-4 pytest 10) |
 | 5 | [scripts/verify_phase_5.sh](../scripts/verify_phase_5.sh) | 2026-05-25 | ✅ 16/16 standalone (compose smoke + DDL invariants for 3 new tables + 2 column adds + lifecycle CHECK widening + xlsx E2E through full Phase 5 chain to `ready` + lifecycle history contains all 3 Phase 5 events + `inferred_doc_type` populated + atomic_units rows of type='row' written with sheet_name/cells parameters + Phase-5 pytest 50) |
+| 6 | [scripts/verify_phase_6.sh](../scripts/verify_phase_6.sh) | 2026-05-25 | ✅ 10/10 standalone (compose smoke + extracted_entities table + RLS + columns shape with ltree + GiST index + lifecycle CHECK widening + xlsx E2E to `ready` + Phase 6 lifecycle transition observed + schema_entities_extracted event + Phase-6 pytest 24) |
+| 7 | [scripts/verify_phase_7.sh](../scripts/verify_phase_7.sh) | 2026-05-25 | ✅ 16/16 standalone (compose smoke + entities + mention_to_entity tables + RLS + resolved_method CHECK + UNIQUE deterministic index + HNSW partial index on embedding + lifecycle CHECK widening + xlsx E2E to `ready` + entities_extracting→identity_resolving→ready transition + identities_resolved event + fabricated-mention end-to-end resolve writes 2 entities + 2 links + cross-file deterministic collapse + Phase-7 pytest 37) |
+
+**Cross-phase sweep totals (2026-05-25 post-Phase-7, all 16 scripts):**
+0:34s · 1a:15s · 1b:22s · 1c:21s · 2a:70s · 2b:21s · 2c:54s · 3a:55s · 3b:55s · 3c:46s · 3d:51s · 3e:82s · 4:16s · 5:22s · 6:20s · 7:27s = **16/16 GREEN**.
 
 **Cross-phase sweep totals (2026-05-25, all 13 scripts via verify_sweep.sh):**
 0:24s · 1a:17s · 1b:17s · 1c:18s · 2a:47s · 2b:16s · 2c:27s · 3a:50s · 3b:41s · 3c:42s · 3d:53s · 3e:59s · 4:14s = **13/13 GREEN in 14:56 total**.
@@ -2468,6 +2636,7 @@ Phases 15–24 per `architecture.md` §12. Tracked here only as a reminder of in
 | 2026-05-25 | **Phase 4 G3 ✅ SIGNED OFF — spec + 13 red tests land.** Spec at `tests/specs/phase_4.md` (5 sections: scope · fixture strategy · decision→test mapping · out-of-scope assertions · exit criteria). 2 new test files: `tests/test_indexes.py` (8 tests — 5 DDL invariants + 3 planner-usage) + `tests/test_retrieval_smoke.py` (5 tests — bm25_smoke + dense_smoke ranked results · multi-level hits · workspace RLS isolation · empty-for-unknown-workspace). RED-state breakdown at G3: **12 fail (RED expected) + 1 regression-guard pre-passes** — `test_kb_app_can_query_indexed_tables` covers decision #15 ("no GRANT changes; kb_app already has SELECT, index USAGE auto-granted") which is true both pre- and post-Phase-4 by design; spec §5 documents this honestly. Failure modes: 4 × DDL tests with `pg_indexes` empty assertion · 3 × planner tests with seq-scan-in-plan assertion · 5 × smoke tests with `ModuleNotFoundError: No module named 'kb.retrieval'`. Existing 286 tests still GREEN in 88.54s — no collateral damage. **Decision traceability:** every G1 decision with assertable behavior maps to ≥1 test (or is structural — #5/#6/#7/#8/#9 are operational/config and covered at G5 via `verify_phase_4.sh`). G4 opens: `0013_indexes.sql` + `kb/retrieval/smoke.py` + `reindex_weekly.sh`. | Aniket |
 | 2026-05-25 | **Phase 5 ✅ FULLY GREEN — open extraction (5a + 5b + 5c) shipped end-to-end on `phase-5/extraction` branch.** Per user direction: build all 3 sub-phases without intermediate sign-off; decisions chosen by Claude per `problem_statement.md` + architecture §5 steps 12/12b-d/14. **Plan locked at §5.12 + §5.12.1 (5a, 11 decisions) + §5.12.2 (5b, 11 decisions) + §5.12.3 (5c, 10 decisions)**. **5a — mention extraction**: 0014_mentions.sql (extracted_mentions table + OntoNotes-18 mention_type CHECK + 5a/5b/5c lifecycle CHECK widening in one migration); `src/kb/extraction/{__init__,mentions}.py` (Gemini/Anthropic/Identity factory mirroring 3b-bis/3d); `src/kb/domain/mentions.py` repo; new worker `extract_mentions_file_impl` chained from raptor_build_file_impl (end-state changed from `ready` to `mentions_extracting`). **5b — emergent fields + auto-promotion**: 0015_emergent_fields.sql (proposed_fields + inferred_schema_fields tables + `files.inferred_doc_type` + `schema_fields.auto_promoted` column adds); `src/kb/extraction/fields.py` (classifier + proposer with 3-impl factory); `src/kb/extraction/promotion.py` (snake_case-normalize cluster + thresholds prevalence ≥ 0.80, stability ≥ 0.90, value_type_confidence ≥ 0.90, n_docs_observed ≥ KB_PROMOTION_MIN_DOCS=5; auto-creates `schemas(name='auto:<doc_type>')` + `schema_entities('Doc')` + INSERT schema_fields with auto_promoted=true; value_type→schema_type mapping text/enum→string). **5c — atomic units + anomaly**: 0016_atomic_units.sql (atomic_units table + open jsonb parameters); `src/kb/extraction/plugins/{__init__,clauses,transactions,rows}.py` (3-plugin registry with dispatcher; rows plugin is LLM-free—parses xlsx text directly); `src/kb/extraction/anomaly.py` (JIT centroid + per-numeric z-score + per-categorical 1-frequency, max across params); final worker `extract_atomic_units_file_impl` transitions to `ready`. **50 new tests** across `test_mentions_{unit,worker}.py` (13) + `test_fields_{unit,worker}.py` (18) + `test_atomic_units_{unit,worker}.py` (19) — all GREEN. **Forward-compat fixes (§0.15 convention)**: 0009 + 0012 lifecycle CHECK widened to include 5a/5b/5c states (idempotent re-run test pollution); 6 verify scripts (2a/2b/2c/3a/3b/3c) widened to accept new mid-states; 1 raptor_worker test updated to assert `mentions_extracting` instead of `ready`. **Final: 346/346 pytest in 87.29s · verify_phase_5.sh 16/16 standalone · cross-phase sweep 14/14 GREEN**. Phase 6 opens next (schema-driven extraction). | Aniket |
 | 2026-05-25 | **Phase 4 G5 ✅ SIGNED OFF — Phase 4 fully green; all 5 gates closed.** `scripts/verify_phase_4.sh` lands with 16 checks (standalone): 4 DDL invariants on the 4 indexes (USING clause + operator class + key_field) + 1 HNSW params check (m=16 + ef_construction=200) + tiny.pdf E2E to `ready` + ANALYZE + 3 planner-usage EXPLAIN checks (HNSW for chunk_embeddings KNN + HNSW for raptor_nodes KNN + BM25 for contextual_chunks text search — all forced via `SET enable_seqscan=off enable_bitmapscan=off`, the same approach pytest used but which failed there because btree won at fixture scale; at full-stack scale with ANALYZE stats the forcing flags + index choice work) + 2 smoke-helper checks (worker imports `kb.retrieval.smoke` + grep proves `kb.retrieval` not leaked into `kb.api/*` per decision #10) + Phase-4 pytest (10/10 over testcontainers). **Standalone: 16/16 GREEN.** Also updated `scripts/verify_sweep.sh` to include `4` in its phase list. **Cross-phase sweep across all 13 verify scripts via `verify_sweep.sh`: 13/13 GREEN in 14:56 total** (per-phase: 0:24s · 1a:17s · 1b:17s · 1c:18s · 2a:47s · 2b:16s · 2c:27s · 3a:50s · 3b:41s · 3c:42s · 3d:53s · 3e:59s · 4:14s — Phase 4 is fastest because the indexes are auto-populated when the worker writes through the pipeline, no separate build step). One small in-G5 fix: sweep wrapper's `ALL_PHASES` array initially missing `4` — added. Branch `phase-4/retrieval` ready for PR. **Phase 5 opens next** — open extraction (L2 mentions + L2b emergent fields + L3 atomic units + anomaly scoring) per architecture §12 line 1165; recommend G1 split into 5a/5b/5c. | Aniket |
+| 2026-05-25 | **Phase 7 ✅ FULLY GREEN — identity resolution shipped on `phase-7/identity-resolution` branch.** Plan §5.14 with **14 decisions** (including #14 explicitly deferring persistent union-find to Wave B, with per-file cascade-on-insert as the Wave A equivalent). Per architecture §5 step 15: deterministic→embedding→LLM-judge→cascade-create. **Migration 0018_entities.sql**: `entities` (workspace-scoped canonical directory, UPDATEable, with HNSW halfvec_cosine_ops partial index WHERE embedding IS NOT NULL + UNIQUE on `(workspace_id, lower(canonical_name), entity_type)` for stage-a deterministic) + `mention_to_entity` (PK on mention_id, resolved_method CHECK ∈ deterministic/embedding/llm_judge/identity, REVOKE UPDATE). Forward-compat: 0009/0012/0014/0017 widened to include `identity_resolving`. **Modules**: `src/kb/identity/{__init__,judge,resolve}.py` (3-impl factory mirroring 3b-bis/3d/5a/5b/5c/6; thresholds EMBEDDING_HIGH=0.92, EMBEDDING_LOW=0.85) + `src/kb/domain/entities.py` repo. **Worker**: `resolve_identities_file_impl` chained from Phase 6 (end-state `ready` → `identity_resolving`), 4-stage cascade with workspace-id RLS context. **37 tests** across `test_identity_unit.py` (13) + `test_identity_worker.py` (14) + `test_entities_repo_unit.py` (10) — including dedicated `test_resolve_identities_embedding_blocking_matches_existing_entity` that monkeypatches `kb.embeddings.make_embedder` to force a one-hot vector for stage-b coverage. **`scripts/verify_phase_7.sh`** 16/16 GREEN standalone (compose smoke + 5 DDL invariants + lifecycle CHECK + xlsx E2E + lifecycle transition + identities_resolved event + fabricated-mention end-to-end resolve + cross-file deterministic collapse + pytest 37). **Forward-compat fixes**: 6 prior verify scripts widened (2a/2b/2c/3a/3b/3c) accept-sets include `identity_resolving`; Phase 6 verify lifecycle substring relaxed (was `entities_extracting,ready` — Phase 7 inserts `identity_resolving` between them). **In-G5 fix**: verify_phase_7.sh fab seed initially produced 67-char `chunks.content_sha`; fixed via `substring(... from 1 for 64)`. **Final: 407/407 pytest in 87s · verify_phase_7.sh 16/16 · cross-phase sweep across all 16 verify scripts: 16/16 GREEN** (per-phase: 0:34s · 1a:15s · 1b:22s · 1c:21s · 2a:70s · 2b:21s · 2c:54s · 3a:55s · 3b:55s · 3c:46s · 3d:51s · 3e:82s · 4:16s · 5:22s · 6:20s · 7:27s). Phase 8 opens next (the big one — query layer). | Aniket |
 | 2026-05-25 | **Phase 4 G4 ✅ SIGNED OFF — indexes + smoke helper land.** Commits this gate: (1) `migrations/runner.py` — `@no-transaction` pragma support. Postgres rejects `CREATE INDEX CONCURRENTLY` inside transaction blocks; pragma marker `-- @no-transaction` at the top of a migration file makes `_apply_one` run statements under autocommit (no surrounding `BEGIN`/`COMMIT`). On mid-file failure the file stays UNrecorded but earlier-applied CONCURRENTLY statements remain (inherent to CONCURRENTLY — you can't rollback a built index). Reusable infrastructure; Phase 14 HippoRAG graph indexes will use the same path. (2) `migrations/sql/0013_indexes.sql` — 4 CONCURRENTLY indexes: HNSW on `chunk_embeddings.embedding` + `raptor_nodes.embedding` (both `halfvec_cosine_ops`/`m=16`/`ef_construction=200`); BM25 on `contextual_chunks.contextual_text` + `raptor_nodes.text` (pg_search defaults: Tantivy default tokenizer, Robertson k1=1.2/b=0.75). (3) `src/kb/retrieval/__init__.py` + `src/kb/retrieval/smoke.py` — internal helpers `bm25_smoke(conn, *, workspace_id, query, limit)` + `dense_smoke(conn, *, workspace_id, query_vec, limit)` returning `list[tuple[id, score, level, scope]]`. Both UNION-combine contextual_chunks (level=1, scope='leaf') + raptor_nodes (level 2..6, scope per_doc/corpus); workspace_id filter holds redundantly with kb_app RLS. NOT mounted on any router; NOT importable from `kb.api.*`. (4) `scripts/reindex_weekly.sh` — host-cron stub for weekly `REINDEX CONCURRENTLY` rotation; not wired into compose (production scheduler is Phase 9). **In-G4 fixes:** (a) seed `content_sha` widened from arbitrary string to `hashlib.sha256(...).hexdigest()` (files table's 64-char CHECK constraint). (b) **3 planner-usage tests dropped** — at pytest fixture scale (~200 rows) the planner correctly prefers a btree index-scan + in-memory sort over HNSW; HNSW only wins above ~5K rows per workspace AND with ANALYZE stats up to date. Even forcing `SET LOCAL enable_seqscan=off enable_bitmapscan=off`, btree `chunk_embeddings_workspace_idx` won. Planner-usage moved to G5 `verify_phase_4.sh` where it runs against the full ingestion pipeline + ANALYZE. Spec `tests/specs/phase_4.md` updated to reflect 10 tests instead of 13. **296/296 pytest in 89.84s.** G5 opens. | Aniket |
 
 ---

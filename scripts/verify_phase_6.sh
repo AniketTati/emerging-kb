@@ -162,10 +162,13 @@ else
     fi
 fi
 
-step "psql: lifecycle history shows units_extracting→entities_extracting→ready"
+step "psql: lifecycle history shows units_extracting→entities_extracting→...→ready"
 events=$(DB_PSQL -tAc "SELECT string_agg(to_state, ',' ORDER BY created_at) FROM file_lifecycle WHERE file_id = '$file_id'")
-if [[ "$events" == *"units_extracting,entities_extracting,ready"* ]]; then
-    ok "Phase 6 transition chain observed"
+# With Phase 7 in tree, the chain extends entities_extracting → identity_resolving → ready.
+# Phase 6's contract is just that units_extracting → entities_extracting transition lands
+# and the file reaches ready. Don't assert exact next-state after entities_extracting.
+if [[ "$events" == *"units_extracting,entities_extracting"* && "$events" == *"ready"* ]]; then
+    ok "Phase 6 transition chain observed (entities_extracting→...→ready)"
 else
     fail "unexpected lifecycle chain: $events"
 fi
