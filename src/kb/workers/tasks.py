@@ -564,15 +564,26 @@ async def contextualize_file_impl(file_id: str) -> None:
         )
         return
 
-    # Phase 2: contextualize each chunk (factory picks Anthropic or Identity).
+    # Phase 2: contextualize each chunk in parallel under a concurrency cap.
+    # §5.8 decision #4: KB_CONTEXTUAL_CONCURRENCY (default 8) — bounds the
+    # in-flight Anthropic/Gemini calls per doc. Same shape as §5.10 decision
+    # #8 for the Summarizer (Semaphore at the worker, not the adapter).
+    import os as _os
     contextualizer = make_contextualizer()
-    results: list[tuple[str, str, ContextualizedChunk]] = []
-    try:
-        for chunk_id, chunk_text in chunk_rows:
+    concurrency = int(_os.environ.get("KB_CONTEXTUAL_CONCURRENCY") or 8)
+    semaphore = asyncio.Semaphore(concurrency)
+
+    async def _contextualize_one(chunk_id: str, chunk_text: str):
+        async with semaphore:
             result = await contextualizer.contextualize(
                 doc_text=doc_text, chunk_text=chunk_text,
             )
-            results.append((chunk_id, chunk_text, result))
+            return chunk_id, chunk_text, result
+
+    try:
+        results = await asyncio.gather(*(
+            _contextualize_one(cid, ctext) for cid, ctext in chunk_rows
+        ))
     except ContextualizationError as exc:
         await _mark_failed(
             db_url, file_id, str(workspace_id),
