@@ -60,7 +60,7 @@ fail() {
 
 cleanup() {
     local rc=$?
-    if [[ "${KB_VERIFY_KEEP_STACK:-0}" != "1" ]]; then
+    if [[ "${KB_VERIFY_KEEP_STACK:-0}" != "1" && "${KB_REUSE_STACK:-0}" != "1" ]]; then
         echo
         echo "[verify] tearing down compose stack..."
         $COMPOSE down -v --remove-orphans >/dev/null 2>&1 || true
@@ -82,6 +82,7 @@ trap cleanup EXIT
 # Stack 1: docker-compose smoke
 # ----------------------------------------------------------------------------
 
+if [[ "${KB_REUSE_STACK:-0}" != "1" ]]; then
 step "docker compose build"
 $COMPOSE build >/tmp/kb-verify-build.log 2>&1
 ok "compose build clean"
@@ -138,6 +139,9 @@ except Exception: print('')" 2>/dev/null || echo "")
         fail "$svc not healthy after 60s (state: $h)"
     fi
 done
+else
+    ok "(reuse-stack) skipping compose build/up + migrate + api-healthy wait"
+fi
 
 step "psql: extensions installed (vector + pg_search + ltree)"
 exts=$(DB_PSQL -tAc \

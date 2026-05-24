@@ -49,7 +49,7 @@ fail() {
 
 cleanup() {
     local rc=$?
-    if [[ "${KB_VERIFY_KEEP_STACK:-0}" != "1" ]]; then
+    if [[ "${KB_VERIFY_KEEP_STACK:-0}" != "1" && "${KB_REUSE_STACK:-0}" != "1" ]]; then
         echo
         echo "[verify-3c] tearing down compose stack..."
         $COMPOSE down -v --remove-orphans >/dev/null 2>&1 || true
@@ -65,6 +65,7 @@ cleanup() {
 
 trap cleanup EXIT
 
+if [[ "${KB_REUSE_STACK:-0}" != "1" ]]; then
 step "compose build + up"
 $COMPOSE build >/tmp/kb-verify-3c-build.log 2>&1
 $COMPOSE up -d >/tmp/kb-verify-3c-up.log 2>&1
@@ -99,6 +100,9 @@ except Exception: print('')" 2>/dev/null || echo "")
     sleep 2
 done
 [[ "$h" == "healthy" ]] && ok "api healthy" || fail "api not healthy (state: $h)"
+else
+    ok "(reuse-stack) skipping compose build/up + migrate + api-healthy wait"
+fi
 
 # DDL invariants — 0011_chunk_embeddings.sql applied
 step "psql: chunk_embeddings table exists with workspace_id + RLS forced"

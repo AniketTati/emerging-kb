@@ -68,6 +68,19 @@ RUN mkdir -p /tmp/huggingface /tmp/cache && chown -R kb:kb /tmp/huggingface /tmp
 
 USER kb
 
+# Pre-warm Docling's layout + table models so the FIRST parse doesn't pay a
+# ~2-3 min download. Cached in the image layer; container starts hit a warm
+# cache. Saves the sweep's longest tail per cold worker start. Build-time
+# cost: one-time ~500 MB pull + ~30s build delay.
+#
+# Explicit -o /tmp/huggingface — without it docling-tools writes to
+# `${CWD}/.cache/docling/models` (relative to WORKDIR=/app, which `kb` user
+# can't write to). Setting DOCLING_ARTIFACTS_PATH so runtime DocumentConverter
+# instances find the pre-warmed models.
+ENV DOCLING_ARTIFACTS_PATH=/tmp/huggingface/docling
+RUN docling-tools models download -o /tmp/huggingface/docling \
+    && echo "[build] Docling models pre-warmed in /tmp/huggingface/docling"
+
 # Default entrypoint = API. docker-compose overrides for worker + migrate.
 EXPOSE 8000
 CMD ["uvicorn", "kb.api.main:app", "--host", "0.0.0.0", "--port", "8000"]

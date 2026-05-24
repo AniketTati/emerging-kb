@@ -39,8 +39,9 @@ curl -X POST http://localhost:8000/corpus/raptor/rebuild \
   -H "Content-Type: application/json" -d '{}'
 
 # 6. Run the full pytest + verify suite
-uv sync && uv run pytest tests/
-./scripts/verify_phase_3e.sh   # any one of the 12 verify_phase_*.sh scripts
+uv sync && uv run pytest tests/         # ~85s for the full unit + integration suite
+./scripts/verify_sweep.sh               # all 12 verify scripts against one shared stack
+# Or: ./scripts/verify_phase_3e.sh     # any single phase against its own fresh stack
 ```
 
 **Retrieval is NOT yet implemented** — Phase 4 adds `/query`, HNSW + BM25 indexes, and tree-aware planning. Today you can ingest and inspect the persisted RAPTOR tree directly via SQL on `raptor_nodes` + `raptor_edges`.

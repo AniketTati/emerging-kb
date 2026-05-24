@@ -67,6 +67,27 @@ chore(phase-1): G5 — verify script + green run
 
 ---
 
+## Running tests
+
+Two test layers:
+
+**Unit + integration (testcontainers):**
+```bash
+uv run pytest tests/                    # full suite, ~85s
+uv run pytest tests/test_<phase>_*.py   # single phase
+```
+Each session spins one Postgres + MinIO testcontainer. `pytest-xdist` is intentionally not bundled — measured at 286 tests, per-worker testcontainer-spinup overhead exactly cancels the parallelism gain. Worth revisiting once the suite passes ~500 tests.
+
+**Docker-stack verification (G5 gates):**
+```bash
+scripts/verify_phase_<N>.sh        # single phase against a fresh stack
+scripts/verify_sweep.sh            # all 12 phases against ONE shared stack
+scripts/verify_sweep.sh 3d 3e      # subset of phases against the shared stack
+```
+The sweep wrapper brings the stack up once, TRUNCATEs workspace-scoped tables between phases (so each phase sees a clean DB), then tears the stack down once at the end. Each phase script honors `KB_REUSE_STACK=1` to skip its own setup/teardown. `KB_VERIFY_KEEP_STACK=1` leaves the stack running at the end for debugging.
+
+---
+
 ## How to get started
 
 1. **Clone + read.** Start with this README, then [`docs/problem_statement.md`](docs/problem_statement.md), then [`docs/architecture.md`](docs/architecture.md), then [`docs/ui_design.md`](docs/ui_design.md).
