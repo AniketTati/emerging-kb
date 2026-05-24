@@ -10,8 +10,11 @@
 # contextualize_file Procrastinate task + chained-defer from chunk_file's
 # success path. NO new HTTP endpoints (lifecycle_state enum widens only).
 #
-# KB_ANTHROPIC_API_KEY is NOT set in compose — uses IdentityContextualizer
-# (model_id='identity'); verifies the degraded-mode path works.
+# Adapter selection (Phase 3b-bis §5.8.1 #2):
+#   - KB_GEMINI_API_KEY set in .env → GeminiContextualizer (model_id='gemini-2.5-flash')
+#   - else KB_ANTHROPIC_API_KEY set  → AnthropicContextualizer
+#   - else                            → IdentityContextualizer (degraded mode)
+# Verify branches on which path the auto-selector picked.
 
 set -euo pipefail
 
@@ -112,6 +115,18 @@ done
 [[ "$h" == "healthy" ]] && ok "api healthy" || fail "api not healthy (state: $h)"
 
 # ---------------------------------------------------------------------------
+# Adapter-selection sanity (Phase 3b-bis §5.8.1 #2)
+# ---------------------------------------------------------------------------
+
+step "compose env: contextualizer adapter probe (KB_CONTEXTUALIZER, KB_GEMINI_API_KEY, KB_ANTHROPIC_API_KEY presence in worker)"
+worker_env=$($COMPOSE exec -T worker sh -c 'echo "KB_CONTEXTUALIZER=${KB_CONTEXTUALIZER:-<unset>}"; echo "KB_GEMINI_API_KEY=$([ -n "$KB_GEMINI_API_KEY" ] && echo set || echo unset)"; echo "KB_ANTHROPIC_API_KEY=$([ -n "$KB_ANTHROPIC_API_KEY" ] && echo set || echo unset)"' 2>/dev/null || echo "")
+if [[ -n "$worker_env" ]]; then
+    ok "worker env probe: $(echo "$worker_env" | tr '\n' ' ')"
+else
+    fail "could not probe worker env"
+fi
+
+# ---------------------------------------------------------------------------
 # DDL invariants — 0010_contextual_chunks.sql applied
 # ---------------------------------------------------------------------------
 
@@ -171,21 +186,80 @@ step "psql: contextual_chunks rows present for tiny.pdf"
 ctx_count=$(DB_PSQL -tA -c "SELECT count(*) FROM contextual_chunks WHERE file_id = '$pdf_id';" | tr -d '[:space:]')
 [[ "$ctx_count" -ge 1 ]] && ok "$ctx_count contextual_chunk(s) for tiny.pdf" || fail "no contextual_chunks for tiny.pdf"
 
-step "psql: model_id='identity' (no API key in compose → IdentityContextualizer)"
-model_ids=$(DB_PSQL -tA -c "SELECT DISTINCT model_id FROM contextual_chunks WHERE file_id = '$pdf_id';")
-if [[ "$model_ids" == "identity" ]]; then
-    ok "model_id=identity (IdentityContextualizer fallback ran as expected)"
+# Branch on which adapter the auto-selector picked. The compose `api` +
+# `worker` services inherit env via `env_file: .env`, so anything in .env
+# is in the container env. Mirror the factory's auto-probe order here:
+# Gemini → Anthropic → Identity (Gemini-first per §5.8.1 #2).
+if [[ -n "${KB_GEMINI_API_KEY:-}" && "${KB_CONTEXTUALIZER:-auto}" != "anthropic" && "${KB_CONTEXTUALIZER:-auto}" != "identity" ]]; then
+    EXPECTED_MODEL_ID="gemini-2.5-flash"
+    EXPECTED_ADAPTER="gemini"
+elif [[ -n "${KB_ANTHROPIC_API_KEY:-}" && "${KB_CONTEXTUALIZER:-auto}" != "gemini" && "${KB_CONTEXTUALIZER:-auto}" != "identity" ]]; then
+    EXPECTED_MODEL_ID="claude-opus-4-7"
+    EXPECTED_ADAPTER="anthropic"
 else
-    fail "expected model_id='identity'; got '$model_ids'"
+    EXPECTED_MODEL_ID="identity"
+    EXPECTED_ADAPTER="identity"
 fi
 
-step "psql: contextual_text matches chunks.text for identity path (no prefix)"
-mismatch=$(DB_PSQL -tA -c "
-    SELECT count(*) FROM contextual_chunks cc
-    JOIN chunks c ON cc.chunk_id = c.id
-    WHERE cc.file_id = '$pdf_id' AND cc.contextual_text <> c.text;
-" | tr -d '[:space:]')
-[[ "$mismatch" == "0" ]] && ok "every contextual_text == chunk text (identity fallback)" || fail "$mismatch row(s) where contextual_text != chunk text"
+step "psql: model_id matches expected adapter ($EXPECTED_ADAPTER → model_id=$EXPECTED_MODEL_ID)"
+model_ids=$(DB_PSQL -tA -c "SELECT DISTINCT model_id FROM contextual_chunks WHERE file_id = '$pdf_id';")
+if [[ "$model_ids" == "$EXPECTED_MODEL_ID" ]]; then
+    ok "model_id=$model_ids ($EXPECTED_ADAPTER adapter ran as expected)"
+else
+    fail "expected model_id='$EXPECTED_MODEL_ID'; got '$model_ids'"
+fi
+
+if [[ "$EXPECTED_ADAPTER" == "identity" ]]; then
+    step "psql: contextual_text matches chunks.text for identity path (no prefix)"
+    mismatch=$(DB_PSQL -tA -c "
+        SELECT count(*) FROM contextual_chunks cc
+        JOIN chunks c ON cc.chunk_id = c.id
+        WHERE cc.file_id = '$pdf_id' AND cc.contextual_text <> c.text;
+    " | tr -d '[:space:]')
+    [[ "$mismatch" == "0" ]] && ok "every contextual_text == chunk text (identity fallback)" || fail "$mismatch row(s) where contextual_text != chunk text"
+else
+    # Phase 3b-bis §5.8.1 decision #4: real adapters must emit a non-empty
+    # prefix + record billed-input tokens in cache_creation_input_tokens.
+    # Gemini path: cache_read_input_tokens=0 (no explicit cache at demo
+    # scale). Anthropic path: cache_read may be > 0 on the 2nd+ chunks.
+    step "psql: contextual_text is prefix + chunk for $EXPECTED_ADAPTER path"
+    prefix_present=$(DB_PSQL -tA -c "
+        SELECT count(*) FROM contextual_chunks cc
+        JOIN chunks c ON cc.chunk_id = c.id
+        WHERE cc.file_id = '$pdf_id'
+          AND cc.contextual_prefix <> ''
+          AND cc.contextual_text LIKE '%' || c.text;
+    " | tr -d '[:space:]')
+    if [[ "$prefix_present" -ge 1 ]]; then
+        ok "$prefix_present row(s) have non-empty prefix + contextual_text ends with chunk text"
+    else
+        fail "no contextual_chunks row has prefix + chunk-suffix structure"
+    fi
+
+    step "psql: $EXPECTED_ADAPTER path recorded billed-input tokens"
+    billed=$(DB_PSQL -tA -c "
+        SELECT min(cache_creation_input_tokens) FROM contextual_chunks
+        WHERE file_id = '$pdf_id';
+    " | tr -d '[:space:]')
+    if [[ "$billed" -gt 0 ]]; then
+        ok "cache_creation_input_tokens > 0 (min=$billed) — billed input recorded"
+    else
+        fail "expected cache_creation_input_tokens > 0; min=$billed"
+    fi
+
+    if [[ "$EXPECTED_ADAPTER" == "gemini" ]]; then
+        step "psql: Gemini path keeps cache_read_input_tokens = 0 (no explicit cache)"
+        cache_read_max=$(DB_PSQL -tA -c "
+            SELECT max(cache_read_input_tokens) FROM contextual_chunks
+            WHERE file_id = '$pdf_id';
+        " | tr -d '[:space:]')
+        if [[ "$cache_read_max" == "0" ]]; then
+            ok "cache_read_input_tokens=0 on all Gemini rows (§5.8.1 #4 semantics)"
+        else
+            fail "expected cache_read=0 for Gemini path; max=$cache_read_max"
+        fi
+    fi
+fi
 
 step "psql: lifecycle history shows ...→chunked→contextualized"
 events=$(DB_PSQL -tA -c "SELECT string_agg(to_state, ',' ORDER BY created_at) FROM file_lifecycle WHERE file_id = '$pdf_id';")
