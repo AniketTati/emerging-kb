@@ -892,7 +892,7 @@ Per [build_tracker §5.5](build_tracker.md). Five endpoints under `/files`. Firs
 
 1. **MinIO holds bytes, Postgres holds metadata.** `files.object_key` references a MinIO object under `raw_files/<sha256>`. Never store file bytes in PG.
 2. **Content-hash dedup per workspace.** `(workspace_id, content_sha)` partial unique among `lifecycle_state != 'deleted'` rows. Re-uploading the same content returns the existing `files` row (not a 409).
-3. **Lifecycle state machine** (`files.lifecycle_state`): `queued → parsing → parsed | failed`; soft-delete via `→ deleted`. Transitions are append-only logged to `file_lifecycle` (immutable audit table).
+3. **Lifecycle state machine** (`files.lifecycle_state`): `queued → parsing → parsed → chunked → contextualized → embedded | failed`; soft-delete via `→ deleted` from any non-failed state. Transitions are append-only logged to `file_lifecycle` (immutable audit table). Phase 3a added `chunked` (chained `chunk_file`); Phase 3b added `contextualized` (chained `contextualize_file` — Anthropic prefix LLM call with prompt-cached doc context); Phase 3c adds `embedded` (chained `embed_file` — Gemini Embedding 001 with DeterministicMockEmbedder fallback when `KB_GEMINI_API_KEY` is unset); Phase 3d will add the terminal `ready`. **Each sub-phase appends exactly one new state to the enum** — existing readers ignore unknown states (forward-compatible).
 4. **`raw_pages` immutable.** Per-page content keyed by `(file_id, page_number)`. `GRANT SELECT, INSERT` only. Re-parsing the same content produces byte-identical rows (content-hash keyed).
 5. **Per-stage idempotency.** If `parse_file(file_id)` is replayed and `files.lifecycle_state == 'parsed'`, the task returns immediately without re-work.
 6. **Workspace-isolated.** All 4 new tables carry own `workspace_id` + own RLS policy. The worker calls `SET LOCAL app.workspace_id` before any per-file query.
@@ -921,7 +921,7 @@ Per [build_tracker §5.5](build_tracker.md). Five endpoints under `/files`. Firs
 | `mime_type` | string | From upload's Content-Type or sniffed from magic bytes. |
 | `size_bytes` | int | Raw byte count. |
 | `doc_type` | string \| null | Always `null` at Phase 2a (classifier lands in a later phase). |
-| `lifecycle_state` | enum | `queued/parsing/parsed/failed` — `deleted` returns 404 on reads. |
+| `lifecycle_state` | enum | `queued/parsing/parsed/chunked/contextualized/embedded/raptor_building/ready/failed` — `deleted` returns 404 on reads. Terminal success state is `ready` (Phase 3d). Each parsing→…→ready transition appends an entry to `lifecycle` history (§5.3). |
 
 No `workspace_id`, no `object_key` in response — `object_key` is a server-internal detail (clients don't read MinIO directly).
 
@@ -935,6 +935,15 @@ No `workspace_id`, no `object_key` in response — `object_key` is a server-inte
     {"from_state": null,      "to_state": "queued",  "event": "upload",      "payload": {},                                "created_at": "..."},
     {"from_state": "queued",  "to_state": "parsing", "event": "task_started","payload": {"task_id": "0193..."},            "created_at": "..."},
     {"from_state": "parsing", "to_state": "parsed",  "event": "parse_done",  "payload": {"parser": "docling", "pages": 12},"created_at": "..."}
+    // Phase 2c: `parser` enum widens to `docling | xlsx | email | gemini_ocr | mistral_ocr`.
+    // `payload.provenance` may also be set when Phase 2c's strategy/escalation runs (see raw_pages.layout_json.provenance).
+    // Phase 3a/3b/3c/3d (subsequent events on a single file's lifecycle history):
+    //   parsed → chunked            event=chunking_done           payload={chunk_count}
+    //   chunked → contextualized    event=contextualization_done  payload={prefix_count, model_id, cache_creation_input_tokens, cache_read_input_tokens}
+    //   contextualized → embedded   event=embedding_done          payload={embedded_count, model_id, dim}
+    //   embedded → raptor_building  event=raptor_build_started    payload={leaf_count}
+    //   raptor_building → ready     event=raptor_build_done       payload={leaf_count, levels_built, total_summarizer_calls, summarizer_model_id, embedder_model_id}
+    // Failures at any stage: <prior_state> → failed, event=<stage>_failed, payload={error_class, message, ...}
   ]
 }
 ```
@@ -993,6 +1002,12 @@ Idempotency-Key: <client-uuid>
 
 Mode B is useful for Phase 10a's streaming-upload UI (which streams directly to MinIO before calling the API) and for tests using pre-staged files.
 
+**Query parameters (Phase 2c):**
+
+| Param | Type | Default | Notes |
+|---|---|---|---|
+| `parser` | enum | `auto` | Forces a parser regardless of the server's `KB_PARSER_STRATEGY`. Values: `auto` (use server strategy + text-layer sniff), `docling` (force Docling — fast, free, may produce empty/garbled text for scanned PDFs), `gemini` (force Gemini OCR — paid, slower, accurate on scanned/multilingual/handwritten/table-heavy inputs). Persisted into `raw_pages.layout_json.provenance.forced_parser`. Useful for testing known-edge-case inputs and benchmarking adapters head-to-head. Invalid values → `400 invalid-parser-override`. |
+
 **Success — `201 Created`:** file object (§5.2) with `lifecycle_state='queued'`. `Location: /files/<id>` header. Server computes `sha256` + writes `files` row + writes initial `file_lifecycle` row (`null → queued`) + enqueues `parse_file` task — all in one tx.
 
 **Content-hash dedup:** if a file with the same `(workspace_id, content_sha)` already exists with `lifecycle_state != 'deleted'`, return `200 OK` (NOT 201) with the existing file object. Header `X-Dedup-Reason: content-hash`.
@@ -1001,7 +1016,7 @@ Mode B is useful for Phase 10a's streaming-upload UI (which streams directly to 
 
 | Status | When | `type` slug |
 |---|---|---|
-| `400` | missing `Idempotency-Key`, malformed body | `missing-idempotency-key`, `bad-request` |
+| `400` | missing `Idempotency-Key`, malformed body, or `?parser=` value not in `{auto, docling, gemini}` | `missing-idempotency-key`, `bad-request`, `invalid-parser-override` |
 | `413` | content > 100 MB | `payload-too-large` |
 | `415` | mime_type not in supported list. Phase 2a accepted only `application/pdf`. Phase 2b widens to: `application/pdf` · `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` (.xlsx) · `application/vnd.ms-excel` (.xls) · `message/rfc822` (.eml). Magic-byte sniff at upload picks the right parser when `Content-Type` is missing or `application/octet-stream`. | `unsupported-media-type` |
 | `422` | `name` empty / > 500 chars, or `minio_object_key` doesn't resolve | `validation-error` |
@@ -1066,7 +1081,72 @@ Soft-deletes by setting `lifecycle_state='deleted'`. `raw_pages` rows are NOT ca
 
 ---
 
-## 6. Future phases — placeholders
+## 6. Phase 3e — Corpus RAPTOR
+
+### 6.1 Corpus tree model (the invariants every endpoint depends on)
+
+1. **One corpus tree per workspace.** Cross-workspace trees are out of scope (multi-tenant isolation is enforced by RLS — the same `workspace_id` boundary that scopes files, chunks, contextual_chunks, chunk_embeddings, raptor_nodes, raptor_edges).
+2. **Built from per-doc roots, not from raw chunks.** Per-doc raptor trees (Phase 3d) produce a root summary per file; corpus RAPTOR clusters and summarizes ACROSS those doc-roots. For singleton-leaf files (which have no per-doc raptor_nodes — see Phase 3d decision §5.10 #4), the doc-root is the single `contextual_chunks` row directly. Cross-kind input is handled via the discriminated `raptor_edges` FK (Phase 3d decision §5.10 #10).
+3. **Explicit trigger only.** Corpus rebuild is NOT auto-fired on file upload. Operators call `POST /corpus/raptor/rebuild` on a cadence that fits their cost model. At 100K-doc scale, per-upload rebuilds would melt the worker pool.
+4. **Atomic rebuild semantics.** A rebuild DELETEs all `raptor_nodes` + `raptor_edges` rows with `scope='corpus'` for the workspace, then INSERTs the new tree in one transaction. Partial trees are never visible to retrieval.
+5. **Deterministic.** UMAP + GMM use a fixed `random_state` so re-running the rebuild with no new docs produces an identical tree (retrieval-time citation stability).
+6. **Schema is the same as per-doc.** Corpus nodes live in `raptor_nodes` with `scope='corpus'` and `file_id=NULL` (the forward-compat columns landed at Phase 3d's `0012_raptor.sql`). Corpus edges live in `raptor_edges` and may use either child column (raptor_nodes ID for multi-leaf-file doc-roots; contextual_chunks ID for singleton-leaf-file doc-roots).
+7. **Retrieval graceful degradation.** If no corpus tree exists for a workspace, Phase 4 retrieval falls back to per-doc + chunk-level search. The corpus tree is additive; never blocking.
+
+### 6.2 Corpus-node resource shape
+
+Same physical schema as per-doc raptor_nodes (Phase 3d) — distinguished by `scope='corpus'`. Phase 4 will expose a `GET /corpus/raptor` navigation endpoint; in Phase 3e the corpus nodes are read directly via SQL or Phase 4's retrieval queries.
+
+### 6.3 `POST /corpus/raptor/rebuild` — explicit corpus-tree rebuild
+
+**Auth:** none in Wave A (relies on `X-Test-Workspace` header same as other endpoints). Admin RBAC deferred to Phase 9 — operators MUST gate at the network layer in production.
+
+**Idempotency:** the endpoint itself is fire-and-forget; replaying it just queues another rebuild job. The rebuild WORKER is idempotent — re-running with the same input docs produces the same tree (decision §5.10.1 #10). Multiple concurrent rebuild requests for the same workspace serialize via Procrastinate job semantics.
+
+```http
+POST /corpus/raptor/rebuild
+X-Test-Workspace: <uuid>
+Content-Type: application/json
+
+{}
+```
+
+(Request body is empty — workspace is implied from the header. Future versions may accept `{"force": bool}` for cache-bust semantics.)
+
+**Success — `202 Accepted`:**
+
+```json
+{
+  "workspace_id": "...",
+  "task_id": "0193b2a0-1111-7c2a-9c11-9a3f8c1c9c11",
+  "status": "queued",
+  "message": "corpus RAPTOR rebuild queued"
+}
+```
+
+Worker processes the job asynchronously. Clients poll via SQL on `procrastinate_jobs` (admin polling endpoint lands at Phase 9).
+
+**Errors:**
+
+| Status | When | `type` slug |
+|---|---|---|
+| `400` | workspace has zero files OR zero docs at lifecycle_state='ready' (nothing to cluster) | `corpus-rebuild-no-input` |
+| `503` | a rebuild job for this workspace is already `todo` or `doing` in procrastinate_jobs | `corpus-rebuild-in-flight` |
+
+**Cost note:** at 100K docs with branching=8, a rebuild produces ~115K corpus nodes (≈ N + N/8 + N/64 + ... summary nodes) → ≈ 115K LLM summarization calls + ≈ 115K embedding calls. Operators must own the cost.
+
+### 6.4 Out of scope for Phase 3e
+
+- **`GET /corpus/raptor`** read endpoint — Phase 4 retrieval reads `raptor_nodes`/`raptor_edges` directly via SQL. A REST navigation surface for end-user UIs lands with Phase 8+.
+- **Status / progress polling** on the rebuild job — Procrastinate's `procrastinate_jobs` table is queryable via SQL; admin endpoint at Phase 9.
+- **Incremental updates** when new files arrive after a rebuild — corpus tree is stale until next manual rebuild. CDC-based incremental rebuilds at Phase 5+.
+- **Admin authorization** — Wave A ships open per user direction. Phase 9 adds RBAC.
+- **HNSW + BM25 indexes** on the new corpus rows — Phase 4.
+- **Cross-workspace corpus trees** — corpus trees are per-workspace, not cross-tenant.
+
+---
+
+## 7. Future phases — placeholders
 
 Each phase appends its endpoint contracts here at its G2 gate. Index:
 
@@ -1077,15 +1157,20 @@ Each phase appends its endpoint contracts here at its G2 gate. Index:
 | 1b | `/schemas/:id/versions*` (versioning + rollback) | ✅ signed off 2026-05-23 (§3) |
 | 1c | `/schemas/:id/{entities,fields,relationships}` (hierarchy — 11 endpoints) | ✅ signed off 2026-05-23 (§4) |
 | **2a** | `/files` admin upload + read (5 endpoints) + worker pipeline | 🟡 drafted in §5 — awaiting sign-off |
-| 2b | Additional parsers (xlsx + email + Mistral OCR) — no new HTTP endpoints | ⬜ |
-| 3–7 | Internal worker triggers + admin endpoints (TBD at each phase's G1) | ⬜ |
+| 2b | Additional parsers (xlsx + email + Mistral OCR) — no new HTTP endpoints | ✅ signed off 2026-05-23 (§5.5 415 row widened) |
+| 3a | Chunking — no new HTTP endpoints; `lifecycle_state` enum widens to add `chunked` (§5.1 #3 + §5.2 row) | ✅ signed off 2026-05-23 (§5.1 #3 + §5.2) |
+| 3b | Contextual Retrieval — no new HTTP endpoints; `lifecycle_state` enum widens to add `contextualized` (§5.1 #3 + §5.2 row) | ✅ signed off 2026-05-23 (§5.1 #3 + §5.2) |
+| 3c | Embedding — no new HTTP endpoints; `lifecycle_state` enum widens to add `embedded` (§5.1 #3 + §5.2 row) | ✅ signed off 2026-05-23 (§5.1 #3 + §5.2) |
+| 3d | Per-doc RAPTOR — no new HTTP endpoints; `lifecycle_state` enum widens with `raptor_building` + `ready` as terminal (§5.2 row) + §5.3 lifecycle example annotated | ✅ signed off 2026-05-24 (§5.2 + §5.3) |
+| **3e** | Corpus RAPTOR — `POST /corpus/raptor/rebuild` explicit-trigger endpoint (new top-level §6) | 🟡 drafted in §6 — awaiting sign-off |
+| 4–7 | Retrieval (HNSW + BM25 + tree-aware query) + extraction + ranking endpoints (TBD at each phase's G1) | ⬜ |
 | 8 | `/query`, `/chat`, `/chat/:id/stream` | ⬜ |
-| 9 | `/upload/:id/status` (SSE), `/audit` | ⬜ |
+| 9 | `/upload/:id/status` (SSE), `/audit`, admin RBAC for `/corpus/raptor/rebuild` | ⬜ |
 | 10a–g | UI-driven endpoints follow from `prototype/wiring_inventory.md` | ⬜ |
 
 ---
 
-## 7. Change log
+## 8. Change log
 
 | Date | Change | By |
 |---|---|---|
@@ -1097,3 +1182,9 @@ Each phase appends its endpoint contracts here at its G2 gate. Index:
 | 2026-05-23 | **Phase 1c G2 — schemas hierarchy contracts drafted.** §4 added with 18 sub-sections: hierarchy invariants (§4.1 — workspace-isolated, parent-scoped soft delete, coarse-grained versioning, atomic mutations, name-resolved cross-refs in snapshots, replay never duplicates), extended `schema_versions.body` shape with entities/fields/relationships (§4.2), diff format extension with nested dotted paths (§4.3), entity resource shape + 4 endpoints (§4.4–§4.8 — POST/GET-list/PUT/DELETE; DELETE cascades to fields + relationships), field resource shape + 4 endpoints (§4.9–§4.13; type enum string/number/boolean/date/datetime), relationship resource shape + 3 endpoints (§4.14–§4.17; no PUT — soft-delete + re-create path; kind enum verbatim from architecture line 794; cardinality/cascade_delete/single_parent recorded only), out-of-scope (§4.18). 3 new error slugs introduced: `entity-name-conflict`, `field-name-conflict`, `relationship-name-conflict` (join 1a/1b's 5). Old §4 placeholder index → §5; old §5 changelog → §6. | Aniket |
 | 2026-05-23 | **Phase 2a G2 — files + parse pipeline contracts drafted.** §5 added with 10 sub-sections: pipeline-model invariants (§5.1 — MinIO/PG split, content-hash dedup, lifecycle state machine, raw_pages immutable, per-stage idempotency, workspace-isolated), file resource shape (§5.2), lifecycle history array shape (§5.3), raw-page resource shape (§5.4), POST upload with two modes — multipart OR JSON (§5.5), GET list (§5.6), GET one with lifecycle (§5.7), GET pages (§5.8), DELETE soft (§5.9), out-of-scope §5.10. 2 new error slugs: `payload-too-large` (413, file > 100 MB), `unsupported-media-type` (415, mime not in 2a's whitelist). Idempotency-Key: required POST, optional DELETE (same rule). Content-hash dedup returns `200 OK X-Dedup-Reason: content-hash` (not 409). Old §5 placeholders → §6, old §6 changelog → §7. | Aniket |
 | 2026-05-23 | **Phase 2b G2 — mime whitelist widened (single contract delta).** §5.5 `POST /files` 415 row's narrative grows to list the four supported mime types: `application/pdf` + `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` (.xlsx) + `application/vnd.ms-excel` (.xls) + `message/rfc822` (.eml). Added: "magic-byte sniff at upload picks the right parser when Content-Type is missing or application/octet-stream." No new endpoints; no new error slugs; no other §5 sub-sections changed. | Aniket |
+| 2026-05-23 | **Phase 3a G2 — `lifecycle_state` enum widens by `chunked` (single contract delta).** §5.1 #3 invariant rewritten to make the state machine extension explicit: `queued → parsing → parsed → chunked | failed`; soft-delete via `→ deleted` from any non-failed state. §5.2 file-resource shape's `lifecycle_state` enum row widens accordingly. Phase 3b will append `contextualized`; 3c will append the terminal `ready` — pattern is "each sub-phase appends exactly one new state" so existing wire readers stay forward-compatible. No new endpoints, no new error slugs, no other §5 sub-sections changed. | Aniket |
+| 2026-05-23 | **Phase 3b G2 — `lifecycle_state` enum widens by `contextualized` (single contract delta).** §5.1 invariant #3 extended to `queued → parsing → parsed → chunked → contextualized | failed`. §5.2 file-resource shape's `lifecycle_state` enum row widens to match. Phase 3c will append the terminal `ready`. Forward-compat convention continues — each sub-phase appends exactly one new state. No new endpoints, no new error slugs, no other §5 sub-sections changed. | Aniket |
+| 2026-05-23 | **Phase 3c G2 — `lifecycle_state` enum widens by `embedded` (single contract delta).** §5.1 invariant #3 extended to `queued → parsing → parsed → chunked → contextualized → embedded | failed`. §5.2 file-shape enum widens to match. Phase 3d will append the terminal `ready`. Forward-compat convention preserved — each sub-phase appends exactly one state. No new endpoints, no new error slugs. | Aniket |
+| 2026-05-24 | **Phase 2c G2 — `?parser=` caller override + 400 invalid-parser-override.** §5.5 `POST /files` adds Query parameters subsection documenting `?parser=auto\|docling\|gemini` (default `auto`; persisted into `raw_pages.layout_json.provenance.forced_parser`). 400 error type widened with `invalid-parser-override`. §5.3 lifecycle history example footnoted with the parser enum widening (`docling | xlsx | email | gemini_ocr | mistral_ocr`). | Aniket |
+| 2026-05-24 | **Phase 3d G2 — `lifecycle_state` enum widens by `raptor_building` + reframes `ready`.** §5.2 enum row widens to include `raptor_building` (3d's intermediate state between embedded → ready) and reframes `ready` as 3d's terminal (was "Phase 3d will add"). §5.3 lifecycle history example annotated with all post-Phase-2c stage transitions (chunking_done, contextualization_done, embedding_done, raptor_build_started, raptor_build_done) + payload shapes per stage + failure-event convention noted explicitly. | Aniket |
+| 2026-05-24 | **Phase 3e G2 — Corpus RAPTOR new §6 added.** New top-level `## 6. Phase 3e — Corpus RAPTOR` introduces the corpus-tree model (§6.1 — 7 invariants covering workspace isolation, doc-root sourcing from per-doc roots, explicit-trigger semantics, atomic rebuild, determinism, schema reuse, retrieval graceful degradation), notes corpus-node resource shape is shared with per-doc (§6.2), and documents `POST /corpus/raptor/rebuild` (§6.3 — 202 Accepted with task_id; errors `400 corpus-rebuild-no-input` and `503 corpus-rebuild-in-flight`). Cost note at the endpoint description warns operators of ~115K LLM+embedding calls at 100K-doc scale. Out-of-scope §6.4 documents the deferrals (GET /corpus/raptor → Phase 8+; status polling → Phase 9; incremental updates → Phase 5+; admin RBAC → Phase 9; HNSW → Phase 4). Old §6 placeholders → §7; old §7 changelog → §8. | Aniket |

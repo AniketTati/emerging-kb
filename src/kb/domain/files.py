@@ -136,11 +136,15 @@ async def create_file(
     object_key: str,
     mime_type: str,
     size_bytes: int,
+    upload_payload: dict[str, Any] | None = None,
 ) -> FileResponse:
     """INSERT a new files row + initial file_lifecycle event (null → 'queued').
 
     Caller has already done content-hash dedup (find_active_by_sha returned
     None) — if there's still a UNIQUE violation we surface as FileAlreadyExists.
+
+    `upload_payload` is recorded verbatim on the initial 'upload' event so
+    callers can persist context (e.g., Phase 2c §5.6.1 #11's `forced_parser`).
     """
     cur = await conn.execute(
         f"INSERT INTO files "
@@ -159,7 +163,7 @@ async def create_file(
         from_state=None,
         to_state="queued",
         event="upload",
-        payload={},
+        payload=upload_payload or {},
     )
     return file_response
 

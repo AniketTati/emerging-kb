@@ -52,3 +52,39 @@ class BadRequestError(Exception):
     def __init__(self, detail: str) -> None:
         self.detail = detail
         super().__init__(detail)
+
+
+class InvalidParserOverrideError(Exception):
+    """Phase 2c §5.6.1 #11: POST /files?parser=<value> with a value not in
+    {auto, docling, gemini}. Maps to 400 invalid-parser-override."""
+
+    def __init__(self, value: str) -> None:
+        self.value = value
+        super().__init__(
+            f"?parser={value!r} is invalid; expected one of auto, docling, gemini"
+        )
+
+
+class CorpusRebuildNoInputError(Exception):
+    """Phase 3e §6.3: POST /corpus/raptor/rebuild on a workspace with zero
+    files at lifecycle_state='ready'. Nothing to cluster. Maps to 400
+    corpus-rebuild-no-input."""
+
+    def __init__(self, workspace_id: str) -> None:
+        self.workspace_id = workspace_id
+        super().__init__(
+            f"workspace {workspace_id!r} has no files at lifecycle_state='ready'; "
+            f"nothing to cluster"
+        )
+
+
+class CorpusRebuildInFlightError(Exception):
+    """Phase 3e §6.3: POST /corpus/raptor/rebuild while a job is already
+    queued (procrastinate_jobs.status IN ('todo','doing')) for this
+    workspace. Maps to 503 corpus-rebuild-in-flight."""
+
+    def __init__(self, workspace_id: str) -> None:
+        self.workspace_id = workspace_id
+        super().__init__(
+            f"a corpus rebuild for workspace {workspace_id!r} is already in flight"
+        )

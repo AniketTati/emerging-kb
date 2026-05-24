@@ -157,27 +157,31 @@ parsed=0
 for _ in $(seq 1 120); do
     state=$(curl -sS "http://localhost:8000/files/$FILE_ID" -H "X-Test-Workspace: $WS_A" \
             | python3 -c "import sys,json; print(json.loads(sys.stdin.read()).get('lifecycle_state',''))")
-    if [[ "$state" == "parsed" ]]; then parsed=1; break; fi
+    # Phase 3a chained chunk_file may race past 'parsed' to 'chunked' before
+    # this loop polls. Any post-parse state counts as parse-success.
+    if [[ "$state" == "parsed" || "$state" == "chunked" || "$state" == "contextualized" || "$state" == "ready" ]]; then parsed=1; break; fi
     if [[ "$state" == "failed" ]]; then break; fi
     sleep 5
 done
-(( parsed == 1 )) && ok "worker transitioned to 'parsed'" || fail "did not parse within 600s (state: $state)"
+(( parsed == 1 )) && ok "worker transitioned past 'parsing' to '$state'" || fail "did not parse within 600s (state: $state)"
 
 step "curl: GET /files/:id/pages returns ≥1 page after parse"
 total=$(curl -sS "http://localhost:8000/files/$FILE_ID/pages" -H "X-Test-Workspace: $WS_A" \
         | python3 -c "import sys,json; print(json.loads(sys.stdin.read()).get('total',0))")
 [[ "$total" -ge "1" ]] && ok "raw_pages total=$total" || fail "expected ≥1 page; got $total"
 
-step "curl: GET /files/:id has lifecycle history with queued→parsing→parsed"
+step "curl: GET /files/:id lifecycle history starts with queued→parsing→parsed"
+# Phase 3a may append (parsed,chunked). Verify the PREFIX matches; Phase 3a's
+# own verify script handles the post-parsed transitions.
 lifecycle=$(curl -sS "http://localhost:8000/files/$FILE_ID" -H "X-Test-Workspace: $WS_A" \
             | python3 -c "
 import sys, json
 events = json.loads(sys.stdin.read())['lifecycle']
 transitions = [(e['from_state'], e['to_state']) for e in events]
-expected = [(None,'queued'), ('queued','parsing'), ('parsing','parsed')]
-print('match' if transitions == expected else 'mismatch: ' + str(transitions))
+expected_prefix = [(None,'queued'), ('queued','parsing'), ('parsing','parsed')]
+print('match' if transitions[:3] == expected_prefix else 'mismatch: ' + str(transitions))
 ")
-[[ "$lifecycle" == "match" ]] && ok "lifecycle history matches expected chain" || fail "$lifecycle"
+[[ "$lifecycle" == "match" ]] && ok "lifecycle history starts with queued→parsing→parsed" || fail "$lifecycle"
 
 # ---------------------------------------------------------------------------
 # Content-hash dedup

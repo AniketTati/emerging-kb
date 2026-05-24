@@ -109,6 +109,40 @@ async def test_post_creates_file_via_json_minio_key(client, test_workspace, mini
     assert body["content_sha"] == sha
 
 
+async def test_post_files_accepts_parser_gemini_query_param(client, test_workspace):
+    """Phase 2c §5.6.1 #11: POST /files?parser=gemini accepted → 201; the
+    forced parser value is persisted into the worker task arg so the
+    dispatcher routes to Gemini OCR regardless of `KB_PARSER_STRATEGY`."""
+    resp = await client.post(
+        "/files?parser=gemini",
+        files={"file": ("scanned.pdf", _TINY_PDF, "application/pdf")},
+        headers=headers(test_workspace, idempotency_key=str(uuid.uuid4())),
+    )
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["lifecycle_state"] == "queued"
+    # The response shape is unchanged, but the lifecycle history's initial
+    # 'upload' event (or a follow-up worker event) must record the override.
+    fid = body["id"]
+    get_resp = await client.get(f"/files/{fid}", headers=headers(test_workspace))
+    upload_event = get_resp.json()["lifecycle"][0]
+    assert upload_event["payload"].get("forced_parser") == "gemini", (
+        f"expected forced_parser=gemini in upload event payload; got {upload_event}"
+    )
+
+
+async def test_post_files_rejects_bogus_parser_value(client, test_workspace):
+    """Phase 2c §5.6.1 #11: invalid `?parser=` value → 400 invalid-parser-override.
+    Valid values are: auto, docling, gemini."""
+    resp = await client.post(
+        "/files?parser=bogus",
+        files={"file": ("x.pdf", _TINY_PDF, "application/pdf")},
+        headers=headers(test_workspace, idempotency_key=str(uuid.uuid4())),
+    )
+    assert resp.status_code == 400, resp.text
+    assert resp.json()["type"].endswith("/invalid-parser-override")
+
+
 async def test_post_requires_idempotency_key(client, test_workspace):
     resp = await client.post(
         "/files",
