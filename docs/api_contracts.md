@@ -935,6 +935,8 @@ No `workspace_id`, no `object_key` in response — `object_key` is a server-inte
     {"from_state": null,      "to_state": "queued",  "event": "upload",      "payload": {},                                "created_at": "..."},
     {"from_state": "queued",  "to_state": "parsing", "event": "task_started","payload": {"task_id": "0193..."},            "created_at": "..."},
     {"from_state": "parsing", "to_state": "parsed",  "event": "parse_done",  "payload": {"parser": "docling", "pages": 12},"created_at": "..."}
+    // Phase 2c: `parser` enum widens to `docling | xlsx | email | gemini_ocr | mistral_ocr`.
+    // `payload.provenance` may also be set when Phase 2c's strategy/escalation runs (see raw_pages.layout_json.provenance).
   ]
 }
 ```
@@ -993,6 +995,12 @@ Idempotency-Key: <client-uuid>
 
 Mode B is useful for Phase 10a's streaming-upload UI (which streams directly to MinIO before calling the API) and for tests using pre-staged files.
 
+**Query parameters (Phase 2c):**
+
+| Param | Type | Default | Notes |
+|---|---|---|---|
+| `parser` | enum | `auto` | Forces a parser regardless of the server's `KB_PARSER_STRATEGY`. Values: `auto` (use server strategy + text-layer sniff), `docling` (force Docling — fast, free, may produce empty/garbled text for scanned PDFs), `gemini` (force Gemini OCR — paid, slower, accurate on scanned/multilingual/handwritten/table-heavy inputs). Persisted into `raw_pages.layout_json.provenance.forced_parser`. Useful for testing known-edge-case inputs and benchmarking adapters head-to-head. Invalid values → `400 invalid-parser-override`. |
+
 **Success — `201 Created`:** file object (§5.2) with `lifecycle_state='queued'`. `Location: /files/<id>` header. Server computes `sha256` + writes `files` row + writes initial `file_lifecycle` row (`null → queued`) + enqueues `parse_file` task — all in one tx.
 
 **Content-hash dedup:** if a file with the same `(workspace_id, content_sha)` already exists with `lifecycle_state != 'deleted'`, return `200 OK` (NOT 201) with the existing file object. Header `X-Dedup-Reason: content-hash`.
@@ -1001,7 +1009,7 @@ Mode B is useful for Phase 10a's streaming-upload UI (which streams directly to 
 
 | Status | When | `type` slug |
 |---|---|---|
-| `400` | missing `Idempotency-Key`, malformed body | `missing-idempotency-key`, `bad-request` |
+| `400` | missing `Idempotency-Key`, malformed body, or `?parser=` value not in `{auto, docling, gemini}` | `missing-idempotency-key`, `bad-request`, `invalid-parser-override` |
 | `413` | content > 100 MB | `payload-too-large` |
 | `415` | mime_type not in supported list. Phase 2a accepted only `application/pdf`. Phase 2b widens to: `application/pdf` · `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` (.xlsx) · `application/vnd.ms-excel` (.xls) · `message/rfc822` (.eml). Magic-byte sniff at upload picks the right parser when `Content-Type` is missing or `application/octet-stream`. | `unsupported-media-type` |
 | `422` | `name` empty / > 500 chars, or `minio_object_key` doesn't resolve | `validation-error` |

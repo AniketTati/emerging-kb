@@ -154,9 +154,9 @@ QA gates this at G1.5b — every prototype page is grep'd for the forbidden voca
 
 ## 1. Now / Next / Blocked
 
-**Now:** Phase 3b-bis ✅ shipped — `GeminiContextualizer` + 4-value `KB_CONTEXTUALIZER` factory selector + `.env.example` consistency gap closed. 238/238 pytest. verify_phase_3b.sh 16/16 (was 15). Cross-phase sweep across all 9 verify scripts (0/1a/1b/1c/2a/2b/3a/3b/3c) all GREEN — **158 checks total**, no regressions. Branch `phase-3/chunking-raptor` carries 4 commit-sets (3a/3b/3c/3b-bis); ready to merge or extend with 3d.
-**Next:** Phase 3d (RAPTOR tree build) on same branch — clustering + Gemini-Flash summarization of L1 contextual chunks → tree nodes. Phase 1c-bis (GeminiOCRParser) gated on demo-corpus answer (scanned PDFs?).
-**Blocked on:** corpus answer (for Phase 1c-bis scoping). Phase 3d unblocked.
+**Now:** Phase 2c G1 ✅ + G2 ✅ + G3 🟡 OPEN. Per-page rendering for OCR confirmed (briefly considered direct-PDF-upload simplification — user kept per-page for parallelism + per-page provenance + hybrid escalation symmetry). api_contracts §5.5 delta done: Query parameters subsection added for `?parser=auto|docling|gemini`, 400 error type `invalid-parser-override`, §5.3 lifecycle parser-enum widening note. G3 opens: spec + ~18 red skeletons (4 test files + 1 mutation).
+**Next:** Phase 2c G3 → G4 (code: GeminiOCRParser per-page + pypdfium2 sniff + strategy dispatcher + quality escalation + caller override) → G5 (new verify_phase_2c.sh + scanned-PDF fixture + cross-phase sweep). Then Phase 3d (RAPTOR).
+**Blocked on:** nothing.
 
 ---
 
@@ -266,6 +266,7 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
 | **1c** | Schema service — **hierarchy**: `schema_entities`, `schema_fields`, `schema_relationships` tables; nested CRUD; NL field descriptions; single_parent + cascade_delete constraints | ✅ | ✅ | ✅ | ✅ | ✅ | All 5 gates green 2026-05-23. verify_phase_1c.sh 20/20. verify_phase_1b.sh still 21/21. verify_phase_1a.sh still 17/17. verify_phase_0.sh still 16/16. pytest 142/142. Ready to merge. |
 | **2a** | Parse layer — **scaffold + Docling**: `files` + `file_lifecycle` + `raw_pages` + `parse_artifacts` tables; Procrastinate `parse_file` task; MIME-based dispatcher; Docling (digital PDF) parser; admin `POST /files` upload endpoint | ✅ | ✅ | ✅ | ✅ | ✅ | All 5 gates green 2026-05-23. pytest 170/170. First worker phase complete. Ready to merge. |
 | **2b** | Parse layer — **additional parsers**: xlsx (openpyxl) + email (stdlib) + Mistral OCR (external API adapter class + mock-tested; real-API gated on `KB_MISTRAL_API_KEY`) | ✅ | ✅ | ✅ | ✅ | ✅ | All 5 gates green 2026-05-23. verify_phase_2b.sh 15/15. pytest 188/188. xlsx + email E2E pipeline verified in Docker stack (xlsx → 2 sheets → 2 raw_pages; email → 1 page with headers + body). Mistral OCR adapter ready, self-disabled without API key. Ready to merge. |
+| **2c** | Gemini OCR + strategy-driven dispatch — `GeminiOCRParser` (pypdfium2 PDF→PNG + Gemini 2.5 Flash VLM, per-page) + pre-flight text-layer sniff + 4-value `KB_PARSER_STRATEGY ∈ {auto,docling_first,gemini_first,gemini_only}` + caller override `?parser=...` + quality escalation + provenance JSON in `raw_pages.layout_json`. | ✅ | ✅ | 🟡 | ⬜ | ⬜ | G1 signed off 2026-05-24 (per-page rendering for all OCR paths confirmed). G2 ✅: api_contracts §5.5 deltas (Query parameters subsection + 400 invalid-parser-override row + §5.3 parser enum widening note). G3 open: spec + ~18 red skeletons. |
 | **3a** | Chunking — late chunking of `raw_pages` → `chunks` table (layout-aware, token-bounded, cross-page joining); worker stage `chunk_file`; new lifecycle state `chunked` | ✅ | ✅ | ✅ | ✅ | ✅ | All 5 gates green 2026-05-23. verify_phase_3a.sh 18/18. Cross-phase sweep: 0/1a/1b/1c/2a/2b all still green (124/124 cumulative checks). pytest 204/204. Ready to merge. |
 | **3b** | Contextual Retrieval — Anthropic Claude per-chunk prefix with prompt-cached doc context; `contextual_chunks` table; worker stage `contextualize_file` | ✅ | ✅ | ✅ | ✅ | ✅ | All 5 gates green 2026-05-23. verify_phase_3b.sh 15/15. Cross-phase sweep: 0/1a/1b/1c/2a/2b/3a/3b all green (139/139 cumulative checks). pytest 219/219. Ready to merge. |
 | **3c** | Embedding — Gemini Embedding 001 on contextual chunks → `chunk_embeddings` (`halfvec(3072)`); worker stage `embed_file`; new lifecycle state `embedded` | ✅ | ✅ | ✅ | ✅ | ✅ | First embedding call; gated on `KB_GEMINI_API_KEY` with DeterministicMockEmbedder for CI. 13/13 new tests green; suite 232/232. verify_phase_3c.sh 15/15 + cross-phase sweep 0/1a/1b/1c/2a/2b/3a/3b/3c all GREEN. One sweep fix: 3a's accept-set widened to also accept `embedded` (Phase 3c chained-defer races past `chunked` before the script polls — same forward-compat pattern handled at 3b). |
@@ -1240,6 +1241,153 @@ When Aniket approves this plan, the Phase 2b G1 cell in §5 flips 🟡 → ✅ a
 
 ---
 
+### 5.6.1 Phase 2c plan — Gemini OCR + strategy-driven parser dispatch (G1 ✅ + G2 ✅ + G3 🟡 OPEN)
+
+> **Status:** G1 opens 2026-05-24. Physically slotted as §5.6.1 (adjacent to 2b in this doc); functionally a new top-level phase 2c — introduces multiple new system surfaces (new parser + sniff library + strategy-aware dispatcher + caller override + quality escalation + provenance metadata) on top of what 2b shipped. Same `phase-3/chunking-raptor` branch (5th commit-set after 3a/3b/3c/3b-bis). Naming convention matches §5.8.1 (Phase 3b-bis).
+>
+> **Motivation:** Build_tracker §5.6 #7 + #1166 documented "force-parser routing as Phase 2c-or-later" and "current scanned-PDF fallback uses Docling+RapidOCR." The user has concluded that OCR quality directly determines KB retrieval quality (garbage-in-garbage-out applies twice — to chunks AND to RAPTOR summaries that compound on chunks) and that Docling+RapidOCR's quality is insufficient for hard inputs (multilingual, handwriting, complex tables, mixed-layout). Phase 2c brings Gemini 2.5 Flash VLM as the OCR adapter + a cheapest-first routing strategy so the system uses Gemini only when the input actually needs it.
+
+#### Scope
+
+Phase 2c keeps Phase 2b's `Parser` Protocol untouched. It widens the **dispatcher** (currently first-match-wins) into a strategy-aware selector that consults a pre-flight text-layer sniff before routing PDF uploads, with a post-parse quality-escalation safety net and a caller-side override.
+
+**In scope:**
+- **`GeminiOCRParser`** (`src/kb/parsers/gemini_ocr_parser.py`) — renders each PDF page to a PIL image via `pypdfium2` at 150 DPI, calls `google.genai.Client.aio.models.generate_content` with the image + an OCR prompt (markdown output, table-preserving), returns one `ParsedDocument.pages[*]` entry per page. Per-page concurrency cap via `asyncio.Semaphore(4)`. Reuses the `google-genai` SDK already added at Phase 3c.
+- **Pre-flight text-layer sniff** (`src/kb/parsers/text_layer_sniff.py`) — `def sniff_pdf_text_layer(buffer: bytes) -> SniffResult` returns `{avg_chars_per_page, page_count, has_text_layer}`. Uses `pypdfium2.PdfDocument(buffer).get_page(i).get_textpage().get_text_range()` per page. Bounded by `max_pages=10` for the heuristic (large docs sniff only the first N pages — cost vs. accuracy tradeoff).
+- **Strategy-aware dispatcher** (mutate `src/kb/parsers/__init__.py`) — new `select_parser_for(*, mime_type, magic_bytes, file_bytes, strategy)` function. Reads `KB_PARSER_STRATEGY` env (default `auto`). Strategies:
+  - `auto`: for PDFs, run sniff. If `avg_chars_per_page ≥ KB_PDF_TEXT_LAYER_THRESHOLD` (default 50) → Docling. Else → Gemini OCR. For non-PDF mimes, behavior unchanged (first-match wins per Phase 2b).
+  - `docling_first`: always Docling for PDFs; escalate on bad quality (see below).
+  - `gemini_first`: always Gemini OCR for PDFs (no sniff, no Docling).
+  - `gemini_only`: Gemini OCR for PDFs, fail if `KB_GEMINI_API_KEY` is unset (no Docling fallback).
+- **Quality escalation** (mutate `src/kb/workers/tasks.py::parse_file_impl`) — after Docling parses, score the result:
+  - Total chars across all pages == 0 → escalate
+  - `(printable_chars / total_chars) < 0.7` → escalate (garbled output)
+  - Any individual page with `chars < 5` while others have `chars > 100` → escalate that page only (hybrid PDF: digital pages + 1 scanned page)
+  - Escalation: re-parse via Gemini OCR (full doc or per-page depending on scope of failure). Both attempts recorded in `raw_pages.layout_json.provenance`.
+- **Caller override** (mutate `src/kb/api/files.py::create_file`) — `POST /files?parser=<docling|gemini|auto>` query param. Defaults to `auto`. Passed through to the worker via task arg `forced_parser: str | None`. Worker bypasses dispatcher when set.
+- **Provenance JSON in `raw_pages.layout_json`** — every parse writes:
+  ```json
+  {
+    "provenance": {
+      "strategy": "auto",
+      "forced_parser": null,
+      "tried": ["docling"],
+      "chose": "docling",
+      "reason": "text_layer_present (avg=2730 chars/page over 3 pages)",
+      "quality_score": 0.94
+    }
+  }
+  ```
+  On escalation:
+  ```json
+  {
+    "provenance": {
+      "strategy": "auto",
+      "tried": ["docling", "gemini_ocr"],
+      "chose": "gemini_ocr",
+      "reason": "docling output failed quality check: printable_ratio=0.42",
+      "quality_score": 0.42
+    }
+  }
+  ```
+- **`.env.example` updates** — `KB_PARSER_STRATEGY` (default `auto`), `KB_PDF_TEXT_LAYER_THRESHOLD` (default 50, commented), `KB_OCR_MODEL` (default `gemini-2.5-flash`, commented), `KB_OCR_CONCURRENCY` (default 4, commented).
+
+**Out of scope (deferred):**
+- **Workspace-level OCR policy** (`workspaces.default_ocr_strategy` column + per-workspace override) — needs workspace_settings infrastructure; lands at Phase 5 / workspace mgmt.
+- **PNG vs JPEG image format toggle** — defaults to PNG (lossless, slightly larger payloads). JPEG quality knob deferred.
+- **Multi-page batched OCR call** (one API call covering N pages) — defaults to per-page calls (simpler, parallelizable). Batched mode is a cost optimization for later.
+- **Mistral OCR adapter activation** — stays registered + inert. Phase 2c's strategy slots Gemini OCR ahead; Mistral is a 4th option deferred to "when force-route covers it" (i.e., now, but we don't wire it in since Gemini is the chosen path).
+- **Recursive ingestion of email attachments** — same deferral as Phase 2b #5.
+- **`audit_log` writes** on dispatcher decisions — Phase 9.
+
+#### Decisions (locked at G1; changes require re-opening G1)
+
+| # | Decision | Choice | Rationale |
+|---|---|---|---|
+| 1 | OCR model | **`gemini-2.5-flash`** (configurable via `KB_OCR_MODEL`). | Flash is the multimodal Gemini for image input + text output. Pro reserved for downstream reasoning (RAPTOR L3 in later phases). Architecture line 423 already references "Gemini 2.5 Flash VLM" as the planned OCR path. |
+| 2 | PDF → image library | **`pypdfium2`** (Apache-2.0; pure-binary wheel, no system deps). | Modern, fast, permissive license. `pdf2image` requires system Poppler; `pymupdf` is AGPL. `pypdfium2` is also what `pdfminer.six` is being replaced by. |
+| 3 | Render DPI | 150 DPI per page (configurable via `KB_OCR_RENDER_DPI`; not exposed in .env.example until tuned). | 150 DPI is the sweet spot for OCR quality vs. image size (~1.5MB per A4 page as PNG). 300 DPI doubles latency + cost without measurable quality gain for typed text. |
+| 4 | Image format to Gemini | **PNG** (lossless). | Tables + thin lines suffer with JPEG compression. PNG is ~30% larger but Gemini Flash's per-input-token cost is independent of image bytes (it's normalized internally). |
+| 5 | OCR prompt | Fixed prompt: `"Extract ALL text from this document page. Preserve tables as markdown tables, headings as # / ## / ###, lists as - bullets. Return only the extracted text, no preamble or commentary."` | Markdown is what Docling produces too — keeps downstream chunkers + contextualizers indifferent to which parser ran. |
+| 6 | Per-page concurrency | `asyncio.Semaphore(4)` (configurable via `KB_OCR_CONCURRENCY`). | Gemini Flash free tier is 15 RPM. 4-way concurrency stays under for typical 5-10 page docs while parallelizing the slow part (vision inference is ~1-3s per page). |
+| 7 | Dispatcher strategy enum | `KB_PARSER_STRATEGY ∈ {auto, docling_first, gemini_first, gemini_only}`, default `auto`. | Four explicit modes cover the demo's needs (auto for most users), CI determinism (`docling_first` skips Gemini API costs in tests), force-Gemini for benchmarking (`gemini_first`), and operator opt-out of Docling for known-bad-input corpora (`gemini_only`). |
+| 8 | Pre-flight sniff threshold | `KB_PDF_TEXT_LAYER_THRESHOLD = 50` chars/page (averaged over first 10 pages). | A typed 1-page A4 is ~3000 chars. A scanned PDF page returns ~0-20 chars from the text layer (often just a stray header). 50 is a generous floor that won't trip on edge cases. |
+| 9 | Sniff bounding | `max_pages_sniffed = 10`. Large docs (>10 pages) sniff only the first 10. | Sniff is cheap (~10ms/page) but bounded so a 1000-page PDF doesn't cost 10s before parsing starts. First 10 pages are representative of the doc's text-layer-ness. |
+| 10 | Quality-escalation criteria | Total chars == 0 → escalate. `printable_chars/total_chars < 0.7` → escalate (garbled). Per-page: `chars < 5` while peers have `> 100` → escalate that page only. | Three signals catch the realistic failure modes: empty (everything's scanned), garbled (OCR ran but on bad input), hybrid (most pages digital, one page scanned). |
+| 11 | Caller override | `POST /files?parser=<docling\|gemini\|auto>` query param. Defaults to `auto`. Worker accepts via `forced_parser` task arg. Invalid values → 400. | Three explicit values (no "anthropic" since this is the parser layer, not contextualizer). Per-call override defeats the strategy env var. Useful for `/files?parser=gemini` to force-run on edge-case demos. |
+| 12 | Provenance JSON shape | `raw_pages.layout_json.provenance = {strategy, forced_parser, tried[], chose, reason, quality_score}`. | Audit trail without a new column. `layout_json` is already free-form JSON per Phase 2a #6. Dashboards filter rows by `provenance->>'chose'`. |
+| 13 | Failure semantics | If `auto`/`gemini_first` picks Gemini but `KB_GEMINI_API_KEY` is unset → worker writes `parsing→failed` with `error_class='OCRConfigError'`. Strategy `gemini_only` + no key → same. `docling_first` is always safe (no key needed). | Loud-fail on misconfig at parse time, not at dispatch (need bytes to sniff). Surfacing the wrong-config message in the lifecycle event keeps debug-loop short. |
+| 14 | Test fixture for scanned PDFs | `tests/fixtures/tiny_scanned.pdf` — synthetic: render `tiny.pdf` to PNG via pypdfium2, then re-encode as an image-only PDF (no text layer). Test assertion is "routes to Gemini path", not "Gemini extracts perfectly" (mocked). | Avoids the licensing/provenance question of using a real scanned PDF. Synthetic fixture is reproducible from `tiny.pdf` + a one-shot generator script. |
+| 15 | Mistral OCR adapter | **Untouched.** Still registered after Docling; still inert. Phase 2c slots Gemini OCR via the strategy + sniff, not via parser-registration order. | Keeps 2b's Mistral adapter as a "drop-in replacement if Gemini hits cost ceiling" without rewiring routing. |
+
+#### Repo layout delta after Phase 2c G4
+
+```
+emerging-kb/
+├── pyproject.toml + uv.lock                   ← MUTATED (add pypdfium2)
+├── src/kb/
+│   ├── api/
+│   │   └── files.py                           ← MUTATED (?parser= query param + 400 on invalid)
+│   ├── parsers/
+│   │   ├── __init__.py                        ← MUTATED (select_parser_for + strategy enum + sniff invocation)
+│   │   ├── gemini_ocr_parser.py               ← NEW (~150 LOC: PDF→PNG via pypdfium2 + Gemini Flash VLM call + concurrency cap)
+│   │   └── text_layer_sniff.py                ← NEW (~50 LOC: pypdfium2 text-extraction sniff with max_pages bound)
+│   └── workers/
+│       └── tasks.py                           ← MUTATED (quality_score + escalation re-parse + provenance JSON write + forced_parser arg)
+├── tests/
+│   ├── fixtures/
+│   │   ├── tiny_scanned.pdf                   ← NEW (synthetic; generated from tiny.pdf)
+│   │   └── scripts/make_tiny_scanned.py       ← NEW (one-shot generator script, not run in CI)
+│   ├── test_parse_gemini_ocr.py               ← NEW (~6 tests: prompt shape, response parsing, model literal, per-page concurrency, error handling, missing-key error)
+│   ├── test_text_layer_sniff.py               ← NEW (~3 tests: digital PDF returns avg > 50, scanned returns ~0, page-count bounded)
+│   ├── test_parser_dispatcher_strategy.py     ← NEW (~5 tests: auto+digital→docling, auto+scanned→gemini, docling_first, gemini_only_no_key→err, invalid strategy→err)
+│   ├── test_parse_quality_escalation.py       ← NEW (~4 tests: empty docling→escalate, garbled→escalate, hybrid per-page escalation, provenance JSON shape)
+│   ├── test_files_crud.py                     ← MUTATED (+2 tests: ?parser=gemini override + invalid value → 400)
+│   └── specs/phase_2c.md                      ← NEW
+└── scripts/
+    └── verify_phase_2c.sh                     ← NEW (separate from verify_phase_2b.sh — adds compose stack invocation with KB_GEMINI_API_KEY check + scanned-PDF E2E + dispatcher provenance assertions)
+```
+
+No SQL migration. No new domain module. No lifecycle change (parse_file is still `queued → parsing → parsed | failed`).
+
+#### Endpoint contract delta (api_contracts.md §5.5)
+
+Two single-line deltas to §5.5 `POST /files`:
+1. Add the `?parser=<docling|gemini|auto>` query param under the "Query parameters" subsection. Default `auto`. Invalid → 400 with `error_class='InvalidParserOverride'`.
+2. The 200/201 response body's `parser` field (already part of the file resource per §5.5) gains a new possible value: `'gemini_ocr'`. The accepted set widens to `'docling' | 'xlsx' | 'email' | 'gemini_ocr' | 'mistral_ocr'`.
+
+#### Phase 2c G5 — what "green" means
+
+`scripts/verify_phase_2c.sh` (new):
+1. Compose smoke — same shape as 2b, plus a worker-env probe for `KB_PARSER_STRATEGY` + `KB_OCR_MODEL` + `KB_GEMINI_API_KEY` presence.
+2. `psql` confirms `raw_pages.layout_json` is JSONB (no schema change but documented invariant).
+3. **Auto-strategy digital path:** `POST tiny.pdf` → routes to Docling → `provenance.chose='docling'` + `provenance.tried=['docling']` + `quality_score > 0.7`.
+4. **Auto-strategy scanned path:** `POST tiny_scanned.pdf` → sniff says scanned → routes to Gemini OCR (gated on `KB_GEMINI_API_KEY` presence; verify-skip with `[skip]` if unset) → `provenance.chose='gemini_ocr'` + `provenance.reason` includes `'text_layer_absent'`.
+5. **Caller override:** `POST tiny.pdf?parser=gemini` → routes to Gemini OCR even though sniff says digital → `provenance.forced_parser='gemini'`.
+6. **Invalid override:** `POST tiny.pdf?parser=bogus` → 400 with `error_class='InvalidParserOverride'`.
+7. **Quality escalation:** `POST` a fixture PDF where Docling extracts garbled output → escalates → `provenance.tried=['docling', 'gemini_ocr']` + `provenance.chose='gemini_ocr'`. (Skipped if no `KB_GEMINI_API_KEY`.)
+8. **`gemini_only` no-key failure:** with `KB_PARSER_STRATEGY=gemini_only` + `KB_GEMINI_API_KEY` unset → lifecycle event `parsing_failed` with `error_class='OCRConfigError'`.
+9. `pytest tests/` green: 238 (existing) + ~18 new = ~256.
+10. Cross-phase sweep `verify_phase_{0,1a,1b,1c,2a,2b,2c,3a,3b,3c}.sh` all green (10 scripts now).
+
+#### Pre-G3 consistency review checklist
+
+Before G3 opens:
+- [ ] Architecture line 417–425 routing — line 423's "Gemini 2.5 Flash VLM (image-only PDF, very poor OCR)" stays accurate (we run it on scanned PDFs broadly, not just "very poor OCR" cases — the line predates the sniff design).
+- [ ] api_contracts §5.5 deltas drafted (two single-line changes).
+- [ ] `.env.example` widens with `KB_PARSER_STRATEGY` + commented overrides.
+- [ ] No regression to Phase 2b's Mistral adapter (untouched, still registered).
+- [ ] Phase 2a's worker contract (`parser.parse(file_bytes, ...)`) unchanged — strategy + sniff happen at dispatcher level, parsers stay simple.
+- [ ] Provenance JSON shape documented in `raw_pages.layout_json` invariants (Phase 2a #6).
+- [ ] `layout_json` is already JSONB per Phase 2a; no migration needed.
+- [ ] Phase 3b/3b-bis/3c untouched — they read `raw_pages.text` regardless of which parser produced it (provenance is metadata only).
+
+#### Sign-off
+
+When Aniket approves this plan, §5 gains a new row for Phase 2c, G1 flips 🟡 → ✅, and G2 opens (two single-line deltas to `docs/api_contracts.md` §5.5 — query param + parser enum widening). Estimated wall-clock: ~6-8 hr across G3 + G4 + G5 combined.
+
+---
+
 ### 5.7 Phase 3a plan — Chunking (G1 ✅ + G2 ✅ + G3 ✅ + G4 ✅ + G5 ✅ SIGNED OFF)
 
 > **Status:** All 5 gates green 2026-05-23. Plan + contract delta + 16 red skeletons + working implementation + verify_phase_3a.sh 18/18 + cross-phase sweep (124/124 cumulative). Branch: `phase-3/chunking-raptor` off `main`. **Ready to merge** as the FIRST commit-set on the Phase 3 branch (3b + 3c follow on the same branch as additional commit-sets per the split-decision §9 entry).
@@ -1794,6 +1942,8 @@ Phases 15–24 per `architecture.md` §12. Tracked here only as a reminder of in
 | 2026-05-23 | **Phase 3c G4 ✅ — code landed.** 4 new files + 3 mutated. All 13 new tests + full suite 232/232 in 70.3s. **One in-G4 fix**: 0009's forward-compat CHECK list (added at 3b G4 fix #2) included `'ready'` but skipped the in-between `'embedded'` state. Insert into `files` of `lifecycle_state='embedded'` 400'd with CheckViolation. Fixed by extending the CHECK list to include every state through the terminal `ready`: `queued/parsing/parsed/chunked/contextualized/embedded/ready/failed/deleted`. Convention reinforced: every lifecycle-extending migration writes a CHECK with all currently-planned future states. Files: `pyproject.toml` + `uv.lock` (google-genai>=0.3.0 — resolved as 2.6.0); `migrations/sql/0009_chunks.sql` MUTATED (added `'embedded'` to CHECK); `migrations/sql/0011_chunk_embeddings.sql` (CREATE TABLE with halfvec(3072) + RLS + REVOKE + UNIQUE); `src/kb/embeddings/__init__.py` (Embedder Protocol + GeminiEmbedder via google-genai.aio.models.embed_content + DeterministicMockEmbedder using sha256(text||':'||dim) + L2-normalize + make_embedder factory); `src/kb/domain/chunk_embeddings.py` (insert_chunk_embedding with halfvec literal cast + read_contextual_chunks_for_embedding); `src/kb/workers/tasks.py` MUTATED (embed_file_impl + embed_file Procrastinate task + contextualize_file_impl chained-defer). All 13 G1 decisions traced. | Aniket |
 | 2026-05-23 | **Phase 3c G5 🟡 — verify script authored, Docker-stack run blocked on host disk pressure.** Authored `scripts/verify_phase_3c.sh` (15 checks): compose smoke + 5 DDL assertions (chunk_embeddings table + UNIQUE + RLS forced + kb_app grants restricted + `halfvec` column type + lifecycle CHECK includes `embedded`) + E2E PDF parse → chunk → contextualize → embed (with `model_id='mock-deterministic-v1'` via DeterministicMockEmbedder since `KB_GEMINI_API_KEY` is unset in compose) + lifecycle progression assert + idempotent re-defer + Phase-3c pytest 13. Also widened Phase 3b's verify accept-set: `contextualized | embedded | ready` all count as contextualize-success (forward-compat for 3d). **Docker-stack execution deferred** — host disk hit 88% / ~2 GB free during 3c development; OrbStack daemon stopped. pytest suite remains authoritative + green at 232/232; the Docker-stack run validates ops-stack behavior but does not change the merge bar (Phase 3a + 3b shipped under the same gate). **Action for user**: free ~5-10 GB → restart Docker (OrbStack) → run `./scripts/verify_phase_3c.sh` + cross-phase sweep → flip G5 to ✅. | Aniket |
 | 2026-05-23 | **Phase 3c G5 ✅ — disk reclaimed, full sweep green.** User freed disk (76 GB free, up from 2 GB); OrbStack restarted (Docker 29.4.0). `./scripts/verify_phase_3c.sh` returned 15/15. Cross-phase sweep across all 9 verify scripts (0/1a/1b/1c/2a/2b/3a/3b/3c): 8/9 GREEN on first pass; 3a tripped 3 checks with `last state: embedded` instead of `chunked` — same forward-compat race that 3b's accept-set already handled. Fix: widened 3a's accept-set so `chunked | contextualized | embedded | ready` all count as chunking-success (with comment updated to cite Phase 3b/3c chain). Re-ran 3a → 18/18. Final sweep: **0:16/16 · 1a:17/17 · 1b:21/21 · 1c:20/20 · 2a:17/17 · 2b:15/15 · 3a:18/18 · 3b:15/15 · 3c:15/15 — all GREEN**. Convention reinforced (matches 0009 CHECK convention): every accept-set in a verify script writes all currently-planned future states. Phase 3c officially shipped. | Aniket |
+| 2026-05-24 | **Phase 2c G1 ✅ + G2 ✅ — plan signed off; api_contracts §5.5 delta landed.** Brief mid-G1 design loop: considered switching from per-page rendering to direct-PDF upload (Gemini 2.5 Flash supports native PDF input via `Part.from_bytes(mime_type='application/pdf')`, 258 tok/page, simpler primary code path). Held off because the existing pipeline assumes per-page rows (`raw_pages.page_number`, `chunks.source_page_numbers`, RAPTOR per-page citations) — direct-PDF would need explicit page-break markers in the prompt to recover boundaries, AND hybrid escalation (one bad page in a 100-page doc) still needs per-page render anyway. Verdict: per-page everywhere keeps the architecture symmetric. G2 delta in `docs/api_contracts.md`: added Query parameters subsection to §5.5 documenting `?parser=auto\|docling\|gemini` (default `auto`; persisted into `raw_pages.layout_json.provenance.forced_parser`), 400 error type widened with `invalid-parser-override`, §5.3 lifecycle example footnote on the parser enum widening to include `gemini_ocr`. G3 opens: spec + ~18 red skeletons across 4 test files + 1 mutation. | Aniket |
+| 2026-05-24 | **Phase 2c G1 🟡 OPEN — Gemini OCR + strategy-driven parser dispatch plan drafted.** Trigger: after the 2026-05-24 corpus-discussion, user concluded that (a) demo corpus may include scanned PDFs, (b) Docling+RapidOCR's quality on hard inputs (multilingual, handwriting, complex tables) is unreliable, (c) OCR quality compounds through 3a→3b→3c→3d so garbage-in-garbage-out applies twice. Plan at §5.6.1 introduces 5 new system surfaces: `GeminiOCRParser` (pypdfium2 PDF→PNG at 150 DPI + Gemini 2.5 Flash VLM call per page, asyncio.Semaphore(4) concurrency), pre-flight text-layer sniff (`pypdfium2.PdfDocument` → avg chars/page over first 10 pages, threshold 50), strategy-aware dispatcher (4-value `KB_PARSER_STRATEGY ∈ {auto,docling_first,gemini_first,gemini_only}` with `auto` default routing PDFs by sniff result), three-signal quality escalation in `parse_file_impl` (empty / printable_ratio<0.7 / hybrid per-page), caller override `POST /files?parser=<docling\|gemini\|auto>`. Provenance JSON written to existing `raw_pages.layout_json` (no migration). 15 decisions locked. Out of scope: workspace-level OCR policy (Phase 5), batched multi-page OCR (cost opt), Mistral adapter activation (stays inert). Endpoint contract delta: 2 single-line additions to api_contracts §5.5 (query param + parser-enum value). G5 verify will be a new `verify_phase_2c.sh` (not extension of 2b) given the surface area. Estimated ~6-8 hr G3+G4+G5. Awaiting sign-off. | Aniket |
 | 2026-05-24 | **Phase 3b-bis G5 ✅ — shipped.** `scripts/verify_phase_3b.sh` widened 15→16 checks: added an adapter env-probe step that prints `KB_CONTEXTUALIZER`/`KB_GEMINI_API_KEY`/`KB_ANTHROPIC_API_KEY` presence in the worker container (catches the .env-vs-host-env footgun) + a conditional branch on the model_id assertion that mirrors the factory's auto-probe order (Gemini → Anthropic → Identity). Identity-path assertions preserved; Gemini/Anthropic branch adds `contextual_text LIKE '%' || chunk_text` (prefix present) + `cache_creation_input_tokens > 0` (billed-input recorded) + (Gemini-only) `cache_read_input_tokens = 0` (no explicit cache per §5.8.1 #4). Local run: 16/16 GREEN on Identity path (`.env` has no contextualizer keys — Gemini branch dormant; will activate when user adds `KB_GEMINI_API_KEY` to .env). Also closed the `.env.example` consistency gap (flagged in the 2026-05-23 consistency-sweep discussion): added documented placeholders for all 3 LLM keys (`KB_GEMINI_API_KEY`, `KB_ANTHROPIC_API_KEY`, `KB_MISTRAL_API_KEY`) + the new `KB_CONTEXTUALIZER` selector + commented `KB_CONTEXTUAL_MODEL`/`KB_EMBEDDING_MODEL` overrides + chunker tuning entries. Cross-phase sweep across all 9 verify scripts: **0:16/16 · 1a:17/17 · 1b:21/21 · 1c:20/20 · 2a:17/17 · 2b:15/15 · 3a:18/18 · 3b:16/16 · 3c:15/15 — 158 total, all GREEN**. Branch `phase-3/chunking-raptor` ready for merge or Phase 3d extension. | Aniket |
 | 2026-05-24 | **Phase 3b-bis G4 ✅ — GeminiContextualizer + factory selector land.** `GeminiContextualizer` (~110 LOC) added to `src/kb/contextualization/__init__.py` alongside `AnthropicContextualizer` + `IdentityContextualizer`. Uses `google.genai.Client.aio.models.generate_content` with `types.GenerateContentConfig(system_instruction=..., max_output_tokens=200, thinking_config=types.ThinkingConfig(thinking_budget=0))`. Doc context lands in `system_instruction`; chunk text in `contents` (string). Decision #4 implemented: `usage_metadata.prompt_token_count` stored in `cache_creation_input_tokens` (= billed-input); `cache_read_input_tokens` stays 0 (no explicit cache used at demo scale). Decision #8 implemented: exception path captures `prompt_feedback.block_reason` if attached to exception or response, wraps into `ContextualizationError`. Defensive empty-candidates check covers safety-block responses. `make_contextualizer()` rewritten to a 4-value `KB_CONTEXTUALIZER` selector with `auto` probing Gemini → Anthropic → Identity (Gemini-first matches demo's single-key story). Explicit `gemini`/`anthropic` without matching key raises ValueError (loud-fail beats silent-fallback for misconfigs). **One in-G4 fix**: G3's `test_gemini_contextualizer_disables_thinking` used `getattr(...) or ...` to read `thinking_budget`, but `0 or x` short-circuits to `x` because 0 is falsy → test got `None` instead of asserting against `0`. Refactored to explicit `hasattr` branches. Full suite: 238/238 in 61.5s (232 prior + 6 new). G5 opens: extend `verify_phase_3b.sh` with a Gemini-path E2E branch + cross-phase sweep. | Aniket |
 | 2026-05-24 | **Phase 3b-bis G1 ✅ + G3 ✅ — plan signed off; red skeletons land.** Spec at `tests/specs/phase_3b_bis.md`. 6 new tests in `tests/test_contextualization_gemini_unit.py` (mocked `google.genai.Client.aio.models.generate_content` mirroring the `_MockAnthropicClient` pattern from 3b for side-by-side reviewability — same `last_kwargs` capture + `raise_exc` injection). Tests cover decisions #1/#3/#4/#6/#7/#8/#9 from §5.8.1. 1 mutated test: `tests/test_contextualization_unit.py::test_contextualizer_factory_returns_identity_when_no_api_key` renamed to `test_contextualizer_factory_selector_matrix` and widened from a 2-case binary check to an 8-case matrix covering all `KB_CONTEXTUALIZER` values (auto+none/auto+gemini/auto+anthropic/auto+both/explicit-gemini/explicit-anthropic/explicit-identity/bogus→ValueError). Decision #10 (worker test parameterization) deferred to G4 — it's a code-only refactor with no new assertion. Run state: 7/7 fail (RED expected); rest of suite 231/231 pass — no collateral damage. G4 opens: implement `GeminiContextualizer` (~50 LOC mirroring `AnthropicContextualizer` shape, swap to `google-genai` client) + widen `make_contextualizer()` to read `KB_CONTEXTUALIZER` with auto-probe. | Aniket |
