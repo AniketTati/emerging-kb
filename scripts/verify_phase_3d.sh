@@ -197,10 +197,15 @@ for _ in $(seq 1 180); do
 done
 (( ready == 1 )) && ok "file reached ready (last state: $s)" || fail "file didn't reach ready (last state: $s)"
 
-step "psql: lifecycle history shows ...→embedded→raptor_building→ready"
+step "psql: lifecycle history shows ...→embedded→raptor_building→...→ready"
 events=$(DB_PSQL -tA -c "SELECT string_agg(to_state, ',' ORDER BY created_at) FROM file_lifecycle WHERE file_id = '$fid';")
-if [[ "$events" == *"embedded,raptor_building,ready"* ]]; then
-    ok "lifecycle progression embedded→raptor_building→ready observed"
+# Per Phase 5a §5.12.1 #7: after raptor_building, the chain now passes
+# through mentions_extracting → fields_extracting → units_extracting before
+# reaching ready. Phase 3d's contract is just that raptor_building appears
+# immediately after embedded and ready is terminal — not the EXACT next
+# state after raptor_building.
+if [[ "$events" == *"embedded,raptor_building"* && "$events" == *"ready"* ]]; then
+    ok "lifecycle progression embedded→raptor_building→...→ready observed"
 else
     fail "unexpected lifecycle: $events"
 fi
