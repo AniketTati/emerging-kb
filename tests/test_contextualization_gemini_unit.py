@@ -194,13 +194,21 @@ async def test_gemini_contextualizer_disables_thinking():
     await contextualizer.contextualize(doc_text="doc", chunk_text="chunk")
 
     config = mock_client.last_kwargs.get("config")
-    thinking = getattr(config, "thinking_config", None) or (
-        config.get("thinking_config") if isinstance(config, dict) else None
-    )
+    # Don't use `or` for thinking_budget — 0 is the value we want to assert
+    # and 0 is falsy.
+    if hasattr(config, "thinking_config"):
+        thinking = config.thinking_config
+    elif isinstance(config, dict):
+        thinking = config.get("thinking_config")
+    else:
+        thinking = None
     assert thinking is not None, "expected thinking_config in GenerateContentConfig"
-    budget = getattr(thinking, "thinking_budget", None) or (
-        thinking.get("thinking_budget") if isinstance(thinking, dict) else None
-    )
+    if hasattr(thinking, "thinking_budget"):
+        budget = thinking.thinking_budget
+    elif isinstance(thinking, dict):
+        budget = thinking.get("thinking_budget")
+    else:
+        budget = None
     assert budget == 0
 
 
