@@ -136,6 +136,11 @@ async def post_file(
     idem_key: Annotated[str, Depends(idempotency_key_required)],
     conn: Annotated[Connection, Depends(kb_app_connection)],
 ) -> Response:
+    # ---- Phase 2c — caller-override ?parser= ----
+    # §5.6.1 #11: valid values are auto | docling | gemini. None/empty → auto.
+    raw_parser = request.query_params.get("parser")
+    forced_parser = _validate_forced_parser(raw_parser)
+
     # ---- Idempotency-Key replay (HTTP layer) ----
     cached = await get_cached(conn, workspace_id, idem_key)
     if cached is not None:
@@ -148,9 +153,13 @@ async def post_file(
     # ---- Parse body — Content-Type branches the two modes ----
     content_type = request.headers.get("content-type", "")
     if content_type.startswith("multipart/form-data"):
-        file_resp, status = await _handle_multipart(request, workspace_id, conn)
+        file_resp, status = await _handle_multipart(
+            request, workspace_id, conn, forced_parser=forced_parser,
+        )
     elif content_type.startswith("application/json"):
-        file_resp, status = await _handle_json(request, workspace_id, conn)
+        file_resp, status = await _handle_json(
+            request, workspace_id, conn, forced_parser=forced_parser,
+        )
     else:
         raise BadRequestError(
             f"unsupported request Content-Type: {content_type!r} "
@@ -167,8 +176,28 @@ async def post_file(
     return JSONResponse(content=body_dict, status_code=status, headers=headers)
 
 
+_VALID_PARSER_OVERRIDES = {"auto", "docling", "gemini"}
+
+
+def _validate_forced_parser(raw: str | None) -> str | None:
+    """Return the normalized `forced_parser` token, or raise
+    InvalidParserOverrideError. `None`/empty/`auto` all normalize to None
+    (= use the server-side strategy)."""
+    from kb.api.errors import InvalidParserOverrideError
+
+    if raw is None or raw == "" or raw == "auto":
+        return None
+    if raw not in _VALID_PARSER_OVERRIDES:
+        raise InvalidParserOverrideError(raw)
+    return raw
+
+
 async def _handle_multipart(
-    request: StarletteRequest, workspace_id: str, conn: Connection,
+    request: StarletteRequest,
+    workspace_id: str,
+    conn: Connection,
+    *,
+    forced_parser: str | None = None,
 ) -> tuple[FileResponse, int]:
     """Mode A — multipart upload."""
     form = await request.form()
@@ -203,11 +232,16 @@ async def _handle_multipart(
         mime_type=mime_type,
         size_bytes=len(file_bytes),
         upload_bytes=file_bytes,
+        forced_parser=forced_parser,
     )
 
 
 async def _handle_json(
-    request: StarletteRequest, workspace_id: str, conn: Connection,
+    request: StarletteRequest,
+    workspace_id: str,
+    conn: Connection,
+    *,
+    forced_parser: str | None = None,
 ) -> tuple[FileResponse, int]:
     """Mode B — JSON references pre-uploaded MinIO object."""
     try:
@@ -246,6 +280,7 @@ async def _handle_json(
         size_bytes=len(file_bytes),
         upload_bytes=None,  # already in MinIO at minio_object_key; ensure_key_matches below
         prestaged_key=body.minio_object_key,
+        forced_parser=forced_parser,
     )
 
 
@@ -259,6 +294,7 @@ async def _create_or_dedup(
     size_bytes: int,
     upload_bytes: bytes | None,
     prestaged_key: str | None = None,
+    forced_parser: str | None = None,
 ) -> tuple[FileResponse, int]:
     """Shared logic for both POST modes — content-hash dedup + create + enqueue."""
     # ---- Content-hash dedup ----
@@ -282,6 +318,13 @@ async def _create_or_dedup(
     # else: prestaged at canonical key — already there.
 
     # ---- Insert files + initial lifecycle event ----
+    # §5.6.1 #11/#12: persist the `forced_parser` override into the initial
+    # 'upload' lifecycle event payload so the worker (and any audit-trail
+    # consumer) can see what the caller asked for.
+    upload_payload: dict[str, str] = {}
+    if forced_parser is not None:
+        upload_payload["forced_parser"] = forced_parser
+
     file_resp = await create_file(
         conn,
         workspace_id=workspace_id,
@@ -290,12 +333,15 @@ async def _create_or_dedup(
         object_key=canonical_key,
         mime_type=mime_type,
         size_bytes=size_bytes,
+        upload_payload=upload_payload,
     )
 
     # ---- Enqueue parse task ----
     # Procrastinate's defer needs an async DB connection; use the connector
-    # that's already on the app.
-    await parse_file.defer_async(file_id=file_resp.id)
+    # that's already on the app. Phase 2c: forward `forced_parser` so the
+    # worker hits select_parser_for(..., forced_parser=...) without
+    # re-reading the upload event.
+    await parse_file.defer_async(file_id=file_resp.id, forced_parser=forced_parser)
 
     return file_resp, 201
 

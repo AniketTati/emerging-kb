@@ -50,20 +50,34 @@ from kb.embeddings import EmbeddingError, make_embedder
 from kb.parsers import (
     NoParserForMime,
     Page,
+    ParsedDocument,
     ParseError,
     global_registry,
     register_default_parsers,
+    select_parser_for,
+)
+from kb.parsers.gemini_ocr_parser import OCRConfigError
+from kb.parsers.quality import (
+    build_provenance,
+    escalate_per_page,
+    score_parse_quality,
+    should_escalate,
 )
 from kb.storage.files import get_file_bytes
 from kb.workers.app import app as procrastinate_app
 
 
-async def parse_file_impl(file_id: str) -> None:
+async def parse_file_impl(file_id: str, forced_parser: str | None = None) -> None:
     """Pure async core. Reads the file row, sets workspace context, fetches
     bytes from MinIO, dispatches to a parser, writes raw_pages + lifecycle.
 
     Per-stage idempotency: if `files.lifecycle_state == 'parsed'` at entry,
     return immediately.
+
+    Phase 2c (§5.6.1): `forced_parser` (from `POST /files?parser=...`) overrides
+    the dispatcher strategy when set. Quality-escalation is wired in after
+    Docling parses — bad output triggers a Gemini OCR re-parse and the
+    provenance metadata lands in `raw_pages.layout_json.provenance`.
     """
     register_default_parsers()  # idempotent
 
@@ -111,16 +125,45 @@ async def parse_file_impl(file_id: str) -> None:
 
         # Outside the first transaction: fetch bytes (no DB), parse (no DB),
         # then re-open a tx to write results.
+        import os
         try:
             file_bytes = get_file_bytes(object_key)
             magic = file_bytes[:8]
-            parser = global_registry().dispatch(
-                mime_type=mime_type, magic_bytes=magic,
+
+            # Phase 2c §5.6.1: strategy-aware dispatch (sniff + forced_parser).
+            parser = select_parser_for(
+                mime_type=mime_type,
+                magic_bytes=magic,
+                file_bytes=file_bytes,
+                forced_parser=forced_parser,
             )
             doc = await parser.parse(
                 file_bytes, file_id=file_id, workspace_id=str(workspace_id),
             )
-        except (ParseError, NoParserForMime) as exc:
+
+            # Phase 2c quality escalation (§5.6.1 #10): only meaningful when
+            # the chosen parser is Docling. Gemini-OCR results are accepted
+            # as-is; if Gemini failed, ParseError already fired above.
+            chose, tried, doc, provenance_reason, quality = await _maybe_escalate_to_ocr(
+                doc=doc,
+                file_id=file_id,
+                workspace_id=str(workspace_id),
+                file_bytes=file_bytes,
+                primary_parser=parser,
+                forced_parser=forced_parser,
+            )
+            strategy_for_provenance = (
+                os.environ.get("KB_PARSER_STRATEGY") or "auto"
+            ).lower()
+            provenance = build_provenance(
+                strategy=strategy_for_provenance,
+                forced_parser=forced_parser,
+                tried=tried,
+                chose=chose,
+                reason=provenance_reason,
+                quality_score=quality,
+            )
+        except (ParseError, NoParserForMime, OCRConfigError) as exc:
             await _mark_failed(
                 db_url, file_id, str(workspace_id),
                 error_class=type(exc).__name__,
@@ -145,13 +188,18 @@ async def parse_file_impl(file_id: str) -> None:
                 )
                 for page in doc.pages:
                     sha = hashlib.sha256(page.text.encode("utf-8")).hexdigest()
+                    layout = dict(page.layout_json or {})
+                    # Phase 2c §5.6.1 #12: stamp every raw_pages row with the
+                    # provenance JSON so downstream consumers can attribute
+                    # the OCR/parse source per page.
+                    layout["provenance"] = provenance
                     await insert_raw_page(
                         conn,
                         file_id=file_id,
                         workspace_id=str(workspace_id),
                         page_number=page.page_number,
                         text=page.text,
-                        layout_json=page.layout_json,
+                        layout_json=layout,
                         content_sha=sha,
                     )
                 await transition_lifecycle(
@@ -161,8 +209,9 @@ async def parse_file_impl(file_id: str) -> None:
                     to_state="parsed",
                     event="parse_done",
                     payload={
-                        "parser": type(parser).__name__,
+                        "parser": chose,
                         "pages": len(doc.pages),
+                        "provenance": provenance,
                     },
                 )
 
@@ -177,6 +226,117 @@ async def parse_file_impl(file_id: str) -> None:
         except Exception:  # noqa: BLE001 — best-effort chain
             # Don't fail the parse over a chain defer error; log only.
             traceback.print_exc()
+
+
+async def _maybe_escalate_to_ocr(
+    *,
+    doc: ParsedDocument,
+    file_id: str,
+    workspace_id: str,
+    file_bytes: bytes,
+    primary_parser: object,
+    forced_parser: str | None,
+) -> tuple[str, list[str], ParsedDocument, str, float | None]:
+    """Phase 2c §5.6.1 #10 — quality-escalation decision.
+
+    Inputs: the document produced by the primary parser (typically Docling),
+    plus the original file bytes for a potential per-page Gemini OCR retry.
+
+    Returns `(chose, tried, final_doc, reason, quality_score)`:
+      - `chose`: 'docling', 'gemini_ocr', or the underlying parser slug
+      - `tried`: list of parser slugs in execution order
+      - `final_doc`: the ParsedDocument written to raw_pages (may be the
+        original, a per-page-patched version, or a full Gemini retry)
+      - `reason`: human-readable explanation for the provenance JSON
+      - `quality_score`: score in [0.0, 1.0] from the primary parse, or None
+        when no Docling output existed to score (forced gemini path)
+    """
+    primary_slug = _parser_slug(primary_parser)
+    tried = [primary_slug]
+
+    # If the primary was already Gemini OCR (forced or strategy-driven), no
+    # escalation makes sense — Gemini IS the escalation target.
+    if primary_slug != "docling":
+        return primary_slug, tried, doc, "primary parser produced output", None
+
+    # Score quality + decide on escalation.
+    quality = score_parse_quality(doc)
+    escalate_whole, reason = should_escalate(doc)
+    bad_pages = escalate_per_page(doc) if not escalate_whole else []
+
+    # If neither signal fires, keep Docling output as-is.
+    if not escalate_whole and not bad_pages:
+        return primary_slug, tried, doc, "quality_ok", quality
+
+    # If forced_parser explicitly said "docling", do NOT escalate — caller
+    # asked for Docling and we respect that even when quality is poor.
+    if forced_parser == "docling":
+        return primary_slug, tried, doc, (
+            f"{reason} (caller forced parser=docling — escalation suppressed)"
+        ), quality
+
+    # We need Gemini OCR. Verify the key is present before rendering pages.
+    import os
+    if not os.environ.get("KB_GEMINI_API_KEY"):
+        # No key → can't escalate. Keep the bad Docling output but record
+        # the reason in provenance so dashboards can alert on this.
+        return primary_slug, tried, doc, (
+            f"{reason} (escalation skipped: KB_GEMINI_API_KEY unset)"
+        ), quality
+
+    from kb.parsers.gemini_ocr_parser import GeminiOCRParser
+    gemini = GeminiOCRParser(api_key=os.environ["KB_GEMINI_API_KEY"])
+
+    if escalate_whole:
+        # Re-parse the entire document via Gemini OCR.
+        try:
+            new_doc = await gemini.parse(
+                file_bytes, file_id=file_id, workspace_id=workspace_id,
+            )
+        except ParseError as exc:
+            return primary_slug, tried + ["gemini_ocr"], doc, (
+                f"{reason} (escalation attempted but failed: {exc})"
+            ), quality
+        tried.append("gemini_ocr")
+        return "gemini_ocr", tried, new_doc, (
+            f"escalated whole doc: {reason}"
+        ), quality
+
+    # Hybrid case: per-page escalation for bad_pages only.
+    try:
+        gemini_doc = await gemini.parse(
+            file_bytes, file_id=file_id, workspace_id=workspace_id,
+        )
+    except ParseError as exc:
+        return primary_slug, tried + ["gemini_ocr"], doc, (
+            f"{reason} (per-page escalation attempted but failed: {exc})"
+        ), quality
+    tried.append("gemini_ocr")
+
+    # Patch in the Gemini pages for the bad_pages set; keep Docling for rest.
+    gemini_by_pn = {p.page_number: p for p in gemini_doc.pages}
+    patched: list[Page] = []
+    for page in doc.pages:
+        if page.page_number in bad_pages and page.page_number in gemini_by_pn:
+            patched.append(gemini_by_pn[page.page_number])
+        else:
+            patched.append(page)
+    patched_doc = ParsedDocument(pages=patched)
+    return "gemini_ocr", tried, patched_doc, (
+        f"per-page escalation: re-OCR'd pages {bad_pages}"
+    ), quality
+
+
+def _parser_slug(parser: object) -> str:
+    """Map a parser instance to its provenance slug used in lifecycle events."""
+    cls = type(parser).__name__
+    return {
+        "DoclingParser": "docling",
+        "GeminiOCRParser": "gemini_ocr",
+        "MistralOCRParser": "mistral_ocr",
+        "XLSXParser": "xlsx",
+        "EmailParser": "email",
+    }.get(cls, cls.lower())
 
 
 async def _mark_failed(
@@ -615,9 +775,13 @@ async def embed_file_impl(file_id: str) -> None:
 
 
 @procrastinate_app.task(name="parse_file", queue="kb", pass_context=False)
-async def parse_file(file_id: str) -> None:
-    """Wire-level Procrastinate task. Delegates to the testable impl."""
-    await parse_file_impl(file_id)
+async def parse_file(file_id: str, forced_parser: str | None = None) -> None:
+    """Wire-level Procrastinate task. Delegates to the testable impl.
+
+    Phase 2c §5.6.1: `forced_parser` (from `POST /files?parser=...`) is
+    forwarded to the dispatcher so the worker honors caller overrides.
+    """
+    await parse_file_impl(file_id, forced_parser=forced_parser)
 
 
 @procrastinate_app.task(name="chunk_file", queue="kb", pass_context=False)

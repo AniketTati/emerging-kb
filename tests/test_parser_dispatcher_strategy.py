@@ -44,13 +44,22 @@ def _env(**kwargs):
 
 
 def test_select_parser_for_auto_digital_pdf_picks_docling():
-    """`auto` + PDF with text layer → DoclingParser (via pre-flight sniff)."""
+    """`auto` + PDF with text layer → DoclingParser (via pre-flight sniff).
+
+    tiny.pdf is a small fixture (~38 chars), so we lower
+    KB_PDF_TEXT_LAYER_THRESHOLD to 10 to keep the sniff routing positive
+    on the fixture. Production default of 50 chars/page is right for typical
+    A4 pages (~3000 chars typed)."""
     from kb.parsers import select_parser_for
     from kb.parsers.docling_parser import DoclingParser
 
     pdf_bytes = _TINY_PDF_PATH.read_bytes()
 
-    with _env(KB_PARSER_STRATEGY=None, KB_GEMINI_API_KEY="fake"):
+    with _env(
+        KB_PARSER_STRATEGY=None,
+        KB_GEMINI_API_KEY="fake",
+        KB_PDF_TEXT_LAYER_THRESHOLD="10",
+    ):
         # Default strategy = auto when env unset.
         parser = select_parser_for(
             mime_type="application/pdf",

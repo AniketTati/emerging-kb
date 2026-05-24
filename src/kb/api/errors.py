@@ -52,3 +52,14 @@ class BadRequestError(Exception):
     def __init__(self, detail: str) -> None:
         self.detail = detail
         super().__init__(detail)
+
+
+class InvalidParserOverrideError(Exception):
+    """Phase 2c §5.6.1 #11: POST /files?parser=<value> with a value not in
+    {auto, docling, gemini}. Maps to 400 invalid-parser-override."""
+
+    def __init__(self, value: str) -> None:
+        self.value = value
+        super().__init__(
+            f"?parser={value!r} is invalid; expected one of auto, docling, gemini"
+        )

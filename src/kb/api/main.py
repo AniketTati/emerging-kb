@@ -228,6 +228,16 @@ def build_app() -> FastAPI:
             title="Bad request", detail=exc.detail,
         )
 
+    from kb.api.errors import InvalidParserOverrideError
+
+    @app.exception_handler(InvalidParserOverrideError)
+    async def _invalid_parser_override(req: Request, exc: InvalidParserOverrideError):
+        return problem_response(
+            req, status_code=400, type_slug="invalid-parser-override",
+            title="?parser= query value is invalid",
+            detail=str(exc),
+        )
+
     @app.exception_handler(RequestValidationError)
     async def _validation(req: Request, exc: RequestValidationError):
         return problem_response(
