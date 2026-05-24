@@ -8,12 +8,14 @@
 
 ## 1. Scope
 
-Every §5.11 G1 decision that has assertable behavior gets matching tests. Total surface: **13 new tests** across 2 new files. On top of 286 from prior phases (~299 expected at G5 green).
+Every §5.11 G1 decision that has assertable behavior gets matching tests. Total surface: **10 new tests** across 2 new files. On top of 286 from prior phases (~296 expected at G5 green).
 
 | File | New tests | Covers |
 |---|---|---|
-| [`tests/test_indexes.py`](../test_indexes.py) | 8 | DDL invariants (HNSW + BM25 on 4 columns with correct operator classes) + planner usage (EXPLAIN proves HNSW/BM25 are used, not seq scan) + kb_app role can query indexed tables (decisions #1, #2, #3, #4, #15) |
+| [`tests/test_indexes.py`](../test_indexes.py) | 5 | DDL invariants — HNSW + BM25 on 4 columns with correct operator classes + kb_app role can query indexed tables (decisions #1, #2, #15) |
 | [`tests/test_retrieval_smoke.py`](../test_retrieval_smoke.py) | 5 | `bm25_smoke()` + `dense_smoke()` return ranked results · multi-level hits (chunk + raptor_node) · workspace isolation via RLS · empty for unknown workspace (decisions #10, #11, #12) |
+
+**Planner-usage tests moved to G5** (`scripts/verify_phase_4.sh`) instead of pytest. Rationale: at pytest-fixture scale (~200 fabricated rows per test) the planner correctly prefers btree index-scan + in-memory sort over HNSW — HNSW only wins above ~5K rows per workspace AND with up-to-date pg_statistic stats from ANALYZE. Forcing the planner via `SET LOCAL enable_*=off` flags tests a synthetic scenario rather than the real choice. verify_phase_4.sh exercises this at full-stack scale (5+ docs through the real ingestion pipeline + ANALYZE + EXPLAIN against realistic query shapes).
 
 ---
 
@@ -46,7 +48,7 @@ Every §5.11 G1 decision that has assertable behavior gets matching tests. Total
 | 15 | kb_app role retains query access | `test_kb_app_can_query_indexed_tables` |
 | 16 | No `api_contracts.md` delta | No new test file under `tests/` named for an HTTP endpoint |
 
-**Planner tests** (Bucket B in test_indexes.py) — `test_planner_uses_hnsw_for_chunk_embeddings_knn`, `test_planner_uses_hnsw_for_raptor_nodes_knn`, `test_planner_uses_bm25_for_text_search` — verify the *integration* of the indexes with the query planner (you can have a perfectly valid index that the planner ignores; these tests catch that).
+**Planner-usage** verification happens at G5 via `scripts/verify_phase_4.sh` (not pytest) — see explanation in §1 above. At G5, EXPLAIN against realistic seed data + ANALYZE proves both HNSW and BM25 are chosen by the planner for the right query shapes.
 
 Decisions #5 (single shared HNSW graph — no per-tenant partition), #6 (BM25 default tokenizer), #7 (BM25 Robertson defaults), #8 (`KB_HNSW_EF_SEARCH` env), #9 (`scripts/reindex_weekly.sh` stub) need no dedicated pytest — they're operational/configuration decisions verified at G5 via `verify_phase_4.sh` and code review.
 
@@ -69,12 +71,11 @@ Decisions #5 (single shared HNSW graph — no per-tenant partition), #6 (BM25 de
 
 ## 5. G3 exit criteria
 
-- `uv run pytest tests/test_indexes.py tests/test_retrieval_smoke.py` → **12 fail (RED expected) + 1 pre-passes** (the 1 pre-passing test is `test_kb_app_can_query_indexed_tables` — decision #15 says "no GRANT changes; kb_app already has SELECT" so this test is a regression guard, not a new-behavior assertion; it correctly passes at both G3 and G5).
+- `uv run pytest tests/test_indexes.py tests/test_retrieval_smoke.py` → **9 fail (RED expected) + 1 pre-passes** (the 1 pre-passing test is `test_kb_app_can_query_indexed_tables` — decision #15 says "no GRANT changes; kb_app already has SELECT" so this test is a regression guard, not a new-behavior assertion; it correctly passes at both G3 and G5).
 - Rest of suite (286 prior) remains green — no collateral damage.
 - This spec file committed; build_tracker §5.11 status updated to `G1 ✅ + G2 — + G3 ✅ + G4 🟡`.
 
 **RED-state failure mode breakdown:**
 - 4 × DDL tests fail with `assert row is not None` (pg_indexes returns empty for the not-yet-created index).
-- 3 × planner tests fail with seed-SQL errors (the seeded data path works, but planner shape assertion fails — no HNSW/BM25 index in plan).
 - 5 × smoke helper tests fail with `ModuleNotFoundError: No module named 'kb.retrieval'`.
 - 1 × kb_app SELECT test passes (regression guard — kb_app SELECT works regardless of indexes).
