@@ -16,6 +16,7 @@ failure doesn't roll back the successful parse.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import traceback
 
@@ -768,6 +769,335 @@ async def embed_file_impl(file_id: str) -> None:
                 },
             )
 
+    # Phase 3d decision #13: chain raptor_build_file in a SEPARATE tx so a
+    # Procrastinate-defer failure doesn't roll back the successful embed.
+    # Matches the 3a→3b, 3b→3c chaining shape.
+    try:
+        await procrastinate_app.configure_task(
+            name="raptor_build_file"
+        ).defer_async(file_id=file_id)
+    except Exception:  # noqa: BLE001 — best-effort chain
+        traceback.print_exc()
+
+
+# ---------------------------------------------------------------------------
+# Phase 3d — raptor_build_file_impl
+# ---------------------------------------------------------------------------
+
+
+async def raptor_build_file_impl(file_id: str) -> None:
+    """Build the per-doc RAPTOR tree for an 'embedded' file → write
+    raptor_nodes (L2+) + raptor_edges → advance lifecycle to 'ready'.
+
+    Per build_tracker §5.10:
+    - decision #9: L1 leaves stay in contextual_chunks (not denormalized).
+    - decision #10: discriminated edge FK (L2 edges → child_contextual_chunk_id;
+      L3+ edges → child_node_id).
+    - decision #12: lifecycle is embedded → raptor_building → ready (or failed).
+      Adds intermediate `raptor_building` state for observability.
+    - decision #14: cluster/summarize/embed errors → raptor_building → failed;
+      tree-writes happen in one tx so partial failures roll back atomically.
+    - decision #15: reuses Phase 3c's `make_embedder()` so leaves + summaries
+      live in the same halfvec(3072) vector space.
+
+    Per-stage idempotency: returns immediately if already 'ready' or beyond.
+    """
+    from kb.config import get_settings
+    from kb.domain.raptor import (
+        insert_raptor_edge,
+        insert_raptor_node,
+        read_leaves_for_raptor_build,
+    )
+    from kb.raptor import (
+        DEFAULT_BRANCHING_FACTOR,
+        DEFAULT_MAX_LEVELS,
+        cluster_embeddings,
+    )
+    import math
+    import os
+
+    settings = get_settings()
+    db_url = settings.database_url
+
+    # Phase 1: read file row + check idempotency + transition to raptor_building.
+    async with open_connection(db_url) as conn:
+        async with conn.transaction():
+            cur = await conn.execute(
+                "SELECT workspace_id, lifecycle_state FROM files WHERE id = %s",
+                (file_id,),
+            )
+            row = await cur.fetchone()
+            if row is None:
+                raise FileNotFoundError(file_id)
+            workspace_id, lifecycle_state = row
+
+            if lifecycle_state in ("ready", "failed", "deleted"):
+                return
+            if lifecycle_state == "raptor_building":
+                # Concurrent invocation in flight — let it finish.
+                return
+            if lifecycle_state != "embedded":
+                # Not yet ready to build.
+                return
+
+            await conn.execute(
+                "SELECT set_config('app.workspace_id', %s, true)",
+                (str(workspace_id),),
+            )
+            await transition_lifecycle(
+                conn,
+                workspace_id=str(workspace_id),
+                file_id=file_id,
+                to_state="raptor_building",
+                event="raptor_build_started",
+                payload={},
+            )
+            leaves = await read_leaves_for_raptor_build(conn, file_id=file_id)
+
+    if not leaves:
+        await _mark_failed(
+            db_url, file_id, str(workspace_id),
+            error_class="RaptorBuildError",
+            message=f"no contextual_chunks/chunk_embeddings for file={file_id}",
+            from_state="raptor_building",
+            event="raptor_build_failed",
+        )
+        return
+
+    # Phase 2: build tree in memory (cluster + summarize + embed each level).
+    leaf_ids = [cc_id for cc_id, _, _, _ in leaves]
+    leaf_texts = [text for _, text, _, _ in leaves]
+    leaf_embeddings = [vec for _, _, vec, _ in leaves]
+
+    branching_factor = int(
+        os.environ.get("KB_RAPTOR_BRANCHING_FACTOR") or DEFAULT_BRANCHING_FACTOR
+    )
+    max_levels = int(
+        os.environ.get("KB_RAPTOR_MAX_LEVELS") or DEFAULT_MAX_LEVELS
+    )
+    concurrency = int(
+        os.environ.get("KB_SUMMARIZER_CONCURRENCY") or 4
+    )
+
+    # Build state: track level → list of (text, vector, raptor_node_id|None,
+    # child_indexes_at_prev_level). At L=2, children are contextual_chunks
+    # (no node IDs); at L>=3, children are raptor_nodes (have IDs).
+    from kb.summarization import SummarizationError, make_summarizer
+    summarizer = make_summarizer()
+    embedder = make_embedder()
+    summarizer_model_id = ""
+    embedder_model_id = ""
+    levels_built: list[int] = []
+    total_summarizer_calls = 0
+
+    # Per-level state: at L=2, prev_ids = contextual_chunk_ids, prev_kind="chunk";
+    # at L>=3, prev_ids = raptor_node_ids,             prev_kind="node".
+    prev_texts = list(leaf_texts)
+    prev_embeddings = list(leaf_embeddings)
+    prev_ids = list(leaf_ids)
+    prev_kind = "chunk"
+
+    semaphore = asyncio.Semaphore(concurrency)
+
+    # Collect writes for a single atomic transaction (decision #14).
+    writes: list[dict] = []  # list of {"kind": "node"|"edge", "row": {...}}
+
+    try:
+        for level in range(2, max_levels + 1):
+            n = len(prev_embeddings)
+            if n <= 1:
+                break
+            if n <= branching_factor:
+                n_clusters = 1
+                labels = [0] * n
+            else:
+                n_clusters = max(1, math.ceil(n / branching_factor))
+                labels = cluster_embeddings(
+                    prev_embeddings, branching_factor=branching_factor,
+                )
+
+            # Group child-indexes per cluster.
+            clusters: dict[int, list[int]] = {}
+            for idx, label in enumerate(labels):
+                clusters.setdefault(label, []).append(idx)
+
+            # Summarize each cluster in parallel under the semaphore.
+            async def _summarize_one(cluster_idx: int, member_indexes: list[int]):
+                async with semaphore:
+                    cluster_texts = [prev_texts[i] for i in member_indexes]
+                    summary = await summarizer.summarize(texts=cluster_texts)
+                    return cluster_idx, member_indexes, summary
+
+            summary_results = await asyncio.gather(*(
+                _summarize_one(ci, mi) for ci, mi in clusters.items()
+            ))
+            summary_results.sort(key=lambda t: t[0])
+            total_summarizer_calls += len(summary_results)
+
+            # Embed all summaries in a single batch call.
+            summary_texts_only = [s.text for _, _, s in summary_results]
+            embedding_results = await embedder.embed_batch(summary_texts_only)
+            if len(embedding_results) != len(summary_results):
+                raise RuntimeError(
+                    f"embedder returned {len(embedding_results)} vectors "
+                    f"for {len(summary_results)} summaries"
+                )
+
+            # Stage node-writes for this level + edge-writes from children.
+            new_level_texts: list[str] = []
+            new_level_embeddings: list[list[float]] = []
+            new_level_synthetic_ids: list[tuple[int, list[int]]] = []  # (cluster_idx, member_indexes)
+            for (cluster_idx, member_indexes, summary), emb_result in zip(
+                summary_results, embedding_results, strict=True,
+            ):
+                writes.append({
+                    "kind": "node",
+                    "scope": "per_doc",
+                    "file_id": file_id,
+                    "workspace_id": str(workspace_id),
+                    "level": level,
+                    "text": summary.text,
+                    "vector": list(emb_result.vector),
+                    "cluster_id_in_level": cluster_idx,
+                    "summarizer_model_id": summary.model_id,
+                    "embedder_model_id": emb_result.model_id,
+                    "token_count": summary.output_token_count,
+                })
+                summarizer_model_id = summary.model_id
+                embedder_model_id = emb_result.model_id
+                # Edges from this node to its member children. We don't know
+                # node_id yet (assigned at INSERT time) — write a placeholder
+                # keyed on (level, cluster_idx) that gets resolved at write time.
+                for child_idx in member_indexes:
+                    child_id = prev_ids[child_idx]
+                    if prev_kind == "chunk":
+                        writes.append({
+                            "kind": "edge",
+                            "parent_level": level,
+                            "parent_cluster_idx": cluster_idx,
+                            "child_contextual_chunk_id": child_id,
+                            "workspace_id": str(workspace_id),
+                        })
+                    else:
+                        writes.append({
+                            "kind": "edge",
+                            "parent_level": level,
+                            "parent_cluster_idx": cluster_idx,
+                            "child_node_synthetic": (level - 1, child_idx),
+                            "workspace_id": str(workspace_id),
+                        })
+
+                new_level_texts.append(summary.text)
+                new_level_embeddings.append(list(emb_result.vector))
+                new_level_synthetic_ids.append((cluster_idx, member_indexes))
+
+            levels_built.append(level)
+
+            # Advance state for the next level.
+            prev_texts = new_level_texts
+            prev_embeddings = new_level_embeddings
+            prev_ids = [None] * len(new_level_texts)  # resolved at write time
+            prev_kind = "node"
+
+            if len(new_level_texts) <= 1:
+                # Root reached.
+                break
+
+    except SummarizationError as exc:
+        await _mark_failed(
+            db_url, file_id, str(workspace_id),
+            error_class="SummarizationError",
+            message=str(exc),
+            from_state="raptor_building",
+            event="raptor_build_failed",
+        )
+        return
+    except EmbeddingError as exc:
+        await _mark_failed(
+            db_url, file_id, str(workspace_id),
+            error_class="EmbeddingError",
+            message=str(exc),
+            from_state="raptor_building",
+            event="raptor_build_failed",
+        )
+        return
+    except Exception as exc:
+        await _mark_failed(
+            db_url, file_id, str(workspace_id),
+            error_class=type(exc).__name__,
+            message=str(exc),
+            from_state="raptor_building",
+            event="raptor_build_failed",
+            traceback_head=traceback.format_exc()[:2000],
+        )
+        return
+
+    # Phase 3: atomic DB write of all nodes + edges + lifecycle transition.
+    async with open_connection(db_url) as conn:
+        async with conn.transaction():
+            await conn.execute(
+                "SELECT set_config('app.workspace_id', %s, true)",
+                (str(workspace_id),),
+            )
+
+            # Insert nodes first, building (level, cluster_idx) → node_id map.
+            node_id_by_synthetic: dict[tuple[int, int], str] = {}
+            for w in writes:
+                if w["kind"] == "node":
+                    node_id = await insert_raptor_node(
+                        conn,
+                        scope=w["scope"],
+                        file_id=w["file_id"],
+                        workspace_id=w["workspace_id"],
+                        level=w["level"],
+                        text=w["text"],
+                        vector=w["vector"],
+                        cluster_id_in_level=w["cluster_id_in_level"],
+                        summarizer_model_id=w["summarizer_model_id"],
+                        embedder_model_id=w["embedder_model_id"],
+                        token_count=w["token_count"],
+                    )
+                    node_id_by_synthetic[(w["level"], w["cluster_id_in_level"])] = node_id
+
+            # Now insert edges using the resolved node_ids.
+            for w in writes:
+                if w["kind"] == "edge":
+                    parent_id = node_id_by_synthetic[
+                        (w["parent_level"], w["parent_cluster_idx"])
+                    ]
+                    if "child_contextual_chunk_id" in w:
+                        await insert_raptor_edge(
+                            conn,
+                            parent_node_id=parent_id,
+                            workspace_id=w["workspace_id"],
+                            child_contextual_chunk_id=w["child_contextual_chunk_id"],
+                        )
+                    else:
+                        child_level, child_idx = w["child_node_synthetic"]
+                        child_node_id = node_id_by_synthetic[(child_level, child_idx)]
+                        await insert_raptor_edge(
+                            conn,
+                            parent_node_id=parent_id,
+                            workspace_id=w["workspace_id"],
+                            child_node_id=child_node_id,
+                        )
+
+            # Finally, transition to ready.
+            await transition_lifecycle(
+                conn,
+                workspace_id=str(workspace_id),
+                file_id=file_id,
+                to_state="ready",
+                event="raptor_build_done",
+                payload={
+                    "leaf_count": len(leaves),
+                    "levels_built": levels_built,
+                    "total_summarizer_calls": total_summarizer_calls,
+                    "summarizer_model_id": summarizer_model_id,
+                    "embedder_model_id": embedder_model_id,
+                },
+            )
+
 
 # ---------------------------------------------------------------------------
 # Procrastinate task registration
@@ -800,3 +1130,14 @@ async def contextualize_file(file_id: str) -> None:
 async def embed_file(file_id: str) -> None:
     """Wire-level Procrastinate task. Delegates to the testable impl."""
     await embed_file_impl(file_id)
+
+
+@procrastinate_app.task(name="raptor_build_file", queue="kb", pass_context=False)
+async def raptor_build_file(file_id: str) -> None:
+    """Wire-level Procrastinate task. Delegates to the testable impl.
+
+    Phase 3d: builds the per-doc RAPTOR tree (L2+ summary nodes + edges)
+    from an 'embedded' file's contextual_chunks + chunk_embeddings.
+    Lifecycle transitions: embedded → raptor_building → ready (or failed).
+    """
+    await raptor_build_file_impl(file_id)

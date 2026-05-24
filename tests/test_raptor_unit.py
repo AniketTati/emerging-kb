@@ -90,7 +90,8 @@ def test_cluster_singleton_returns_single_label():
 # ===========================================================================
 
 
-def test_tree_terminates_when_n_le_branching():
+@pytest.mark.asyncio
+async def test_tree_terminates_when_n_le_branching():
     """When previous level has ≤ BRANCHING_FACTOR nodes, the next-level
     cluster would collapse to N=1 — no information gain. build_tree must
     terminate without writing the trivial L→L+1 transition.
@@ -102,10 +103,7 @@ def test_tree_terminates_when_n_le_branching():
     from kb.raptor import build_tree_for_file
 
     # Inject test doubles so we don't need a real DB / real LLM.
-    captured_levels: list[int] = []
-
     async def fake_summarize(*, texts, doc_context=None):
-        captured_levels.append(len(texts))
         from kb.summarization import Summary
         return Summary(
             text=f"summary-of-{len(texts)}",
@@ -123,7 +121,7 @@ def test_tree_terminates_when_n_le_branching():
     leaf_texts = [f"leaf {i}" for i in range(5)]
     leaf_ids = [f"chunk-{i}" for i in range(5)]
 
-    levels_built = build_tree_for_file._build_in_memory(  # type: ignore[attr-defined]
+    levels_built = await build_tree_for_file._build_in_memory(  # type: ignore[attr-defined]
         leaf_embeddings=leaves,
         leaf_texts=leaf_texts,
         leaf_ids=leaf_ids,
@@ -138,7 +136,8 @@ def test_tree_terminates_when_n_le_branching():
     assert levels_built == [2], f"expected [2]; got {levels_built}"
 
 
-def test_tree_terminates_when_max_levels_reached():
+@pytest.mark.asyncio
+async def test_tree_terminates_when_max_levels_reached():
     """For pathological inputs, MAX_LEVELS caps the tree depth even if
     n_at_level > branching_factor still."""
     from kb.raptor import build_tree_for_file
@@ -161,7 +160,7 @@ def test_tree_terminates_when_max_levels_reached():
     leaf_texts = [f"leaf {i}" for i in range(n)]
     leaf_ids = [f"chunk-{i}" for i in range(n)]
 
-    levels_built = build_tree_for_file._build_in_memory(  # type: ignore[attr-defined]
+    levels_built = await build_tree_for_file._build_in_memory(  # type: ignore[attr-defined]
         leaf_embeddings=leaves,
         leaf_texts=leaf_texts,
         leaf_ids=leaf_ids,

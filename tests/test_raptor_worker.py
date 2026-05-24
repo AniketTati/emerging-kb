@@ -52,14 +52,27 @@ def headers(workspace: str, *, idempotency_key: str | None = None) -> dict[str, 
     return h
 
 
-async def _post_parse_chunk_contextualize_embed(client, workspace: str) -> str:
-    """POST tiny.pdf, drive it through to lifecycle_state='embedded', return id."""
-    from kb.workers.tasks import (
-        chunk_file_impl,
-        contextualize_file_impl,
-        embed_file_impl,
-        parse_file_impl,
-    )
+async def _post_parse_chunk_contextualize_embed(
+    client, workspace: str, *, n_leaves: int = 5, db_url_superuser: str | None = None,
+) -> str:
+    """Seed a file at lifecycle_state='embedded' with N fabricated
+    contextual_chunks + chunk_embeddings.
+
+    Bypasses the upstream parse→chunk→contextualize→embed chain — those
+    are tested elsewhere. For RAPTOR worker tests we just need N leaves
+    in the DB at the moment raptor_build_file_impl is invoked.
+
+    Uses tiny.pdf as the upload (so file row + initial lifecycle event +
+    parsed/chunked/contextualized/embedded transitions all get written
+    properly), then injects fabricated chunks/contextual_chunks/embeddings
+    via direct SQL. tiny.pdf-via-Docling only gives 1 chunk; for RAPTOR
+    we override with N synthetic ones."""
+    import hashlib as _hashlib
+    import json
+    import os as _os
+    import psycopg
+
+    from kb.workers.tasks import parse_file_impl
 
     resp = await client.post(
         "/files",
@@ -68,12 +81,75 @@ async def _post_parse_chunk_contextualize_embed(client, workspace: str) -> str:
     )
     assert resp.status_code == 201, resp.text
     fid = resp.json()["id"]
-    await parse_file_impl(fid)
-    await chunk_file_impl(fid)
-    with _env(KB_ANTHROPIC_API_KEY=None):
-        await contextualize_file_impl(fid)
-    with _env(KB_GEMINI_API_KEY=None):
-        await embed_file_impl(fid)
+    await parse_file_impl(fid)  # gets us to lifecycle_state='parsed'
+
+    if db_url_superuser is None:
+        db_url_superuser = _os.environ.get("KB_DATABASE_URL")
+    assert db_url_superuser, "need KB_DATABASE_URL"
+
+    # Inject N fabricated chunks + contextual_chunks + chunk_embeddings,
+    # then jump lifecycle to 'embedded'. Vectors are deterministic per-leaf
+    # (non-identical so clustering can produce ≥2 clusters).
+    async with await psycopg.AsyncConnection.connect(db_url_superuser) as conn:
+        await conn.execute("SELECT set_config('app.workspace_id', %s, true)", (workspace,))
+
+        # Insert N chunks + contextual_chunks + chunk_embeddings.
+        for i in range(n_leaves):
+            text = f"Synthetic chunk {i} — about topic {chr(ord('A') + i % 3)}. " * 4
+            sha = _hashlib.sha256(text.encode()).hexdigest()
+            cur = await conn.execute(
+                "INSERT INTO chunks (file_id, workspace_id, chunk_index, text, "
+                "source_page_numbers, token_count, content_sha) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id::text",
+                (fid, workspace, i, text, [1], len(text.split()), sha),
+            )
+            (chunk_id,) = await cur.fetchone()
+
+            cur = await conn.execute(
+                "INSERT INTO contextual_chunks "
+                "(chunk_id, file_id, workspace_id, contextual_prefix, contextual_text, "
+                " model_id, prefix_token_count, cache_creation_input_tokens, "
+                " cache_read_input_tokens) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id::text",
+                (chunk_id, fid, workspace, "", text, "identity", 0, 0, 0),
+            )
+            (cc_id,) = await cur.fetchone()
+
+            # Build a deterministic semi-distinct halfvec(3072) — first dim
+            # is the leaf index normalized so clustering can find structure.
+            vec = [0.0] * 3072
+            vec[0] = (i % 3) * 0.5  # bias toward 3 clusters
+            vec[1] = (i % 3) * 0.5
+            vec[2] = 1.0 - (i % 3) * 0.5
+            # Normalize-ish.
+            norm = (sum(v * v for v in vec) or 1.0) ** 0.5
+            vec = [v / norm for v in vec]
+            vec_literal = "[" + ",".join(repr(float(v)) for v in vec) + "]"
+            await conn.execute(
+                "INSERT INTO chunk_embeddings "
+                "(contextual_chunk_id, file_id, workspace_id, embedding, model_id) "
+                "VALUES (%s, %s, %s, %s::halfvec, %s)",
+                (cc_id, fid, workspace, vec_literal, "test-mock"),
+            )
+
+        # Advance lifecycle: parsed → chunked → contextualized → embedded
+        # via direct file_lifecycle inserts + files update.
+        for from_state, to_state, event, payload in [
+            ("parsed", "chunked", "chunking_done", {"chunks_count": n_leaves}),
+            ("chunked", "contextualized", "contextualization_done", {"prefix_count": n_leaves}),
+            ("contextualized", "embedded", "embedding_done", {"embedding_count": n_leaves, "dim": 3072, "model_id": "test-mock"}),
+        ]:
+            await conn.execute(
+                "INSERT INTO file_lifecycle (file_id, workspace_id, from_state, to_state, event, payload) "
+                "VALUES (%s, %s, %s, %s, %s, %s)",
+                (fid, workspace, from_state, to_state, event, json.dumps(payload)),
+            )
+            await conn.execute(
+                "UPDATE files SET lifecycle_state = %s WHERE id = %s",
+                (to_state, fid),
+            )
+        await conn.commit()
+
     return fid
 
 
@@ -89,7 +165,7 @@ async def test_raptor_build_file_impl_writes_l2_nodes_and_edges(
     raptor_nodes rows at level >= 2 + raptor_edges linking to contextual_chunks."""
     from kb.workers.tasks import raptor_build_file_impl
 
-    fid = await _post_parse_chunk_contextualize_embed(client, test_workspace)
+    fid = await _post_parse_chunk_contextualize_embed(client, test_workspace, db_url_superuser=db_url_superuser)
     with _env(KB_GEMINI_API_KEY=None, KB_ANTHROPIC_API_KEY=None):
         # Identity Summarizer + DeterministicMockEmbedder
         await raptor_build_file_impl(fid)
@@ -141,14 +217,14 @@ async def test_raptor_build_file_impl_writes_l2_nodes_and_edges(
 
 
 async def test_raptor_build_writes_raptor_build_done_lifecycle_event(
-    client, test_workspace
+    client, test_workspace, db_url_superuser
 ):
     """Lifecycle history must show the full chain including the intermediate
     raptor_building state. Both events (`raptor_build_started`,
     `raptor_build_done`) get appended."""
     from kb.workers.tasks import raptor_build_file_impl
 
-    fid = await _post_parse_chunk_contextualize_embed(client, test_workspace)
+    fid = await _post_parse_chunk_contextualize_embed(client, test_workspace, db_url_superuser=db_url_superuser)
     with _env(KB_GEMINI_API_KEY=None, KB_ANTHROPIC_API_KEY=None):
         await raptor_build_file_impl(fid)
 
@@ -186,7 +262,7 @@ async def test_raptor_build_is_idempotent_on_already_ready(
     is a no-op: no duplicate raptor_build_done event, no duplicate raptor_nodes."""
     from kb.workers.tasks import raptor_build_file_impl
 
-    fid = await _post_parse_chunk_contextualize_embed(client, test_workspace)
+    fid = await _post_parse_chunk_contextualize_embed(client, test_workspace, db_url_superuser=db_url_superuser)
     with _env(KB_GEMINI_API_KEY=None, KB_ANTHROPIC_API_KEY=None):
         await raptor_build_file_impl(fid)
         # Capture state after the first build.
@@ -269,22 +345,29 @@ async def test_embed_file_impl_chains_raptor_build_via_defer(
 
 
 async def test_raptor_build_failure_writes_failed_event(
-    client, test_workspace, monkeypatch
+    client, test_workspace, monkeypatch, db_url_superuser
 ):
     """Inject a failure in the Summarizer; assert raptor_building→failed
-    transition with event='raptor_build_failed' + error_class in payload."""
+    transition with event='raptor_build_failed' + error_class in payload.
+
+    Patches at the kb.summarization module + at the worker module's local
+    binding (the worker does `from kb.summarization import make_summarizer`
+    inside the function body, but the import statement re-fetches from the
+    module namespace each call — patching the module attribute works)."""
+    import kb.summarization as kb_summarization
+    from kb.summarization import SummarizationError
     from kb.workers.tasks import raptor_build_file_impl
 
-    fid = await _post_parse_chunk_contextualize_embed(client, test_workspace)
+    fid = await _post_parse_chunk_contextualize_embed(client, test_workspace, db_url_superuser=db_url_superuser)
 
-    # Force the Summarizer factory to return an object whose summarize()
-    # raises. The worker must catch + write raptor_building→failed.
     class _ExplodingSummarizer:
         async def summarize(self, *, texts, doc_context=None):
-            raise RuntimeError("simulated summarizer outage")
+            # Raise SummarizationError so the worker's typed except branch
+            # catches it (instead of falling through to the generic handler).
+            raise SummarizationError("simulated summarizer outage")
 
     monkeypatch.setattr(
-        "kb.summarization.make_summarizer",
+        kb_summarization, "make_summarizer",
         lambda: _ExplodingSummarizer(),
     )
 
@@ -293,7 +376,10 @@ async def test_raptor_build_failure_writes_failed_event(
 
     resp = await client.get(f"/files/{fid}", headers=headers(test_workspace))
     body = resp.json()
-    assert body["lifecycle_state"] == "failed"
+    assert body["lifecycle_state"] == "failed", (
+        f"expected failed; got {body['lifecycle_state']}; "
+        f"last events: {body['lifecycle'][-3:]}"
+    )
 
     last_event = body["lifecycle"][-1]
     assert last_event["from_state"] == "raptor_building"
