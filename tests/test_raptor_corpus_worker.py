@@ -131,6 +131,7 @@ async def test_raptor_build_corpus_writes_scope_corpus_nodes_and_cross_scope_edg
       - raptor_edges link corpus L2 nodes to BOTH raptor_nodes (multi-leaf doc
         roots) AND contextual_chunks (singleton doc roots) via the
         discriminated FK columns."""
+    from kb.config import get_settings
     from kb.workers.tasks import raptor_build_corpus_impl
 
     workspace = str(uuid.uuid4())
@@ -138,8 +139,13 @@ async def test_raptor_build_corpus_writes_scope_corpus_nodes_and_cross_scope_edg
         db_url_superuser, workspace=workspace, n_files=10, mix_singleton=True,
     )
 
-    with _env(KB_GEMINI_API_KEY=None, KB_ANTHROPIC_API_KEY=None):
+    with _env(
+        KB_GEMINI_API_KEY=None, KB_ANTHROPIC_API_KEY=None,
+        KB_DATABASE_URL=db_url_superuser,
+    ):
+        get_settings.cache_clear()
         await raptor_build_corpus_impl(workspace_id=workspace)
+    get_settings.cache_clear()
 
     async with await psycopg.AsyncConnection.connect(db_url_superuser) as conn:
         cur = await conn.execute(
@@ -191,6 +197,7 @@ async def test_raptor_build_corpus_atomic_rebuild_replaces_old_rows(
     """Running raptor_build_corpus_impl twice on the same workspace must
     DELETE existing scope='corpus' rows before INSERTing new ones — total
     count after second run equals the count after first run (not doubled)."""
+    from kb.config import get_settings
     from kb.workers.tasks import raptor_build_corpus_impl
 
     workspace = str(uuid.uuid4())
@@ -198,7 +205,11 @@ async def test_raptor_build_corpus_atomic_rebuild_replaces_old_rows(
         db_url_superuser, workspace=workspace, n_files=10,
     )
 
-    with _env(KB_GEMINI_API_KEY=None, KB_ANTHROPIC_API_KEY=None):
+    with _env(
+        KB_GEMINI_API_KEY=None, KB_ANTHROPIC_API_KEY=None,
+        KB_DATABASE_URL=db_url_superuser,
+    ):
+        get_settings.cache_clear()
         await raptor_build_corpus_impl(workspace_id=workspace)
         async with await psycopg.AsyncConnection.connect(db_url_superuser) as conn:
             cur = await conn.execute(
@@ -215,6 +226,7 @@ async def test_raptor_build_corpus_atomic_rebuild_replaces_old_rows(
                 (workspace,),
             )
             (after_replay,) = await cur.fetchone()
+    get_settings.cache_clear()
 
     assert after_replay == after_first, (
         f"atomic rebuild should not double rows; first={after_first} replay={after_replay}"
@@ -230,6 +242,7 @@ async def test_raptor_build_corpus_skips_when_only_one_doc(db_url_superuser):
     """A workspace with 0 or 1 doc-roots should NOT produce a corpus tree
     (no clustering makes sense for N≤1). The worker should return cleanly
     without writing any scope='corpus' rows."""
+    from kb.config import get_settings
     from kb.workers.tasks import raptor_build_corpus_impl
 
     workspace = str(uuid.uuid4())
@@ -237,8 +250,13 @@ async def test_raptor_build_corpus_skips_when_only_one_doc(db_url_superuser):
         db_url_superuser, workspace=workspace, n_files=1,
     )
 
-    with _env(KB_GEMINI_API_KEY=None, KB_ANTHROPIC_API_KEY=None):
+    with _env(
+        KB_GEMINI_API_KEY=None, KB_ANTHROPIC_API_KEY=None,
+        KB_DATABASE_URL=db_url_superuser,
+    ):
+        get_settings.cache_clear()
         await raptor_build_corpus_impl(workspace_id=workspace)
+    get_settings.cache_clear()
 
     async with await psycopg.AsyncConnection.connect(db_url_superuser) as conn:
         cur = await conn.execute(
@@ -264,6 +282,7 @@ async def test_raptor_build_corpus_is_deterministic_across_rebuilds(
     sizes. (We don't assert identical node IDs since DEFAULT gen_random_uuid()
     generates new IDs; structural equivalence is what matters for
     retrieval-citation stability across rebuilds.)"""
+    from kb.config import get_settings
     from kb.workers.tasks import raptor_build_corpus_impl
 
     workspace = str(uuid.uuid4())
@@ -271,7 +290,11 @@ async def test_raptor_build_corpus_is_deterministic_across_rebuilds(
         db_url_superuser, workspace=workspace, n_files=12,
     )
 
-    with _env(KB_GEMINI_API_KEY=None, KB_ANTHROPIC_API_KEY=None):
+    with _env(
+        KB_GEMINI_API_KEY=None, KB_ANTHROPIC_API_KEY=None,
+        KB_DATABASE_URL=db_url_superuser,
+    ):
+        get_settings.cache_clear()
         await raptor_build_corpus_impl(workspace_id=workspace)
         async with await psycopg.AsyncConnection.connect(db_url_superuser) as conn:
             cur = await conn.execute(
@@ -289,6 +312,8 @@ async def test_raptor_build_corpus_is_deterministic_across_rebuilds(
                 (workspace,),
             )
             shape_after_replay = await cur.fetchall()
+
+    get_settings.cache_clear()
 
     assert shape_after_first == shape_after_replay, (
         f"corpus tree shape unstable across rebuilds; "

@@ -27,6 +27,7 @@ from kb.api.middleware import (
     RequestIdMiddleware,
     WorkspaceMiddleware,
 )
+from kb.api.corpus import router as corpus_router
 from kb.api.files import router as files_router
 from kb.api.readiness import router as ready_router
 from kb.api.schema_hierarchy import router as schema_hierarchy_router
@@ -99,6 +100,7 @@ def build_app() -> FastAPI:
     app.include_router(schema_versions_router)
     app.include_router(schema_hierarchy_router)
     app.include_router(files_router)
+    app.include_router(corpus_router)
 
     # Phase 2a — register default parsers (Docling). Idempotent.
     from kb.parsers import register_default_parsers
@@ -228,13 +230,33 @@ def build_app() -> FastAPI:
             title="Bad request", detail=exc.detail,
         )
 
-    from kb.api.errors import InvalidParserOverrideError
+    from kb.api.errors import (
+        CorpusRebuildInFlightError,
+        CorpusRebuildNoInputError,
+        InvalidParserOverrideError,
+    )
 
     @app.exception_handler(InvalidParserOverrideError)
     async def _invalid_parser_override(req: Request, exc: InvalidParserOverrideError):
         return problem_response(
             req, status_code=400, type_slug="invalid-parser-override",
             title="?parser= query value is invalid",
+            detail=str(exc),
+        )
+
+    @app.exception_handler(CorpusRebuildNoInputError)
+    async def _corpus_rebuild_no_input(req: Request, exc: CorpusRebuildNoInputError):
+        return problem_response(
+            req, status_code=400, type_slug="corpus-rebuild-no-input",
+            title="Workspace has no input documents for corpus rebuild",
+            detail=str(exc),
+        )
+
+    @app.exception_handler(CorpusRebuildInFlightError)
+    async def _corpus_rebuild_in_flight(req: Request, exc: CorpusRebuildInFlightError):
+        return problem_response(
+            req, status_code=503, type_slug="corpus-rebuild-in-flight",
+            title="A corpus rebuild is already in flight for this workspace",
             detail=str(exc),
         )
 

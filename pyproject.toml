@@ -39,6 +39,7 @@ dependencies = [
     "torchvision>=0.15",
     "pypdfium2>=5.8.0",
     "scikit-learn>=1.8.0",
+    "umap-learn>=0.5.12",
 ]
 
 [dependency-groups]

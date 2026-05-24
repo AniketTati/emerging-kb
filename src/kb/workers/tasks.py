@@ -1141,3 +1141,258 @@ async def raptor_build_file(file_id: str) -> None:
     Lifecycle transitions: embedded → raptor_building → ready (or failed).
     """
     await raptor_build_file_impl(file_id)
+
+
+# ---------------------------------------------------------------------------
+# Phase 3e — raptor_build_corpus_impl
+# ---------------------------------------------------------------------------
+
+
+async def raptor_build_corpus_impl(*, workspace_id: str) -> None:
+    """Build the corpus-level RAPTOR tree for a workspace.
+
+    Per build_tracker §5.10.1:
+    - decision #1: UMAP+GMM (sklearn GaussianMixture) for clustering.
+    - decision #6: heterogeneous doc-root source (per-doc raptor roots +
+      singleton contextual_chunks).
+    - decision #7: discriminated edge FK — corpus L2 → raptor_nodes
+      (multi-leaf doc roots) OR contextual_chunks (singleton doc roots).
+    - decision #8: explicit trigger only (not chained from any file event).
+    - decision #9: atomic rebuild — DELETE old scope='corpus' rows +
+      INSERT new tree in ONE transaction. All-or-nothing.
+    - decision #10: deterministic via random_state=42.
+    - decision #13: skip when N≤1 (no corpus tree for trivial workspaces).
+    - decision #14: reuses Summarizer + Embedder factories from 3d/3c.
+    """
+    from kb.config import get_settings
+    from kb.domain.raptor import insert_raptor_edge, insert_raptor_node
+    from kb.raptor import DEFAULT_BRANCHING_FACTOR, DEFAULT_MAX_LEVELS
+    from kb.raptor.corpus import (
+        cluster_embeddings_corpus,
+        delete_corpus_rows_for_workspace,
+        read_doc_roots_for_workspace,
+    )
+    from kb.summarization import SummarizationError, make_summarizer
+    import math
+    import os
+
+    settings = get_settings()
+    db_url = settings.database_url
+
+    branching_factor = int(
+        os.environ.get("KB_RAPTOR_BRANCHING_FACTOR") or DEFAULT_BRANCHING_FACTOR
+    )
+    max_levels = int(
+        os.environ.get("KB_RAPTOR_MAX_LEVELS") or DEFAULT_MAX_LEVELS
+    )
+    concurrency = int(
+        os.environ.get("KB_SUMMARIZER_CONCURRENCY") or 4
+    )
+
+    summarizer = make_summarizer()
+    embedder = make_embedder()
+    semaphore = asyncio.Semaphore(concurrency)
+
+    # Phase 1: read doc-roots outside any tx (read-only).
+    async with open_connection(db_url) as conn:
+        await conn.execute(
+            "SELECT set_config('app.workspace_id', %s, true)",
+            (workspace_id,),
+        )
+        roots = await read_doc_roots_for_workspace(conn, workspace_id=workspace_id)
+
+    if len(roots) <= 1:
+        # Decision #13: skip — N≤1 means no clustering to do.
+        return
+
+    # Phase 2: build the corpus tree in memory.
+    # prev_level: list of (root_id, root_text, root_embedding, root_kind).
+    # At L=2, prev_level = doc-roots (heterogeneous: kind ∈ {'node', 'chunk'}).
+    # At L≥3, prev_level = raptor_nodes from the previous corpus level (all
+    # kind='node').
+    prev_level: list[tuple[str, str, list[float], str]] = list(roots)
+    levels_built: list[int] = []
+
+    # Staged writes: applied in a single tx after the in-memory tree is fully
+    # computed (decision #9 — atomic rebuild).
+    writes: list[dict] = []
+
+    for level in range(2, max_levels + 1):
+        n = len(prev_level)
+        if n <= 1:
+            break
+
+        embeddings = [r[2] for r in prev_level]
+        if n <= branching_factor:
+            n_clusters = 1
+            labels = [0] * n
+        else:
+            n_clusters = max(1, math.ceil(n / branching_factor))
+            labels = cluster_embeddings_corpus(
+                embeddings, branching_factor=branching_factor,
+            )
+
+        # Group members per cluster.
+        clusters: dict[int, list[int]] = {}
+        for idx, label in enumerate(labels):
+            clusters.setdefault(label, []).append(idx)
+
+        # Summarize each cluster (parallel under semaphore).
+        async def _summarize_one(cluster_idx: int, member_indexes: list[int]):
+            async with semaphore:
+                cluster_texts = [prev_level[i][1] for i in member_indexes]
+                summary = await summarizer.summarize(texts=cluster_texts)
+                return cluster_idx, member_indexes, summary
+
+        summary_results = await asyncio.gather(*(
+            _summarize_one(ci, mi) for ci, mi in clusters.items()
+        ))
+        summary_results.sort(key=lambda t: t[0])
+
+        # Embed all summaries in one batch.
+        summary_texts = [s.text for _, _, s in summary_results]
+        embedding_results = await embedder.embed_batch(summary_texts)
+        if len(embedding_results) != len(summary_results):
+            raise RuntimeError(
+                f"embedder returned {len(embedding_results)} vectors for "
+                f"{len(summary_results)} summaries"
+            )
+
+        # Stage node-writes + edge-writes.
+        new_level: list[tuple[str, str, list[float], str]] = []
+        for (cluster_idx, member_indexes, summary), emb_result in zip(
+            summary_results, embedding_results, strict=True,
+        ):
+            writes.append({
+                "kind": "node",
+                "scope": "corpus",
+                "file_id": None,  # corpus nodes have no file_id (decision #16 from 3d)
+                "workspace_id": workspace_id,
+                "level": level,
+                "text": summary.text,
+                "vector": list(emb_result.vector),
+                "cluster_id_in_level": cluster_idx,
+                "summarizer_model_id": summary.model_id,
+                "embedder_model_id": emb_result.model_id,
+                "token_count": summary.output_token_count,
+            })
+            for child_idx in member_indexes:
+                child_id, _, _, child_kind = prev_level[child_idx]
+                if child_kind == "chunk":
+                    # Singleton-leaf doc root → contextual_chunks FK.
+                    writes.append({
+                        "kind": "edge",
+                        "parent_level": level,
+                        "parent_cluster_idx": cluster_idx,
+                        "child_contextual_chunk_id": child_id,
+                        "workspace_id": workspace_id,
+                    })
+                else:
+                    # Multi-leaf doc root or higher-level corpus node →
+                    # raptor_nodes FK. For L=2, child_id is an existing
+                    # per-doc raptor_nodes ID (real, not synthetic).
+                    # For L≥3, child_id is a synthetic placeholder we
+                    # resolve at write time.
+                    if level == 2:
+                        writes.append({
+                            "kind": "edge",
+                            "parent_level": level,
+                            "parent_cluster_idx": cluster_idx,
+                            "child_node_existing_id": child_id,
+                            "workspace_id": workspace_id,
+                        })
+                    else:
+                        # Synthetic: (child_level, child_cluster_idx)
+                        # Extract from the synthetic id format below.
+                        synthetic_label = child_id  # encoded as "Lx-cN"
+                        writes.append({
+                            "kind": "edge",
+                            "parent_level": level,
+                            "parent_cluster_idx": cluster_idx,
+                            "child_node_synthetic": synthetic_label,
+                            "workspace_id": workspace_id,
+                        })
+
+            # Use a synthetic id for the next-level lookup.
+            new_level.append((
+                f"L{level}-c{cluster_idx}",
+                summary.text,
+                list(emb_result.vector),
+                "node",
+            ))
+
+        levels_built.append(level)
+        prev_level = new_level
+
+        if len(new_level) <= 1:
+            break
+
+    # Phase 3: atomic write — DELETE old corpus rows + INSERT new tree.
+    async with open_connection(db_url) as conn:
+        async with conn.transaction():
+            await conn.execute(
+                "SELECT set_config('app.workspace_id', %s, true)",
+                (workspace_id,),
+            )
+            await delete_corpus_rows_for_workspace(conn, workspace_id=workspace_id)
+
+            # Insert nodes first; build (level, cluster_idx) → real id map.
+            node_id_by_synthetic: dict[str, str] = {}
+            for w in writes:
+                if w["kind"] == "node":
+                    node_id = await insert_raptor_node(
+                        conn,
+                        scope=w["scope"],
+                        file_id=w["file_id"],
+                        workspace_id=w["workspace_id"],
+                        level=w["level"],
+                        text=w["text"],
+                        vector=w["vector"],
+                        cluster_id_in_level=w["cluster_id_in_level"],
+                        summarizer_model_id=w["summarizer_model_id"],
+                        embedder_model_id=w["embedder_model_id"],
+                        token_count=w["token_count"],
+                    )
+                    node_id_by_synthetic[f"L{w['level']}-c{w['cluster_id_in_level']}"] = node_id
+
+            # Edges: resolve synthetic IDs to real raptor_nodes IDs.
+            for w in writes:
+                if w["kind"] == "edge":
+                    parent_id = node_id_by_synthetic[
+                        f"L{w['parent_level']}-c{w['parent_cluster_idx']}"
+                    ]
+                    if "child_contextual_chunk_id" in w:
+                        await insert_raptor_edge(
+                            conn,
+                            parent_node_id=parent_id,
+                            workspace_id=w["workspace_id"],
+                            child_contextual_chunk_id=w["child_contextual_chunk_id"],
+                        )
+                    elif "child_node_existing_id" in w:
+                        # L=2 edges from corpus → existing per-doc raptor_nodes.
+                        await insert_raptor_edge(
+                            conn,
+                            parent_node_id=parent_id,
+                            workspace_id=w["workspace_id"],
+                            child_node_id=w["child_node_existing_id"],
+                        )
+                    else:
+                        # L≥3 edges within the corpus tree (synthetic → real).
+                        child_id = node_id_by_synthetic[w["child_node_synthetic"]]
+                        await insert_raptor_edge(
+                            conn,
+                            parent_node_id=parent_id,
+                            workspace_id=w["workspace_id"],
+                            child_node_id=child_id,
+                        )
+
+
+@procrastinate_app.task(name="raptor_build_corpus", queue="kb", pass_context=False)
+async def raptor_build_corpus(workspace_id: str) -> None:
+    """Wire-level Procrastinate task. Delegates to the testable impl.
+
+    Phase 3e: builds the corpus-level RAPTOR tree for a workspace from all
+    per-doc roots (or singleton contextual_chunks). Triggered explicitly
+    via POST /corpus/raptor/rebuild (not chained from any file event).
+    """
+    await raptor_build_corpus_impl(workspace_id=workspace_id)
