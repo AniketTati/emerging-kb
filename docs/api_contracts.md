@@ -1081,7 +1081,72 @@ Soft-deletes by setting `lifecycle_state='deleted'`. `raw_pages` rows are NOT ca
 
 ---
 
-## 6. Future phases — placeholders
+## 6. Phase 3e — Corpus RAPTOR
+
+### 6.1 Corpus tree model (the invariants every endpoint depends on)
+
+1. **One corpus tree per workspace.** Cross-workspace trees are out of scope (multi-tenant isolation is enforced by RLS — the same `workspace_id` boundary that scopes files, chunks, contextual_chunks, chunk_embeddings, raptor_nodes, raptor_edges).
+2. **Built from per-doc roots, not from raw chunks.** Per-doc raptor trees (Phase 3d) produce a root summary per file; corpus RAPTOR clusters and summarizes ACROSS those doc-roots. For singleton-leaf files (which have no per-doc raptor_nodes — see Phase 3d decision §5.10 #4), the doc-root is the single `contextual_chunks` row directly. Cross-kind input is handled via the discriminated `raptor_edges` FK (Phase 3d decision §5.10 #10).
+3. **Explicit trigger only.** Corpus rebuild is NOT auto-fired on file upload. Operators call `POST /corpus/raptor/rebuild` on a cadence that fits their cost model. At 100K-doc scale, per-upload rebuilds would melt the worker pool.
+4. **Atomic rebuild semantics.** A rebuild DELETEs all `raptor_nodes` + `raptor_edges` rows with `scope='corpus'` for the workspace, then INSERTs the new tree in one transaction. Partial trees are never visible to retrieval.
+5. **Deterministic.** UMAP + GMM use a fixed `random_state` so re-running the rebuild with no new docs produces an identical tree (retrieval-time citation stability).
+6. **Schema is the same as per-doc.** Corpus nodes live in `raptor_nodes` with `scope='corpus'` and `file_id=NULL` (the forward-compat columns landed at Phase 3d's `0012_raptor.sql`). Corpus edges live in `raptor_edges` and may use either child column (raptor_nodes ID for multi-leaf-file doc-roots; contextual_chunks ID for singleton-leaf-file doc-roots).
+7. **Retrieval graceful degradation.** If no corpus tree exists for a workspace, Phase 4 retrieval falls back to per-doc + chunk-level search. The corpus tree is additive; never blocking.
+
+### 6.2 Corpus-node resource shape
+
+Same physical schema as per-doc raptor_nodes (Phase 3d) — distinguished by `scope='corpus'`. Phase 4 will expose a `GET /corpus/raptor` navigation endpoint; in Phase 3e the corpus nodes are read directly via SQL or Phase 4's retrieval queries.
+
+### 6.3 `POST /corpus/raptor/rebuild` — explicit corpus-tree rebuild
+
+**Auth:** none in Wave A (relies on `X-Test-Workspace` header same as other endpoints). Admin RBAC deferred to Phase 9 — operators MUST gate at the network layer in production.
+
+**Idempotency:** the endpoint itself is fire-and-forget; replaying it just queues another rebuild job. The rebuild WORKER is idempotent — re-running with the same input docs produces the same tree (decision §5.10.1 #10). Multiple concurrent rebuild requests for the same workspace serialize via Procrastinate job semantics.
+
+```http
+POST /corpus/raptor/rebuild
+X-Test-Workspace: <uuid>
+Content-Type: application/json
+
+{}
+```
+
+(Request body is empty — workspace is implied from the header. Future versions may accept `{"force": bool}` for cache-bust semantics.)
+
+**Success — `202 Accepted`:**
+
+```json
+{
+  "workspace_id": "...",
+  "task_id": "0193b2a0-1111-7c2a-9c11-9a3f8c1c9c11",
+  "status": "queued",
+  "message": "corpus RAPTOR rebuild queued"
+}
+```
+
+Worker processes the job asynchronously. Clients poll via SQL on `procrastinate_jobs` (admin polling endpoint lands at Phase 9).
+
+**Errors:**
+
+| Status | When | `type` slug |
+|---|---|---|
+| `400` | workspace has zero files OR zero docs at lifecycle_state='ready' (nothing to cluster) | `corpus-rebuild-no-input` |
+| `503` | a rebuild job for this workspace is already `todo` or `doing` in procrastinate_jobs | `corpus-rebuild-in-flight` |
+
+**Cost note:** at 100K docs with branching=8, a rebuild produces ~115K corpus nodes (≈ N + N/8 + N/64 + ... summary nodes) → ≈ 115K LLM summarization calls + ≈ 115K embedding calls. Operators must own the cost.
+
+### 6.4 Out of scope for Phase 3e
+
+- **`GET /corpus/raptor`** read endpoint — Phase 4 retrieval reads `raptor_nodes`/`raptor_edges` directly via SQL. A REST navigation surface for end-user UIs lands with Phase 8+.
+- **Status / progress polling** on the rebuild job — Procrastinate's `procrastinate_jobs` table is queryable via SQL; admin endpoint at Phase 9.
+- **Incremental updates** when new files arrive after a rebuild — corpus tree is stale until next manual rebuild. CDC-based incremental rebuilds at Phase 5+.
+- **Admin authorization** — Wave A ships open per user direction. Phase 9 adds RBAC.
+- **HNSW + BM25 indexes** on the new corpus rows — Phase 4.
+- **Cross-workspace corpus trees** — corpus trees are per-workspace, not cross-tenant.
+
+---
+
+## 7. Future phases — placeholders
 
 Each phase appends its endpoint contracts here at its G2 gate. Index:
 
@@ -1095,15 +1160,17 @@ Each phase appends its endpoint contracts here at its G2 gate. Index:
 | 2b | Additional parsers (xlsx + email + Mistral OCR) — no new HTTP endpoints | ✅ signed off 2026-05-23 (§5.5 415 row widened) |
 | 3a | Chunking — no new HTTP endpoints; `lifecycle_state` enum widens to add `chunked` (§5.1 #3 + §5.2 row) | ✅ signed off 2026-05-23 (§5.1 #3 + §5.2) |
 | 3b | Contextual Retrieval — no new HTTP endpoints; `lifecycle_state` enum widens to add `contextualized` (§5.1 #3 + §5.2 row) | ✅ signed off 2026-05-23 (§5.1 #3 + §5.2) |
-| 3c | Embedding — no new HTTP endpoints; `lifecycle_state` enum widens to add `embedded` (§5.1 #3 + §5.2 row) | 🟡 G1 drafted in build_tracker §5.9 |
-| 3d–7 | Internal worker triggers + admin endpoints (TBD at each phase's G1) | ⬜ |
+| 3c | Embedding — no new HTTP endpoints; `lifecycle_state` enum widens to add `embedded` (§5.1 #3 + §5.2 row) | ✅ signed off 2026-05-23 (§5.1 #3 + §5.2) |
+| 3d | Per-doc RAPTOR — no new HTTP endpoints; `lifecycle_state` enum widens with `raptor_building` + `ready` as terminal (§5.2 row) + §5.3 lifecycle example annotated | ✅ signed off 2026-05-24 (§5.2 + §5.3) |
+| **3e** | Corpus RAPTOR — `POST /corpus/raptor/rebuild` explicit-trigger endpoint (new top-level §6) | 🟡 drafted in §6 — awaiting sign-off |
+| 4–7 | Retrieval (HNSW + BM25 + tree-aware query) + extraction + ranking endpoints (TBD at each phase's G1) | ⬜ |
 | 8 | `/query`, `/chat`, `/chat/:id/stream` | ⬜ |
-| 9 | `/upload/:id/status` (SSE), `/audit` | ⬜ |
+| 9 | `/upload/:id/status` (SSE), `/audit`, admin RBAC for `/corpus/raptor/rebuild` | ⬜ |
 | 10a–g | UI-driven endpoints follow from `prototype/wiring_inventory.md` | ⬜ |
 
 ---
 
-## 7. Change log
+## 8. Change log
 
 | Date | Change | By |
 |---|---|---|
@@ -1118,3 +1185,6 @@ Each phase appends its endpoint contracts here at its G2 gate. Index:
 | 2026-05-23 | **Phase 3a G2 — `lifecycle_state` enum widens by `chunked` (single contract delta).** §5.1 #3 invariant rewritten to make the state machine extension explicit: `queued → parsing → parsed → chunked | failed`; soft-delete via `→ deleted` from any non-failed state. §5.2 file-resource shape's `lifecycle_state` enum row widens accordingly. Phase 3b will append `contextualized`; 3c will append the terminal `ready` — pattern is "each sub-phase appends exactly one new state" so existing wire readers stay forward-compatible. No new endpoints, no new error slugs, no other §5 sub-sections changed. | Aniket |
 | 2026-05-23 | **Phase 3b G2 — `lifecycle_state` enum widens by `contextualized` (single contract delta).** §5.1 invariant #3 extended to `queued → parsing → parsed → chunked → contextualized | failed`. §5.2 file-resource shape's `lifecycle_state` enum row widens to match. Phase 3c will append the terminal `ready`. Forward-compat convention continues — each sub-phase appends exactly one new state. No new endpoints, no new error slugs, no other §5 sub-sections changed. | Aniket |
 | 2026-05-23 | **Phase 3c G2 — `lifecycle_state` enum widens by `embedded` (single contract delta).** §5.1 invariant #3 extended to `queued → parsing → parsed → chunked → contextualized → embedded | failed`. §5.2 file-shape enum widens to match. Phase 3d will append the terminal `ready`. Forward-compat convention preserved — each sub-phase appends exactly one state. No new endpoints, no new error slugs. | Aniket |
+| 2026-05-24 | **Phase 2c G2 — `?parser=` caller override + 400 invalid-parser-override.** §5.5 `POST /files` adds Query parameters subsection documenting `?parser=auto\|docling\|gemini` (default `auto`; persisted into `raw_pages.layout_json.provenance.forced_parser`). 400 error type widened with `invalid-parser-override`. §5.3 lifecycle history example footnoted with the parser enum widening (`docling | xlsx | email | gemini_ocr | mistral_ocr`). | Aniket |
+| 2026-05-24 | **Phase 3d G2 — `lifecycle_state` enum widens by `raptor_building` + reframes `ready`.** §5.2 enum row widens to include `raptor_building` (3d's intermediate state between embedded → ready) and reframes `ready` as 3d's terminal (was "Phase 3d will add"). §5.3 lifecycle history example annotated with all post-Phase-2c stage transitions (chunking_done, contextualization_done, embedding_done, raptor_build_started, raptor_build_done) + payload shapes per stage + failure-event convention noted explicitly. | Aniket |
+| 2026-05-24 | **Phase 3e G2 — Corpus RAPTOR new §6 added.** New top-level `## 6. Phase 3e — Corpus RAPTOR` introduces the corpus-tree model (§6.1 — 7 invariants covering workspace isolation, doc-root sourcing from per-doc roots, explicit-trigger semantics, atomic rebuild, determinism, schema reuse, retrieval graceful degradation), notes corpus-node resource shape is shared with per-doc (§6.2), and documents `POST /corpus/raptor/rebuild` (§6.3 — 202 Accepted with task_id; errors `400 corpus-rebuild-no-input` and `503 corpus-rebuild-in-flight`). Cost note at the endpoint description warns operators of ~115K LLM+embedding calls at 100K-doc scale. Out-of-scope §6.4 documents the deferrals (GET /corpus/raptor → Phase 8+; status polling → Phase 9; incremental updates → Phase 5+; admin RBAC → Phase 9; HNSW → Phase 4). Old §6 placeholders → §7; old §7 changelog → §8. | Aniket |
