@@ -51,7 +51,7 @@ fail() {
 
 cleanup() {
     local rc=$?
-    if [[ "${KB_VERIFY_KEEP_STACK:-0}" != "1" ]]; then
+    if [[ "${KB_VERIFY_KEEP_STACK:-0}" != "1" && "${KB_REUSE_STACK:-0}" != "1" ]]; then
         echo
         echo "[verify-2b] tearing down compose stack..."
         $COMPOSE down -v --remove-orphans >/dev/null 2>&1 || true
@@ -73,6 +73,7 @@ trap cleanup EXIT
 # Stack 1: docker compose
 # ----------------------------------------------------------------------------
 
+if [[ "${KB_REUSE_STACK:-0}" != "1" ]]; then
 step "compose build + up"
 $COMPOSE build >/tmp/kb-verify-2b-build.log 2>&1
 $COMPOSE up -d >/tmp/kb-verify-2b-up.log 2>&1
@@ -107,6 +108,9 @@ except Exception: print('')" 2>/dev/null || echo "")
     sleep 2
 done
 [[ "$h" == "healthy" ]] && ok "api healthy" || fail "api not healthy (state: $h)"
+else
+    ok "(reuse-stack) skipping compose build/up + migrate + api-healthy wait"
+fi
 
 # ---------------------------------------------------------------------------
 # Mime whitelist — Phase 2b widens to xlsx + email
