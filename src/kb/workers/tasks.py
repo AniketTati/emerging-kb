@@ -1603,6 +1603,17 @@ async def extract_atomic_units_file_impl(file_id: str) -> None:
     except Exception:  # noqa: BLE001
         traceback.print_exc()
 
+    # B1 / WA-4: also defer extract_triples_file in parallel — triples
+    # extraction is additive and doesn't depend on schema entities. It
+    # reads contextual_chunks (Phase 3b) which are already in place by
+    # the time atomic_units finished.
+    try:
+        await procrastinate_app.configure_task(
+            name="extract_triples_file"
+        ).defer_async(file_id=file_id)
+    except Exception:  # noqa: BLE001
+        traceback.print_exc()
+
 
 # ---------------------------------------------------------------------------
 # Phase 6 — extract_schema_entities_file_impl
@@ -1990,6 +2001,22 @@ async def resolve_identities_file_impl(file_id: str) -> None:
                 },
             )
 
+    # B1 / WA-4 + WA-5: chain post-ready graph layers in SEPARATE
+    # transactions so a defer failure doesn't roll back the successful
+    # identity resolution. Both are additive (no lifecycle gating).
+    try:
+        await procrastinate_app.configure_task(
+            name="build_relationships_file"
+        ).defer_async(file_id=file_id)
+    except Exception:  # noqa: BLE001
+        traceback.print_exc()
+    try:
+        await procrastinate_app.configure_task(
+            name="build_graph_file"
+        ).defer_async(file_id=file_id)
+    except Exception:  # noqa: BLE001
+        traceback.print_exc()
+
 
 # ---------------------------------------------------------------------------
 # WA-3 / Design 3 — detect_doc_chain_file_impl
@@ -2249,6 +2276,367 @@ async def detect_doc_chain_file_impl(file_id: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# B1 / WA-4 — extract_triples_file_impl (arch §5 stage 13)
+# ---------------------------------------------------------------------------
+
+
+async def extract_triples_file_impl(file_id: str) -> None:
+    """Per-file open-triple extraction (architecture §5 stage 13).
+
+    Runs as an additive post-L3 task. Calls the configured extractor
+    (Identity / Gemini / Anthropic) on every contextual chunk for the
+    file, INSERTs extracted_triples rows. Single transaction wraps the
+    reads + writes + lifecycle event.
+    """
+    from kb.config import get_settings
+    from kb.domain.triples import insert_triples_batch
+    from kb.extraction.triples import (
+        TripleExtractionError,
+        make_triple_extractor,
+    )
+
+    settings = get_settings()
+    db_url = settings.database_url
+    extractor = make_triple_extractor()
+
+    async with open_connection(db_url) as conn:
+        async with conn.transaction():
+            cur = await conn.execute(
+                "SELECT workspace_id, lifecycle_state FROM files WHERE id = %s",
+                (file_id,),
+            )
+            row = await cur.fetchone()
+            if row is None:
+                raise FileNotFoundError(file_id)
+            workspace_id, lifecycle_state = row
+            workspace_id_str = str(workspace_id)
+            if lifecycle_state in ("failed", "deleted"):
+                return
+
+            await conn.execute(
+                "SELECT set_config('app.workspace_id', %s, true)",
+                (workspace_id_str,),
+            )
+
+            # Read this file's contextual chunks (chunk_id + text).
+            cur = await conn.execute(
+                "SELECT cc.id::text, cc.contextual_text "
+                "FROM contextual_chunks cc "
+                "JOIN chunks c ON c.id = cc.chunk_id "
+                "WHERE cc.file_id = %s "
+                "ORDER BY c.chunk_index ASC",
+                (file_id,),
+            )
+            chunk_rows = await cur.fetchall()
+            if not chunk_rows:
+                # No contextual chunks → no triples. Emit event and return.
+                await record_lifecycle_event(
+                    conn,
+                    workspace_id=workspace_id_str,
+                    file_id=file_id,
+                    from_state=str(lifecycle_state),
+                    to_state=str(lifecycle_state),
+                    event="triples_extracted",
+                    payload={"triple_count": 0, "model_id": extractor.model_id},
+                )
+                return
+
+            total_triples = 0
+            for chunk_id, chunk_text in chunk_rows:
+                if not chunk_text:
+                    continue
+                try:
+                    result = await extractor.extract(chunk_text=chunk_text)
+                except TripleExtractionError:
+                    traceback.print_exc()
+                    continue  # advisory — skip this chunk, keep going
+                if not result.triples:
+                    continue
+                triples_to_insert = [
+                    (t.subject, t.predicate, t.object, t.confidence, chunk_id)
+                    for t in result.triples
+                ]
+                inserted_ids = await insert_triples_batch(
+                    conn,
+                    workspace_id=workspace_id_str,
+                    file_id=file_id,
+                    model_id=extractor.model_id,
+                    triples=triples_to_insert,
+                )
+                total_triples += len(inserted_ids)
+
+            await record_lifecycle_event(
+                conn,
+                workspace_id=workspace_id_str,
+                file_id=file_id,
+                from_state=str(lifecycle_state),
+                to_state=str(lifecycle_state),
+                event="triples_extracted",
+                payload={
+                    "triple_count": total_triples,
+                    "model_id": extractor.model_id,
+                    "chunks_processed": len(chunk_rows),
+                },
+            )
+
+
+# ---------------------------------------------------------------------------
+# B1 / WA-4 — build_relationships_file_impl (arch §5 stage 16)
+# ---------------------------------------------------------------------------
+
+
+async def build_relationships_file_impl(file_id: str) -> None:
+    """Resolve this file's extracted_triples → relationships rows.
+
+    Runs after identity_resolving → ready (entities exist in the
+    workspace). Reads the file's triples + uses Phase 7's deterministic
+    entity lookup. Single transaction wraps everything.
+    """
+    from kb.config import get_settings
+    from kb.domain.entities import find_entity_deterministic
+    from kb.domain.relationships import add_evidence, upsert_relationship
+    from kb.domain.triples import read_triples_for_file
+    from kb.extraction.relationships_resolver import resolve_triples
+
+    settings = get_settings()
+    db_url = settings.database_url
+
+    async with open_connection(db_url) as conn:
+        async with conn.transaction():
+            cur = await conn.execute(
+                "SELECT workspace_id, lifecycle_state FROM files WHERE id = %s",
+                (file_id,),
+            )
+            row = await cur.fetchone()
+            if row is None:
+                raise FileNotFoundError(file_id)
+            workspace_id, lifecycle_state = row
+            workspace_id_str = str(workspace_id)
+            if lifecycle_state in ("failed", "deleted"):
+                return
+
+            await conn.execute(
+                "SELECT set_config('app.workspace_id', %s, true)",
+                (workspace_id_str,),
+            )
+
+            triples = await read_triples_for_file(conn, file_id=file_id)
+            if not triples:
+                await record_lifecycle_event(
+                    conn,
+                    workspace_id=workspace_id_str,
+                    file_id=file_id,
+                    from_state=str(lifecycle_state),
+                    to_state=str(lifecycle_state),
+                    event="relationships_built",
+                    payload={"relationship_count": 0, "triple_count": 0},
+                )
+                return
+
+            # Wave A lookup: try ANY entity type (None) so the resolver
+            # doesn't need to know the mention_type. Phase 7's
+            # find_entity_deterministic accepts entity_type=None.
+            async def lookup(workspace: str, text: str) -> str | None:
+                # The Phase 7 helper requires entity_type — try the most
+                # common types in priority order (heuristic Wave A).
+                for et in ("ORG", "PERSON", "GPE", "FAC", "PRODUCT", "EVENT"):
+                    res = await find_entity_deterministic(
+                        conn,
+                        workspace_id=workspace,
+                        name=text,
+                        entity_type=et,
+                    )
+                    if res:
+                        return res
+                return None
+
+            resolved = await resolve_triples(
+                triples=triples,
+                workspace_id=workspace_id_str,
+                lookup=lookup,
+            )
+
+            n_relationships = 0
+            n_evidence = 0
+            for rr in resolved:
+                rel_id, _ = await upsert_relationship(
+                    conn,
+                    workspace_id=workspace_id_str,
+                    subject_entity_id=rr.subject_entity_id,
+                    object_entity_id=rr.object_entity_id,
+                    predicate=rr.predicate,
+                    confidence=rr.confidence,
+                )
+                n_relationships += 1
+                for triple_id in rr.triple_ids:
+                    await add_evidence(
+                        conn,
+                        workspace_id=workspace_id_str,
+                        relationship_id=rel_id,
+                        triple_id=triple_id,
+                        file_id=rr.file_id,
+                        chunk_id=rr.chunk_id,
+                        confidence=rr.confidence,
+                    )
+                    n_evidence += 1
+
+            await record_lifecycle_event(
+                conn,
+                workspace_id=workspace_id_str,
+                file_id=file_id,
+                from_state=str(lifecycle_state),
+                to_state=str(lifecycle_state),
+                event="relationships_built",
+                payload={
+                    "relationship_count": n_relationships,
+                    "evidence_count": n_evidence,
+                    "triple_count": len(triples),
+                    "resolved_count": len(resolved),
+                },
+            )
+
+
+# ---------------------------------------------------------------------------
+# B1 / WA-5 — build_graph_file_impl (arch §5 stage 17)
+# ---------------------------------------------------------------------------
+
+
+async def build_graph_file_impl(file_id: str) -> None:
+    """Per-file incremental HippoRAG graph build.
+
+    Reads new relationships + mention co-occurrences + lineage pairs
+    that involve this file's entities, derives edges via
+    graph_builder.build_edges_for_file, UPSERTs into graph_edges.
+    """
+    from kb.config import get_settings
+    from kb.domain.graph import upsert_edge
+    from kb.domain.relationships import RelationshipRecord
+    from kb.extraction.graph_builder import (
+        LineagePair,
+        MentionInUnit,
+        build_edges_for_file,
+    )
+
+    settings = get_settings()
+    db_url = settings.database_url
+
+    async with open_connection(db_url) as conn:
+        async with conn.transaction():
+            cur = await conn.execute(
+                "SELECT workspace_id, lifecycle_state FROM files WHERE id = %s",
+                (file_id,),
+            )
+            row = await cur.fetchone()
+            if row is None:
+                raise FileNotFoundError(file_id)
+            workspace_id, lifecycle_state = row
+            workspace_id_str = str(workspace_id)
+            if lifecycle_state in ("failed", "deleted"):
+                return
+
+            await conn.execute(
+                "SELECT set_config('app.workspace_id', %s, true)",
+                (workspace_id_str,),
+            )
+
+            # 1) Relationships sourced from this file's evidence rows.
+            cur = await conn.execute(
+                """
+                SELECT DISTINCT r.id::text, r.workspace_id::text,
+                       r.subject_entity_id::text, r.object_entity_id::text,
+                       r.predicate, r.confidence, r.n_evidence,
+                       r.created_at, r.updated_at
+                  FROM relationships r
+                  JOIN relationship_evidence e ON e.relationship_id = r.id
+                 WHERE e.file_id = %s
+                """,
+                (file_id,),
+            )
+            rel_rows = await cur.fetchall()
+            relationships = [
+                RelationshipRecord(
+                    id=str(r[0]), workspace_id=str(r[1]),
+                    subject_entity_id=str(r[2]), object_entity_id=str(r[3]),
+                    predicate=str(r[4]), confidence=float(r[5]),
+                    n_evidence=int(r[6]),
+                    created_at=r[7].isoformat() if hasattr(r[7], "isoformat") else str(r[7]),
+                    updated_at=r[8].isoformat() if hasattr(r[8], "isoformat") else str(r[8]),
+                )
+                for r in rel_rows
+            ]
+
+            # 2) Co-mentions: pair entities mentioned in the same atomic_unit.
+            # mention_to_entity joins mentions ← atomic_units via the
+            # mention's source chunk → atomic_unit's source chunk. Wave A
+            # simplification: pair entities whose mentions share a chunk_id
+            # (the same chunk that backed an atomic_unit). This avoids a
+            # complex JOIN through atomic_units while still capturing
+            # tight co-occurrence.
+            cur = await conn.execute(
+                """
+                SELECT me.entity_id::text, m.contextual_chunk_id::text
+                  FROM mention_to_entity me
+                  JOIN extracted_mentions m ON m.id = me.mention_id
+                 WHERE m.file_id = %s
+                """,
+                (file_id,),
+            )
+            mention_rows = await cur.fetchall()
+            mentions_in_units = [
+                MentionInUnit(entity_id=str(r[0]), unit_id=str(r[1]))
+                for r in mention_rows
+            ]
+
+            # 3) Lineage: extracted_entities.parent_entity_id pairs.
+            cur = await conn.execute(
+                """
+                SELECT parent_entity_id::text, id::text
+                  FROM extracted_entities
+                 WHERE workspace_id = %s
+                   AND parent_entity_id IS NOT NULL
+                """,
+                (workspace_id_str,),
+            )
+            lineage_rows = await cur.fetchall()
+            lineage_pairs = [
+                LineagePair(parent_entity_id=str(r[0]), child_entity_id=str(r[1]))
+                for r in lineage_rows
+            ]
+
+            edges = build_edges_for_file(
+                relationships=relationships,
+                mentions_in_units=mentions_in_units,
+                lineage_pairs=lineage_pairs,
+            )
+
+            for edge in edges:
+                await upsert_edge(
+                    conn,
+                    workspace_id=workspace_id_str,
+                    src_entity_id=edge.src_entity_id,
+                    dst_entity_id=edge.dst_entity_id,
+                    edge_kind=edge.edge_kind,
+                    weight_delta=edge.weight_delta,
+                    source_ref=edge.source_ref,
+                )
+
+            await record_lifecycle_event(
+                conn,
+                workspace_id=workspace_id_str,
+                file_id=file_id,
+                from_state=str(lifecycle_state),
+                to_state=str(lifecycle_state),
+                event="graph_built",
+                payload={
+                    "edges_upserted": len(edges),
+                    "n_relationships": len(relationships),
+                    "n_mention_pairs": len(mentions_in_units),
+                    "n_lineage_pairs": len(lineage_pairs),
+                },
+            )
+
+
+# ---------------------------------------------------------------------------
 # Procrastinate task registration
 # ---------------------------------------------------------------------------
 
@@ -2359,6 +2747,33 @@ async def detect_doc_chain_file(file_id: str) -> None:
     post-parse task in parallel with chunk_file — does not gate lifecycle.
     """
     await detect_doc_chain_file_impl(file_id)
+
+
+@procrastinate_app.task(name="extract_triples_file", queue="kb", pass_context=False)
+async def extract_triples_file(file_id: str) -> None:
+    """Wire-level Procrastinate task. Delegates to the testable impl.
+
+    B1 / WA-4: per-file open-triple extraction (arch §5 stage 13).
+    """
+    await extract_triples_file_impl(file_id)
+
+
+@procrastinate_app.task(name="build_relationships_file", queue="kb", pass_context=False)
+async def build_relationships_file(file_id: str) -> None:
+    """Wire-level Procrastinate task. Delegates to the testable impl.
+
+    B1 / WA-4: per-file relationship resolution (arch §5 stage 16).
+    """
+    await build_relationships_file_impl(file_id)
+
+
+@procrastinate_app.task(name="build_graph_file", queue="kb", pass_context=False)
+async def build_graph_file(file_id: str) -> None:
+    """Wire-level Procrastinate task. Delegates to the testable impl.
+
+    B1 / WA-5: per-file incremental HippoRAG graph build (arch §5 stage 17).
+    """
+    await build_graph_file_impl(file_id)
 
 
 # ---------------------------------------------------------------------------
