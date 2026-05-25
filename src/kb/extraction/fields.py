@@ -30,7 +30,10 @@ from pydantic import BaseModel, Field
 DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
 DEFAULT_ANTHROPIC_MODEL = "claude-opus-4-7"
 _MAX_OUTPUT_TOKENS_CLASSIFY = 50
-_MAX_OUTPUT_TOKENS_PROPOSE = 4000  # ~30 fields per doc worst case
+# Long financial/legal docs propose 50+ fields with descriptions; 4000
+# truncates in the wild. PR4 raised to 12000 and added json_recovery to
+# salvage on the rare ongoing truncation.
+_MAX_OUTPUT_TOKENS_PROPOSE = 12000
 
 VALUE_TYPES: tuple[str, ...] = ("text", "number", "date", "datetime", "boolean", "enum")
 
@@ -151,18 +154,19 @@ def _parse_doc_type(raw: str) -> str:
 
 
 def _parse_proposed_fields(raw: str) -> list[ProposedField]:
-    """Parse proposer JSON → list[ProposedField]. Filters bad rows."""
-    text = _strip_code_fence(raw)
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise FieldExtractionError(
-            f"proposer returned invalid JSON: {exc}; output: {raw[:200]}"
-        ) from exc
+    """Parse proposer JSON → list[ProposedField]. Tolerant of truncation
+    via json_recovery — when Gemini hits max_output_tokens we still
+    salvage the fields that closed cleanly rather than dropping all."""
+    from kb.extraction.json_recovery import parse_tolerant_array_in_object
 
-    raw_list = data.get("fields") if isinstance(data, dict) else None
-    if not isinstance(raw_list, list):
-        return []
+    raw_list, truncated = parse_tolerant_array_in_object(raw, "fields")
+    if truncated:
+        import logging
+        logging.getLogger(__name__).warning(
+            "proposer response was truncated; recovered %d fields from "
+            "partial JSON (consider raising _MAX_OUTPUT_TOKENS_PROPOSE)",
+            len(raw_list),
+        )
 
     fields: list[ProposedField] = []
     valid_types = set(VALUE_TYPES)

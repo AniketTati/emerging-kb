@@ -95,9 +95,12 @@ def test_parse_mentions_handles_nullable_offsets():
     assert mentions[0].confidence is None
 
 
-def test_parse_mentions_invalid_json_raises():
-    with pytest.raises(MentionExtractionError):
-        _parse_mentions_json("not valid json {{")
+def test_parse_mentions_invalid_json_returns_empty():
+    # PR4: parser now uses json_recovery which silently returns []
+    # rather than raising. Truncated/malformed input is treated as
+    # "no salvageable items" so the worker keeps processing other
+    # chunks instead of failing the whole file.
+    assert _parse_mentions_json("not valid json {{") == []
 
 
 # ===========================================================================

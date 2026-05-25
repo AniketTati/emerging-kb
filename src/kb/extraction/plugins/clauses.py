@@ -59,26 +59,22 @@ _USER_TEMPLATE = (
     '}}]}}\n'
     "Omit any field you cannot determine. clause_type is required."
 )
-_MAX_OUTPUT_TOKENS = 4000
+_MAX_OUTPUT_TOKENS = 8000
 
 
 def _parse_clauses(raw: str) -> list[dict[str, Any]]:
-    """Tolerant JSON parser — strip fences, accept dict-of-list or array."""
-    text = raw.strip()
-    if text.startswith("```"):
-        lines = text.splitlines()
-        if len(lines) >= 2 and lines[-1].strip() == "```":
-            lines = lines[1:-1]
-        else:
-            lines = lines[1:]
-        text = "\n".join(lines)
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError:
-        return []
-    raw_list = data.get("clauses") if isinstance(data, dict) else (data if isinstance(data, list) else None)
-    if not isinstance(raw_list, list):
-        return []
+    """Tolerant JSON parser — strips fences AND recovers truncated output
+    so long contracts with 10+ clauses don't drop the entire list when
+    Gemini hits the output cap."""
+    from kb.extraction.json_recovery import parse_tolerant_array_in_object
+
+    raw_list, truncated = parse_tolerant_array_in_object(raw, "clauses")
+    if truncated:
+        import logging
+        logging.getLogger(__name__).warning(
+            "clauses response was truncated; recovered %d clauses",
+            len(raw_list),
+        )
     out: list[dict[str, Any]] = []
     for item in raw_list:
         if not isinstance(item, dict):
