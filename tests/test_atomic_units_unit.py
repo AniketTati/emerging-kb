@@ -69,6 +69,108 @@ def test_dispatch_fuzzy_contract_match():
     assert plugin.UNIT_TYPE == "clause"
 
 
+# PR8 dispatcher coverage — broader clauses-matcher synonyms +
+# email_messages plugin priority over generic_items + generic_items
+# fallback for prose doc_types.
+
+
+@pytest.mark.parametrize("doc_type", [
+    "offer_letter",                    # employment_offer_letter shorthand
+    "employment_offer_letter",
+    "master_services_agreement",       # MSA — narrow match pre-PR8
+    "subscription_agreement",          # SaaS
+    "mutual_nda",
+    "addendum",
+    "statement_of_work",
+    "license_agreement",
+    "lease_agreement",
+])
+def test_dispatch_pr8_broader_clauses_synonyms(doc_type):
+    """All these classifications should reach the clauses plugin now —
+    previously only `legal_contract` / `contract` / `agreement` /
+    `nda` / `employment` substring matched."""
+    fm = FileMeta(
+        file_id="x", workspace_id="w", mime_type="application/pdf",
+        inferred_doc_type=doc_type, name=f"{doc_type}.pdf",
+    )
+    plugin = dispatch(fm)
+    assert plugin is not None, f"no plugin matched for {doc_type}"
+    assert plugin.UNIT_TYPE == "clause"
+
+
+def test_dispatch_eml_routes_to_email_messages():
+    fm = FileMeta(
+        file_id="x", workspace_id="w", mime_type="message/rfc822",
+        inferred_doc_type="email_thread", name="thread.eml",
+    )
+    plugin = dispatch(fm)
+    assert plugin is not None
+    assert plugin.UNIT_TYPE == "email_message"
+
+
+def test_dispatch_email_thread_doctype_on_txt_routes_to_email_messages():
+    """A .txt file classified as email_thread should also route here
+    (pasted-thread case)."""
+    fm = FileMeta(
+        file_id="x", workspace_id="w", mime_type="text/plain",
+        inferred_doc_type="email_thread", name="thread.txt",
+    )
+    plugin = dispatch(fm)
+    assert plugin is not None
+    assert plugin.UNIT_TYPE == "email_message"
+
+
+@pytest.mark.parametrize("doc_type", [
+    "incident_postmortem",
+    "performance_review",
+    "press_release",
+    "case_study",
+    "bug_report",
+    "rfc",
+    "job_posting",
+    "resume",
+    "lab_report",
+    "financial_report",
+    "meeting_minutes",
+    "vendor_evaluation",
+])
+def test_dispatch_prose_doctypes_route_to_generic_items(doc_type):
+    """Long-tail prose doc_types now route to generic_items instead
+    of returning None (which caused 0 atomic_units)."""
+    fm = FileMeta(
+        file_id="x", workspace_id="w", mime_type="text/markdown",
+        inferred_doc_type=doc_type, name=f"{doc_type}.md",
+    )
+    plugin = dispatch(fm)
+    assert plugin is not None, f"no plugin matched for {doc_type}"
+    # generic_items reports unit_type='item' at the top level even
+    # though per-row unit_type comes from the LLM's item_type field.
+    assert plugin.UNIT_TYPE == "item"
+
+
+def test_dispatch_unknown_doctype_still_returns_none():
+    """generic_items must NOT match when classification failed —
+    otherwise we'd burn LLM tokens on every misclassified file."""
+    fm = FileMeta(
+        file_id="x", workspace_id="w", mime_type="application/pdf",
+        inferred_doc_type="unknown", name="x.pdf",
+    )
+    assert dispatch(fm) is None
+
+
+def test_dispatch_xlsx_doctype_still_routes_to_rows_not_generic():
+    """The structural row plugin takes priority over generic_items
+    even when the doc_type label is generic-prose-like."""
+    fm = FileMeta(
+        file_id="x", workspace_id="w",
+        mime_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        inferred_doc_type="financial_report", name="kpi.xlsx",
+    )
+    plugin = dispatch(fm)
+    assert plugin is not None
+    assert plugin.UNIT_TYPE == "row"
+
+
 # ===========================================================================
 # Rows plugin — no LLM
 # ===========================================================================

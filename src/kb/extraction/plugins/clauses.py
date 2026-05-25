@@ -33,10 +33,63 @@ from kb.extraction.plugins import AtomicUnit, FileMeta
 
 UNIT_TYPE = "clause"
 
+# Exact-match doc_types (small, hand-picked). The fuzzy substring matcher
+# below catches longer-form classifications (subscription_agreement,
+# master_services_agreement, employment_offer_letter, etc.).
 _CONTRACT_DOC_TYPES = {
     "legal_contract", "contract", "agreement", "nda", "employment_letter",
     "service_agreement", "license_agreement", "lease",
 }
+
+# Word-level (underscore-split) match — keeps "lease" / "license" /
+# "agreement" etc. from false-positiving on doc_types like
+# "press_release" or "case_study" where the contract-y substring is
+# embedded mid-word. Pre-fix the plugin used naive `substring in dt`
+# which silently let through both:
+#   - false NEGATIVES (offer_letter, master_services_agreement, addendum)
+#   - false POSITIVES would-have-been (press_release via "lease",
+#     case_study via "ase" if "lease" were "ase" — guarding now anyway)
+_CONTRACT_LIKE_WORDS = frozenset({
+    "contract", "agreement", "msa", "nda", "sow",
+    "amendment", "addendum", "lease", "license", "subscription",
+})
+
+# Full-name allow-list for compound classifications that the word-split
+# can't catch (multi-word concepts that lose meaning when tokenized).
+# Keep this list in sync as Gemini learns new doc_type labels.
+_CONTRACT_LIKE_FULL_NAMES = frozenset({
+    "statement_of_work",
+    "side_letter",
+    "offer_letter",
+    "employment_offer_letter",
+    "job_offer_letter",
+    "engagement_letter",
+    "master_services_agreement",
+    "subscription_agreement",
+    "license_agreement",
+    "lease_agreement",
+    "mutual_nda",
+    "non_disclosure_agreement",
+    "service_agreement",
+    "employment_letter",
+})
+
+
+def _doc_type_is_contract_like(dt: str) -> bool:
+    """True when the doc_type names a contract-family document.
+
+    Uses two checks:
+      1. Exact full-name match (`statement_of_work`, `mutual_nda`, …)
+      2. Word-level intersection (after splitting on `_`) with the
+         contract-words set — so `license_agreement` matches via
+         either "license" or "agreement", but `press_release` does
+         NOT match (split = {press, release}; neither is contract-y).
+    """
+    if not dt:
+        return False
+    if dt in _CONTRACT_LIKE_FULL_NAMES:
+        return True
+    return bool(set(dt.split("_")) & _CONTRACT_LIKE_WORDS)
 
 _SYSTEM_PROMPT = (
     "You extract structured clauses from legal/commercial agreement documents. "
@@ -114,8 +167,7 @@ class ClausesPlugin:
         dt = file_meta.inferred_doc_type.lower()
         if dt in _CONTRACT_DOC_TYPES:
             return True
-        # heuristic match on common substrings
-        return any(k in dt for k in ("contract", "agreement", "nda", "employment"))
+        return _doc_type_is_contract_like(dt)
 
     async def extract(
         self,
