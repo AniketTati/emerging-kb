@@ -58,13 +58,16 @@ from kb.workers.tasks import parse_file
 router = APIRouter(prefix="/files", tags=["files"])
 
 
-# Phase 2a + 2b accepted mime types.
+# Phase 2a + 2b + Wave B demo-corpus accepted mime types.
 _MIME_WHITELIST = {
     "application/pdf",
     # Phase 2b — xlsx + email
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     "application/vnd.ms-excel",  # .xls — let the parser handle format detection
     "message/rfc822",
+    # Wave B demo corpus — plain text + Markdown for memo / readme-style docs.
+    "text/plain",
+    "text/markdown",
 }
 
 
