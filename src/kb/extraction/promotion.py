@@ -33,7 +33,12 @@ from typing import Any
 from kb.db.pool import Connection
 
 
-DEFAULT_PROMOTION_MIN_DOCS = 5
+# Default n=1 so a single-doc demo corpus actually exercises the L4
+# closed-world path. The other three thresholds (prevalence, stability,
+# value_type_confidence) still gate noisy fields. Production deployments
+# with 100s of docs per type should raise this via KB_PROMOTION_MIN_DOCS
+# (e.g. =20) so one-off fields don't pollute the schema.
+DEFAULT_PROMOTION_MIN_DOCS = 1
 
 
 def _normalize_field_name(raw: str) -> str:
