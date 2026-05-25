@@ -1292,6 +1292,7 @@ async def extract_fields_file_impl(file_id: str) -> None:
         update_file_inferred_doc_type,
         upsert_inferred_schema_field,
     )
+    from kb.domain.conflicts import apply_source_authority_from_config
     from kb.extraction.fields import FieldExtractionError, make_field_extractor
     from kb.extraction.promotion import (
         PromotionThresholds,
@@ -1359,6 +1360,21 @@ async def extract_fields_file_impl(file_id: str) -> None:
             await update_file_inferred_doc_type(
                 conn, file_id=file_id, doc_type=doc_type,
             )
+
+            # WA-6 / B2 — apply source_authority from config now that we
+            # know the doc-type. Strategy B: additive side-effect only;
+            # does not gate lifecycle. Swallow exceptions so an authority
+            # lookup failure cannot block the pipeline.
+            try:
+                await apply_source_authority_from_config(
+                    conn,
+                    file_id=file_id,
+                    workspace_id=str(workspace_id),
+                    inferred_doc_type=doc_type,
+                )
+            except Exception:  # noqa: BLE001
+                traceback.print_exc()
+
             await delete_proposed_fields_for_file(conn, file_id=file_id)
 
             n_proposed = 0
