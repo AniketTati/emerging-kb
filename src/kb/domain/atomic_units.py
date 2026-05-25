@@ -27,16 +27,21 @@ async def insert_atomic_unit(
     anchor_chunk_id: str | None,
     rarity_score: float | None,
     model_id: str,
+    source_chunk_id: str | None = None,
+    source_char_start: int | None = None,
+    source_char_end: int | None = None,
 ) -> str:
     cur = await conn.execute(
         "INSERT INTO atomic_units "
         "(file_id, workspace_id, unit_type, parameters, anchor_chunk_id, "
-        "rarity_score, model_id) "
-        "VALUES (%s, %s, %s, %s::jsonb, %s, %s, %s) "
+        "rarity_score, model_id, "
+        "source_chunk_id, source_char_start, source_char_end) "
+        "VALUES (%s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s) "
         "RETURNING id::text",
         (
             file_id, workspace_id, unit_type, json.dumps(parameters),
             anchor_chunk_id, rarity_score, model_id,
+            source_chunk_id, source_char_start, source_char_end,
         ),
     )
     return (await cur.fetchone())[0]

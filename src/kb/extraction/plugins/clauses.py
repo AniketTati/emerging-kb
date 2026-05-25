@@ -100,9 +100,20 @@ class ClausesPlugin:
     UNIT_TYPE = "clause"
 
     def matches(self, file_meta: FileMeta) -> bool:
-        if file_meta.mime_type != "application/pdf":
-            return False
+        # E3 fix: gate on doc_type, not file format. A legal contract is a
+        # legal contract whether it arrived as a PDF, plain text, or
+        # markdown — the prototype demo corpus has the MSA as PDF and
+        # the Amendment as .txt; both should produce clause atomic units.
+        # Spreadsheets + emails are handled by other plugins.
         if not file_meta.inferred_doc_type:
+            return False
+        # Format guard — clause extraction needs prose. Skip mime types
+        # where another plugin owns the unit shape.
+        if (file_meta.mime_type or "").lower() in (
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "application/vnd.ms-excel",
+            "message/rfc822",
+        ):
             return False
         dt = file_meta.inferred_doc_type.lower()
         if dt in _CONTRACT_DOC_TYPES:

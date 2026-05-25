@@ -502,14 +502,31 @@ function ProposedFieldsBody({ fileId, open }: { fileId: string; open: boolean })
     <div className="rounded border border-zinc-200 divide-y divide-zinc-100 overflow-hidden">
       {data.map((f) => {
         const v = (f.value_text ?? "").trim();
-        const clickable = v.length > 1;
-        const c: Citation | null = clickable
-          ? { kind: "text", text: v }
-          : null;
+        const hasExact =
+          f.source_chunk_id != null &&
+          f.source_char_start != null &&
+          f.source_char_end != null;
+        const clickable = hasExact || v.length > 1;
+        const c: Citation | null = hasExact
+          ? {
+              kind: "exact",
+              chunkId: f.source_chunk_id!,
+              start: f.source_char_start!,
+              end: f.source_char_end!,
+              pages: f.source_page_numbers ?? undefined,
+            }
+          : clickable
+            ? { kind: "text", text: v }
+            : null;
         const active =
-          c &&
-          citation?.kind === "text" &&
-          citation.text === v;
+          !!c &&
+          ((citation?.kind === "exact" &&
+            c.kind === "exact" &&
+            citation.chunkId === c.chunkId &&
+            citation.start === c.start) ||
+            (citation?.kind === "text" &&
+              c.kind === "text" &&
+              citation.text === c.text));
         return (
           <button
             key={f.id}
@@ -606,11 +623,30 @@ function UnitList({ items }: { items: AtomicUnit[] }) {
   );
 }
 
-/** Pick the best citation shape for an atomic_unit based on its parameters. */
+/** Pick the best citation shape for an atomic_unit. Priority:
+ *  1. xlsx row coordinates (sheet + row_index) — pinpoint precision
+ *  2. worker-resolved source offsets (clause summary located in source)
+ *  3. fallback text search */
 function citationForUnit(u: AtomicUnit): Citation | null {
-  const p = u.parameters as { sheet_name?: string; row_index?: number; text?: string };
+  const p = u.parameters as { sheet_name?: string; row_index?: number; text?: string; summary?: string };
   if (typeof p.row_index === "number") {
     return { kind: "xlsx-row", sheet: p.sheet_name, rowIndex: p.row_index };
+  }
+  if (
+    u.source_chunk_id != null &&
+    u.source_char_start != null &&
+    u.source_char_end != null
+  ) {
+    return {
+      kind: "exact",
+      chunkId: u.source_chunk_id,
+      start: u.source_char_start,
+      end: u.source_char_end,
+      pages: u.source_page_numbers ?? undefined,
+    };
+  }
+  if (typeof p.summary === "string" && p.summary.length > 4) {
+    return { kind: "text", text: p.summary.slice(0, 200) };
   }
   if (typeof p.text === "string" && p.text.length > 4) {
     return { kind: "text", text: p.text.slice(0, 200) };
@@ -690,14 +726,33 @@ function MentionList({ items }: { items: Mention[] }) {
   return (
     <div className="space-y-1">
       {items.map((m) => {
-        const c: Citation = {
-          kind: "text",
-          text: m.mention_text,
-          page: m.source_page_numbers ?? undefined,
-          chunkId: m.chunk_id,
-        };
+        // Prefer worker-resolved exact offsets (migration 0032). Fall
+        // back to text-search for rows the resolver couldn't repair.
+        const c: Citation =
+          m.source_chunk_id != null &&
+          m.source_char_start != null &&
+          m.source_char_end != null
+            ? {
+                kind: "exact",
+                chunkId: m.source_chunk_id,
+                start: m.source_char_start,
+                end: m.source_char_end,
+                pages: m.source_page_numbers ?? undefined,
+              }
+            : {
+                kind: "text",
+                text: m.mention_text,
+                page: m.source_page_numbers ?? undefined,
+                chunkId: m.chunk_id,
+              };
         const active =
-          citation?.kind === "text" && citation.text === m.mention_text;
+          (citation?.kind === "exact" &&
+            c.kind === "exact" &&
+            citation.chunkId === c.chunkId &&
+            citation.start === c.start) ||
+          (citation?.kind === "text" &&
+            c.kind === "text" &&
+            citation.text === c.text);
         return (
           <button
             key={m.id}
@@ -809,17 +864,45 @@ function TripleList({ items }: { items: TripleInDoc[] }) {
   return (
     <div className="rounded border border-zinc-200 divide-y divide-zinc-100 overflow-hidden">
       {items.map((t) => {
-        // Triples don't carry a guaranteed source text. The richest
-        // citation we can publish is subject_text — usually surfaces
-        // somewhere in the chunk. Pages come from the chunks join.
-        const c: Citation = {
-          kind: "text",
-          text: t.subject_text,
-          page: t.source_page_numbers ?? undefined,
-          chunkId: t.chunk_id,
-        };
+        // Prefer worker-resolved offsets on the SUBJECT (the most
+        // meaningful "where did this fact start" anchor). Object
+        // offsets are also stored on the row; we expose them on hover
+        // later.
+        const c: Citation =
+          t.chunk_id != null &&
+          t.subject_char_start != null &&
+          t.subject_char_end != null
+            ? {
+                kind: "exact",
+                chunkId: t.chunk_id,
+                start: t.subject_char_start,
+                end: t.subject_char_end,
+                pages: t.source_page_numbers ?? undefined,
+              }
+            : t.chunk_id != null &&
+                t.object_char_start != null &&
+                t.object_char_end != null
+              ? {
+                  kind: "exact",
+                  chunkId: t.chunk_id,
+                  start: t.object_char_start,
+                  end: t.object_char_end,
+                  pages: t.source_page_numbers ?? undefined,
+                }
+              : {
+                  kind: "text",
+                  text: t.subject_text,
+                  page: t.source_page_numbers ?? undefined,
+                  chunkId: t.chunk_id,
+                };
         const active =
-          citation?.kind === "text" && citation.text === t.subject_text;
+          (citation?.kind === "exact" &&
+            c.kind === "exact" &&
+            citation.chunkId === c.chunkId &&
+            citation.start === c.start) ||
+          (citation?.kind === "text" &&
+            c.kind === "text" &&
+            citation.text === c.text);
         return (
           <button
             key={t.id}

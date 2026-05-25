@@ -589,6 +589,43 @@ async def get_citations(
 
 
 # ---------------------------------------------------------------------------
+# GET /chunks/:chunk_id — chunk body + page span. Used by the doc-detail
+# citation UI: after a click publishes (source_chunk_id, char_start, char_end)
+# we fetch the chunk text once and slice it to render the highlighted span.
+# ---------------------------------------------------------------------------
+
+
+_chunks_router = APIRouter(prefix="/chunks", tags=["chunks"])
+
+
+@_chunks_router.get(
+    "/{chunk_id}",
+    summary="Read one chunk by id — text + source_page_numbers + file_id. "
+            "Powers the doc-detail citation highlighter.",
+)
+async def get_chunk_by_id(
+    chunk_id: str,
+    conn: Annotated[Connection, Depends(kb_app_connection)],
+) -> dict:
+    cur = await conn.execute(
+        "SELECT id::text, file_id::text, chunk_index, text, source_page_numbers "
+        "FROM chunks WHERE id = %s",
+        (chunk_id,),
+    )
+    row = await cur.fetchone()
+    if row is None:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail=f"chunk {chunk_id} not found")
+    return {
+        "id": row[0],
+        "file_id": row[1],
+        "chunk_index": int(row[2]),
+        "text": row[3] or "",
+        "source_page_numbers": list(row[4]) if row[4] else [],
+    }
+
+
+# ---------------------------------------------------------------------------
 # GET /files/:id/blob — stream the original file bytes from MinIO.
 #
 # Powers the doc-detail page's left-pane natural-format viewer (PDF.js,

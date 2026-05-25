@@ -12,8 +12,19 @@
 import { createContext, useCallback, useContext, useState } from "react";
 
 export type Citation =
-  // Generic text reference — matches in .txt / .md / .eml body and
-  // also drives best-effort search-and-highlight in PDF text layer.
+  // Precise — worker resolved the exact chunk + char range at extraction
+  // time (migration 0032). UI fetches /chunks/:id once and slices the
+  // text to get the verbatim quote, then highlights it deterministically.
+  | {
+      kind: "exact";
+      chunkId: string;
+      start: number;
+      end: number;
+      pages?: number[];
+    }
+  // Best-effort fallback — used when the resolver couldn't find the
+  // snippet (LLM paraphrased, only in contextual prefix, …) or for
+  // pre-PR2 data the backfill couldn't repair.
   | { kind: "text"; text: string; page?: number[]; chunkId?: string | null }
   // Spreadsheet row hit — atomic_units carry sheet_name + row_index.
   | { kind: "xlsx-row"; sheet?: string; rowIndex: number }

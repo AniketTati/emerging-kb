@@ -58,18 +58,26 @@ async def insert_triple(
     chunk_id: str | None = None,
     confidence: float = 0.5,
     model_id: str = "identity",
+    subject_char_start: int | None = None,
+    subject_char_end: int | None = None,
+    object_char_start: int | None = None,
+    object_char_end: int | None = None,
 ) -> str:
     cur = await conn.execute(
         """
         INSERT INTO extracted_triples (
             workspace_id, file_id, chunk_id, subject_text, predicate_text,
-            object_text, confidence, model_id
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            object_text, confidence, model_id,
+            subject_char_start, subject_char_end,
+            object_char_start, object_char_end
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING id::text
         """,
         (
             workspace_id, file_id, chunk_id, subject_text, predicate_text,
             object_text, confidence, model_id,
+            subject_char_start, subject_char_end,
+            object_char_start, object_char_end,
         ),
     )
     row = await cur.fetchone()
@@ -83,12 +91,22 @@ async def insert_triples_batch(
     workspace_id: str,
     file_id: str,
     model_id: str,
-    triples: Iterable[tuple[str, str, str, float, str | None]],
+    triples: Iterable[tuple],
 ) -> list[str]:
     """Bulk insert. Each tuple is (subject, predicate, object, confidence,
-    chunk_id|None). Returns the new row ids in order."""
+    chunk_id|None) OR (subject, predicate, object, confidence, chunk_id|None,
+    subject_char_start, subject_char_end, object_char_start, object_char_end).
+    Returns the new row ids in order."""
     out: list[str] = []
-    for subj, pred, obj, conf, chunk_id in triples:
+    for t in triples:
+        if len(t) == 5:
+            subj, pred, obj, conf, chunk_id = t
+            s_start = s_end = o_start = o_end = None
+        elif len(t) == 9:
+            (subj, pred, obj, conf, chunk_id,
+             s_start, s_end, o_start, o_end) = t
+        else:
+            continue
         if not subj or not pred or not obj:
             continue  # skip empties — CHECK would reject
         new_id = await insert_triple(
@@ -101,6 +119,10 @@ async def insert_triples_batch(
             chunk_id=chunk_id,
             confidence=conf,
             model_id=model_id,
+            subject_char_start=s_start,
+            subject_char_end=s_end,
+            object_char_start=o_start,
+            object_char_end=o_end,
         )
         out.append(new_id)
     return out

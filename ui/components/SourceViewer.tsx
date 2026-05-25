@@ -6,8 +6,61 @@ import {
   blobUrl,
   fetchBlob,
   fetchBlobText,
+  getChunk,
 } from "@/lib/api";
 import { useCitation, type Citation } from "./DocDetailCitation";
+
+
+/**
+ * Resolve a Citation to a verbatim text snippet. For `exact` citations we
+ * fetch the chunk once (cached in a ref) and slice the worker-stored
+ * char range — that gives us the precise quote the LLM extracted. For
+ * `text` citations the snippet IS the citation. For non-text kinds
+ * (xlsx-row, page) returns null.
+ *
+ * The snippet is then handed to each format-specific renderer for
+ * exact-text highlighting (no fuzzy first-match).
+ */
+function useCitedSnippet(citation: Citation | null): string | null {
+  const [snippet, setSnippet] = useState<string | null>(null);
+  // Cache per-citation so React strict-mode double-mount doesn't refetch.
+  const cacheRef = useRef<Map<string, string>>(new Map());
+
+  useEffect(() => {
+    if (!citation) {
+      setSnippet(null);
+      return;
+    }
+    if (citation.kind === "text") {
+      setSnippet(citation.text);
+      return;
+    }
+    if (citation.kind !== "exact") {
+      setSnippet(null);
+      return;
+    }
+    const key = `${citation.chunkId}:${citation.start}:${citation.end}`;
+    const cached = cacheRef.current.get(key);
+    if (cached !== undefined) {
+      setSnippet(cached);
+      return;
+    }
+    let cancelled = false;
+    getChunk(citation.chunkId)
+      .then((c) => {
+        if (cancelled) return;
+        const s = c.text.slice(citation.start, citation.end);
+        cacheRef.current.set(key, s);
+        setSnippet(s);
+      })
+      .catch(() => !cancelled && setSnippet(null));
+    return () => {
+      cancelled = true;
+    };
+  }, [citation]);
+
+  return snippet;
+}
 
 /**
  * Render an uploaded file in its NATIVE format — PDF pages for PDFs,
@@ -21,6 +74,7 @@ import { useCitation, type Citation } from "./DocDetailCitation";
 export function SourceViewer({ file }: { file: FileResource }) {
   const kind = classifyKind(file);
   const { citation, cite } = useCitation();
+  const snippet = useCitedSnippet(citation);
   return (
     <div className="rounded-lg border border-zinc-200 bg-white overflow-hidden flex flex-col h-full">
       <div className="px-3 py-2 border-b border-zinc-200 flex items-center gap-2 text-[11px] mono text-zinc-500 flex-shrink-0">
@@ -51,11 +105,21 @@ export function SourceViewer({ file }: { file: FileResource }) {
         data-testid="source-viewer"
         data-kind={kind}
       >
-        {kind === "pdf" && <PdfView file={file} citation={citation} />}
-        {kind === "markdown" && <MarkdownView file={file} citation={citation} />}
-        {kind === "email" && <EmailView file={file} citation={citation} />}
-        {kind === "xlsx" && <XlsxView file={file} citation={citation} />}
-        {kind === "text" && <PlainTextView file={file} citation={citation} />}
+        {kind === "pdf" && (
+          <PdfView file={file} citation={citation} snippet={snippet} />
+        )}
+        {kind === "markdown" && (
+          <MarkdownView file={file} snippet={snippet} />
+        )}
+        {kind === "email" && (
+          <EmailView file={file} snippet={snippet} />
+        )}
+        {kind === "xlsx" && (
+          <XlsxView file={file} citation={citation} snippet={snippet} />
+        )}
+        {kind === "text" && (
+          <PlainTextView file={file} snippet={snippet} />
+        )}
         {kind === "unknown" && (
           <div className="p-6 text-sm text-zinc-500">
             No native viewer for {file.mime_type}. Open the {" "}
@@ -76,10 +140,31 @@ export function SourceViewer({ file }: { file: FileResource }) {
 }
 
 function citationLabel(c: Citation): string {
-  if (c.kind === "text") return `"${c.text.slice(0, 40)}${c.text.length > 40 ? "…" : ""}"`;
+  if (c.kind === "exact")
+    return `chunk ${c.chunkId.slice(0, 8)}…[${c.start}-${c.end}]`;
+  if (c.kind === "text")
+    return `"${c.text.slice(0, 40)}${c.text.length > 40 ? "…" : ""}"`;
   if (c.kind === "xlsx-row")
     return `${c.sheet ?? "sheet"} row ${c.rowIndex}`;
   return `page ${c.pageNumber}`;
+}
+
+/** Strip thousands-separators / currency / percent signs / whitespace so
+ *  a numeric snippet like "51840" matches a rendered cell "$51,840.00". */
+function stripFormatting(s: string): string {
+  return s.toLowerCase().replace(/[\s,$%]/g, "").trim();
+}
+
+function uniqueNonEmpty(arr: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const v of arr) {
+    if (v && !seen.has(v)) {
+      seen.add(v);
+      out.push(v);
+    }
+  }
+  return out;
 }
 
 type Kind = "pdf" | "markdown" | "email" | "xlsx" | "text" | "unknown";
@@ -103,9 +188,11 @@ function classifyKind(file: FileResource): Kind {
 function PdfView({
   file,
   citation,
+  snippet,
 }: {
   file: FileResource;
   citation: Citation | null;
+  snippet: string | null;
 }) {
   // react-pdf 10 + pdfjs-dist 5 ESM works under Next.js Turbopack
   // (webpack 5.98 hits a known ESM-interop bug; tracking issue
@@ -143,40 +230,66 @@ function PdfView({
   useEffect(() => {
     if (!citation) return;
     if (citation.kind === "page") setPageNum(citation.pageNumber);
+    if (citation.kind === "exact" && citation.pages && citation.pages.length > 0) {
+      setPageNum(citation.pages[0]);
+    }
     if (citation.kind === "text" && citation.page && citation.page.length > 0) {
       setPageNum(citation.page[0]);
     }
   }, [citation]);
 
-  // Best-effort text-layer highlight: once the page renders, walk the
-  // PDF.js text spans and mark the first one whose textContent contains
-  // the cited needle. PDF.js text layer is selectable DOM so this works
-  // even though we don't pre-compute exact ranges.
+  // Highlight the cited span in the PDF.js text layer. We use the
+  // worker-resolved snippet (verbatim source slice) as the needle, then
+  // pick the LONGEST consecutive run of spans whose textContent covers
+  // it — beats naive first-substring-match for short needles like "0.5".
   useEffect(() => {
-    if (!citation || citation.kind !== "text") return;
+    if (!snippet) return;
     const wrap = pageWrapRef.current;
     if (!wrap) return;
-    const needle = citation.text.trim();
+    const needle = snippet.trim();
     if (!needle) return;
-    // Wait a tick for the text layer to mount.
     const id = window.setTimeout(() => {
       wrap.querySelectorAll(".kb-pdf-hit").forEach((el) =>
         el.classList.remove("kb-pdf-hit"),
       );
-      const spans = wrap.querySelectorAll<HTMLElement>(
-        ".react-pdf__Page__textContent span",
+      const spans = Array.from(
+        wrap.querySelectorAll<HTMLElement>(
+          ".react-pdf__Page__textContent span",
+        ),
       );
       const lower = needle.toLowerCase();
-      for (const sp of Array.from(spans)) {
-        if ((sp.textContent ?? "").toLowerCase().includes(lower)) {
-          sp.classList.add("kb-pdf-hit");
-          sp.scrollIntoView({ behavior: "smooth", block: "center" });
-          break;
+      // Concatenate consecutive spans and find the run that contains
+      // the snippet — PDF.js splits at word boundaries so the snippet
+      // is rarely in one span. Mark every span in that run.
+      let best: { start: number; end: number } | null = null;
+      for (let i = 0; i < spans.length; i++) {
+        let acc = "";
+        for (let j = i; j < spans.length && acc.length < lower.length + 200; j++) {
+          acc += (spans[j].textContent ?? "");
+          if (acc.toLowerCase().includes(lower)) {
+            const span = { start: i, end: j };
+            if (
+              !best ||
+              span.end - span.start < best.end - best.start
+            ) {
+              best = span;
+            }
+            break;
+          }
         }
+        if (best && best.start === i) break;
+      }
+      if (best) {
+        for (let k = best.start; k <= best.end; k++) {
+          spans[k].classList.add("kb-pdf-hit");
+        }
+        spans[best.start].scrollIntoView({
+          behavior: "smooth", block: "center",
+        });
       }
     }, 400);
     return () => window.clearTimeout(id);
-  }, [citation, pageNum]);
+  }, [snippet, pageNum]);
 
   if (err) return <div className="p-4 text-xs text-red-700 mono">{err}</div>;
   if (!Lib || !blob)
@@ -236,10 +349,10 @@ function PdfView({
 
 function MarkdownView({
   file,
-  citation,
+  snippet,
 }: {
   file: FileResource;
-  citation: Citation | null;
+  snippet: string | null;
 }) {
   const [text, setText] = useState<string | null>(null);
   const [Comp, setComp] = useState<{
@@ -272,18 +385,17 @@ function MarkdownView({
   if (text === null || !Comp)
     return <div className="p-4 text-xs text-zinc-500">Loading…</div>;
   const { Markdown, gfm, sanitize } = Comp;
-  const needle = citation?.kind === "text" ? citation.text : null;
   return (
     <div className="prose prose-sm prose-zinc max-w-none p-5">
       {/* When the user cites something, render the highlighted-text view
           inline above the markdown render so we can still wrap the hit
           in a <mark>. The fully rendered markdown stays below. */}
-      {needle && (
+      {snippet && (
         <div className="not-prose mb-4 rounded border border-amber-200 bg-amber-50/40 p-3 text-[12px] text-zinc-800">
           <div className="text-[10px] mono text-amber-700 uppercase mb-1">
             cited span
           </div>
-          <HighlightedText text={text} needle={needle} />
+          <HighlightedText text={text} needle={snippet} />
         </div>
       )}
       <Markdown
@@ -313,10 +425,10 @@ type ParsedEmail = {
 
 function EmailView({
   file,
-  citation,
+  snippet,
 }: {
   file: FileResource;
-  citation: Citation | null;
+  snippet: string | null;
 }) {
   const [parsed, setParsed] = useState<ParsedEmail | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -371,10 +483,7 @@ function EmailView({
           />
         ) : (
           <pre className="text-[13px] text-zinc-800 whitespace-pre-wrap font-sans leading-relaxed">
-            <HighlightedText
-              text={parsed.text ?? ""}
-              needle={citation?.kind === "text" ? citation.text : null}
-            />
+            <HighlightedText text={parsed.text ?? ""} needle={snippet} />
           </pre>
         )}
       </div>
@@ -405,9 +514,11 @@ function fmtAddr(a?: { name?: string; address?: string } | null): string {
 function XlsxView({
   file,
   citation,
+  snippet,
 }: {
   file: FileResource;
   citation: Citation | null;
+  snippet: string | null;
 }) {
   // SheetJS client-side parse: fetch the blob, hand to XLSX.read, render
   // each sheet via XLSX.utils.sheet_to_html. Avoids a server round-trip
@@ -447,14 +558,15 @@ function XlsxView({
       if (idx >= 0 && idx !== tab) setTab(idx);
       return;
     }
-    if (citation.kind === "text") {
-      const needle = citation.text.toLowerCase();
+    // For text/exact citations: search by snippet (worker-verbatim).
+    if (snippet) {
+      const needle = snippet.toLowerCase();
       const idx = sheets.findIndex((s) =>
         s.html.toLowerCase().includes(needle),
       );
       if (idx >= 0 && idx !== tab) setTab(idx);
     }
-  }, [citation, sheets, tab]);
+  }, [citation, snippet, sheets, tab]);
 
   // Apply highlight whenever the citation or active sheet changes.
   // Deferred past the next React render so the DOM written by
@@ -482,14 +594,25 @@ function XlsxView({
         }
         return;
       }
-      if (citation.kind === "text") {
+      if (snippet) {
         // Cell-level text search inside the active sheet — first cell
-        // whose textContent contains the needle gets the highlight.
-        const needle = citation.text.toLowerCase().trim();
-        if (!needle) return;
+        // whose textContent contains the snippet gets the highlight.
+        // Numeric-aware: also try a comma/$-stripped form so "51840"
+        // matches a cell rendered as "$51,840.00".
+        const needles = uniqueNonEmpty([
+          snippet.toLowerCase().trim(),
+          stripFormatting(snippet),
+        ]);
+        if (needles.length === 0) return;
         for (const row of Array.from(rows)) {
           for (const cell of Array.from(row.querySelectorAll("td"))) {
-            if ((cell.textContent ?? "").toLowerCase().includes(needle)) {
+            const cellText = (cell.textContent ?? "").toLowerCase();
+            const cellStripped = stripFormatting(cell.textContent ?? "");
+            if (
+              needles.some(
+                (n) => cellText.includes(n) || cellStripped.includes(n),
+              )
+            ) {
               cell.classList.add("kb-cited-cell");
               row.classList.add("kb-cited");
               cell.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -497,16 +620,14 @@ function XlsxView({
             }
           }
         }
-        // Searched every sheet that contains the needle (auto-switch
-        // already moved us there). Reaching here means the active
-        // sheet's cells don't contain the text — usually because the
-        // mention came from a contextualizer-added prefix rather than
-        // from the raw file body.
+        // Searched the active sheet exhaustively — snippet isn't in any
+        // cell. Usually means the mention came from a contextualizer-
+        // added prefix rather than from the raw file body.
         setNotFound(true);
       }
     }, 50);
     return () => window.clearTimeout(id);
-  }, [citation, sheets, tab]);
+  }, [citation, snippet, sheets, tab]);
 
   if (err) return <div className="p-4 text-xs text-red-700 mono">{err}</div>;
   if (!sheets)
@@ -556,10 +677,10 @@ function XlsxView({
 
 function PlainTextView({
   file,
-  citation,
+  snippet,
 }: {
   file: FileResource;
-  citation: Citation | null;
+  snippet: string | null;
 }) {
   const [text, setText] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -579,7 +700,7 @@ function PlainTextView({
 
   return (
     <pre className="text-[13px] text-zinc-800 whitespace-pre-wrap font-sans leading-relaxed p-5">
-      <HighlightedText text={text} needle={citation?.kind === "text" ? citation.text : null} />
+      <HighlightedText text={text} needle={snippet} />
     </pre>
   );
 }
