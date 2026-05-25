@@ -28,7 +28,12 @@ from pydantic import BaseModel, Field
 
 DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
 DEFAULT_ANTHROPIC_MODEL = "claude-opus-4-7"
-_MAX_OUTPUT_TOKENS = 2000  # ~50-100 mentions per chunk worst case
+# Long entity-rich docs (resumes, invoices, multi-page contracts) emit
+# ~200+ mentions; the prior 2000-token cap truncated the JSON response
+# mid-array and the strict parser then threw out the whole list. PR4
+# raised this + added json_recovery.parse_tolerant_array_in_object so
+# the rare ongoing truncation salvages everything that did parse.
+_MAX_OUTPUT_TOKENS = 8000
 
 ONTONOTES_18_TYPES: tuple[str, ...] = (
     "PERSON", "NORP", "FAC", "ORG", "GPE", "LOC", "PRODUCT",
@@ -125,29 +130,26 @@ def _parse_mentions_json(raw_text: str) -> list[Mention]:
         types like "CITY" or "AMOUNT" sometimes — drop them).
       - mentions whose text is empty or > 1000 chars (CHECK constraint).
 
-    Tolerant of code-fenced output: strips ```json fences if present.
+    Tolerant of code-fenced output and of TRUNCATED responses: when the
+    LLM hits max_output_tokens mid-array, we recover every mention that
+    closed cleanly rather than throwing the whole list away (E1 root
+    cause, PR4).
     """
-    text = raw_text.strip()
-    # Strip code fences if present (Gemini sometimes wraps JSON in ```json ... ```).
-    if text.startswith("```"):
-        lines = text.splitlines()
-        # Drop first line (```json or ```) and last line (```) if last is fence.
-        if len(lines) >= 2 and lines[-1].strip() == "```":
-            lines = lines[1:-1]
-        else:
-            lines = lines[1:]
-        text = "\n".join(lines)
+    from kb.extraction.json_recovery import parse_tolerant_array_in_object
 
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise MentionExtractionError(
-            f"LLM returned invalid JSON: {exc}; output: {raw_text[:200]}"
-        ) from exc
-
-    raw_list = data.get("mentions") if isinstance(data, dict) else None
-    if not isinstance(raw_list, list):
-        return []
+    raw_list, truncated = parse_tolerant_array_in_object(raw_text, "mentions")
+    if truncated:
+        # Visible signal so operators know the cap is biting. Dump the
+        # tail of the raw output too — useful when recovery=0 because
+        # Gemini occasionally returns a verbose preamble before the
+        # JSON, blowing the array open without ever closing an element.
+        import logging
+        log = logging.getLogger(__name__)
+        log.warning(
+            "mentions response was truncated; recovered %d items "
+            "(raw len=%d, last 200 chars: %r)",
+            len(raw_list), len(raw_text), raw_text[-200:] if raw_text else "",
+        )
 
     mentions: list[Mention] = []
     valid_types = set(ONTONOTES_18_TYPES)
