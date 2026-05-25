@@ -1146,7 +1146,156 @@ Worker processes the job asynchronously. Clients poll via SQL on `procrastinate_
 
 ---
 
-## 7. Future phases — placeholders
+## 7. Phase 8 — Query (search + chat)
+
+> **Status:** Phase 8f G2 — drafted 2026-05-25. Locks the HTTP surface for Phase 8's full query pipeline. 8a–8e are pure-module phases with no API delta; 8f introduces the 2 endpoints below + the `query_log` audit table (DB-side concern, not part of contract).
+
+### 7.1 Pipeline invariants (what every query endpoint guarantees)
+
+1. **Workspace-isolated.** Both endpoints require `X-Workspace-Id`. RLS enforces that retrieval channels, the rerank pool, and the audit row only see/write within the caller's workspace.
+2. **Cite-or-refuse.** Every `/chat` response either (a) contains at least one citation backing every claim, or (b) carries `refused: true` with a machine-readable `refusal_reason`. There is no third path — no uncited answer is ever emitted.
+3. **Consistent envelope across refusal modes.** Whether retrieval was empty, CRAG flagged low confidence, the LLM self-refused, the LLM crashed, or the LLM's JSON couldn't be parsed — the response is always a 200 with `refused: true` and an explanatory `refusal_reason`. The orchestrator does not 4xx on retrieval emptiness; that's a domain answer ("no evidence in corpus"), not a client error.
+4. **Audited.** Every call writes one row to `query_log` (workspace-scoped, RLS-forced, immutable — kb_app has SELECT + INSERT only). Phase 9 `/audit` reads from this table.
+5. **Idempotency on `/chat`.** `Idempotency-Key` header is honored. Replays return the cached `ChatResult` (looked up by `(workspace_id, idempotency_key)` in `query_log`) without re-spending tokens. `/search` is read-only and not idempotency-keyed.
+6. **No streaming in Wave A.** Both endpoints return one JSON body. Phase 9 wraps `/chat` with SSE under `/chat/:id/stream`.
+7. **No DB writes outside `query_log`.** Neither endpoint mutates `files`, `entities`, `schemas`, etc. — they are pure read + audit.
+
+### 7.2 `POST /search` — retrieval inspector (read-only)
+
+Runs the full retrieval pipeline (rewriter → 6 channels × 4 rewrites → RRF → rerank → CRAG) and returns the top-10 reranked hits + CRAG score. **No generation step.** Used by audit/admin UIs (Phase 10f) to inspect what the chat endpoint would have seen.
+
+**Request body:**
+
+```json
+{
+  "query": "What is X?",
+  "mode": "H"
+}
+```
+
+- `query` (required, string, 1–4000 chars) — natural-language question
+- `mode` (optional, string, default `"H"`) — Wave A only accepts `"H"` (hybrid). Other values (`"Q"`/`"D"`/`"E"`) deferred to Wave B; rejected with 400 `invalid-query`.
+
+**Response (200):**
+
+```json
+{
+  "query_id": "01926d4f-7ce0-7320-bf6d-fb9f133b8fc3",
+  "query": "What is X?",
+  "rewrites": {
+    "original": "What is X?",
+    "step_back": "What is the general topic of X?",
+    "hyde": "X is a concept that...",
+    "query2doc": "Document discussing X..."
+  },
+  "hits": [
+    {
+      "id": "abc12345-6789-...",
+      "kind": "chunk",
+      "score": 0.92,
+      "snippet": "...up to 500 chars...",
+      "metadata": {
+        "file_id": "f1...",
+        "channel": "dense_chunks",
+        "rerank": "cohere"
+      }
+    }
+  ],
+  "crag_score": 0.78,
+  "latency_ms": 1240
+}
+```
+
+**Errors:**
+
+- `400 invalid-query` — empty query, query > 4000 chars, or `mode` not `"H"`
+- `500 query-pipeline-error` — internal failure (channel + rerank + CRAG together exhausted all fail-safes)
+
+### 7.3 `POST /chat` — full pipeline (search + generate)
+
+Runs `/search` internally, then gates with CRAG, then calls the generator (force-refuses when CRAG below threshold). Returns the answer envelope.
+
+**Headers:**
+- `X-Workspace-Id` (required)
+- `Idempotency-Key` (optional, recommended) — replay returns cached answer
+
+**Request body:** same shape as `/search`.
+
+**Response (200):**
+
+```json
+{
+  "query_id": "01926d4f-...",
+  "query": "What is X?",
+  "rewrites": { "original": "...", "step_back": "...", "hyde": "...", "query2doc": "..." },
+  "generation": {
+    "answer": "X is [abc12345] foo and [def67890] bar.",
+    "citations": [
+      {
+        "hit_id": "abc12345-...",
+        "kind": "chunk",
+        "file_id": "f1...",
+        "snippet_preview": "first 200 chars",
+        "score": 0.92
+      }
+    ],
+    "refused": false,
+    "refusal_reason": null,
+    "model_id": "gemini-2.5-flash"
+  },
+  "hits": [ /* same shape as /search */ ],
+  "crag_score": 0.78,
+  "latency_ms": 1870
+}
+```
+
+**Refusal envelope (still 200):**
+
+```json
+{
+  "query_id": "01926d4f-...",
+  "query": "What was our Q4 2026 revenue?",
+  "generation": {
+    "answer": "",
+    "citations": [],
+    "refused": true,
+    "refusal_reason": "insufficient_evidence",
+    "model_id": "gemini-2.5-flash"
+  },
+  "hits": [ /* what was searched, even though score was too low */ ],
+  "crag_score": 0.31,
+  "latency_ms": 980
+}
+```
+
+`refusal_reason` values (machine-readable):
+- `"insufficient_evidence"` — CRAG score below threshold (0.5); generator was force-refused
+- `"no_hits"` — retrieval returned zero hits across all channels
+- `"llm_error"` — generator's LLM call raised an exception
+- `"parse_error"` — generator's LLM returned malformed JSON
+- `"empty_response"` — generator's LLM returned no candidates
+- model-supplied string — when the LLM itself self-refuses (decision #8 in §5.15.5)
+
+**Errors:** same as `/search` (`400 invalid-query` / `500 query-pipeline-error`). **Critically, no 4xx for empty corpora** — emptiness yields a 200 + refusal envelope.
+
+### 7.4 Out of scope at 8f
+
+- SSE streaming on `/chat/:id/stream` — Phase 9.
+- `mode` other than `"H"` — Wave B (Q/D/E mode classification).
+- `query_log` is read-only from clients — Phase 9 ships `GET /audit` for inspection.
+- Cross-workspace queries — RLS-isolated; no contract for it.
+- Rate limiting / RBAC — Wave B.
+
+### 7.5 New error types (added to §0)
+
+| Type slug | HTTP | Phase | When |
+|---|---|---|---|
+| `invalid-query` | 400 | 8f | Empty query, query > 4000 chars, or unsupported `mode` |
+| `query-pipeline-error` | 500 | 8f | Orchestrator caught an unrecoverable internal error after all module-level fail-safes |
+
+---
+
+## 8. Future phases — placeholders
 
 Each phase appends its endpoint contracts here at its G2 gate. Index:
 
@@ -1172,7 +1321,7 @@ Each phase appends its endpoint contracts here at its G2 gate. Index:
 
 ---
 
-## 8. Change log
+## 9. Change log
 
 | Date | Change | By |
 |---|---|---|
@@ -1190,3 +1339,4 @@ Each phase appends its endpoint contracts here at its G2 gate. Index:
 | 2026-05-24 | **Phase 2c G2 — `?parser=` caller override + 400 invalid-parser-override.** §5.5 `POST /files` adds Query parameters subsection documenting `?parser=auto\|docling\|gemini` (default `auto`; persisted into `raw_pages.layout_json.provenance.forced_parser`). 400 error type widened with `invalid-parser-override`. §5.3 lifecycle history example footnoted with the parser enum widening (`docling | xlsx | email | gemini_ocr | mistral_ocr`). | Aniket |
 | 2026-05-24 | **Phase 3d G2 — `lifecycle_state` enum widens by `raptor_building` + reframes `ready`.** §5.2 enum row widens to include `raptor_building` (3d's intermediate state between embedded → ready) and reframes `ready` as 3d's terminal (was "Phase 3d will add"). §5.3 lifecycle history example annotated with all post-Phase-2c stage transitions (chunking_done, contextualization_done, embedding_done, raptor_build_started, raptor_build_done) + payload shapes per stage + failure-event convention noted explicitly. | Aniket |
 | 2026-05-24 | **Phase 3e G2 — Corpus RAPTOR new §6 added.** New top-level `## 6. Phase 3e — Corpus RAPTOR` introduces the corpus-tree model (§6.1 — 7 invariants covering workspace isolation, doc-root sourcing from per-doc roots, explicit-trigger semantics, atomic rebuild, determinism, schema reuse, retrieval graceful degradation), notes corpus-node resource shape is shared with per-doc (§6.2), and documents `POST /corpus/raptor/rebuild` (§6.3 — 202 Accepted with task_id; errors `400 corpus-rebuild-no-input` and `503 corpus-rebuild-in-flight`). Cost note at the endpoint description warns operators of ~115K LLM+embedding calls at 100K-doc scale. Out-of-scope §6.4 documents the deferrals (GET /corpus/raptor → Phase 8+; status polling → Phase 9; incremental updates → Phase 5+; admin RBAC → Phase 9; HNSW → Phase 4). Old §6 placeholders → §7; old §7 changelog → §8. | Aniket |
+| 2026-05-25 | **Phase 8f G2 — Query HTTP surface new §7 added.** New top-level `## 7. Phase 8 — Query (search + chat)` locks the HTTP surface for Phase 8's full pipeline (8a→8e are pure-module phases with no API delta). §7.1 — 7 pipeline invariants (workspace-isolated, cite-or-refuse, consistent envelope across refusal modes, audited via query_log, idempotency on /chat, no streaming in Wave A, no DB writes outside query_log). §7.2 — `POST /search` (read-only retrieval inspector returning reranked top-10 + CRAG score; no generation). §7.3 — `POST /chat` (full pipeline; ChatResult envelope with generation + hits + crag_score + latency_ms + query_id); refusal-envelope shape documented with 6 machine-readable `refusal_reason` values (insufficient_evidence, no_hits, llm_error, parse_error, empty_response, plus model-supplied strings). **Critical invariant:** refusals are 200 + envelope, NOT 4xx — emptiness is a domain answer ("no evidence in corpus"), not a client error. §7.4 out-of-scope (SSE streaming → Phase 9; mode!=H → Wave B; admin RBAC → Wave B). §7.5 — 2 new error slugs `invalid-query` (400) + `query-pipeline-error` (500). Old §7 placeholders → §8; old §8 changelog → §9. | Aniket |

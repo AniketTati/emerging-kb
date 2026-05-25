@@ -88,3 +88,22 @@ class CorpusRebuildInFlightError(Exception):
         super().__init__(
             f"a corpus rebuild for workspace {workspace_id!r} is already in flight"
         )
+
+
+class InvalidQueryError(Exception):
+    """Phase 8f §7.5: POST /search or POST /chat with an empty query,
+    query > 4000 chars, or `mode` not in {'H'}. Maps to 400 invalid-query."""
+
+    def __init__(self, detail: str) -> None:
+        self.detail = detail
+        super().__init__(detail)
+
+
+class QueryPipelineError(Exception):
+    """Phase 8f §7.5: orchestrator caught an unrecoverable internal error
+    after all module-level fail-safes. Maps to 500 query-pipeline-error.
+    Detail is logged server-side; client sees a generic message."""
+
+    def __init__(self, detail: str) -> None:
+        self.detail = detail
+        super().__init__(detail)

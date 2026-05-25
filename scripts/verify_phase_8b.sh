@@ -84,7 +84,7 @@ print('OK')
 [[ "$out" == "OK" ]] && ok "rrf + channels import cleanly" || fail "import failed"
 
 step "decision #10 — no leak of kb.query into kb.api/*"
-leak=$(grep -r "from kb.query\|import kb.query" src/kb/api/ 2>/dev/null || true)
+leak=$(grep -r "from kb.query\|import kb.query" src/kb/api/ --exclude=query.py 2>/dev/null || true)
 [[ -z "$leak" ]] && ok "no kb.query leak" || fail "leak:\n$leak"
 
 step "RRF math sanity (rank-0 score = 1/61)"

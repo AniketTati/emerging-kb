@@ -29,6 +29,7 @@ from kb.api.middleware import (
 )
 from kb.api.corpus import router as corpus_router
 from kb.api.files import router as files_router
+from kb.api.query import router as query_router
 from kb.api.readiness import router as ready_router
 from kb.api.schema_hierarchy import router as schema_hierarchy_router
 from kb.api.schema_versions import router as schema_versions_router
@@ -101,6 +102,7 @@ def build_app() -> FastAPI:
     app.include_router(schema_hierarchy_router)
     app.include_router(files_router)
     app.include_router(corpus_router)
+    app.include_router(query_router)
 
     # Phase 2a — register default parsers (Docling). Idempotent.
     from kb.parsers import register_default_parsers
@@ -234,6 +236,8 @@ def build_app() -> FastAPI:
         CorpusRebuildInFlightError,
         CorpusRebuildNoInputError,
         InvalidParserOverrideError,
+        InvalidQueryError,
+        QueryPipelineError,
     )
 
     @app.exception_handler(InvalidParserOverrideError)
@@ -258,6 +262,23 @@ def build_app() -> FastAPI:
             req, status_code=503, type_slug="corpus-rebuild-in-flight",
             title="A corpus rebuild is already in flight for this workspace",
             detail=str(exc),
+        )
+
+    @app.exception_handler(InvalidQueryError)
+    async def _invalid_query(req: Request, exc: InvalidQueryError):
+        return problem_response(
+            req, status_code=400, type_slug="invalid-query",
+            title="Invalid query body",
+            detail=str(exc),
+        )
+
+    @app.exception_handler(QueryPipelineError)
+    async def _query_pipeline_error(req: Request, exc: QueryPipelineError):
+        # Don't leak internal exception text to clients (decision #14).
+        return problem_response(
+            req, status_code=500, type_slug="query-pipeline-error",
+            title="Internal query-pipeline error",
+            detail="The query pipeline failed after exhausting fail-safes.",
         )
 
     @app.exception_handler(RequestValidationError)

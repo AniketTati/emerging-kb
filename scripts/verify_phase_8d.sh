@@ -68,7 +68,7 @@ print('OK', CRAG_THRESHOLD)
 [[ "$out" == "OK 0.5" ]] && ok "crag module imports cleanly + threshold = 0.5" || fail "import/threshold check failed: $out"
 
 step "no kb.query leak into kb.api/*"
-leak=$(grep -r "from kb.query\|import kb.query" src/kb/api/ 2>/dev/null || true)
+leak=$(grep -r "from kb.query\|import kb.query" src/kb/api/ --exclude=query.py 2>/dev/null || true)
 [[ -z "$leak" ]] && ok "no leak" || fail "leak:\n$leak"
 
 step "Identity always returns 1.0 (incl. empty hits — fail-safe pass)"
