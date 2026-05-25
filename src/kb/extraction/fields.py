@@ -38,13 +38,33 @@ _MAX_OUTPUT_TOKENS_PROPOSE = 12000
 VALUE_TYPES: tuple[str, ...] = ("text", "number", "date", "datetime", "boolean", "enum")
 
 _CLASSIFY_SYSTEM_PROMPT = (
-    "You classify documents into short snake_case doc-type labels. "
-    "Examples: legal_contract, bank_statement, 10k_filing, invoice, "
-    "employment_letter, land_record, drawing, handwritten_note, email_thread, "
-    "vendor_spreadsheet. Output JSON only."
+    "You classify documents into a short snake_case doc-type label that "
+    "captures what KIND of document this is. The label drives downstream "
+    "schema inference, so be specific but use widely-recognized terms.\n"
+    "\n"
+    "Good examples (use ones like these when they fit):\n"
+    "  legal_contract, master_services_agreement, mutual_nda, employment_offer,\n"
+    "  invoice, bank_statement, expense_report, vendor_spreadsheet, price_sheet,\n"
+    "  lab_report, medical_discharge_summary, prescription, insurance_eob,\n"
+    "  resume, job_description, performance_review, offer_letter,\n"
+    "  incident_postmortem, meeting_minutes, design_doc, rfc, bug_report,\n"
+    "  email_thread, press_release, case_study, financial_report, 10k_filing,\n"
+    "  land_record, drawing, handwritten_note\n"
+    "\n"
+    "Rules:\n"
+    "  - Always emit a meaningful label. If none of the examples fit, invent "
+    "    a plausible snake_case one (e.g. 'shipping_manifest', 'voter_roll').\n"
+    "  - Do NOT return 'unknown' or 'document' or 'other' — those words are "
+    "    reserved for the parser's identity fallback and shouldn't come from "
+    "    a classifier that read the doc. If you literally cannot tell, pick "
+    "    the most likely candidate based on visible structure (table-heavy → "
+    "    spreadsheet-style, with signatures → contract-style, etc.).\n"
+    "  - Output JSON only, no preamble."
 )
 _CLASSIFY_USER_TEMPLATE = (
-    "Classify this document:\n\n<doc>\n{doc_text}\n</doc>\n\n"
+    "Classify this document. The label should be specific enough that the "
+    "system can infer a useful schema (fields the doc-type is likely to "
+    "contain).\n\n<doc>\n{doc_text}\n</doc>\n\n"
     'Return JSON: {{"doc_type": "snake_case_label"}}'
 )
 
