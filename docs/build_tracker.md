@@ -280,7 +280,8 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
 | **5c** | Atomic units + per-type rarity / anomaly scoring (clauses + transactions + rows plugins) | ✅ | — | ✅ | ✅ | ✅ | §5.12.3 (10 decisions). 19/19 5c pytest. Lifecycle adds `units_extracting`; final transitions to `ready`. |
 | **6** | Schema-driven extraction (Gemini structured outputs) + lineage paths | ✅ | — | ✅ | ✅ | ✅ | All gates green 2026-05-25. 370/370 pytest. verify_phase_6.sh 10/10. Cross-phase sweep 15/15 GREEN. Branch `phase-6/schema-extraction`. |
 | **7** | Identity resolution (deterministic→embedding→LLM judge→union-find) | ✅ | — | ✅ | ✅ | ✅ | All gates green 2026-05-25 (§5.14, 14 decisions). 407/407 pytest. verify_phase_7.sh 16/16. Cross-phase sweep 16/16 GREEN. Branch `phase-7/identity-resolution`. |
-| **8** | Query planner + rewriting (Step-Back + HyDE + Query2Doc) + parallel retrieval + RRF + rerank + CRAG gate + Astute generation | 🟡 | — | ⬜ | ⬜ | ⬜ | G1 DRAFT at §5.15 — split into 8a-f. Per architecture "the big one"; treat each sub-phase as its own G1→G5 cycle. |
+| **8** | Query planner + rewriting + parallel retrieval + RRF + rerank + CRAG + Astute generation (parent — split into 8a-f) | ✅ | — | ⬜ | ⬜ | ⬜ | G1 ✅ split-locked at §5.15. Each sub-phase has its own G1→G5 cycle. |
+| **8a** | Query rewriting (Step-Back + HyDE + Query2Doc) | ✅ | — | ✅ | ✅ | ✅ | All gates green 2026-05-25 (§5.15.1, 10 decisions). 421/421 pytest. verify_phase_8a.sh 8/8. Cross-phase sweep 17/17. Branch `phase-8a/query-rewriter`. |
 | **9** | Audit log + lifecycle visibility + idempotency | 🟡 | — | ⬜ | ⬜ | ⬜ | G1 DRAFT at §5.16. SSE for Upload status + Chat replay + GET /audit. |
 | **10a** | UI — Upload (drag-drop · live per-doc per-stage status via SSE) | 🟡 | — | ⬜ | ⬜ | ⬜ | G1 DRAFT at §5.17. Next.js 15 per architecture. |
 | **10b** | UI — Chat (front door · streamed answers · right-side citation cards · plan inspector) + universal Doc Detail slide-in panel | 🟡 | — | ⬜ | ⬜ | ⬜ | G1 DRAFT at §5.17. |
@@ -2351,9 +2352,87 @@ When Aniket approves this plan, the Phase 4 G1 cell in §5 flips ⬜ → ✅ and
 
 ---
 
-### 5.15 Phase 8 plan — Query layer (split into 8a-f) (G1 🟡 DRAFT)
+### 5.15 Phase 8 parent — Query layer (split into 8a-f) (G1 ✅ split-locked)
 
-> **Status:** Sub-phase split sketched per architecture §12 "the big one — split into sub-phases at G1". Each sub-phase 8a→8f is its own G1→G5 cycle (matching Phase 5's a/b/c split discipline). DO NOT treat this as signed off — each sub-phase G1 needs its own decisions table + scope + tests-spec + PR. Earlier rush-cut shipped 7 modules + 0 tests; that code was reverted. Restart from 8a properly.
+> **Status:** Sub-phase split locked per architecture §12 "the big one — split into sub-phases at G1". Each sub-phase 8a→8f is its own G1→G5 cycle (matching Phase 5's a/b/c split discipline). Each sub-phase has its own decisions table + scope + tests-spec + verify + PR.
+
+**Sub-phase split + dependencies:**
+
+| Sub | Scope | Depends on | Plan |
+|---|---|---|---|
+| **8a** | Query rewriting — Step-Back + HyDE + Query2Doc per architecture §6 step 4 | Phase 3c embedder, no DB writes | §5.15.1 |
+| **8b** | 6-channel parallel retrieval — BM25 chunks · BM25 raptor · dense chunks · dense raptor · mentions_exact · atomic_units_rarity. RRF fusion (k=60) per Cormack 2009. | Phase 4 (indexes), Phase 5a/5c (mentions + units), Phase 7 (entities for mentions_exact resolution) | §5.15.2 |
+| **8c** | Rerank — Cohere Rerank 3.5 default; `mxbai-rerank-large-v2` local fallback; identity passthrough. Factory `KB_RERANKER`. | 8b output schema | §5.15.3 |
+| **8d** | CRAG gate — Gemini judges relevance of top-K post-rerank; refuses below threshold. | 8c output, Phase 3b LLM factory pattern | §5.15.4 |
+| **8e** | Astute generation — Gemini answer with chunk + entity + atomic-unit citations + refusal mode. | 8d output | §5.15.5 |
+| **8f** | HTTP surface — `POST /search` + `POST /chat` + `query_log` audit table | 8a→8e all complete | §5.15.6 |
+
+**Skipped vs architecture full vision (deferred to Wave B):**
+- 4 of architecture's 10 retrieval channels: HippoRAG PPR (no graph yet), ColPali (Wave C), doc-chain (Design 3 not built), anomaly-filter separate from atomic-unit rarity.
+- Conversational-context resolver (Design 8) — first-turn-only in Wave A; multi-turn lands at Phase 10b polish.
+- Per-query rewriting hyperparameter overrides — env defaults only in Wave A.
+- Streaming generation — Wave A returns full answer; SSE streaming lives at Phase 9 + 10b.
+
+---
+
+### 5.15.1 Phase 8a plan — Query rewriting (Step-Back + HyDE + Query2Doc) (G1 🟡 DRAFTED)
+
+> **Status:** G1 plan drafted 2026-05-25. Per architecture §6 step 4 (3 rewriting strategies). Standalone module; no DB writes; pure LLM-call layer. Input: user query string. Output: 4 query variants (original + step_back + hyde + query2doc) for parallel-channel input.
+
+**Scope (in / out):**
+
+**In scope:**
+- New `src/kb/query/` package (top-level, sibling to `kb/extraction/`, `kb/identity/`).
+- `src/kb/query/rewriter.py`: `Rewrites` pydantic model · `QueryRewriter` Protocol · 3-impl factory (`GeminiQueryRewriter` + `AnthropicQueryRewriter` + `IdentityQueryRewriter`) · `make_query_rewriter()` reads `KB_QUERY_LLM ∈ {gemini, anthropic, identity, auto}`.
+- Single LLM call returns all 3 rewrites as JSON `{step_back, hyde, query2doc}`. Identity fallback returns original query for all 3 (no expansion — degraded recall but functional).
+- JSON parser tolerant of fences + missing keys (returns original on parse failure).
+- Out-of-the-box `auto` selector probes Gemini → Anthropic → Identity (matches 3b-bis/3d/5a/5b/5c/6/7 convention).
+
+**Out of scope (deferred):**
+- Conversational context (multi-turn rewriting per Design 8) — Phase 10b chat polish.
+- DSPy-optimized prompts — Wave B Phase B3.
+- Per-channel rewriting (different rewrites for BM25 vs dense) — Wave B.
+- Query-classification routing (which planner mode `D` vs `H` vs `Q` per architecture §6) — Wave B Phase 8b refactor.
+- HTTP surface — `/search` + `/chat` land in 8f; 8a is module-only.
+- Audit logging of rewrites — 8f writes `query_log.rewrites` jsonb.
+- Caching rewrites (a query like "hello" gets the same step_back forever) — Wave B.
+
+**Decisions locked at G1:**
+
+| # | Decision | Choice | Rationale |
+|---|---|---|---|
+| 1 | 3 rewriting strategies bundled in ONE LLM call | Yes — system prompt asks for all 3 in a single JSON. | Cheaper than 3 separate calls; Gemini's response_mime_type=application/json constrains output. Per architecture §6 step 4. |
+| 2 | LLM | **Gemini 2.5 Flash** default. 3-impl factory `KB_QUERY_LLM`. Identity returns original-text for all 3. | Same factory pattern as 3b-bis/3d/5a/5b/5c/6/7. Single-key story holds. |
+| 3 | Output schema | `{step_back: str, hyde: str, query2doc: str}` strict. Parser fallback returns the original query in all 3 slots if JSON is malformed. | Tolerant fail-soft — bad LLM output degrades to no-expansion rather than blocking the query. |
+| 4 | Tokens budget | `max_output_tokens=600` (~200 tokens × 3 rewrites). | HyDE paragraphs are the longest; 200 tokens each is plenty for the synthetic-doc pattern. |
+| 5 | Prompt format | Verbatim spec in module — single system prompt explains all 3 strategies; user message is just `"Query: <text>"`. | Self-contained for review. No external prompt-config file (Wave B adds Hydra). |
+| 6 | Thinking budget | `thinking_budget=0` (Gemini). | Rewriting is a short transform task, not multi-step reasoning. Mirrors §5.8 #9. |
+| 7 | Error handling | Any LLM exception → return `Rewrites(original=q, step_back=q, hyde=q, query2doc=q)`. Worker doesn't fail on rewriting failure. | Rewriting is optional quality boost; query still proceeds with original-only on failure. |
+| 8 | Model override | `KB_QUERY_MODEL` env (defaults `gemini-2.5-flash` / `claude-opus-4-7`). | Matches 3b-bis/3d/5a/5b/5c/6 KB_*_MODEL env convention. |
+| 9 | Variant ordering | Returned `Rewrites` model exposes `.original`, `.step_back`, `.hyde`, `.query2doc` as named fields. Phase 8b consumes all 4. | Named-attribute access easier for tests + downstream than positional list. |
+| 10 | No prompt caching | No `cache_control` block. | Rewriting prompts are tiny; caching overhead > savings for this stage. (Phase 3b uses caching for doc-context which is huge.) |
+
+**Files (G3/G4):**
+- `src/kb/query/__init__.py` — package docstring (mentions all 8 sub-modules even though only `rewriter` ships in 8a)
+- `src/kb/query/rewriter.py` — Rewrites model + 3-impl factory + `make_query_rewriter()`
+- `tests/specs/phase_8a.md` — test spec
+- `tests/test_query_rewriter_unit.py` — pure-function tests (factory matrix + parser edge cases + Identity fallback + mocked Gemini path)
+
+**Phase 8a G5 — what "green" means:**
+- `scripts/verify_phase_8a.sh` standalone: 6-8 checks (worker container imports `kb.query.rewriter` + no leak into `kb.api/*` + Identity returns original for all 3 + Phase 8a pytest).
+- Full pytest: prior 407 still GREEN + new ≥10 Phase 8a tests GREEN.
+- Cross-phase sweep across all 17 verify scripts (0..7 + 8a): 17/17 GREEN.
+
+**Pre-G3 consistency review checklist:**
+- [ ] Architecture §6 step 4 traceability (Step-Back + HyDE + Query2Doc).
+- [ ] No DB migration (pure module).
+- [ ] No HTTP surface (8f owns endpoints).
+- [ ] No api_contracts.md delta.
+- [ ] No lifecycle CHECK widening (no worker stage in 8a).
+- [ ] Identity-fallback path tested.
+- [ ] Factory matrix covers 5 cases.
+- [ ] No leak into 8b (no channel logic).
+- [ ] No leak into 8c (no rerank).
 
 **Sub-phase split:**
 
