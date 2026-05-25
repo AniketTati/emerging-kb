@@ -143,6 +143,7 @@ def register_default_parsers() -> None:
     from kb.parsers.docling_parser import DoclingParser
     from kb.parsers.email_parser import EmailParser
     from kb.parsers.mistral_ocr_parser import MistralOCRParser
+    from kb.parsers.text_parser import TextParser
     from kb.parsers.xlsx_parser import XLSXParser
 
     # Don't double-register — keyed on parser class.
@@ -155,6 +156,7 @@ def register_default_parsers() -> None:
     _GLOBAL_REGISTRY.register(DoclingParser())
     _GLOBAL_REGISTRY.register(XLSXParser())
     _GLOBAL_REGISTRY.register(EmailParser())
+    _GLOBAL_REGISTRY.register(TextParser())
     _GLOBAL_REGISTRY.register(MistralOCRParser())
 
 

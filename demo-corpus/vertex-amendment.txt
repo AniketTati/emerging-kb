@@ -1,0 +1,66 @@
+AMENDMENT NO. 1 TO MASTER SERVICES AGREEMENT
+
+This Amendment No. 1 (the "Amendment") is entered into as of April 1,
+2026 (the "Amendment Effective Date") by and between NorthWind Capital
+LLC ("NorthWind"), a Delaware limited liability company, and Vertex
+Industries Ltd. ("Vertex"), a Maharashtra company, and amends the
+Master Services Agreement between the parties dated January 15, 2026
+(the "Original MSA").
+
+RECITALS
+
+WHEREAS, the parties wish to expand the geographic scope of services
+to include the Aurangabad facility, in addition to the existing
+Mumbai and Pune sites; and
+
+WHEREAS, the parties have agreed to revise the indemnification cap
+and payment terms to reflect the increased value and volume of
+services;
+
+NOW, THEREFORE, the parties agree as follows:
+
+1. SCOPE EXPANSION
+
+Schedule A of the Original MSA is hereby amended to include
+document-intelligence services at the Vertex Aurangabad facility,
+in addition to Mumbai and Pune. The expected monthly document volume
+across all three sites is approximately two hundred forty thousand
+(240,000) documents.
+
+2. INDEMNIFICATION CAP — AMENDED
+
+Section 4 of the Original MSA is hereby amended in its entirety to
+read as follows:
+
+  "Vertex shall indemnify and hold harmless NorthWind from any claims
+  arising out of Vertex's gross negligence or willful misconduct,
+  provided that Vertex's aggregate liability under this Section 4
+  shall not exceed FIFTY MILLION DOLLARS ($50,000,000) per
+  occurrence."
+
+This amended cap supersedes the previous cap of twenty-five million
+dollars ($25,000,000) set forth in the Original MSA.
+
+3. PAYMENT TERMS — AMENDED
+
+Section 3 of the Original MSA is amended to provide for payment on a
+net-forty-five (45) day basis. The previous net-thirty (30) day
+payment term is hereby superseded.
+
+4. ALL OTHER TERMS UNCHANGED
+
+Except as expressly amended hereby, all other terms and conditions of
+the Original MSA — including without limitation the three-year initial
+term, the late-payment interest rate, the confidentiality obligations,
+and the Delaware governing law — remain in full force and effect.
+
+5. SIGNATURES
+
+IN WITNESS WHEREOF, the parties have executed this Amendment as of
+the Amendment Effective Date.
+
+NORTHWIND CAPITAL LLC               VERTEX INDUSTRIES LTD.
+
+By: ____________________            By: ____________________
+   Sarah Chen, CFO                      Rajesh Sharma, CEO
+   Dated: April 1, 2026                 Dated: April 1, 2026

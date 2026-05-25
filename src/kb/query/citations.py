@@ -454,10 +454,26 @@ async def fetch_file_metas(
 
     Returns a dict keyed by file_id (str). Files not present in the DB
     are omitted. Tolerant: if any column is missing (older schema), the
-    missing field stays None on the resulting `FileMetaForCitation`."""
+    missing field stays None on the resulting `FileMetaForCitation`.
+
+    Wraps the SELECT in a SAVEPOINT so that if the query fails (e.g.
+    bad UUID, missing column on an older schema), the outer
+    transaction stays usable for downstream writes (audit log,
+    idempotency cache). Without the SAVEPOINT, a Python try/except
+    swallows the exception but PostgreSQL still marks the txn as
+    aborted, and the next conn.execute() raises
+    InFailedSqlTransaction even though we caught the original error.
+    """
     ids = sorted({fid for fid in file_ids if fid})
     if not ids:
         return {}
+    rows: list[tuple] = []
+    try:
+        await conn.execute("SAVEPOINT fetch_file_metas")
+        in_savepoint = True
+    except Exception:
+        in_savepoint = False
+
     try:
         cur = await conn.execute(
             "SELECT f.id::text, f.mime_type, f.inferred_doc_type, f.name, "
@@ -468,7 +484,22 @@ async def fetch_file_metas(
             (ids,),
         )
         rows = await cur.fetchall()
+        if in_savepoint:
+            try:
+                await conn.execute("RELEASE SAVEPOINT fetch_file_metas")
+            except Exception:
+                pass
     except Exception:
+        # PG marks txn aborted on any error inside a SAVEPOINT scope;
+        # ROLLBACK TO SAVEPOINT clears that state so the caller can
+        # keep using `conn`. Without this, the next execute() would
+        # raise InFailedSqlTransaction and propagate as a 500.
+        if in_savepoint:
+            try:
+                await conn.execute("ROLLBACK TO SAVEPOINT fetch_file_metas")
+                await conn.execute("RELEASE SAVEPOINT fetch_file_metas")
+            except Exception:
+                pass
         return {}
 
     out: dict[str, FileMetaForCitation] = {}

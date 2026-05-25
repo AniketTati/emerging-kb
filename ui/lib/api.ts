@@ -340,3 +340,82 @@ export function segmentAnswer(
 }
 
 export { KbApiError };
+
+
+// ---------------------------------------------------------------------------
+// Dashboard (B7 / WA-14) — /dashboard/summary + /dashboard/needs-attention
+// ---------------------------------------------------------------------------
+
+
+export type CountByLabel = { label: string; count: number };
+
+
+export type DashboardSummary = {
+  workspace_id: string;
+  files_total: number;
+  files_by_lifecycle: CountByLabel[];
+  files_by_doc_type: CountByLabel[];
+  files_by_doc_status: CountByLabel[];
+  files_low_authority: number;
+  queries_total: number;
+  queries_last_24h: number;
+  queries_by_mode: CountByLabel[];
+  queries_by_faithfulness: CountByLabel[];
+  queries_refused: number;
+  queries_low_confidence: number;
+  conflicts_open: number;
+  conflicts_resolved: number;
+  corrections_open: number;
+  corrections_fixing: number;
+  regressions_active: number;
+  sessions_active_24h: number;
+  audit_log_total_rows: number;
+};
+
+
+export type NeedsAttentionKind =
+  | "conflict"
+  | "correction"
+  | "low_confidence_chat"
+  | "low_authority_file";
+
+
+export type NeedsAttentionItem = {
+  kind: NeedsAttentionKind;
+  id: string;
+  title: string;
+  severity: "blocker" | "important" | "minor" | "enhancement";
+  created_at: string;
+  payload: Record<string, unknown>;
+};
+
+
+export async function getDashboardSummary(): Promise<DashboardSummary> {
+  const url = `${KB_API_URL}/dashboard/summary`;
+  const resp = await fetch(url, { headers: workspaceHeaders() });
+  if (!resp.ok) {
+    throw new KbApiError(
+      resp.status,
+      await resp.text().catch(() => ""),
+      `GET /dashboard/summary failed: ${resp.status}`,
+    );
+  }
+  return (await resp.json()) as DashboardSummary;
+}
+
+
+export async function getNeedsAttention(
+  limit = 50,
+): Promise<NeedsAttentionItem[]> {
+  const url = `${KB_API_URL}/dashboard/needs-attention?limit=${limit}`;
+  const resp = await fetch(url, { headers: workspaceHeaders() });
+  if (!resp.ok) {
+    throw new KbApiError(
+      resp.status,
+      await resp.text().catch(() => ""),
+      `GET /dashboard/needs-attention failed: ${resp.status}`,
+    );
+  }
+  const body = (await resp.json()) as { items: NeedsAttentionItem[] };
+  return body.items ?? [];
+}
