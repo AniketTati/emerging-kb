@@ -210,6 +210,100 @@ On the demo corpus:
 
 ---
 
+## 4b. Broader-corpus audit (PR3 — 2026-05-25 evening)
+
+Added 20 new docs across 8 domains to surface gaps the narrow NorthWind /
+Vertex corpus hid. Also fixed two corpus-generation bugs:
+deterministic PDF (`invariant=1`) + xlsx (`_freeze_workbook` helper) so
+content-sha dedup actually catches re-uploads.
+
+### 4b.1 Corpus layout (25 unique docs)
+
+| Format | Count | Files |
+|---|---:|---|
+| PDF | 8 | vertex-msa, mutual-nda, saas-subscription, employment-offer, invoice-mar2026, lab-blood-panel, resume, insurance-eob |
+| .md | 9 | vertex-eval-notes, quarterly-summary, jd-data-scientist, performance-review, postmortem, standup, api-design-rfc, press-release, case-study |
+| .xlsx | 3 | vertex-pricing-tiers, bank-statement, expense-report |
+| .txt | 3 | vertex-amendment, discharge-summary, bug-report |
+| .eml | 2 | vertex-sales-thread, it-incident-thread |
+
+Personas covered: legal/contracts, financial, healthcare, HR, engineering,
+operations, marketing, insurance — vs the prior single "enterprise SaaS
+contract" persona.
+
+### 4b.2 Per-format extraction audit results
+
+| Format | Docs | zero-mentions | zero-units | zero-entities | zero-fields |
+|---|---:|---:|---:|---:|---:|
+| markdown | 9 | **8** | 9 | 8 | 0 |
+| pdf | 9 | **5** | 5 | 5 | 2 |
+| plain (txt) | 3 | **3** | 2 | 3 | 0 |
+| rfc822 (eml) | 2 | **2** | 2 | 2 | 0 |
+| xlsx | 3 | **3** | 0 | 3 | 1 |
+
+### 4b.3 Refined E1 — mentions extractor is broken on MORE than PDF/TXT/EML
+
+The narrow corpus suggested "works on .md + .xlsx, broken on PDF/TXT/EML".
+The broader corpus shows the actual pattern is **content-shape dependent,
+not format dependent**:
+
+- **PDFs that work** (4 of 9): dense legal/insurance prose — vertex-msa
+  (42 mentions), saas-subscription (40), mutual-nda (29), insurance-eob (34)
+- **PDFs that fail** (5 of 9): structured / list / form layouts — resume,
+  invoice, employment-offer-letter, lab-blood-panel, tiny.pdf
+- **Only 1 of 9 markdown files produces mentions** (vertex-eval-notes
+  with 44). Press releases, performance reviews, meeting notes, financial
+  summaries, postmortems, RFCs — all 0 mentions despite being entity-rich.
+- **All 3 xlsx files: 0 mentions**. (Previous "44 mentions on xlsx" was a
+  pre-PR3 run; re-upload with deterministic SHA produced 0.)
+- **All 3 .txt + 2 .eml: 0 mentions**.
+
+**Re-stated hypothesis for E1**: the mentions extractor's `_USER_TEMPLATE`
+asks for char offsets into "the chunk", but the contextualizer prepends
+a prefix BEFORE the chunk body in `contextual_text` (which is what the
+extractor sees). Many chunks contain non-prose layouts (lists, tables,
+headers). The Gemini structured-output schema may be returning `[]`
+when it can't confidently produce char offsets — and our code accepts
+that empty list as the answer.
+
+Other plausible contributors:
+- The L0 chunker emits ONE chunk per file for short docs (n_chunks = 1
+  on every doc in the audit). Big chunks → Gemini may truncate output.
+- The contextualizer prefix often LOOKS like the doc itself, so the
+  extractor may see the prefix as "the chunk" and refuse to point at
+  offsets in the unseen prose body.
+- Response truncation: `_MAX_OUTPUT_TOKENS = 2000` may cap structured
+  output for long lists.
+
+Pass 2 for E1 should:
+1. Log the raw Gemini response for a failing chunk to see whether
+   it's returning `{"mentions": []}` deliberately or whether parsing
+   is dropping rows.
+2. Test the prompt with + without the contextual prefix to see which
+   variant produces mentions on the failing files.
+3. Test smaller chunks for the long docs.
+
+### 4b.4 Open-world fields (proposed_fields) — surprising winners
+
+Fields ARE being extracted on most docs (only 2 with zero):
+- lab-blood-panel.pdf (0 fields) — also `doc_type=unknown`, classifier
+  likely refused due to medical content
+- bank-statement.xlsx (0 fields) — also `doc_type=unknown`
+
+When classification fails, the field-proposer presumably skips. That's
+a separate bug — classifier should at least return a generic type so
+field inference can proceed.
+
+### 4b.5 Updated priorities
+
+| # | Issue | New severity | Notes |
+|---|---|---|---|
+| E1 | Mentions extractor fails on most non-dense-prose docs | **CRITICAL** | Bigger than initially scoped — affects 22 of 26 docs (85%) |
+| E2 | schema_entities empty | high | still 0 across all 26 |
+| E2b | classifier returns `unknown` on healthcare/financial → no proposed_fields | medium | new gap surfaced by broader corpus |
+| E4 | doc-chain doesn't link MSA ↔ Amendment | medium | unchanged |
+| E5 | parse_artifacts empty (Docling layout dropped) | Wave C | unchanged |
+
 ## 5. Wave C (separate effort, not blocking)
 
 | Item | What it unlocks |
