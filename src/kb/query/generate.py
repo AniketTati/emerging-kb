@@ -63,13 +63,26 @@ _SYSTEM_PROMPT = (
 
 
 class Citation(BaseModel):
-    """Minimal citation envelope. Rich envelope is Wave B."""
+    """Citation envelope (Design 5 polymorphic — B3 / WA-7).
+
+    The original five fields stay mandatory for back-compat. The new fields
+    are all optional and populated by the orchestrator's enrichment pass
+    (kb.query.citations.build_citations_for_hits)."""
 
     hit_id: str
     kind: str
     file_id: str | None = None
     snippet_preview: str = ""
     score: float = 0.0
+    # B3 polymorphic extensions — None when the generator emits the bare
+    # envelope, populated when the orchestrator enriches via citations.py.
+    modality: str | None = None
+    ref: dict[str, Any] | None = None
+    label: str | None = None
+    authority: float | None = None
+    doc_status: str | None = None
+    chain_id: str | None = None
+    confidence: float | None = None
 
 
 class GenerationResult(BaseModel):
@@ -205,6 +218,15 @@ def _parse_result(
                     "file_id": rc.get("file_id"),
                     "snippet_preview": str(rc.get("snippet_preview", ""))[:500],
                     "score": float(rc.get("score", 0.0) or 0.0),
+                    # B3 polymorphic fields — accept whatever the LLM gives
+                    # (or omits). Orchestrator does the canonical enrichment.
+                    "modality": rc.get("modality"),
+                    "ref": rc.get("ref") if isinstance(rc.get("ref"), dict) else None,
+                    "label": rc.get("label"),
+                    "authority": rc.get("authority"),
+                    "doc_status": rc.get("doc_status"),
+                    "chain_id": rc.get("chain_id"),
+                    "confidence": rc.get("confidence"),
                 }))
             except (TypeError, ValueError):
                 continue

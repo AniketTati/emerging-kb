@@ -107,6 +107,11 @@ async def _write_query_log(
     answer: str | None = None
     citations_payload: Any = None
     model_id: str | None = None
+    # B3 — faithfulness gate + modality denormalization
+    faithfulness_verdict: str | None = None
+    faithfulness_score: float | None = None
+    faithfulness_regenerations: int = 0
+    citation_modalities: list[str] | None = None
 
     if chat_result is not None:
         gen = chat_result.generation
@@ -115,6 +120,10 @@ async def _write_query_log(
         answer = gen.answer or None
         citations_payload = [c.model_dump(mode="json") for c in gen.citations]
         model_id = gen.model_id or None
+        faithfulness_verdict = chat_result.faithfulness_verdict
+        faithfulness_score = chat_result.faithfulness_score
+        faithfulness_regenerations = chat_result.faithfulness_regenerations
+        citation_modalities = chat_result.citation_modalities or None
 
     hit_ids_payload = [
         {"id": h.id, "kind": h.kind, "score": h.score}
@@ -129,11 +138,15 @@ async def _write_query_log(
                 id, workspace_id, query, mode, endpoint,
                 rewrites, hit_ids, crag_score,
                 refused, refusal_reason, answer, citations, model_id,
-                latency_ms, idempotency_key
+                latency_ms, idempotency_key,
+                faithfulness_score, faithfulness_verdict,
+                faithfulness_regenerations, citation_modalities
             ) VALUES (
                 %s, %s, %s, %s, %s,
                 %s::jsonb, %s::jsonb, %s,
                 %s, %s, %s, %s::jsonb, %s,
+                %s, %s,
+                %s, %s,
                 %s, %s
             )
             """,
@@ -153,6 +166,10 @@ async def _write_query_log(
                 model_id,
                 source.latency_ms,
                 idempotency_key,
+                faithfulness_score,
+                faithfulness_verdict,
+                faithfulness_regenerations,
+                citation_modalities,
             ),
         )
     except Exception as exc:  # noqa: BLE001 — audit is best-effort
