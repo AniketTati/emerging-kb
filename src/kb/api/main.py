@@ -10,8 +10,11 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
+import os
+
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from starlette.requests import Request
 
 from kb import __version__
@@ -96,6 +99,21 @@ def build_app() -> FastAPI:
     app.add_middleware(AccessLogMiddleware)
     app.add_middleware(WorkspaceMiddleware)
     app.add_middleware(RequestIdMiddleware)
+
+    # Phase 10a — CORS for the Next.js dev origin. Production deployments
+    # should set KB_CORS_ORIGINS to a comma-separated allowlist.
+    _origins = [o.strip() for o in os.environ.get(
+        "KB_CORS_ORIGINS", "http://localhost:3000"
+    ).split(",") if o.strip()]
+    if _origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=_origins,
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+            expose_headers=["X-Request-Id", "X-Dedup-Reason"],
+        )
 
     app.include_router(health_router)
     app.include_router(ready_router)

@@ -1,0 +1,9 @@
+node_modules/
+.next/
+out/
+*.log
+.env.local
+.env.production.local
+tests/artifacts/*.png
+playwright-report/
+test-results/
