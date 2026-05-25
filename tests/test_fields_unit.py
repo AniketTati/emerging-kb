@@ -230,4 +230,5 @@ def test_promotion_thresholds_from_env():
         assert t.min_docs == 20
     with _env(KB_PROMOTION_MIN_DOCS=None):
         t = PromotionThresholds.from_env()
-        assert t.min_docs == 5  # default
+        assert t.min_docs == 1  # default lowered to 1 in PR5 so single-doc
+                                # demo corpus exercises L4 closed-world path
