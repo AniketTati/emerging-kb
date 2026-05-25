@@ -9,6 +9,13 @@ export default defineConfig({
   testDir: "./tests",
   testMatch: /.*\.spec\.ts$/,
   fullyParallel: false,
+  // The pipeline test posts to /chat which (with KB_GEMINI_API_KEY set)
+  // hits real Gemini and the API's per-request DB transaction. Concurrent
+  // /chat workers occasionally collide mid-transaction and the second
+  // request comes back as 500 → "Failed to fetch" in the browser. Single
+  // worker keeps the suite deterministic without papering over a real
+  // backend race we still want to surface if it gets worse.
+  workers: 1,
   forbidOnly: !!process.env.CI,
   reporter: "list",
   use: {

@@ -310,14 +310,22 @@ async def post_chat(
         idempotency_key=idempotency_key,
     )
 
-    # Cache the response for replay.
+    # Cache the response for replay. Best-effort — the orchestrator
+    # pipeline may have run a SQL query that caught its own exception
+    # but left the surrounding PG transaction in an aborted state.
+    # The cache write would then fail with InFailedSqlTransaction and
+    # propagate as a 500 to the browser even though the answer is
+    # already in `response_body`. Swallow + log so the answer ships.
     response_body = result.model_dump(mode="json")
-    await cache_response(
-        conn,
-        workspace_id,
-        idempotency_key,
-        body=response_body,
-        status_code=200,
-    )
+    try:
+        await cache_response(
+            conn,
+            workspace_id,
+            idempotency_key,
+            body=response_body,
+            status_code=200,
+        )
+    except Exception as exc:  # noqa: BLE001 — replay cache is best-effort
+        _LOG.warning("idempotency cache_response failed: %s", exc)
 
     return JSONResponse(content=response_body, status_code=200)
