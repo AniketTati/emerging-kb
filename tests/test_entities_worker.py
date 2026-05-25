@@ -201,7 +201,7 @@ async def test_extract_entities_no_matching_schema_advances_to_ready(
         cur = await conn.execute(
             "SELECT lifecycle_state FROM files WHERE id = %s", (file_id,),
         )
-        assert (await cur.fetchone())[0] == "ready"
+        assert (await cur.fetchone())[0] == "identity_resolving"
         cur = await conn.execute(
             "SELECT count(*) FROM extracted_entities WHERE file_id = %s", (file_id,),
         )
@@ -249,7 +249,7 @@ async def test_extract_entities_writes_rows_with_citations(
         cur = await conn.execute(
             "SELECT lifecycle_state FROM files WHERE id = %s", (file_id,),
         )
-        assert (await cur.fetchone())[0] == "ready"
+        assert (await cur.fetchone())[0] == "identity_resolving"
 
         cur = await conn.execute(
             "SELECT fields, citations, schema_entity_id::text FROM extracted_entities "

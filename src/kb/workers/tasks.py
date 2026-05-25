@@ -1788,17 +1788,194 @@ async def extract_schema_entities_file_impl(file_id: str) -> None:
                     lineage_path=lineage_path,
                 )
 
+            # Phase 7 §5.14 #1: transition to identity_resolving (was 'ready'
+            # in Phase 6; Phase 7 resolves mentions → entities before ready).
             await transition_lifecycle(
                 conn,
                 workspace_id=workspace_id_str,
                 file_id=file_id,
-                to_state="ready",
+                to_state="identity_resolving",
                 event="schema_entities_extracted",
                 payload={
                     "entity_count": total_inserted,
                     "schema_entity_calls": len(results),
                     "inferred_doc_type": inferred_doc_type,
                     "model_id": model_id_used,
+                },
+            )
+
+    # Phase 7 §5.14 #1: chain resolve_identities_file in a SEPARATE tx.
+    try:
+        await procrastinate_app.configure_task(
+            name="resolve_identities_file"
+        ).defer_async(file_id=file_id)
+    except Exception:  # noqa: BLE001
+        traceback.print_exc()
+
+
+# ---------------------------------------------------------------------------
+# Phase 7 — resolve_identities_file_impl
+# ---------------------------------------------------------------------------
+
+
+async def resolve_identities_file_impl(file_id: str) -> None:
+    """For every mention in the file, resolve to a canonical entity in the
+    workspace via the 4-stage pipeline (deterministic → embedding → llm_judge
+    → new). Advance lifecycle `identity_resolving → ready`.
+    """
+    from kb.config import get_settings
+    from kb.domain.entities import (
+        delete_mention_to_entity_for_file,
+        find_entity_by_embedding,
+        find_entity_deterministic,
+        increment_mention_count,
+        insert_entity,
+        insert_mention_to_entity,
+        read_mentions_for_file,
+    )
+    from kb.embeddings import make_embedder
+    from kb.identity.judge import make_identity_judge
+    from kb.identity.resolve import (
+        EMBEDDING_HIGH_THRESHOLD,
+        EMBEDDING_LOW_THRESHOLD,
+    )
+
+    settings = get_settings()
+    db_url = settings.database_url
+
+    # Phase 1: state check + read mentions.
+    workspace_id_str = ""
+    mentions: list[tuple[str, str, str]] = []
+    async with open_connection(db_url) as conn:
+        async with conn.transaction():
+            cur = await conn.execute(
+                "SELECT workspace_id, lifecycle_state FROM files WHERE id = %s",
+                (file_id,),
+            )
+            row = await cur.fetchone()
+            if row is None:
+                raise FileNotFoundError(file_id)
+            workspace_id, lifecycle_state = row
+
+            if lifecycle_state in ("ready", "failed", "deleted"):
+                return
+            if lifecycle_state != "identity_resolving":
+                return
+
+            workspace_id_str = str(workspace_id)
+            await conn.execute(
+                "SELECT set_config('app.workspace_id', %s, true)",
+                (workspace_id_str,),
+            )
+            mentions = await read_mentions_for_file(conn, file_id=file_id)
+
+    # Phase 2: embed all mention texts upfront (one batched call).
+    embedder = make_embedder()
+    judge = make_identity_judge()
+
+    mention_embeddings: dict[str, list[float]] = {}
+    if mentions:
+        try:
+            results = await embedder.embed_batch([m[1] for m in mentions])
+            for (mid, _, _), emb in zip(mentions, results, strict=True):
+                mention_embeddings[mid] = list(emb.vector)
+        except Exception:
+            traceback.print_exc()
+            # Fall through with no embeddings → all resolve as new entities.
+
+    # Phase 3: atomic resolution + insert links in one tx.
+    async with open_connection(db_url) as conn:
+        async with conn.transaction():
+            await conn.execute(
+                "SELECT set_config('app.workspace_id', %s, true)",
+                (workspace_id_str,),
+            )
+            await delete_mention_to_entity_for_file(conn, file_id=file_id)
+
+            method_counts: dict[str, int] = {
+                "deterministic": 0, "embedding": 0, "llm_judge": 0, "new": 0,
+            }
+
+            for mention_id, mention_text, mention_type in mentions:
+                resolved_entity_id: str | None = None
+                resolution_method: str = "deterministic"
+                confidence: float = 1.0
+                mention_emb = mention_embeddings.get(mention_id)
+
+                # Stage 1: deterministic
+                resolved_entity_id = await find_entity_deterministic(
+                    conn,
+                    workspace_id=workspace_id_str,
+                    name=mention_text,
+                    entity_type=mention_type,
+                )
+                if resolved_entity_id:
+                    method_counts["deterministic"] += 1
+                    confidence = 1.0
+                else:
+                    # Stage 2 + 3: embedding + LLM judge
+                    if mention_emb:
+                        candidates = await find_entity_by_embedding(
+                            conn,
+                            workspace_id=workspace_id_str,
+                            entity_type=mention_type,
+                            embedding=mention_emb,
+                            limit=1,
+                        )
+                        if candidates:
+                            cand_id, cand_name, sim = candidates[0]
+                            if sim >= EMBEDDING_HIGH_THRESHOLD:
+                                resolved_entity_id = cand_id
+                                resolution_method = "embedding"
+                                confidence = sim
+                                method_counts["embedding"] += 1
+                            elif sim >= EMBEDDING_LOW_THRESHOLD:
+                                # Stage 3: LLM judge
+                                try:
+                                    same = await judge.same_entity(
+                                        text_a=mention_text, type_a=mention_type,
+                                        text_b=cand_name, type_b=mention_type,
+                                    )
+                                except Exception:
+                                    same = False
+                                if same:
+                                    resolved_entity_id = cand_id
+                                    resolution_method = "llm_judge"
+                                    confidence = sim
+                                    method_counts["llm_judge"] += 1
+
+                    # Stage 4: create new entity
+                    if resolved_entity_id is None:
+                        resolved_entity_id = await insert_entity(
+                            conn,
+                            workspace_id=workspace_id_str,
+                            canonical_name=mention_text,
+                            entity_type=mention_type,
+                            embedding=mention_emb,
+                        )
+                        resolution_method = "deterministic"  # the create itself
+                        confidence = 1.0
+                        method_counts["new"] += 1
+
+                await insert_mention_to_entity(
+                    conn,
+                    mention_id=mention_id,
+                    entity_id=resolved_entity_id,
+                    workspace_id=workspace_id_str,
+                    confidence=confidence,
+                    resolved_method=resolution_method,
+                )
+                await increment_mention_count(conn, entity_id=resolved_entity_id)
+
+            await transition_lifecycle(
+                conn,
+                workspace_id=workspace_id_str,
+                file_id=file_id,
+                to_state="ready",
+                event="identities_resolved",
+                payload={
+                    "mention_count": len(mentions),
+                    **method_counts,
                 },
             )
 
@@ -1887,12 +2064,23 @@ async def extract_atomic_units_file(file_id: str) -> None:
 async def extract_schema_entities_file(file_id: str) -> None:
     """Wire-level Procrastinate task. Delegates to the testable impl.
 
-    Phase 6: runs Gemini structured-output extraction per active schema_entity
-    for the file's inferred_doc_type → extracted_entities rows with per-field
-    citations + lineage_path ltree → final transition to `ready`. Last stage
-    in the ingestion chain.
+    Phase 6 + 7: runs Gemini structured-output extraction per active
+    schema_entity → extracted_entities rows with per-field citations +
+    lineage_path → chains resolve_identities_file. Lifecycle:
+    entities_extracting → identity_resolving (or failed).
     """
     await extract_schema_entities_file_impl(file_id)
+
+
+@procrastinate_app.task(name="resolve_identities_file", queue="kb", pass_context=False)
+async def resolve_identities_file(file_id: str) -> None:
+    """Wire-level Procrastinate task. Delegates to the testable impl.
+
+    Phase 7: resolves every mention in the file to a canonical entity via
+    deterministic → embedding → LLM judge → new. Final transition to `ready`.
+    Last stage in the ingestion chain.
+    """
+    await resolve_identities_file_impl(file_id)
 
 
 # ---------------------------------------------------------------------------

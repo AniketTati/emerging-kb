@@ -164,7 +164,7 @@ for _ in $(seq 1 180); do
     # Phase 3b/3c chained contextualize_file + embed_file may race past
     # 'chunked' to 'contextualized'/'embedded'/'ready' before this loop
     # polls. Any post-chunked state counts as chunking-success.
-    if [[ "$s" == "chunked" || "$s" == "contextualized" || "$s" == "embedded" || "$s" == "raptor_building" || "$s" == "mentions_extracting" || "$s" == "fields_extracting" || "$s" == "units_extracting" || "$s" == "entities_extracting" || "$s" == "ready" ]]; then chunked=1; break; fi
+    if [[ "$s" == "chunked" || "$s" == "contextualized" || "$s" == "embedded" || "$s" == "raptor_building" || "$s" == "mentions_extracting" || "$s" == "fields_extracting" || "$s" == "units_extracting" || "$s" == "entities_extracting" || "$s" == "identity_resolving" || "$s" == "ready" ]]; then chunked=1; break; fi
     if [[ "$s" == "failed" ]]; then break; fi
     sleep 2
 done
@@ -217,7 +217,7 @@ for _ in $(seq 1 60); do
     # Phase 3b/3c chained contextualize_file + embed_file may race past
     # 'chunked' to 'contextualized'/'embedded'/'ready' before this loop
     # polls. Any post-chunked state counts as chunking-success.
-    if [[ "$s" == "chunked" || "$s" == "contextualized" || "$s" == "embedded" || "$s" == "raptor_building" || "$s" == "mentions_extracting" || "$s" == "fields_extracting" || "$s" == "units_extracting" || "$s" == "entities_extracting" || "$s" == "ready" ]]; then chunked=1; break; fi
+    if [[ "$s" == "chunked" || "$s" == "contextualized" || "$s" == "embedded" || "$s" == "raptor_building" || "$s" == "mentions_extracting" || "$s" == "fields_extracting" || "$s" == "units_extracting" || "$s" == "entities_extracting" || "$s" == "identity_resolving" || "$s" == "ready" ]]; then chunked=1; break; fi
     if [[ "$s" == "failed" ]]; then break; fi
     sleep 2
 done
@@ -244,7 +244,7 @@ for _ in $(seq 1 60); do
     # Phase 3b/3c chained contextualize_file + embed_file may race past
     # 'chunked' to 'contextualized'/'embedded'/'ready' before this loop
     # polls. Any post-chunked state counts as chunking-success.
-    if [[ "$s" == "chunked" || "$s" == "contextualized" || "$s" == "embedded" || "$s" == "raptor_building" || "$s" == "mentions_extracting" || "$s" == "fields_extracting" || "$s" == "units_extracting" || "$s" == "entities_extracting" || "$s" == "ready" ]]; then chunked=1; break; fi
+    if [[ "$s" == "chunked" || "$s" == "contextualized" || "$s" == "embedded" || "$s" == "raptor_building" || "$s" == "mentions_extracting" || "$s" == "fields_extracting" || "$s" == "units_extracting" || "$s" == "entities_extracting" || "$s" == "identity_resolving" || "$s" == "ready" ]]; then chunked=1; break; fi
     if [[ "$s" == "failed" ]]; then break; fi
     sleep 2
 done
