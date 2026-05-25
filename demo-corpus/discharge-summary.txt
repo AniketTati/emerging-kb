@@ -1,0 +1,63 @@
+WESTSIDE GENERAL HOSPITAL
+DISCHARGE SUMMARY
+
+Patient: Jordan Rivera
+MRN: 0048213
+DOB: 1987-09-12
+Sex: Female
+
+Admission Date: 2026-04-15
+Discharge Date: 2026-04-17
+Length of stay: 2 days
+Attending Physician: Aaron Bennett, MD
+Discharge disposition: Home, with PCP follow-up
+
+REASON FOR ADMISSION
+--------------------
+Acute right-flank pain, hematuria. Imaging on admission showed a 4 mm
+non-obstructing right ureteric calculus. Pain was managed conservatively;
+stone passed spontaneously prior to discharge.
+
+HOSPITAL COURSE
+---------------
+The patient presented to the emergency department on 2026-04-15 at 03:42
+with sudden-onset right-sided flank pain and gross hematuria. Initial vitals
+were stable (BP 128/82, HR 96, T 37.2°C, SpO2 99% on room air).
+
+Non-contrast CT abdomen/pelvis identified a 4 mm non-obstructing calculus
+in the proximal right ureter, no hydronephrosis. Urinalysis demonstrated
+30-40 RBC/HPF, no nitrites, no leukocyte esterase. Serum creatinine 0.92
+mg/dL (baseline). Urine culture pending at discharge (no antibiotics
+initiated).
+
+Pain was controlled with IV ketorolac 30 mg q6h and PO acetaminophen 1 g
+q6h PRN. The patient reported passage of a small calculus on 2026-04-16
+at 14:18 with immediate symptomatic relief. Repeat ultrasound on 2026-04-17
+confirmed no residual stone.
+
+DISCHARGE MEDICATIONS
+---------------------
+1. Tamsulosin 0.4 mg PO daily for 14 days (facilitate passage of any
+   subclinical residual fragments)
+2. Acetaminophen 500 mg PO q6h PRN pain
+3. Ibuprofen 400 mg PO q8h PRN pain (with food)
+
+DISCHARGE INSTRUCTIONS
+----------------------
+- Increase fluid intake to 2.5 L/day for the next 30 days.
+- Strain urine for any further stones; bring to PCP for compositional
+  analysis if recovered.
+- Return to ED for fever > 38.5°C, severe pain, intractable nausea/vomiting,
+  or anuria.
+- Follow up with Dr. Bennett (PCP) within 2 weeks for repeat metabolic
+  panel and HbA1c (noting prior elevated fasting glucose on 2026-04-02).
+- Urology referral placed (Dr. Lisa Wong) for outpatient evaluation if any
+  recurrence within 12 months.
+
+DIAGNOSES
+---------
+1. Right ureterolithiasis, passed (N20.1)
+2. Gross hematuria, resolved (R31.0)
+3. Prediabetes mellitus, pending HbA1c (R73.03)
+
+Electronically signed by Aaron Bennett, MD on 2026-04-17 at 11:45.

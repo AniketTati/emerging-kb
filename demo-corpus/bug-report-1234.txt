@@ -1,0 +1,63 @@
+[BUG-1234] Worker crashes with NullPointerException when processing
+attachments larger than 10 MB
+
+Reporter:        priya.menon@example.com
+Date reported:   2026-03-22 14:18 UTC
+Component:       attachment-ingestor (v2.4.1)
+Severity:        S2 (major; affects 1.8% of production traffic)
+Priority:        P1
+Status:          Open
+Assigned to:     ramesh.gupta@example.com
+Affects:         production (us-east-1, eu-west-1, ap-south-1)
+Found in build:  attachment-ingestor-2.4.1-rc.3 deployed 2026-03-20
+
+ENVIRONMENT
+-----------
+- attachment-ingestor v2.4.1 (commit a8f2c19)
+- Kafka 3.7.2
+- Postgres 16.2 (Aurora)
+- JVM: OpenJDK 21.0.4
+- Heap: -Xmx 8192m (per pod, 12 pods per region)
+
+STEPS TO REPRODUCE
+------------------
+1. Submit a job with an attachment > 10 MB. Reliable repro at 12 MB.
+2. Observe the worker pod logs in Datadog.
+3. Within 60 seconds the worker emits NullPointerException at
+   AttachmentProcessor.extractMetadata (line 287), then restarts.
+
+EXPECTED
+--------
+Attachment is processed without error; metadata is extracted and the job
+moves to state=processed.
+
+ACTUAL
+------
+Worker crashes with the following stack trace (truncated):
+
+    java.lang.NullPointerException: Cannot invoke
+    "io.minio.GetObjectResponse.headers()" because "response" is null
+        at AttachmentProcessor.extractMetadata(AttachmentProcessor.java:287)
+        at AttachmentProcessor.handle(AttachmentProcessor.java:142)
+        at WorkerLoop.processBatch(WorkerLoop.java:88)
+        ...
+
+ROOT CAUSE (HYPOTHESIS)
+-----------------------
+PR #4421 ("upgrade minio-java to 8.5.10") changed the behavior of
+getObject() so that when the object exceeds the configured maxObjectSize
+(default 10 MB in 8.5.10, was 100 MB in 8.4.x) the call now returns null
+instead of throwing. extractMetadata does not null-check before calling
+.headers().
+
+WORKAROUND
+----------
+Setting maxObjectSize=104857600 in MinioClientConfig appears to suppress
+the crash; needs verification against the SDK contract.
+
+NEXT STEPS
+----------
+- Confirm the SDK behavior change with minio-java maintainers.
+- Add null-check + explicit oversized-object error in AttachmentProcessor.
+- Backfill 1,847 jobs in dead-letter queue once fix lands.
+- Postmortem template attached (separate doc).
