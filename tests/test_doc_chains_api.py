@@ -602,6 +602,89 @@ async def test_detect_doc_chain_no_match_records_event_with_matched_false(
         assert payload["matched"] is False
 
 
+async def test_detect_doc_chain_links_cross_format_msa_pdf_and_amendment_txt(
+    client, db_url_superuser, test_workspace,
+):
+    """E4 regression — MSA classified as `master_services_agreement` and
+    Amendment classified as `legal_contract`, in different mime types
+    (.pdf vs .txt), now link into the same `contract_chain`.
+
+    Pre-fix: the worker silently emitted `matched=false` because the
+    detector's narrow "contract substring" gate rejected the MSA's
+    doc_type and (when run from the other side) rejected the amendment's
+    sibling list. Both gates use the broader synonym predicate now."""
+    from kb.workers.tasks import detect_doc_chain_file_impl
+    from kb.domain.doc_chains import find_chain_for_doc, read_members
+
+    sha_seed = lambda name: hashlib.sha256(f"{test_workspace}-{name}".encode()).hexdigest()
+
+    # MSA (PDF, master_services_agreement)
+    msa_id = await _seed_file(
+        db_url_superuser, test_workspace,
+        name="vertex-msa.pdf", mime="application/pdf",
+        inferred_doc_type="master_services_agreement",
+        lifecycle_state="parsed",
+    )
+    async with await psycopg.AsyncConnection.connect(db_url_superuser) as conn:
+        await conn.execute(
+            "SELECT set_config('app.workspace_id', %s, true)", (test_workspace,),
+        )
+        await conn.execute(
+            "INSERT INTO raw_pages (file_id, workspace_id, page_number, text, "
+            "layout_json, content_sha) VALUES (%s, %s, 1, %s, '{}'::jsonb, %s)",
+            (msa_id, test_workspace,
+             "MASTER SERVICES AGREEMENT\n\nThis Master Services Agreement "
+             "(the \"Agreement\") is entered into as of January 15, 2026 "
+             "between NorthWind Capital LLC and Vertex Industries Ltd.",
+             sha_seed("msa")),
+        )
+
+    with _env(KB_DATABASE_URL=db_url_superuser):
+        await detect_doc_chain_file_impl(msa_id)
+
+    # Amendment (TXT, legal_contract) — references the MSA in its body.
+    amend_id = await _seed_file(
+        db_url_superuser, test_workspace,
+        name="vertex-amendment.txt", mime="text/plain",
+        inferred_doc_type="legal_contract",
+        lifecycle_state="parsed",
+    )
+    async with await psycopg.AsyncConnection.connect(db_url_superuser) as conn:
+        await conn.execute(
+            "SELECT set_config('app.workspace_id', %s, true)", (test_workspace,),
+        )
+        await conn.execute(
+            "INSERT INTO raw_pages (file_id, workspace_id, page_number, text, "
+            "layout_json, content_sha) VALUES (%s, %s, 1, %s, '{}'::jsonb, %s)",
+            (amend_id, test_workspace,
+             "AMENDMENT NO. 1 TO MASTER SERVICES AGREEMENT\n\nThis Amendment "
+             "No. 1 amends the Master Services Agreement between NorthWind "
+             "Capital LLC and Vertex Industries Ltd. dated January 15, 2026.",
+             sha_seed("amend")),
+        )
+
+    with _env(KB_DATABASE_URL=db_url_superuser):
+        await detect_doc_chain_file_impl(amend_id)
+
+    async with await psycopg.AsyncConnection.connect(db_url_superuser) as conn:
+        await conn.execute(
+            "SELECT set_config('app.workspace_id', %s, true)", (test_workspace,),
+        )
+        msa_pair = await find_chain_for_doc(conn, doc_id=msa_id)
+        amend_pair = await find_chain_for_doc(conn, doc_id=amend_id)
+        assert msa_pair is not None, "MSA should land in a chain"
+        assert amend_pair is not None, "Amendment should land in a chain"
+        assert msa_pair[0].id == amend_pair[0].id, "Both must be the SAME chain"
+        assert msa_pair[0].type == "contract_chain"
+
+        members = await read_members(conn, chain_id=msa_pair[0].id)
+        roles = {m.doc_id: m.role for m in members}
+        assert roles[amend_id] == "amendment"
+        # MSA is the original — the second file added does NOT change role
+        # of the first member (worker is additive).
+        assert roles[msa_id] in ("original", "amendment")
+
+
 # ============================================================================
 # INTEGRATION — the existing parse → chunk → ... pipeline still works
 # with WA-3 active. This is the "doesn't break what was there" gate.
