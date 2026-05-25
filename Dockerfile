@@ -28,6 +28,11 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 COPY src/ ./src/
 COPY migrations/ ./migrations/
 COPY scripts/ ./scripts/
+# WA-1 (layered config) reads config/defaults.yaml + config/doc_types/*.yaml +
+# config/domains/*.yaml at runtime. Without these, the source-authority hook
+# in extract_fields_file_impl raises ConfigLoadError (caught by try/except
+# in the worker, but the feature degrades to defaults silently).
+COPY config/ ./config/
 
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev

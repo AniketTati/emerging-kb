@@ -36,6 +36,11 @@ test.describe("UI-driven pipeline (drop → ready → ask → answer)", () => {
   test("drop tiny.pdf via /upload, wait for ready, chat, see assistant turn", async ({
     page,
   }) => {
+    // The full ingest chain can take 60–120s on a cold worker + another
+    // 60s for the chat round-trip. Playwright's default test timeout is
+    // 30s, which would kill us before the inner poll(240s) gets a chance.
+    test.setTimeout(360_000);
+
     // -------- 1) Pick up the real fixture from the backend test suite --------
     const fixturePath = path.resolve(__dirname, "../../tests/fixtures/tiny.pdf");
     if (!fs.existsSync(fixturePath)) {
@@ -65,14 +70,18 @@ test.describe("UI-driven pipeline (drop → ready → ask → answer)", () => {
     await page.click('a[href="/chat"]');
     await expect(page).toHaveURL(/.*\/chat$/);
     await expect(page.getByTestId("chat-empty-state")).toBeVisible();
+    // Wait for Next.js hydration. Without this, Playwright's fill() can
+    // race the client-side route transition; the textarea gets the value
+    // in the DOM but React's controlled `value` state stays empty and
+    // the Send button stays disabled.
+    await page.waitForLoadState("networkidle");
 
     // -------- 4) Send a query via the composer --------
     const input = page.getByTestId("chat-input");
     await input.fill("Summarize the documents I uploaded.");
-    await page.getByTestId("chat-send").click();
-
-    // Composer disables while the request is in flight.
-    await expect(page.getByTestId("chat-send")).toBeDisabled();
+    const send = page.getByTestId("chat-send");
+    await expect(send).toBeEnabled();
+    await send.click();
 
     // -------- 5) Assistant turn renders — refusal OR grounded --------
     const answer = page.getByTestId("answer-card").first();

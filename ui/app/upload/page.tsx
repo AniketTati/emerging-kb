@@ -30,11 +30,20 @@ function UploadShell() {
     };
   }, [dispatch]);
 
+  // Keep ES handles in a ref so we can close them ONLY when the component
+  // unmounts. Previous version listed `state.rows` in the dep array, so
+  // every lifecycle event re-ran the cleanup and closed the EventSource
+  // after the first event — files appeared to stick at the first state
+  // we observed (e.g. "queued") and never advanced in the UI.
+  const closers = useRef<Map<string, () => void>>(new Map());
+
   useEffect(() => {
-    const cleanups: Array<() => void> = [];
     for (const id of state.order) {
       const row = state.rows[id];
       if (!row) continue;
+      // Don't subscribe to files that are already in a terminal state at
+      // the moment we first see them (e.g. when the page loads /files and
+      // some rows are already 'ready' from a prior session).
       const terminal =
         row.lifecycle_state === "ready" ||
         row.lifecycle_state === "failed" ||
@@ -45,14 +54,28 @@ function UploadShell() {
       subscribed.current.add(id);
       const close = subscribeToFileStatus(id, {
         onLifecycle: (ev) => dispatch({ type: "lifecycle", event: ev }),
-        onDone: () => subscribed.current.delete(id),
+        onDone: () => {
+          subscribed.current.delete(id);
+          closers.current.get(id)?.();
+          closers.current.delete(id);
+        },
       });
-      cleanups.push(close);
+      closers.current.set(id, close);
     }
+    // Intentionally exclude state.rows from the deps: lifecycle events
+    // mutate state.rows on every tick, and re-running this effect would
+    // tear down the just-opened EventSource.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.order, dispatch]);
+
+  // Single unmount cleanup — closes every open ES.
+  useEffect(() => {
+    const map = closers.current;
     return () => {
-      cleanups.forEach((c) => c());
+      for (const close of map.values()) close();
+      map.clear();
     };
-  }, [state.order, state.rows, dispatch]);
+  }, []);
 
   return (
     <div className="flex h-full">
