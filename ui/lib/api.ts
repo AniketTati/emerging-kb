@@ -128,11 +128,19 @@ async function _handle<T>(resp: Response): Promise<T> {
 // File ops
 // ---------------------------------------------------------------------------
 
-export async function listFiles(): Promise<{ items: FileResource[]; total: number }> {
-  const resp = await fetch(`${KB_API_URL}/files`, {
-    headers: workspaceHeaders(),
-    cache: "no-store",
-  });
+/** GET /files — paginated. Backend caps `limit` at 200; default 50.
+ *
+ *  Returns `{items, total, limit, offset}` so the caller can decide whether
+ *  more pages exist (`offset + items.length < total`). */
+export async function listFiles(
+  opts?: { limit?: number; offset?: number },
+): Promise<{ items: FileResource[]; total: number; limit: number; offset: number }> {
+  const limit = opts?.limit ?? 50;
+  const offset = opts?.offset ?? 0;
+  const resp = await fetch(
+    `${KB_API_URL}/files?limit=${limit}&offset=${offset}`,
+    { headers: workspaceHeaders(), cache: "no-store" },
+  );
   return _handle(resp);
 }
 
