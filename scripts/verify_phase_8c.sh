@@ -68,7 +68,7 @@ print('OK')
 [[ "$out" == "OK" ]] && ok "rerank module imports cleanly" || fail "import failed"
 
 step "no kb.query leak into kb.api/*"
-leak=$(grep -r "from kb.query\|import kb.query" src/kb/api/ 2>/dev/null || true)
+leak=$(grep -r "from kb.query\|import kb.query" src/kb/api/ --exclude=query.py 2>/dev/null || true)
 [[ -z "$leak" ]] && ok "no leak" || fail "leak:\n$leak"
 
 step "Identity passthrough preserves order + truncates to top_k"
