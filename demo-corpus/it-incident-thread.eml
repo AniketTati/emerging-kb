@@ -1,0 +1,83 @@
+Message-ID: <20260318062300.94821@vertex.example.com>
+Date: Wed, 18 Mar 2026 06:42:00 +0000
+From: Ramesh Gupta <ramesh.gupta@vertex.example.com>
+To: status-updates@vertex.example.com
+Cc: NorthWind Ops <ops@northwind-capital.com>, Pinnacle Ops <ops@pinnacle-holdings.com>
+Subject: [RESOLVED] Mumbai region ingestion outage — March 18, 2026 04:12-06:42 UTC
+Content-Type: text/plain; charset=utf-8
+
+All —
+
+The Vertex AI Platform ingestion outage in the ap-south-1 (Mumbai)
+region is now RESOLVED.
+
+Duration: 04:12 UTC to 06:42 UTC (2h 30m)
+Customer impact: ~3,400 documents queued or failed during the window.
+Affected enterprise customers: NorthWind Capital, Pinnacle Holdings.
+
+WHAT HAPPENED
+A new analytics job deployed yesterday at 22:40 UTC ran an unbounded
+SELECT against the document_chunks table, saturating the primary RDS
+Postgres CPU. Connection pool exhaustion cascaded through the
+attachment-ingestor pods, causing 503 responses for all ingestion
+requests.
+
+WHAT WE DID
+1. Killed the runaway analytics job (05:02 UTC).
+2. Failed over to the standby RDS Postgres (05:48 UTC complete).
+3. Drained the backed-up job queue (06:42 UTC, 100% throughput restored).
+
+ALL queued documents from the outage window have been re-processed
+successfully as of 07:10 UTC. No customer documents were lost.
+
+SLA IMPACT
+NorthWind: monthly uptime fell to 99.82% (vs 99.95% committed). Per
+your MSA Section 5, you are entitled to a service credit of $1,000,
+which will appear on your March invoice.
+
+Pinnacle Holdings: monthly uptime remains within your 99.9% SLA. No
+credit owed.
+
+POSTMORTEM
+A full postmortem will be published within 5 business days per our
+incident-response policy. Six action items have been identified; two
+are already complete.
+
+If you have any questions, please reach out to your account team or
+reply to this thread directly.
+
+Apologies for the disruption.
+
+—
+Ramesh Gupta
+Senior SRE, Vertex Industries Ltd.
+ramesh.gupta@vertex.example.com
+On-call rotation: ap-south primary
+
+----- Forwarded message -----
+From: PagerDuty <noreply@pagerduty.com>
+Date: Wed, 18 Mar 2026 04:30:00 +0000
+Subject: [TRIGGERED] vertex-ingestion-mumbai · 503 error rate elevated
+
+Severity: high
+Service: vertex-ingestion-mumbai
+Region: ap-south-1
+Alert source: Datadog monitor "ingestion-503-rate-mumbai"
+
+Acknowledged by: Ramesh Gupta at 04:30 UTC.
+
+----- Forwarded message -----
+From: NorthWind Ops <ops@northwind-capital.com>
+Date: Wed, 18 Mar 2026 05:42:00 +0000
+Subject: [URGENT] Our pipeline shows zero ingestion since 04:15 UTC — is there an issue?
+
+Hi Vertex team,
+
+We're seeing zero successful document ingestions from our New York
+pipeline since approximately 04:15 UTC this morning. All requests are
+returning 503 errors. Is there an ongoing incident? This affects our
+diligence engagement that has a deliverable due Thursday.
+
+Please advise.
+
+— Operations team, NorthWind Capital
