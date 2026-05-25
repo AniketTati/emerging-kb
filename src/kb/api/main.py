@@ -37,6 +37,7 @@ from kb.api.query import router as query_router
 from kb.api.readiness import router as ready_router
 from kb.api.settings import router as settings_router
 from kb.api.sse import router as sse_router
+from kb.api.vocabulary import router as vocabulary_router
 from kb.api.schema_hierarchy import router as schema_hierarchy_router
 from kb.api.schema_versions import router as schema_versions_router
 from kb.api.schemas import router as schemas_router
@@ -127,6 +128,7 @@ def build_app() -> FastAPI:
     app.include_router(audit_router)
     app.include_router(sse_router)
     app.include_router(settings_router)
+    app.include_router(vocabulary_router)
 
     # Phase 2a — register default parsers (Docling). Idempotent.
     from kb.parsers import register_default_parsers
