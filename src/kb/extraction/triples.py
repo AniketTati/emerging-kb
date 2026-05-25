@@ -28,7 +28,9 @@ from pydantic import BaseModel, Field
 
 DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
 DEFAULT_ANTHROPIC_MODEL = "claude-opus-4-7"
-_MAX_OUTPUT_TOKENS = 2000   # ~30-50 triples per chunk worst case
+# Dense docs emit 60+ triples; PR4 raised from 2000 + added json_recovery
+# so the inevitable truncation salvages everything that closed cleanly.
+_MAX_OUTPUT_TOKENS = 8000
 
 _SYSTEM_PROMPT = (
     "You are an open information extraction system. Given a chunk of text, "
@@ -116,20 +118,20 @@ def _strip_code_fence(text: str) -> str:
 
 
 def _parse_triples(raw: str) -> list[TripleCandidate]:
-    """Best-effort JSON parse. Drops bad entries silently — extraction is
-    advisory; loud-fail would let one bad triple kill the file."""
+    """Best-effort JSON parse. Tolerant of truncation via json_recovery;
+    drops bad entries silently — extraction is advisory, loud-fail would
+    let one bad triple kill the file."""
     if not raw:
         return []
-    text = _strip_code_fence(raw)
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError:
-        return []
-    if not isinstance(data, dict):
-        return []
-    candidates_raw = data.get("triples") or []
-    if not isinstance(candidates_raw, list):
-        return []
+    from kb.extraction.json_recovery import parse_tolerant_array_in_object
+
+    candidates_raw, truncated = parse_tolerant_array_in_object(raw, "triples")
+    if truncated:
+        import logging
+        logging.getLogger(__name__).warning(
+            "triples response was truncated; recovered %d triples",
+            len(candidates_raw),
+        )
     out: list[TripleCandidate] = []
     for entry in candidates_raw:
         if not isinstance(entry, dict):

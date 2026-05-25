@@ -1,5 +1,13 @@
 "use client";
 
+// react-pdf's text layer is a stack of absolutely-positioned <span>s
+// overlaid on the PDF canvas. Without these CSS files the spans fall
+// back to inline flow and render as duplicate text BELOW the canvas
+// (exactly what we hit before this import landed). Side-effect imports
+// must be at module top so Next.js bundles them with the client chunk.
+import "react-pdf/dist/Page/TextLayer.css";
+import "react-pdf/dist/Page/AnnotationLayer.css";
+
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   type FileResource,
