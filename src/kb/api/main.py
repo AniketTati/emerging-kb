@@ -32,6 +32,7 @@ from kb.api.middleware import (
 )
 from kb.api.audit import router as audit_router
 from kb.api.conflicts import router as conflicts_router
+from kb.api.sessions import router as sessions_router
 from kb.api.corpus import router as corpus_router
 from kb.api.doc_chains import router as doc_chains_router
 from kb.api.entities import router as entities_router
@@ -135,6 +136,7 @@ def build_app() -> FastAPI:
     app.include_router(doc_chains_router)
     app.include_router(entities_router)
     app.include_router(conflicts_router)
+    app.include_router(sessions_router)
 
     # Phase 2a — register default parsers (Docling). Idempotent.
     from kb.parsers import register_default_parsers

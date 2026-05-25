@@ -50,6 +50,11 @@ from kb.query.generate import (
     Generator,
     make_generator,
 )
+from kb.query.context_resolver import (
+    ContextResolution,
+    ContextResolver,
+    make_context_resolver,
+)
 from kb.query.intent import IntentClassifier, IntentResult, make_intent_classifier
 from kb.query.mode_router import QModeNotImplementedError, apply_mode
 from kb.query.planner import Plan, Planner, make_planner
@@ -77,6 +82,10 @@ class SearchResult(BaseModel):
     intent_confidence: float | None = None
     mode: str | None = None
     plan: dict[str, Any] | None = None
+    # B6a — conversation memory (Design 8).
+    session_id: str | None = None
+    resolved_query: str | None = None
+    context_resolution: dict[str, Any] | None = None
 
 
 class ChatResult(BaseModel):
@@ -101,6 +110,11 @@ class ChatResult(BaseModel):
     intent_confidence: float | None = None
     mode: str | None = None
     plan: dict[str, Any] | None = None
+    # B6a — conversation memory.
+    session_id: str | None = None
+    resolved_query: str | None = None
+    context_resolution: dict[str, Any] | None = None
+    turn_index: int | None = None
 
 
 class Orchestrator:
@@ -121,6 +135,7 @@ class Orchestrator:
         faithfulness: FaithfulnessGate | None = None,
         intent_classifier: IntentClassifier | None = None,
         planner: Planner | None = None,
+        context_resolver: ContextResolver | None = None,
         run_channels: Any = run_all_channels,
         crag_threshold: float = CRAG_THRESHOLD,
     ) -> None:
@@ -134,6 +149,8 @@ class Orchestrator:
         # B4a / WA-9 + WA-10 — intent classifier + planner (Identity defaults).
         self._intent_classifier = intent_classifier or make_intent_classifier()
         self._planner = planner or make_planner()
+        # B6a / WA-12 — conversation memory anaphora resolver.
+        self._context_resolver = context_resolver or make_context_resolver()
         self._run_channels = run_channels
         self._crag_threshold = crag_threshold
 
@@ -149,6 +166,7 @@ class Orchestrator:
             faithfulness=make_faithfulness_gate(),
             intent_classifier=make_intent_classifier(),
             planner=make_planner(),
+            context_resolver=make_context_resolver(),
         )
 
     # ------------------------------------------------------------------
@@ -212,33 +230,35 @@ class Orchestrator:
         workspace_id: str,
         conn: Any = None,
         requested_mode: str | None = None,
+        session_id: str | None = None,
     ) -> ChatResult:
-        """Run intent → planner → search → mode router → CRAG-gated
-        generation → HHEM faithfulness gate.
+        """Run context resolution → intent → planner → search → mode router
+        → CRAG-gated generation → HHEM faithfulness gate → persist turn.
 
-        When CRAG < threshold, generator is force-refused so the response
-        shape is consistent (always a `GenerationResult`).
-
-        After generation we enrich citations via Design 5's polymorphic
-        builder, then run the faithfulness gate. On 'refused' verdict we
-        regenerate up to MAX_REGENERATIONS times before surfacing the
-        refusal (architecture §6 step 9).
-
-        Q-mode raises QModeNotImplementedError until B4b lands the 10-
-        layer SQL defense pipeline. The orchestrator catches it and
-        substitutes a clear refusal so /chat keeps a stable shape.
+        When `session_id` is provided AND the session exists, the
+        anaphora resolver rewrites the query using the 3-tier ChatContext
+        before intent classification (Design 8 step 0.5). The final turn
+        is persisted to chat_turns; the session's carry-forward state
+        is rolled.
         """
         t0 = time.monotonic()
         query_id = str(uuid.uuid4())
 
-        intent = await self._intent_classifier.classify(query)
+        # B6a — context resolution. Skips quietly when no session_id /
+        # no prior context.
+        resolved_query, ctx_resolution = await self._resolve_context(
+            query, session_id=session_id, conn=conn,
+        )
+        effective_query = resolved_query or query
+
+        intent = await self._intent_classifier.classify(effective_query)
         plan = await self._planner.plan(
-            query, intent, requested_mode=requested_mode,
+            effective_query, intent, requested_mode=requested_mode,
         )
 
-        rewrites = await self._rewriter.rewrite(query)
+        rewrites = await self._rewriter.rewrite(effective_query)
         hits = await self._retrieve_and_rerank(
-            query=query,
+            query=effective_query,
             rewrites=rewrites,
             workspace_id=workspace_id,
             conn=conn,
@@ -246,7 +266,7 @@ class Orchestrator:
         try:
             hits = await apply_mode(
                 plan, hits,
-                workspace_id=workspace_id, query=query, conn=conn,
+                workspace_id=workspace_id, query=effective_query, conn=conn,
             )
         except QModeNotImplementedError as exc:
             # Q-mode pipeline ships in B4b; return a refusal envelope so
@@ -258,7 +278,7 @@ class Orchestrator:
                 reason=str(exc),
             )
 
-        crag_score = await self._crag.assess(query, hits)
+        crag_score = await self._crag.assess(effective_query, hits)
 
         force_refuse = crag_score < self._crag_threshold
 
@@ -267,7 +287,7 @@ class Orchestrator:
 
         regenerations = 0
         generation = await self._generator.generate(
-            query, hits, force_refuse=force_refuse
+            effective_query, hits, force_refuse=force_refuse
         )
         faithfulness = await self._assess_faithfulness(generation, hits, conn)
         while (
@@ -276,7 +296,7 @@ class Orchestrator:
         ):
             regenerations += 1
             generation = await self._generator.generate(
-                query, hits, force_refuse=force_refuse
+                effective_query, hits, force_refuse=force_refuse
             )
             faithfulness = await self._assess_faithfulness(generation, hits, conn)
 
@@ -295,6 +315,14 @@ class Orchestrator:
 
         latency_ms = int((time.monotonic() - t0) * 1000)
 
+        # B6a — persist the turn + roll the session's carry-forward state.
+        turn_index = await self._persist_turn(
+            conn=conn, workspace_id=workspace_id,
+            session_id=session_id, original_query=query,
+            resolved_query=resolved_query, ctx_resolution=ctx_resolution,
+            generation=generation, query_log_id=query_id,
+        )
+
         return ChatResult(
             query_id=query_id,
             query=query,
@@ -312,6 +340,12 @@ class Orchestrator:
             intent_confidence=intent.confidence,
             mode=plan.mode,
             plan=plan.to_dict(),
+            session_id=session_id,
+            resolved_query=resolved_query,
+            context_resolution=(
+                ctx_resolution.to_dict() if ctx_resolution else None
+            ),
+            turn_index=turn_index,
         )
 
     def _q_mode_refusal_envelope(
@@ -425,6 +459,110 @@ class Orchestrator:
         for c in citations:
             if c.modality:
                 yield c
+
+    async def _resolve_context(
+        self,
+        query: str,
+        *,
+        session_id: str | None,
+        conn: Any,
+    ) -> tuple[str | None, ContextResolution | None]:
+        """B6a — load ChatContext + run anaphora resolver. Returns
+        (resolved_query, ctx_resolution) tuple. (None, None) when no
+        session_id supplied or session doesn't exist."""
+        if not session_id or conn is None:
+            return (None, None)
+        from kb.domain.chat_memory import build_chat_context
+        try:
+            context = await build_chat_context(conn, session_id=session_id)
+        except Exception:  # noqa: BLE001
+            return (None, None)
+        if context is None:
+            return (None, None)
+        try:
+            resolution = await self._context_resolver.resolve(query, context)
+        except Exception:  # noqa: BLE001
+            return (None, None)
+        return (resolution.resolved_query, resolution)
+
+    async def _persist_turn(
+        self,
+        *,
+        conn: Any,
+        workspace_id: str,
+        session_id: str | None,
+        original_query: str,
+        resolved_query: str | None,
+        ctx_resolution: ContextResolution | None,
+        generation: GenerationResult,
+        query_log_id: str,
+    ) -> int | None:
+        """B6a — append a chat_turns row and roll the session's
+        carry-forward state. Returns the new turn_index. Silently no-ops
+        when session_id is None / conn is None / writes fail."""
+        if not session_id or conn is None:
+            return None
+        from kb.domain.chat_memory import (
+            insert_turn,
+            read_session,
+            update_session_carry_forward,
+        )
+        # Confirm the session exists in this workspace (cheap belt-and-braces).
+        try:
+            session = await read_session(conn, session_id=session_id)
+        except Exception:  # noqa: BLE001
+            return None
+        if session is None:
+            return None
+
+        citations_payload = [
+            c.model_dump(mode="json") for c in (generation.citations or [])
+        ]
+        context_used = (
+            ctx_resolution.to_dict() if ctx_resolution
+            else {"resolved_query": resolved_query}
+        )
+        try:
+            _, turn_index = await insert_turn(
+                conn,
+                workspace_id=workspace_id,
+                session_id=session_id,
+                user_query=original_query,
+                resolved_query=resolved_query,
+                answer=generation.answer,
+                citations=citations_payload,
+                context_used=context_used,
+                query_log_id=query_log_id,
+            )
+        except Exception:  # noqa: BLE001
+            return None
+
+        # Roll carry-forward state. We append any new entities from
+        # ctx_resolution to the session's existing list.
+        if ctx_resolution and (
+            ctx_resolution.new_entities
+            or ctx_resolution.new_filters
+            or ctx_resolution.refinement_of_prior
+        ):
+            new_entities_combined = list(session.carry_forward_entities) + [
+                e for e in ctx_resolution.new_entities
+                if e not in session.carry_forward_entities
+            ]
+            merged_filters = {
+                **(session.carry_forward_filters or {}),
+                **(ctx_resolution.new_filters or {}),
+            }
+            try:
+                await update_session_carry_forward(
+                    conn,
+                    session_id=session_id,
+                    carry_forward_entities=new_entities_combined,
+                    carry_forward_filters=merged_filters,
+                )
+            except Exception:  # noqa: BLE001
+                pass
+
+        return turn_index
 
     # ------------------------------------------------------------------
     # Internals

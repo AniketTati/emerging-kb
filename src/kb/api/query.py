@@ -44,6 +44,10 @@ router = APIRouter(tags=["query"])
 class QueryRequest(BaseModel):
     query: str = Field(min_length=1, max_length=_MAX_QUERY_LEN)
     mode: str = "H"
+    # B6a / WA-12 — optional conversation memory binding. When set, the
+    # orchestrator loads the session's ChatContext, runs the anaphora
+    # resolver, and appends a chat_turns row.
+    session_id: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -289,6 +293,7 @@ async def post_chat(
         result = await orchestrator.chat(
             body.query, workspace_id=workspace_id, conn=conn,
             requested_mode=body.mode,
+            session_id=body.session_id,
         )
     except Exception as exc:  # noqa: BLE001
         _LOG.exception("chat pipeline failed: %s", exc)
