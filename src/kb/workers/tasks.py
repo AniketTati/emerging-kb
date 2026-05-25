@@ -228,6 +228,17 @@ async def parse_file_impl(file_id: str, forced_parser: str | None = None) -> Non
             # Don't fail the parse over a chain defer error; log only.
             traceback.print_exc()
 
+        # WA-3 / Design 3 — additive doc-chain detection runs in parallel
+        # with chunking. Side-effect only: no lifecycle gating. If the
+        # defer fails, file still progresses through the rest of the
+        # pipeline; chains can be re-detected later by an admin trigger.
+        try:
+            await procrastinate_app.configure_task(
+                name="detect_doc_chain_file"
+            ).defer_async(file_id=file_id)
+        except Exception:  # noqa: BLE001 — best-effort chain
+            traceback.print_exc()
+
 
 async def _maybe_escalate_to_ocr(
     *,
@@ -1981,6 +1992,263 @@ async def resolve_identities_file_impl(file_id: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# WA-3 / Design 3 — detect_doc_chain_file_impl
+# ---------------------------------------------------------------------------
+
+
+async def detect_doc_chain_file_impl(file_id: str) -> None:
+    """Per-file doc-chain detection (Design 3 §"Pipeline integration").
+
+    Runs as an **additive** post-parse task — does NOT gate the existing
+    parse → chunk → … chain. parse_file_impl defers BOTH chunk_file and
+    detect_doc_chain_file; they run in parallel, doc-chain writes are
+    side-effects on doc_chains / doc_chain_members. No lifecycle state
+    transition (the new `doc_chaining` state is in the CHECK constraint
+    for forward-compat if Wave B switches to a gating model).
+
+    Idempotency: if a chain membership row already exists for this file,
+    skip. Otherwise run detect_chain() over the workspace's prior files
+    and upsert chain + member rows.
+    """
+    from kb.config import get_settings
+    from kb.domain.doc_chains import (
+        add_member,
+        find_chain_for_doc,
+        set_current_version,
+        upsert_chain,
+    )
+    from kb.extraction.doc_chains import (
+        DetectionInput,
+        SiblingFile,
+        detect_chain,
+    )
+
+    settings = get_settings()
+    db_url = settings.database_url
+
+    async with open_connection(db_url) as conn:
+        # Single transaction wraps the entire read+detect+write so chain
+        # rows + lifecycle event commit atomically. Matches the existing
+        # worker-impl pattern (see resolve_identities_file_impl etc.).
+        async with conn.transaction():
+            # Read file + workspace.
+            cur = await conn.execute(
+                "SELECT workspace_id, name, mime_type, inferred_doc_type, "
+                "lifecycle_state FROM files WHERE id = %s",
+                (file_id,),
+            )
+            row = await cur.fetchone()
+            if row is None:
+                raise FileNotFoundError(file_id)
+            workspace_id, name, mime_type, inferred_doc_type, lifecycle_state = row
+            workspace_id_str = str(workspace_id)
+
+            # Bail if file is failed / deleted.
+            if lifecycle_state in ("failed", "deleted"):
+                return
+
+            await conn.execute(
+                "SELECT set_config('app.workspace_id', %s, true)",
+                (workspace_id_str,),
+            )
+
+            # Idempotency: already a chain member.
+            existing_membership = await find_chain_for_doc(conn, doc_id=file_id)
+            if existing_membership is not None:
+                return
+
+            # Build DetectionInput from raw_pages. First page text is the
+            # title-text proxy for contracts + circulars; email headers live
+            # in layout_json regardless of which page they came from.
+            cur = await conn.execute(
+                "SELECT text, layout_json FROM raw_pages "
+                "WHERE file_id = %s ORDER BY page_number ASC LIMIT 1",
+                (file_id,),
+            )
+            first_page_row = await cur.fetchone()
+            title_text = first_page_row[0] if first_page_row else None
+            layout = first_page_row[1] if first_page_row else {}
+
+            # Email fields (mime message/rfc822 → email parser stores
+            # headers in layout_json).
+            email_message_id = None
+            email_in_reply_to = None
+            email_references: tuple[str, ...] = ()
+            email_subject = None
+            email_sender = None
+            email_recipients: tuple[str, ...] = ()
+            if isinstance(layout, dict):
+                headers = layout.get("headers") or {}
+                if isinstance(headers, dict):
+                    email_message_id = headers.get("message_id")
+                    email_in_reply_to = headers.get("in_reply_to")
+                    refs = headers.get("references") or ""
+                    if isinstance(refs, str) and refs:
+                        email_references = tuple(refs.split())
+                    elif isinstance(refs, list):
+                        email_references = tuple(str(r) for r in refs)
+                    email_subject = headers.get("subject")
+                    email_sender = headers.get("from")
+                    recipients = headers.get("to") or []
+                    if isinstance(recipients, str):
+                        email_recipients = (recipients,)
+                    elif isinstance(recipients, list):
+                        email_recipients = tuple(str(r) for r in recipients)
+
+            # Siblings: other files in this workspace already parsed.
+            # Cap at 200 most-recent for cost.
+            cur = await conn.execute(
+                "SELECT id::text, name, mime_type, inferred_doc_type "
+                "FROM files WHERE workspace_id = %s AND id <> %s "
+                "AND lifecycle_state NOT IN "
+                "('queued', 'parsing', 'failed', 'deleted') "
+                "ORDER BY created_at DESC LIMIT 200",
+                (workspace_id, file_id),
+            )
+            sib_rows = await cur.fetchall()
+            siblings: list[SiblingFile] = []
+            for sib_id, sib_name, sib_mime, sib_doc_type in sib_rows:
+                sib_cur = await conn.execute(
+                    "SELECT text, layout_json FROM raw_pages "
+                    "WHERE file_id = %s ORDER BY page_number ASC LIMIT 1",
+                    (sib_id,),
+                )
+                sib_first_page = await sib_cur.fetchone()
+                sib_title = sib_first_page[0] if sib_first_page else None
+                sib_layout = (sib_first_page[1] if sib_first_page else {}) or {}
+                sib_msg_id = None
+                sib_subject = None
+                sib_sender = None
+                sib_recipients: tuple[str, ...] = ()
+                sib_references: tuple[str, ...] = ()
+                if isinstance(sib_layout, dict):
+                    sib_headers = sib_layout.get("headers") or {}
+                    if isinstance(sib_headers, dict):
+                        sib_msg_id = sib_headers.get("message_id")
+                        sib_subject = sib_headers.get("subject")
+                        sib_sender = sib_headers.get("from")
+                        sib_to = sib_headers.get("to") or []
+                        if isinstance(sib_to, list):
+                            sib_recipients = tuple(str(r) for r in sib_to)
+                        elif isinstance(sib_to, str):
+                            sib_recipients = (sib_to,)
+                        srefs = sib_headers.get("references") or ""
+                        if isinstance(srefs, str) and srefs:
+                            sib_references = tuple(srefs.split())
+                        elif isinstance(srefs, list):
+                            sib_references = tuple(str(r) for r in srefs)
+                siblings.append(SiblingFile(
+                    file_id=sib_id,
+                    name=sib_name,
+                    mime_type=sib_mime,
+                    inferred_doc_type=sib_doc_type,
+                    title_text=sib_title,
+                    email_message_id=sib_msg_id,
+                    email_subject=sib_subject,
+                    email_sender=sib_sender,
+                    email_recipients=sib_recipients,
+                    email_references=sib_references,
+                ))
+
+            # Run the detector chain.
+            det_input = DetectionInput(
+                file_id=file_id,
+                name=name,
+                mime_type=mime_type,
+                inferred_doc_type=inferred_doc_type,
+                title_text=title_text,
+                email_message_id=email_message_id,
+                email_in_reply_to=email_in_reply_to,
+                email_references=email_references,
+                email_subject=email_subject,
+                email_sender=email_sender,
+                email_recipients=email_recipients,
+                siblings=tuple(siblings),
+            )
+            candidate = detect_chain(det_input)
+
+            # Additive: from_state == to_state == file's current
+            # lifecycle_state so file_lifecycle stays a faithful audit
+            # trail without claiming a state transition that didn't happen.
+            current_state = str(lifecycle_state)
+            if candidate is None:
+                await record_lifecycle_event(
+                    conn,
+                    workspace_id=workspace_id_str,
+                    file_id=file_id,
+                    from_state=current_state,
+                    to_state=current_state,
+                    event="doc_chain_detected",
+                    payload={"matched": False},
+                )
+                return
+
+            # Find-or-create the chain.
+            chain_id = await upsert_chain(
+                conn,
+                workspace_id=workspace_id_str,
+                chain_type=candidate.chain_type,
+                title=candidate.title,
+                chain_key=candidate.chain_key,
+                detection_confidence=candidate.confidence,
+                current_version_id=file_id,
+            )
+            inserted = await add_member(
+                conn,
+                chain_id=chain_id,
+                doc_id=file_id,
+                workspace_id=workspace_id_str,
+                version_index=candidate.version_index,
+                role=candidate.role,
+                parent_doc_id=candidate.parent_doc_id,
+            )
+            # Ensure each sibling member referenced by the detector is
+            # in the chain (e.g., the first email needs an "original"
+            # row even though it wasn't added when first parsed).
+            for sib_id in candidate.sibling_member_ids:
+                cur = await conn.execute(
+                    "SELECT 1 FROM doc_chain_members "
+                    "WHERE chain_id = %s AND doc_id = %s LIMIT 1",
+                    (chain_id, sib_id),
+                )
+                exists = await cur.fetchone()
+                if exists is None:
+                    await add_member(
+                        conn,
+                        chain_id=chain_id,
+                        doc_id=sib_id,
+                        workspace_id=workspace_id_str,
+                        version_index=0,
+                        role="original",
+                    )
+            # Promote the new file as current_version for amendments /
+            # revisions (newer supersedes).
+            if candidate.role in (
+                "amendment", "revision", "side_letter", "corrigendum",
+            ):
+                await set_current_version(
+                    conn, chain_id=chain_id, current_version_id=file_id,
+                )
+
+            await record_lifecycle_event(
+                conn,
+                workspace_id=workspace_id_str,
+                file_id=file_id,
+                from_state=current_state,
+                to_state=current_state,
+                event="doc_chain_detected",
+                payload={
+                    "matched": True,
+                    "chain_id": chain_id,
+                    "chain_type": candidate.chain_type,
+                    "role": candidate.role,
+                    "confidence": candidate.confidence,
+                    "inserted_member": inserted,
+                },
+            )
+
+
+# ---------------------------------------------------------------------------
 # Procrastinate task registration
 # ---------------------------------------------------------------------------
 
@@ -2081,6 +2349,16 @@ async def resolve_identities_file(file_id: str) -> None:
     Last stage in the ingestion chain.
     """
     await resolve_identities_file_impl(file_id)
+
+
+@procrastinate_app.task(name="detect_doc_chain_file", queue="kb", pass_context=False)
+async def detect_doc_chain_file(file_id: str) -> None:
+    """Wire-level Procrastinate task. Delegates to the testable impl.
+
+    WA-3 / Design 3: per-file doc-chain detection. Runs as an additive
+    post-parse task in parallel with chunk_file — does not gate lifecycle.
+    """
+    await detect_doc_chain_file_impl(file_id)
 
 
 # ---------------------------------------------------------------------------
