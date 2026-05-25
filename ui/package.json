@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev -p 3000",
+    "dev": "next dev -p 3000 --turbopack",
     "build": "next build",
     "start": "next start -p 3000",
     "lint": "next lint",
@@ -13,12 +13,19 @@
   "dependencies": {
     "lucide-react": "^0.456.0",
     "next": "^15.0.3",
+    "postal-mime": "^2.7.4",
     "react": "^19.0.0-rc-66855b96-20241106",
-    "react-dom": "^19.0.0-rc-66855b96-20241106"
+    "react-dom": "^19.0.0-rc-66855b96-20241106",
+    "react-markdown": "^10.1.0",
+    "react-pdf": "^10.4.1",
+    "rehype-sanitize": "^6.0.0",
+    "remark-gfm": "^4.0.1",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@playwright/test": "^1.49.0",
     "@tailwindcss/postcss": "^4.0.0-beta.4",
+    "@tailwindcss/typography": "^0.5.19",
     "@types/node": "^22.9.0",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",

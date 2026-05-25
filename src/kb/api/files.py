@@ -33,14 +33,27 @@ from kb.api.idempotency import (
 from kb.config import get_settings
 from kb.db.pool import Connection
 from kb.domain.files import (
+    ExtractedEntityInstance,
     FileCreateJson,
+    FileDetailsResponse,
     FileListResponse,
     FileResponse,
     FileWithLifecycleResponse,
+    PaginatedList,
+    ProposedField,
     create_file,
     find_active_by_sha,
+    get_file,
+    get_file_details,
     get_file_with_lifecycle,
+    list_atomic_units,
+    list_citations_of_doc,
+    list_entities_mentioned,
+    list_extracted_entities,
     list_files,
+    list_mentions,
+    list_proposed_fields,
+    list_triples_in_doc,
     soft_delete_file,
 )
 from kb.domain.raw_pages import RawPageListResponse, list_raw_pages
@@ -53,7 +66,6 @@ from kb.storage.files import (
     sha256_hex,
 )
 from kb.workers.tasks import parse_file
-
 
 router = APIRouter(prefix="/files", tags=["files"])
 
@@ -388,6 +400,25 @@ async def get_file_by_id(
 
 
 # ---------------------------------------------------------------------------
+# GET /files/:id/details — rich rollups for the Upload-page row-expand
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/{file_id}/details",
+    response_model=FileDetailsResponse,
+    summary="Rich per-doc rollup: counts (chunks/mentions/units/entities/triples) + "
+            "chain membership + lifecycle history. Powers the Upload-page row expand.",
+)
+async def get_file_details_route(
+    file_id: str,
+    request: Request,
+    conn: Annotated[Connection, Depends(kb_app_connection)],
+) -> FileDetailsResponse:
+    return await get_file_details(conn, file_id)
+
+
+# ---------------------------------------------------------------------------
 # GET /files/:id/pages
 # ---------------------------------------------------------------------------
 
@@ -406,9 +437,188 @@ async def get_file_pages(
 ) -> RawPageListResponse:
     _check_pagination(limit, offset)
     # 404-gate via the parent.
-    from kb.domain.files import get_file
     await get_file(conn, file_id)
     return await list_raw_pages(conn, file_id, limit=limit, offset=offset)
+
+
+# ---------------------------------------------------------------------------
+# Doc-detail surfaces — one focused endpoint per UI accordion.
+#
+# Each layer of the extraction pipeline has its own endpoint so the
+# doc-detail page can lazy-load section-by-section. Lists are paginated
+# so a 500-page doc with thousands of mentions doesn't blow up.
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/{file_id}/proposed-fields",
+    response_model=list[ProposedField],
+    summary="L3 open-world: fields Gemini inferred this doc has "
+            "(per-doc, schema-agnostic). Usually <30; no pagination.",
+)
+async def get_proposed_fields(
+    file_id: str,
+    conn: Annotated[Connection, Depends(kb_app_connection)],
+) -> list[ProposedField]:
+    await get_file(conn, file_id)
+    return await list_proposed_fields(conn, file_id)
+
+
+@router.get(
+    "/{file_id}/extracted-entities",
+    response_model=list[ExtractedEntityInstance],
+    summary="L4 closed-world: instances of schema_entities populated from this doc "
+            "(joins schema_entities for human-readable names).",
+)
+async def get_extracted_entities(
+    file_id: str,
+    conn: Annotated[Connection, Depends(kb_app_connection)],
+) -> list[ExtractedEntityInstance]:
+    await get_file(conn, file_id)
+    return await list_extracted_entities(conn, file_id)
+
+
+@router.get(
+    "/{file_id}/atomic-units",
+    response_model=PaginatedList,
+    summary="L3 atomic units (clauses, price rows, etc.) sorted by rarity DESC.",
+)
+async def get_atomic_units(
+    file_id: str,
+    conn: Annotated[Connection, Depends(kb_app_connection)],
+    limit: int = Query(default=50),
+    offset: int = Query(default=0),
+) -> PaginatedList:
+    _check_pagination(limit, offset)
+    await get_file(conn, file_id)
+    items, total = await list_atomic_units(conn, file_id, limit=limit, offset=offset)
+    return PaginatedList(
+        items=[i.model_dump() for i in items],
+        total=total, limit=limit, offset=offset,
+    )
+
+
+@router.get(
+    "/{file_id}/mentions",
+    response_model=PaginatedList,
+    summary="L2 mentions (with canonical_entity_id when resolved). "
+            "Optional ?type=ORG|PERSON|PLACE|… filter.",
+)
+async def get_mentions(
+    file_id: str,
+    conn: Annotated[Connection, Depends(kb_app_connection)],
+    limit: int = Query(default=100),
+    offset: int = Query(default=0),
+    type: str | None = Query(default=None),
+) -> PaginatedList:
+    _check_pagination(limit, offset)
+    await get_file(conn, file_id)
+    items, total = await list_mentions(
+        conn, file_id, limit=limit, offset=offset, mention_type=type,
+    )
+    return PaginatedList(
+        items=[i.model_dump() for i in items],
+        total=total, limit=limit, offset=offset,
+    )
+
+
+@router.get(
+    "/{file_id}/entities-mentioned",
+    response_model=PaginatedList,
+    summary="Canonical entities mentioned in this doc, with in-doc + corpus-wide counts.",
+)
+async def get_entities_mentioned(
+    file_id: str,
+    conn: Annotated[Connection, Depends(kb_app_connection)],
+    limit: int = Query(default=50),
+    offset: int = Query(default=0),
+) -> PaginatedList:
+    _check_pagination(limit, offset)
+    await get_file(conn, file_id)
+    items, total = await list_entities_mentioned(
+        conn, file_id, limit=limit, offset=offset,
+    )
+    return PaginatedList(
+        items=[i.model_dump() for i in items],
+        total=total, limit=limit, offset=offset,
+    )
+
+
+@router.get(
+    "/{file_id}/triples",
+    response_model=PaginatedList,
+    summary="L4 extracted triples (subject — predicate → object) emitted from this doc.",
+)
+async def get_triples(
+    file_id: str,
+    conn: Annotated[Connection, Depends(kb_app_connection)],
+    limit: int = Query(default=50),
+    offset: int = Query(default=0),
+) -> PaginatedList:
+    _check_pagination(limit, offset)
+    await get_file(conn, file_id)
+    items, total = await list_triples_in_doc(
+        conn, file_id, limit=limit, offset=offset,
+    )
+    return PaginatedList(
+        items=[i.model_dump() for i in items],
+        total=total, limit=limit, offset=offset,
+    )
+
+
+@router.get(
+    "/{file_id}/citations",
+    response_model=PaginatedList,
+    summary="Chat answers that cited this doc (JSONB containment scan on query_log.citations).",
+)
+async def get_citations(
+    file_id: str,
+    conn: Annotated[Connection, Depends(kb_app_connection)],
+    limit: int = Query(default=20),
+    offset: int = Query(default=0),
+) -> PaginatedList:
+    _check_pagination(limit, offset)
+    await get_file(conn, file_id)
+    items, total = await list_citations_of_doc(
+        conn, file_id, limit=limit, offset=offset,
+    )
+    return PaginatedList(
+        items=[i.model_dump() for i in items],
+        total=total, limit=limit, offset=offset,
+    )
+
+
+# ---------------------------------------------------------------------------
+# GET /files/:id/blob — stream the original file bytes from MinIO.
+#
+# Powers the doc-detail page's left-pane natural-format viewer (PDF.js,
+# rendered markdown, .eml parsing, etc.). The raw bytes are sha-keyed in
+# MinIO under `raw_files/<sha>`; we fetch by the file's content_sha.
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/{file_id}/blob",
+    summary="Stream the original file bytes (Content-Type matches the upload mime).",
+    response_class=Response,
+)
+async def get_file_blob(
+    file_id: str,
+    conn: Annotated[Connection, Depends(kb_app_connection)],
+) -> Response:
+    from kb.storage.files import get_file_bytes, key_for_sha
+    f = await get_file(conn, file_id)
+    blob = get_file_bytes(key_for_sha(f.content_sha))
+    safe_name = f.name.replace('"', "")
+    return Response(
+        content=blob,
+        media_type=f.mime_type or "application/octet-stream",
+        headers={
+            # `inline` so the browser renders rather than downloads.
+            "Content-Disposition": f'inline; filename="{safe_name}"',
+            "Cache-Control": "private, max-age=300",
+        },
+    )
 
 
 # ---------------------------------------------------------------------------

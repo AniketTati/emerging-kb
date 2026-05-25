@@ -32,6 +32,14 @@ export type LifecycleState =
   | "failed"
   | "deleted";
 
+export type DocStatus =
+  | "live"
+  | "superseded"
+  | "draft"
+  | "archived"
+  | "retracted";
+
+
 export type FileResource = {
   id: string;
   name: string;
@@ -40,7 +48,39 @@ export type FileResource = {
   content_sha: string;
   lifecycle_state: LifecycleState;
   created_at: string;
-  // Other server-side fields exist; we model only what the UI consumes.
+  updated_at?: string;
+  // Phase 5b / WA-6 / B2 — populated after the file passes through
+  // `fields_extracting`. Null on files still being processed.
+  inferred_doc_type?: string | null;
+  source_authority?: number | null;
+  source_authority_reason?: string | null;
+  doc_status?: DocStatus | null;
+};
+
+
+export type LifecycleEventDetail = {
+  from_state: LifecycleState | null;
+  to_state: LifecycleState;
+  event: string;
+  payload: Record<string, unknown>;
+  created_at: string;
+};
+
+
+export type FileDetails = {
+  file: FileResource;
+  lifecycle: LifecycleEventDetail[];
+  n_pages: number;
+  n_chunks: number;
+  n_contextual_chunks: number;
+  n_mentions: number;
+  n_atomic_units: number;
+  n_entities_linked: number;
+  n_triples: number;
+  chain_id: string | null;
+  chain_role: string | null;
+  chain_version_index: number | null;
+  is_current_version: boolean | null;
 };
 
 export type LifecycleEvent = {
@@ -95,6 +135,190 @@ export async function listFiles(): Promise<{ items: FileResource[]; total: numbe
   });
   return _handle(resp);
 }
+
+
+export async function getFileDetails(fileId: string): Promise<FileDetails> {
+  const resp = await fetch(`${KB_API_URL}/files/${fileId}/details`, {
+    headers: workspaceHeaders(),
+    cache: "no-store",
+  });
+  return _handle(resp);
+}
+
+
+// ---------------------------------------------------------------------------
+// Doc-detail surfaces — one fetcher per UI accordion. Each list endpoint
+// is paginated; types mirror the Pydantic shapes from src/kb/api/files.py.
+// ---------------------------------------------------------------------------
+
+export type ProposedField = {
+  id: string;
+  field_name: string;
+  field_description: string | null;
+  value_text: string | null;
+  value_type: string | null;
+  is_pii: boolean;
+  model_id: string | null;
+};
+
+export type AtomicUnit = {
+  id: string;
+  unit_type: string;
+  parameters: Record<string, unknown>;
+  anchor_chunk_id: string | null;
+  rarity_score: number | null;
+  model_id: string | null;
+};
+
+export type Mention = {
+  id: string;
+  mention_text: string;
+  mention_type: string;
+  chunk_id: string | null;
+  start_offset: number | null;
+  end_offset: number | null;
+  confidence: number | null;
+  canonical_entity_id: string | null;
+  canonical_name: string | null;
+  source_page_numbers: number[] | null;
+};
+
+export type EntityMentioned = {
+  entity_id: string;
+  canonical_name: string;
+  entity_type: string;
+  mentions_in_doc: number;
+  total_mentions: number;
+};
+
+export type TripleInDoc = {
+  id: string;
+  subject_text: string;
+  predicate_text: string;
+  object_text: string;
+  confidence: number | null;
+  chunk_id: string | null;
+  source_page_numbers: number[] | null;
+};
+
+export type ExtractedEntityInstance = {
+  id: string;
+  schema_entity_id: string;
+  schema_entity_name: string | null;
+  parent_entity_id: string | null;
+  fields: Record<string, unknown>;
+};
+
+export type CitationByQuery = {
+  query_id: string;
+  query: string;
+  answer: string | null;
+  endpoint: string;
+  created_at: string | null;
+};
+
+export type Paginated<T> = {
+  items: T[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
+export type RawPage = {
+  id: string;
+  page_number: number;
+  text: string;
+  content_sha: string;
+  created_at: string;
+};
+
+async function _getJson<T>(path: string): Promise<T> {
+  const resp = await fetch(`${KB_API_URL}${path}`, {
+    headers: workspaceHeaders(),
+    cache: "no-store",
+  });
+  return _handle(resp);
+}
+
+export const getProposedFields = (id: string) =>
+  _getJson<ProposedField[]>(`/files/${id}/proposed-fields`);
+
+export const getExtractedEntities = (id: string) =>
+  _getJson<ExtractedEntityInstance[]>(`/files/${id}/extracted-entities`);
+
+export const getAtomicUnits = (
+  id: string, opts?: { limit?: number; offset?: number },
+) =>
+  _getJson<Paginated<AtomicUnit>>(
+    `/files/${id}/atomic-units?limit=${opts?.limit ?? 50}&offset=${opts?.offset ?? 0}`,
+  );
+
+export const getDocMentions = (
+  id: string,
+  opts?: { limit?: number; offset?: number; type?: string },
+) => {
+  const qs = new URLSearchParams({
+    limit: String(opts?.limit ?? 100),
+    offset: String(opts?.offset ?? 0),
+  });
+  if (opts?.type) qs.set("type", opts.type);
+  return _getJson<Paginated<Mention>>(`/files/${id}/mentions?${qs}`);
+};
+
+export const getEntitiesMentioned = (
+  id: string, opts?: { limit?: number; offset?: number },
+) =>
+  _getJson<Paginated<EntityMentioned>>(
+    `/files/${id}/entities-mentioned?limit=${opts?.limit ?? 50}&offset=${opts?.offset ?? 0}`,
+  );
+
+export const getDocTriples = (
+  id: string, opts?: { limit?: number; offset?: number },
+) =>
+  _getJson<Paginated<TripleInDoc>>(
+    `/files/${id}/triples?limit=${opts?.limit ?? 50}&offset=${opts?.offset ?? 0}`,
+  );
+
+export const getDocCitations = (
+  id: string, opts?: { limit?: number; offset?: number },
+) =>
+  _getJson<Paginated<CitationByQuery>>(
+    `/files/${id}/citations?limit=${opts?.limit ?? 20}&offset=${opts?.offset ?? 0}`,
+  );
+
+export const getDocPages = (
+  id: string, opts?: { limit?: number; offset?: number },
+) =>
+  _getJson<{ items: RawPage[]; total: number; limit: number; offset: number }>(
+    `/files/${id}/pages?limit=${opts?.limit ?? 10}&offset=${opts?.offset ?? 0}`,
+  );
+
+export const getFile = (id: string) =>
+  _getJson<FileResource & { lifecycle: LifecycleEventDetail[] }>(`/files/${id}`);
+
+
+// ---------------------------------------------------------------------------
+// Source-viewer surfaces — original file blob + structured xlsx parse.
+// ---------------------------------------------------------------------------
+
+export const blobUrl = (id: string) =>
+  `${KB_API_URL}/files/${id}/blob`;
+
+export async function fetchBlob(id: string): Promise<Blob> {
+  const resp = await fetch(blobUrl(id), {
+    headers: workspaceHeaders(),
+    cache: "no-store",
+  });
+  if (!resp.ok) {
+    throw new KbApiError(resp.status, await resp.text(), `blob ${resp.status}`);
+  }
+  return resp.blob();
+}
+
+export async function fetchBlobText(id: string): Promise<string> {
+  return (await fetchBlob(id)).text();
+}
+
 
 /**
  * Upload one file via multipart POST /files.
