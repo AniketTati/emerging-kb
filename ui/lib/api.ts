@@ -215,4 +215,128 @@ export function stageLabelFor(state: LifecycleState): string {
   return state.replace(/_/g, " ");
 }
 
+// ---------------------------------------------------------------------------
+// Chat — Phase 8f /chat + Phase 9 /chat/:id/stream
+// ---------------------------------------------------------------------------
+
+export type Citation = {
+  hit_id: string;
+  kind: string;
+  file_id: string | null;
+  snippet_preview: string;
+  score: number;
+};
+
+export type GenerationResult = {
+  answer: string;
+  citations: Citation[];
+  refused: boolean;
+  refusal_reason: string | null;
+  model_id: string;
+};
+
+export type Hit = {
+  id: string;
+  kind: string;
+  score: number;
+  snippet: string;
+  metadata: Record<string, unknown>;
+};
+
+export type ChatResponse = {
+  query_id: string;
+  query: string;
+  rewrites: Record<string, string>;
+  generation: GenerationResult;
+  hits: Hit[];
+  crag_score: number;
+  latency_ms: number;
+};
+
+export async function postChat(
+  query: string,
+  idempotencyKey: string = crypto.randomUUID(),
+): Promise<ChatResponse> {
+  const resp = await fetch(`${KB_API_URL}/chat`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Idempotency-Key": idempotencyKey,
+      ...workspaceHeaders(),
+    },
+    body: JSON.stringify({ query, mode: "H" }),
+  });
+  return _handle(resp);
+}
+
+/**
+ * Stream the cached answer for a past chat query via Phase 9 SSE.
+ * Useful for replaying an answer at "typing" speed in the UI.
+ */
+export function subscribeToChatStream(
+  queryId: string,
+  handlers: {
+    onChunk?: (chunk: { text: string; offset: number }) => void;
+    onDone?: (data: {
+      refused?: boolean;
+      refusal_reason?: string | null;
+      citations?: Citation[];
+      model_id?: string;
+    }) => void;
+    onError?: (err: unknown) => void;
+  },
+): () => void {
+  const url = `${KB_API_URL}/chat/${queryId}/stream`;
+  const es = new EventSource(url);
+  es.addEventListener("chunk", (e) => {
+    try {
+      handlers.onChunk?.(JSON.parse((e as MessageEvent).data));
+    } catch (err) {
+      handlers.onError?.(err);
+    }
+  });
+  es.addEventListener("done", (e) => {
+    try {
+      handlers.onDone?.(JSON.parse((e as MessageEvent).data));
+    } catch {
+      handlers.onDone?.({});
+    }
+    es.close();
+  });
+  es.onerror = (err) => handlers.onError?.(err);
+  return () => es.close();
+}
+
+// Helper for the UI: render an answer with inline [hit_id] citations as
+// clickable badges. Returns an array of {kind: 'text' | 'cite', value, ...}
+// segments — easier to render in JSX than dangerous innerHTML.
+export type AnswerSegment =
+  | { kind: "text"; value: string }
+  | { kind: "cite"; hitId: string; index: number };
+
+export function segmentAnswer(
+  answer: string,
+  citations: Citation[],
+): AnswerSegment[] {
+  const ids = new Map(citations.map((c, i) => [c.hit_id.slice(0, 8), i]));
+  const segments: AnswerSegment[] = [];
+  // Match either full UUID prefix [xxxxxxxx-xxxx-...] or short [xxxxxxxx].
+  const re = /\[([0-9a-f]{8}(?:-[0-9a-f]{4}){0,4}(?:-[0-9a-f]{12})?)\]/gi;
+  let last = 0;
+  for (const m of answer.matchAll(re)) {
+    if (m.index === undefined) continue;
+    const text = answer.slice(last, m.index);
+    if (text) segments.push({ kind: "text", value: text });
+    const raw = m[1];
+    const shortId = raw.slice(0, 8);
+    const idx = ids.get(shortId) ?? -1;
+    segments.push({ kind: "cite", hitId: raw, index: idx });
+    last = m.index + m[0].length;
+  }
+  if (last < answer.length) {
+    segments.push({ kind: "text", value: answer.slice(last) });
+  }
+  return segments;
+}
+
 export { KbApiError };
