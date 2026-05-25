@@ -33,7 +33,13 @@ test("chat page renders the composer, thread, and citations panel", async ({
 test("composer enables Send when text is entered, disables when empty", async ({
   page,
 }) => {
-  await page.goto("/chat");
+  // `waitUntil: "networkidle"` lets Next.js hydration complete before we
+  // start typing. Without it, Playwright's `fill()` races ahead of
+  // hydration: the DOM gets the value but React doesn't see the change
+  // event, so the controlled `value` state stays empty and the Send
+  // button (whose `disabled` is derived from `!value.trim()`) stays
+  // disabled. Real users type slowly enough that this race never bites.
+  await page.goto("/chat", { waitUntil: "networkidle" });
   const input = page.getByTestId("chat-input");
   const send = page.getByTestId("chat-send");
 
