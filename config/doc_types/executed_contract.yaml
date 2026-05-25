@@ -1,0 +1,5 @@
+# Per Design 2 §"Source-authority defaults". CUAD contracts land here.
+authority: 0.90
+authority_reason: "Executed signed contract; legally binding"
+# This drives the L3 atomic-unit plugin choice at ingest.
+preferred_atomic_unit_type: clause

@@ -40,6 +40,10 @@ dependencies = [
     "pypdfium2>=5.8.0",
     "scikit-learn>=1.8.0",
     "umap-learn>=0.5.12",
+    # WA-1 / Design 9 — layered config tree loader (defaults.yaml + domain
+    # overlays). Already pulled transitively but pinning so a cleanup
+    # doesn't accidentally drop it.
+    "omegaconf>=2.3.0",
 ]
 
 [dependency-groups]

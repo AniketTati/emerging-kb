@@ -1,0 +1,27 @@
+# config/domains/mixed_demo.yaml
+# --------------------------------------------------------------------------
+# Wave A demo corpus = CUAD + Enron subset + SEC 10-K subset (~80–100 docs).
+# Per architecture §2.5. Resolved at layer 5 (between workspace overrides
+# and `config/defaults.yaml`).
+# --------------------------------------------------------------------------
+
+# Lower min_doc_count so auto-promotion fires within demo size.
+extraction:
+  l2b:
+    auto_promotion:
+      min_doc_count: 5
+
+# Enable all three known doc-types' L3 plugins for the demo corpus.
+# Plugin registry resolves by atomic_unit type name (clause/transaction/row).
+plugins:
+  atomic_units:
+    enabled_types: [clause, transaction, row]
+
+# Vocabulary file to preload at demo bootstrap (WA-2 will populate).
+vocabulary:
+  preload_path: null  # not yet populated; demo starts empty + discovers
+
+# Demo can spend a little more per query than production defaults.
+budgets:
+  per_query_usd: 0.20
+  per_chat_usd: 0.20
