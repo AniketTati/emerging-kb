@@ -402,6 +402,13 @@ class ProposedField(BaseModel):
     value_type: str | None
     is_pii: bool
     model_id: str | None
+    # Worker-resolved source position (added PR2 / migration 0032).
+    # Null means the resolver couldn't find the value text in any chunk
+    # (LLM paraphrased it, or it lives in a contextual prefix only).
+    source_chunk_id: str | None = None
+    source_char_start: int | None = None
+    source_char_end: int | None = None
+    source_page_numbers: list[int] | None = None
 
 
 class AtomicUnit(BaseModel):
@@ -411,6 +418,10 @@ class AtomicUnit(BaseModel):
     anchor_chunk_id: str | None
     rarity_score: float | None
     model_id: str | None
+    source_chunk_id: str | None = None
+    source_char_start: int | None = None
+    source_char_end: int | None = None
+    source_page_numbers: list[int] | None = None
 
 
 class Mention(BaseModel):
@@ -427,6 +438,10 @@ class Mention(BaseModel):
     # source viewer can jump PDF pages on click. Null for non-paginated
     # formats (md/txt/eml).
     source_page_numbers: list[int] | None = None
+    # Worker-resolved source position (added PR2 / migration 0032).
+    source_chunk_id: str | None = None
+    source_char_start: int | None = None
+    source_char_end: int | None = None
 
 
 class EntityMentioned(BaseModel):
@@ -445,6 +460,11 @@ class TripleInDoc(BaseModel):
     confidence: float | None
     chunk_id: str | None
     source_page_numbers: list[int] | None = None
+    # Worker-resolved subject + object positions in the source chunk text.
+    subject_char_start: int | None = None
+    subject_char_end: int | None = None
+    object_char_start: int | None = None
+    object_char_end: int | None = None
 
 
 class ExtractedEntityInstance(BaseModel):
@@ -479,11 +499,14 @@ async def list_proposed_fields(
     any closed-world schema. Usually <30 per doc — no pagination."""
     cur = await conn.execute(
         """
-        SELECT id::text, field_name, field_description, value_text,
-               value_type, is_pii, model_id
-          FROM proposed_fields
-         WHERE file_id = %s
-         ORDER BY field_name ASC
+        SELECT pf.id::text, pf.field_name, pf.field_description, pf.value_text,
+               pf.value_type, pf.is_pii, pf.model_id,
+               pf.source_chunk_id::text, pf.source_char_start, pf.source_char_end,
+               c.source_page_numbers
+          FROM proposed_fields pf
+          LEFT JOIN chunks c ON c.id = pf.source_chunk_id
+         WHERE pf.file_id = %s
+         ORDER BY pf.field_name ASC
         """,
         (file_id,),
     )
@@ -493,6 +516,10 @@ async def list_proposed_fields(
             id=r[0], field_name=r[1], field_description=r[2],
             value_text=r[3], value_type=r[4], is_pii=bool(r[5]),
             model_id=r[6],
+            source_chunk_id=r[7],
+            source_char_start=(int(r[8]) if r[8] is not None else None),
+            source_char_end=(int(r[9]) if r[9] is not None else None),
+            source_page_numbers=(list(r[10]) if r[10] else None),
         )
         for r in rows
     ]
@@ -535,11 +562,14 @@ async def list_atomic_units(
     total = int((await cur.fetchone())[0])
     cur = await conn.execute(
         """
-        SELECT id::text, unit_type, parameters, anchor_chunk_id::text,
-               rarity_score, model_id
-          FROM atomic_units
-         WHERE file_id = %s
-         ORDER BY rarity_score DESC NULLS LAST, created_at ASC
+        SELECT au.id::text, au.unit_type, au.parameters,
+               au.anchor_chunk_id::text, au.rarity_score, au.model_id,
+               au.source_chunk_id::text, au.source_char_start, au.source_char_end,
+               c.source_page_numbers
+          FROM atomic_units au
+          LEFT JOIN chunks c ON c.id = au.source_chunk_id
+         WHERE au.file_id = %s
+         ORDER BY au.rarity_score DESC NULLS LAST, au.created_at ASC
          LIMIT %s OFFSET %s
         """,
         (file_id, limit, offset),
@@ -552,6 +582,10 @@ async def list_atomic_units(
             anchor_chunk_id=r[3],
             rarity_score=(float(r[4]) if r[4] is not None else None),
             model_id=r[5],
+            source_chunk_id=r[6],
+            source_char_start=(int(r[7]) if r[7] is not None else None),
+            source_char_end=(int(r[8]) if r[8] is not None else None),
+            source_page_numbers=(list(r[9]) if r[9] else None),
         )
         for r in rows
     ]
@@ -580,12 +614,14 @@ async def list_mentions(
         SELECT em.id::text, em.mention_text, em.mention_type,
                em.contextual_chunk_id::text, em.start_offset, em.end_offset,
                em.confidence, m2e.entity_id::text, e.canonical_name,
-               c.source_page_numbers
+               COALESCE(src.source_page_numbers, ctx_src.source_page_numbers),
+               em.source_chunk_id::text, em.source_char_start, em.source_char_end
           FROM extracted_mentions em
           LEFT JOIN mention_to_entity m2e ON m2e.mention_id = em.id
           LEFT JOIN entities e ON e.id = m2e.entity_id
           LEFT JOIN contextual_chunks cc ON cc.id = em.contextual_chunk_id
-          LEFT JOIN chunks c ON c.id = cc.chunk_id
+          LEFT JOIN chunks ctx_src ON ctx_src.id = cc.chunk_id
+          LEFT JOIN chunks src ON src.id = em.source_chunk_id
          WHERE {where_sql}
          ORDER BY em.contextual_chunk_id ASC, em.start_offset ASC
          LIMIT %s OFFSET %s
@@ -601,6 +637,9 @@ async def list_mentions(
             confidence=(float(r[6]) if r[6] is not None else None),
             canonical_entity_id=r[7], canonical_name=r[8],
             source_page_numbers=(list(r[9]) if r[9] else None),
+            source_chunk_id=r[10],
+            source_char_start=(int(r[11]) if r[11] is not None else None),
+            source_char_end=(int(r[12]) if r[12] is not None else None),
         )
         for r in rows
     ]
@@ -658,7 +697,9 @@ async def list_triples_in_doc(
     cur = await conn.execute(
         """
         SELECT t.id::text, t.subject_text, t.predicate_text, t.object_text,
-               t.confidence, t.chunk_id::text, c.source_page_numbers
+               t.confidence, t.chunk_id::text, c.source_page_numbers,
+               t.subject_char_start, t.subject_char_end,
+               t.object_char_start, t.object_char_end
           FROM extracted_triples t
           LEFT JOIN chunks c ON c.id = t.chunk_id
          WHERE t.file_id = %s
@@ -675,6 +716,10 @@ async def list_triples_in_doc(
             confidence=(float(r[4]) if r[4] is not None else None),
             chunk_id=r[5],
             source_page_numbers=(list(r[6]) if r[6] else None),
+            subject_char_start=(int(r[7]) if r[7] is not None else None),
+            subject_char_end=(int(r[8]) if r[8] is not None else None),
+            object_char_start=(int(r[9]) if r[9] is not None else None),
+            object_char_end=(int(r[10]) if r[10] is not None else None),
         )
         for r in rows
     ]

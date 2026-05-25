@@ -34,6 +34,28 @@ async def read_contextual_chunks_for_file(
     return [(row[0], row[1]) for row in rows]
 
 
+async def read_chunks_for_file_with_source(
+    conn: Connection,
+    *,
+    file_id: str,
+) -> list[tuple[str, str, str, str]]:
+    """Return [(contextual_chunk_id, contextual_text, chunk_id, chunk_text), …]
+    so the worker can resolve source-position offsets for citations.
+    `chunk_text` is the ORIGINAL chunk body (before the contextualizer
+    prepended the prefix). Citation highlighting wants offsets into this,
+    not into contextual_text."""
+    cur = await conn.execute(
+        "SELECT cc.id::text, cc.contextual_text, c.id::text, c.text "
+        "FROM contextual_chunks cc "
+        "JOIN chunks c ON c.id = cc.chunk_id "
+        "WHERE cc.file_id = %s "
+        "ORDER BY c.chunk_index ASC",
+        (file_id,),
+    )
+    rows = await cur.fetchall()
+    return [(r[0], r[1], r[2], r[3]) for r in rows]
+
+
 async def delete_mentions_for_file(
     conn: Connection,
     *,
@@ -60,17 +82,28 @@ async def insert_mention(
     end_offset: int | None,
     confidence: float | None,
     model_id: str,
+    source_chunk_id: str | None = None,
+    source_char_start: int | None = None,
+    source_char_end: int | None = None,
 ) -> str:
-    """INSERT one extracted_mentions row. Returns the new row's id."""
+    """INSERT one extracted_mentions row. Returns the new row's id.
+
+    `start_offset` / `end_offset` are the LLM-reported offsets into
+    `contextual_chunks.contextual_text` (prefix + chunk). The optional
+    `source_*` columns are the worker-resolved position in the ORIGINAL
+    `chunks.text` — set when the resolver finds the snippet (citations
+    UI uses this for exact highlighting)."""
     cur = await conn.execute(
         "INSERT INTO extracted_mentions "
         "(contextual_chunk_id, file_id, workspace_id, mention_text, "
-        "mention_type, start_offset, end_offset, confidence, model_id) "
-        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) "
+        "mention_type, start_offset, end_offset, confidence, model_id, "
+        "source_chunk_id, source_char_start, source_char_end) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
         "RETURNING id::text",
         (
             contextual_chunk_id, file_id, workspace_id, mention_text,
             mention_type, start_offset, end_offset, confidence, model_id,
+            source_chunk_id, source_char_start, source_char_end,
         ),
     )
     row = await cur.fetchone()
