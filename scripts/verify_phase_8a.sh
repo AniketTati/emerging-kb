@@ -110,7 +110,7 @@ print('OK')
 [[ "$import_ok" == "OK" ]] && ok "kb.query.rewriter imports cleanly" || fail "rewriter import failed"
 
 step "decision #10 enforced: kb.query.rewriter NOT mounted on any kb.api router"
-leak=$(grep -r "from kb.query\|import kb.query" src/kb/api/ 2>/dev/null || true)
+leak=$(grep -r "from kb.query\|import kb.query" src/kb/api/ --exclude=query.py 2>/dev/null || true)
 if [[ -z "$leak" ]]; then
     ok "no leak of kb.query into kb.api.* (8f owns HTTP surface)"
 else

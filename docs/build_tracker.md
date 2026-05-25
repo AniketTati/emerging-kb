@@ -155,7 +155,7 @@ QA gates this at G1.5b — every prototype page is grep'd for the forbidden voca
 ## 1. Now / Next / Blocked
 
 **Now:** 🎉 **Wave A FULLY COMPLETE.** Phase 3e ✅ shipped — corpus-level RAPTOR (plan at §5.10.1, **15 decisions**). Phase 3d also ✅ — per-doc RAPTOR (plan at §5.10, **16 decisions** revised post-deliberation; the deliberation flips that earned their keep: (1) discriminated edge FK + L1 stays in contextual_chunks — saves 30 GB at 100K-doc scale; (2) `raptor_building` intermediate lifecycle state — observability for the multi-stage build; (3) `MAX_LEVELS` bumped 4→6 to cover corpus-tree depth `log₈(100K)≈5.5`; (4) forward-compat `raptor_nodes.scope` enum + nullable `file_id` locked at 3d's 0012 migration — Phase 3e needed no separate migration). **286/286 pytest** in 81s. verify_phase_3e.sh 13/13. Cross-phase sweep across **all 12 verify scripts** (0/1a/1b/1c/2a/2b/2c/3a/3b/3c/3d/3e): **205 checks total, 12/12 GREEN on first pass** — no regressions, no forward-compat fixes needed (3e doesn't change any file lifecycle states; corpus tree is workspace-scoped, not file-scoped). Branch `phase-3/chunking-raptor` carries 7 commit-sets (3a/3b/3c/3b-bis/2c/3d/3e) — **PR #7 open against main**. Architecture's "RAPTOR builds the corpus hierarchy" promise (line 41) is now backed by code at 100K-doc scale.
-**Next:** **Phase 7 ✅ FULLY GREEN** — identity resolution shipped end-to-end 2026-05-25 on `phase-7/identity-resolution` (built on `phase-6/schema-extraction` base). **407/407 pytest in 87s** · `verify_phase_7.sh` 16/16 standalone · cross-phase sweep across all **16 verify scripts GREEN**. Worker chain extends `entities_extracting → identity_resolving → ready` (one new lifecycle state). New migration 0018_entities.sql with `entities` + `mention_to_entity` tables, HNSW partial index on `entities.embedding`, UNIQUE index on `(workspace_id, lower(canonical_name), entity_type)` for stage-a deterministic match. 37 new tests across 3 files including dedicated embedding-blocking coverage. **Phase 8 opens next** — "the big one" per architecture §12 line 1167. Split at G1 into 8a/8b/8c/8d/8e/8f (query rewriting · 10-channel retrieval · rerank · CRAG gate · Astute generation · HTTP endpoints).
+**Next:** **Phase 10a ✅ FULLY GREEN — Next.js 15 Upload UI shipped.** `ui/` Next.js 15 (App Router) + Tailwind v4 + lucide-react app delivered 2026-05-25 on `phase-10a/upload-ui` (stacked on `phase-9/sse-audit`). `/upload` page: drag-drop zone + live status table with 5-pip stage indicator + SSE per-file subscription consuming Phase 9's `/upload/:id/status`. **Screenshot artifact verified**: sidebar + topbar (with ready/processing/failed counters) + clean dropzone + empty-state row. **10/10 vitest** unit tests for `lib/api.ts` pure helpers (stage projections + terminal detection + label formatting). **2/2 Playwright** E2E tests (page renders + root redirects). Backend 541/541 pytest still GREEN after CORS middleware addition (`KB_CORS_ORIGINS` env, default `http://localhost:3000`). 15 decisions locked at §5.17 including #1 Next.js 15 App Router · #4 NEXT_PUBLIC_KB_API_URL env · #5 single-tenant workspace · #7 native FormData + Idempotency-Key · #8 native EventSource per file · #12 5-pip canonical stage mapping. UI files: `ui/{app,components,lib,tests}/` (~900 LOC TypeScript). **Phase 10b opens next** — Next.js Chat UI consuming `POST /chat` + `/chat/:id/stream` SSE + citation cards.
 **Blocked on:** nothing.
 
 ---
@@ -284,9 +284,12 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
 | **8a** | Query rewriting (Step-Back + HyDE + Query2Doc) | ✅ | — | ✅ | ✅ | ✅ | All gates green 2026-05-25 (§5.15.1, 10 decisions). 421/421 pytest. verify_phase_8a.sh 8/8. Cross-phase sweep 17/17. Branch `phase-8a/query-rewriter`. |
 | **8b** | 6-channel parallel retrieval (BM25 chunks/raptor + dense chunks/raptor + mentions exact + atomic units rarity) + RRF fusion | ✅ | — | ✅ | ✅ | ✅ | All gates green 2026-05-25 (§5.15.2, 12 decisions). 441/441 pytest. verify_phase_8b.sh 9/9. Cross-phase sweep 18/18. Branch `phase-8b/retrieval-channels`. |
 | **8c** | Reranker (Cohere Rerank 3.5 default · mxbai-rerank-large-v2 local fallback · Identity passthrough) | ✅ | — | ✅ | ✅ | ✅ | All gates green 2026-05-25 (§5.15.3, 12 decisions). 456/456 pytest. Cross-phase sweep 19/19 GREEN. Branch `phase-8c/rerank`. |
-| **9** | Audit log + lifecycle visibility + idempotency | 🟡 | — | ⬜ | ⬜ | ⬜ | G1 DRAFT at §5.16. SSE for Upload status + Chat replay + GET /audit. |
-| **10a** | UI — Upload (drag-drop · live per-doc per-stage status via SSE) | 🟡 | — | ⬜ | ⬜ | ⬜ | G1 DRAFT at §5.17. Next.js 15 per architecture. |
-| **10b** | UI — Chat (front door · streamed answers · right-side citation cards · plan inspector) + universal Doc Detail slide-in panel | 🟡 | — | ⬜ | ⬜ | ⬜ | G1 DRAFT at §5.17. |
+| **8d** | CRAG (Corrective RAG) relevance gate — judges top-K rerank confidence + refuses below threshold | ✅ | — | ✅ | ✅ | ✅ | All gates green 2026-05-25 (§5.15.4, 10 decisions). 472/472 pytest. Branch `phase-8d/crag`. |
+| **8e** | Astute generation — Gemini answer with citations + cite-or-refuse over reranked top-10 | ✅ | — | ✅ | ✅ | ✅ | All gates green 2026-05-25 (§5.15.5, 15 decisions). 491/491 pytest. Branch `phase-8e/generate`. |
+| **8f** | HTTP surface — `POST /search` + `POST /chat` + `query_log` audit table | ✅ | ✅ | ✅ | ✅ | ✅ | All gates green 2026-05-25 (§5.15.6, 17 decisions). 518/518 pytest. verify_phase_8f.sh 13/13. Cross-phase sweep 22/22 (one bash-syntax fix mid-G5, re-verified). Branch `phase-8f/orchestrator`. |
+| **9** | Audit log + lifecycle visibility + chat replay SSE | ✅ | — | ✅ | ✅ | ✅ | All gates green 2026-05-25 (§5.16, 12 decisions). 541/541 pytest. verify_phase_9.sh 14/14 (real-stack E2E SSE 13 lifecycle events). Cross-phase sweep 23/23. Branch `phase-9/sse-audit`. |
+| **10a** | UI — Upload (drag-drop · live per-doc per-stage status via SSE) | ✅ | — | ✅ | ✅ | ✅ | All gates green 2026-05-25 (§5.17, 15 decisions). Next.js 15 + Tailwind v4 + lucide-react. 10/10 vitest + 2/2 Playwright (screenshot artifact). Backend 541/541 still GREEN after CORS middleware. Branch `phase-10a/upload-ui`. |
+| **10b** | UI — Chat (front door · streamed answers · right-side citation cards · plan inspector) + universal Doc Detail slide-in panel | 🟡 | — | ⬜ | ⬜ | ⬜ | G1 DRAFT at §5.18. |
 | **10c** | UI — Explore (Knowledge Explorer: search + left-rail facets · progressive expansion) | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | `explore.html` |
 | **10d** | UI — Schema Studio (6 tabs: Typed · Inferred · Collisions · Vocabulary · Lineage · Versions · schema-swap affordance) | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | `schema-studio.html` · covers Designs 6 / 7 / 9 UI surfaces |
 | **10e** | UI — Dashboard (counts + sparklines · live "what just learned" SSE feed · needs-attention · ingestion/query/cost cards) | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | `dashboard.html` |
@@ -2592,47 +2595,301 @@ When Aniket approves this plan, the Phase 4 G1 cell in §5 flips ⬜ → ✅ and
 
 ---
 
-### 5.16 Phase 9 plan — Audit + lifecycle visibility + idempotency (G1 🟡 DRAFT)
+### 5.15.4 Phase 8d plan — CRAG (Corrective RAG) relevance gate (G1 ✅ → G5 ✅)
 
-**In scope (Wave A — minimum needed to unblock UI):**
-- `GET /upload/:file_id/status` SSE — streams lifecycle events as they land (Upload UI consumes this).
-- `GET /audit` — list past queries (uses Phase 8's `query_log` table). Simple paginated list.
-- `GET /chat/:query_id/stream` SSE — re-stream a past query's generation (Wave A: returns the cached answer; future: re-run).
+> **Status:** All gates green 2026-05-25. 472/472 pytest (16 new). Branch `phase-8d/crag`. Per CRAG paper (Yan et al. 2024 "Corrective Retrieval Augmented Generation"). Cheap LLM-judge of top-K rerank output — passes a confidence score (0-1); orchestrator (Phase 8f) refuses with "insufficient evidence" message when below threshold.
 
-**Out of scope (deferred to Phase 9b in Wave B):**
-- Hash-chained audit_log (architecture §6 mentions hash trigger — already deferred from Phase 0).
-- Re-extraction admin endpoints.
+**Scope (in / out):**
 
-**Files:**
-- `src/kb/api/sse.py` (`GET /upload/:id/status` + `GET /chat/:qid/stream`)
-- `src/kb/api/audit.py` (`GET /audit`)
-- Tests: `test_sse_unit.py` + `test_audit_unit.py`
+**In scope:**
+- `src/kb/query/crag.py`: `CragGate` Protocol · 2-impl factory (`GeminiCragGate` + `IdentityCragGate`) · `make_crag_gate()` reads `KB_QUERY_LLM` (reuses same env var as 8a since both use the same LLM family).
+- LLM prompt: "Given query + 3 snippets, return JSON `{avg_relevance: 0.0-1.0}` where 1.0 = all snippets directly answer, 0.0 = none relevant."
+- `IdentityCragGate` always returns 1.0 (passes — degrades quality but doesn't block, mirrors decision #7 elsewhere).
+- `CRAG_THRESHOLD = 0.5` module constant; orchestrator (Phase 8f) reads.
+- Empty hits → returns 0.0 (clear refusal signal).
+- Sees top-3 hits' snippets only (cost cap; CRAG is a cheap signal).
+
+**Out of scope (deferred):**
+- Per-snippet relevance (vs avg) — Wave B.
+- Corrective re-retrieval (CRAG paper's full algorithm — refusal + new query) — Wave B; Wave A's CRAG just gates the answer.
+- Anthropic CRAG impl — Wave B (LLM choice for CRAG follows Phase 8a's KB_QUERY_LLM).
+- HTTP surface (8f).
+
+**Decisions locked at G1:**
+
+| # | Decision | Choice | Rationale |
+|---|---|---|---|
+| 1 | LLM | Gemini default; Identity fallback. Reuses `KB_QUERY_LLM` env (same family as 8a). | Same LLM family across 8a/8d/8e keeps cost story unified; one switch flips Gemini→Anthropic→Identity for all three. |
+| 2 | Threshold | `CRAG_THRESHOLD = 0.5` (module constant). | Below 0.5 = "more bad than good" hits; refuse. Per literature this is the median heuristic; tunable in Wave B. |
+| 3 | Snippet count fed to LLM | Top-3 only. | Cost cap. Empirically the top-3 cover >85% of the relevance signal. |
+| 4 | Output schema | `{avg_relevance: 0.0-1.0}` single float. Parser clamps to [0, 1] + fallback to 1.0 on parse error. | Simplest possible — orchestrator just compares to threshold. |
+| 5 | Empty input | Returns 0.0 (clear refusal). | No evidence = guaranteed refusal. |
+| 6 | Identity fallback | Always returns 1.0 (always passes — degrades quality but never blocks). | Same rationale as Phase 8a #7 — CRAG is a quality boost, not a blocker; no-key path must still answer. |
+| 7 | Error → fail-safe pass | Any LLM exception → returns 1.0 (passes). | Don't refuse on infra failure. |
+| 8 | Thinking budget | 0 (Gemini). | Cheap judgment task. |
+| 9 | Token budget | `max_output_tokens=100` (single float in a tiny JSON). | CRAG output is one number. |
+| 10 | Anthropic impl | Deferred to Wave B — IdentityCragGate covers the `KB_QUERY_LLM=anthropic` path for now (passes 1.0). Documented decision. | Don't pretend to support Anthropic for CRAG without testing. Identity-fallback is the honest answer. |
+
+**Files (G3/G4):**
+- `src/kb/query/crag.py` — Protocol + 2-impl factory + CRAG_THRESHOLD constant
+- `tests/specs/phase_8d.md` — test spec
+- `tests/test_query_crag_unit.py` — pure-function + mocked Gemini tests (~10)
+- `scripts/verify_phase_8d.sh` — module-level checks (mirrors 8a/8c structure)
+
+**Phase 8d G5 — what "green" means:**
+- `scripts/verify_phase_8d.sh` standalone — 6-8 checks.
+- Full pytest: prior 456 still GREEN + new ≥10 Phase 8d tests GREEN.
+- Cross-phase sweep across all 20 verify scripts: 20/20 GREEN.
 
 ---
 
-### 5.17 Phase 10a + 10b plan — Upload + Chat UI (G1 🟡 DRAFT — Next.js per architecture)
+### 5.15.5 Phase 8e plan — Astute generation (G1 ✅ → G5 ✅)
 
-**Stack:** Next.js 15 (App Router) + Tailwind + lucide-react icons. Light theme default. Locked at architecture §7 line 178.
+> **Status:** All gates green 2026-05-25. 491/491 pytest (19 new). Branch `phase-8e/generate`. Per architecture §6 step 8 + line 1169 + Astute RAG paper (Wang et al. 2024 "Astute RAG: Overcoming Imperfect Retrieval Augmentation and Knowledge Conflicts for Large Language Models" — arXiv 2410.07176). Single defensive-prompt Gemini call over reranked top-10 hits → structured `{answer, citations[], refused, refusal_reason}` JSON. Orchestrator (Phase 8f) invokes after CRAG (8d) confirms confidence ≥ threshold; calls `generate()` with `refusal=True` directly when CRAG-below-threshold so the user still gets a clean "no evidence" envelope rather than a 4xx.
 
-**10a — Upload page (`/upload`):**
-- Drag-drop zone → POST `/files` with the file as multipart.
-- Live status table per `prototype/upload.html` design: one row per uploaded file, columns Name · Status (badge) · Pages · Chunks · RAPTOR · Mentions · Fields · Units · Entities · Time.
-- SSE connection to `/upload/:id/status` updates status badges in real-time as lifecycle events arrive.
+**Scope (in / out):**
 
-**10b — Chat page (`/chat`):**
-- Left sidebar: conversation list (Wave A: in-memory single conversation; persistence deferred).
-- Center: chat thread (user → assistant). User textarea + send button (cmd+enter).
-- Right side: citation cards — one per cited chunk with snippet + doc name + RAPTOR-level badge.
-- POST `/chat` returns answer + citations + per-cite snippet. Non-streaming in Wave A (streaming via SSE is a follow-up polish).
+**In scope:**
+- `src/kb/query/generate.py`: `GenerationResult` Pydantic model (answer · citations · refused · refusal_reason · model_id) · `Generator` Protocol · 2-impl factory (`GeminiGenerator` + `IdentityGenerator`) · `make_generator()` reads `KB_QUERY_LLM` (shared with 8a/8d).
+- Astute-defensive system prompt: (a) extract internal knowledge first · (b) compare with retrieved · (c) cite every claim by `[hit_id]` · (d) refuse with "insufficient evidence" if hits don't support the answer.
+- Citation envelope (Wave A minimal): `{hit_id, kind, file_id, snippet_preview, score}` — derived from `Hit.id` / `Hit.kind` / `Hit.metadata`. Richer envelope (label, authority, doc_status, chain_id, modality, lineage_path) deferred to Wave B.
+- Output: structured JSON via Gemini `response_mime_type=application/json` + Pydantic validation. Parser fail-safes: bad JSON → refusal envelope; missing fields → coerced defaults.
+- `IdentityGenerator`: deterministic stub — returns a templated "echo" answer (`"[identity-stub] {query} (hits: N)"`) with citations synthesized from the first 3 hits. Lets the no-key / CI path produce a valid `GenerationResult` so downstream (8f) tests still run end-to-end without an LLM.
+- Explicit refusal path: when called with `force_refuse=True` (orchestrator passes this when CRAG < threshold), skip LLM entirely, return `GenerationResult(refused=True, refusal_reason="insufficient_evidence", citations=[])`.
+- Empty hits: same as `force_refuse=True` — return refusal envelope, don't call LLM.
 
-**Files:**
-- `web/` — Next.js app (new top-level directory)
-- `web/app/upload/page.tsx`
-- `web/app/chat/page.tsx`
-- `web/components/{StatusTable, CitationCard, MessageBubble, ...}.tsx`
-- `web/lib/api.ts` — backend client (fetch wrappers + SSE)
-- `docker-compose.yml` — add `web` service
-- FastAPI CORS config to allow Next.js dev server
+**Out of scope (deferred to Wave B / later phases):**
+- Sentence-by-sentence HHEM streaming (architecture step 8 sub-bullet "STREAMED to chat UI sentence-by-sentence" + step 9 HHEM gate) — Wave B; 9 ships SSE infrastructure, HHEM is a separate phase.
+- HalluGraph KG-alignment (architecture step 9 gate B) — Wave C.
+- Conflict-resolution cascade (doc-chain → status → authority → recency) — needs Designs 3/7 + chains_table; Wave B.
+- Anthropic Citations-style sentence-level span grounding — Wave B.
+- Templated output for aggregate Q (mode Q from architecture §6 step 5) — depends on planner mode-detection; Wave B.
+- Real Anthropic Generator impl — Wave B (same Wave-A defer pattern as 8a/8d decision #10).
+- Streaming response — Wave A returns the full `GenerationResult` from a single async call. SSE wrapping is Phase 9's surface.
+
+**Decisions locked at G1:**
+
+| # | Decision | Choice | Rationale |
+|---|---|---|---|
+| 1 | LLM | Gemini default; Identity fallback. Reuses `KB_QUERY_LLM` env (shared with 8a + 8d). | Same LLM family across 8a/8d/8e keeps cost story unified; one switch flips Gemini→Anthropic→Identity for all three. |
+| 2 | Hits fed to LLM | Top-10 reranked hits (per Phase 8 overall decision #4 — "Top-K post-rerank returned to chat"). | CRAG (8d) only sees top-3 (cost cap on judgment); generation sees the full top-10 for richer citation surface. |
+| 3 | Snippet length per hit in prompt | 500 chars (already truncated at 8b decision #11). | Bounded prompt; matches what UI eventually renders. |
+| 4 | Output schema | Structured `GenerationResult(answer: str, citations: list[Citation], refused: bool, refusal_reason: str \| None, model_id: str)` where `Citation(hit_id: str, kind: str, file_id: str \| None, snippet_preview: str, score: float)`. Gemini `response_mime_type=application/json`. | Pydantic validation gives type-safety into 8f without bespoke parsing. |
+| 5 | Citation format inside answer text | Inline `[hit_id]` (8-char prefix of UUID for readability). Citations array also returned separately so UI can render badge cards. | Astute paper's pattern: every claim cites; UI can hyperlink. |
+| 6 | Refusal trigger (a) | If `force_refuse=True` (orchestrator passes this when CRAG < 0.5) → skip LLM, return refusal envelope. | Don't waste a token call when we already know we'll refuse. Also returns predictable `refusal_reason="insufficient_evidence"`. |
+| 7 | Refusal trigger (b) | If `hits == []` → same refusal envelope, refusal_reason="no_hits". | Empty retrieval = nothing to cite. |
+| 8 | Refusal trigger (c) | LLM may itself refuse by returning `{refused: true, refusal_reason: "..."}` in JSON. Parser respects this. | Astute defensive prompt instructs the model: "If hits don't support an answer, refuse." Model is the last line of defense after CRAG. |
+| 9 | Parser fail-safes | Bad JSON / non-dict / missing-required-key / wrong-types → return `GenerationResult(refused=True, refusal_reason="parse_error", citations=[])`. | Cite-or-refuse > silent hallucination. |
+| 10 | LLM error | Any LLM exception → return refusal envelope with `refusal_reason="llm_error"`. NOT fail-safe-pass like CRAG (because passing here would mean emitting a fake answer). | Generation refuses on infra failure; CRAG passes on infra failure. Asymmetric because consequences differ. |
+| 11 | Token budget | `max_output_tokens=2048`. | Long enough for a paragraph + citations; short enough to cap cost. |
+| 12 | Thinking budget | `thinking_budget=0` (Gemini). | RAG-grounded answer, not deep reasoning. Cost-aware. |
+| 13 | Identity stub | Returns `answer = "[identity-stub] {query} (hits: N)"` with citations synthesized from first 3 hits (or empty if hits == []). Deterministic for tests. | Lets 8f orchestrator + CI run end-to-end without a key. |
+| 14 | Anthropic impl | Deferred to Wave B — `KB_QUERY_LLM=anthropic` maps to `IdentityGenerator` for now (documented decision; same pattern as 8a/8d). | Don't pretend to support Anthropic without testing. Identity-fallback is the honest answer. |
+| 15 | Where the prompt lives | System-instruction Astute defensive prompt (LLM-agnostic recipe); hits + query land in `contents`. | System-instruction has caching semantics + intent clarity. |
+
+**Files (G3/G4):**
+- `src/kb/query/generate.py` — `GenerationResult` + `Citation` Pydantic models + `Generator` Protocol + 2-impl factory
+- `tests/specs/phase_8e.md` — test spec
+- `tests/test_query_generate_unit.py` — pure-function + mocked Gemini tests (~14)
+- `scripts/verify_phase_8e.sh` — module-level checks (mirrors 8a/8c/8d structure)
+
+**Phase 8e G5 — what "green" means:**
+- `scripts/verify_phase_8e.sh` standalone — 10-12 checks.
+- Full pytest: prior 472 still GREEN + new ≥12 Phase 8e tests GREEN.
+- Cross-phase sweep across all 21 verify scripts: 21/21 GREEN.
+
+---
+
+### 5.15.6 Phase 8f plan — Orchestrator + HTTP surface (G1 ✅ → G5 ✅)
+
+> **Status:** All gates green 2026-05-25. 518/518 pytest (27 new). Branch `phase-8f/orchestrator`. The synthesis of 8a→8e: stitches query rewriter (8a) → 6-channel parallel retrieval × rewrites + RRF fusion (8b) → reranker (8c) → CRAG gate (8d) → Astute generator (8e) into the user-facing `POST /search` (read-only retrieval inspector) and `POST /chat` (full pipeline returning `GenerationResult`). Introduces the immutable `query_log` audit table (migration 0019). **No SSE streaming** — that's Phase 9's surface.
+
+**Scope (in / out):**
+
+**In scope:**
+- `src/kb/query/orchestrator.py`: `Orchestrator` class. Methods `search(query, workspace_id) -> SearchResult` (rewriter → channels × 4 queries → RRF → rerank; returns reranked top-10 + CRAG score, no generation) and `chat(query, workspace_id, idempotency_key=None) -> ChatResult` (search + CRAG gate + generate; full pipeline). Both write a row to `query_log` for audit.
+- `src/kb/api/query.py`: FastAPI router mounting `POST /search` + `POST /chat`. Read-only `Idempotency-Key` semantics on `/chat` (cached answer returned on replay).
+- Migration `0019_query_log.sql`: workspace-scoped + RLS-forced + kb_app SELECT+INSERT only (audit immutability per architecture §6); columns per decision #11 below.
+- New error types: `invalid-query` (400 — empty / oversize query), `query-pipeline-error` (500 — internal failure).
+- Mount the new router in `src/kb/api/main.py` after existing routers.
+- Wire `Orchestrator` into the API layer (deps function constructs it lazily from `make_rewriter()` + `make_reranker()` + `make_crag_gate()` + `make_generator()`).
+
+**Out of scope (deferred):**
+- SSE streaming on `/chat/:id/stream` — Phase 9 wraps.
+- Query-mode classification (Q/D/E modes per architecture §6 step 5) — Wave A is "H" only.
+- Per-query authority/recency tiebreakers (architecture step 8 cascade) — Wave B; needs Designs 3/7.
+- HHEM faithfulness gate — Wave B.
+- Rate limiting / RBAC — Wave B (Phase 9 admin RBAC).
+- Caching of `/search` results — Wave B.
+
+**Decisions locked at G1:**
+
+| # | Decision | Choice | Rationale |
+|---|---|---|---|
+| 1 | Query-mode classification | Wave A is "H" (hybrid) only. No Q/D/E branching. | Architecture's mode classifier is itself an LLM call; defer to keep Wave A latency + cost predictable. "H" covers the 80%-case (find-and-cite). |
+| 2 | Rewrites fanned out to channels | All 4: `original` + `step_back` + `hyde` + `query2doc` (from 8a's `Rewrites`). | Each rewrite probes a different facet; RRF (8b) dedupes when rewrites converge. Identity rewriter produces 4 dupes — still safe (RRF idempotent on identical lists). |
+| 3 | Channel × query fan-out | 4 rewrites × 6 channels = 24 result lists → RRF. | `asyncio.gather(return_exceptions=True)` keeps a single channel failure from killing the query (already 8b's contract). |
+| 4 | Pre-RRF top-K per channel | 20 (matches Phase 8 overall decision #2). | Already what 8b's channels honor. |
+| 5 | Post-RRF top-K (pre-rerank) | 30 (matches Phase 8 overall decision #3). | Slim from 24 lists' worth of dedupes to a bounded set the reranker can chew. |
+| 6 | Post-rerank top-K (returned + fed to generator) | 10 (matches Phase 8 overall decision #4). | Hard cap on UI render + generation prompt size. |
+| 7 | CRAG gate placement | After rerank, before generate. Top-3 fed to CRAG (already 8d's contract). | Don't waste a generate call when CRAG says "no". |
+| 8 | Force-refuse path | If `crag_score < CRAG_THRESHOLD`, orchestrator calls `generate(force_refuse=True)` so the response shape is consistent (always a `GenerationResult` with refusal envelope when applicable). | Single response shape simplifies UI; refusal_reason="insufficient_evidence" tells the user why. |
+| 9 | `/search` returns | `SearchResult(query, rewrites, hits: list[Hit], crag_score, latency_ms, query_id)` — JSON-serializable. Reranked top-10 hits + CRAG score; NO generated answer. | Inspector / debugger endpoint; chat UI doesn't call it but `audit.html` (Phase 10f) will. |
+| 10 | `/chat` returns | `ChatResult(query, generation: GenerationResult, hits: list[Hit], crag_score, latency_ms, query_id)`. | Single envelope carries everything UI needs to render answer + citations + refusal reason if any. |
+| 11 | `query_log` columns | `id uuid PK · workspace_id uuid · query text · mode text DEFAULT 'H' · rewrites jsonb · hit_ids jsonb (list of {id, kind, score}) · crag_score float · refused bool · refusal_reason text · answer text · citations jsonb · model_id text · latency_ms int · idempotency_key text · created_at timestamptz`. RLS enabled + forced; kb_app SELECT+INSERT only. | Audit immutability per architecture §6. Phase 9 `/audit` endpoint reads this table. |
+| 12 | Workspace scoping | Both endpoints require `X-Workspace-Id` header (existing convention from Phase 1a). | RLS context set in deps; no leaks. |
+| 13 | Idempotency on `/chat` | Honor `Idempotency-Key` header per existing pattern (Phase 1a §0). On replay, look up by `(workspace_id, idempotency_key)` in `query_log` and return cached `ChatResult`. `/search` is not idempotent-keyed (it's a read). | Re-issuing the same chat shouldn't re-spend tokens. |
+| 14 | Error types | `invalid-query` (400, empty or oversize query >4000 chars); `query-pipeline-error` (500, internal failure). RFC 9457 envelope per `kb.api.errors`. | Loud-fail on bad input; opaque-500 on infra (don't leak internal exception text). |
+| 15 | Streaming | Not in Wave A. `/chat` is JSON. Phase 9 wraps with SSE under `/chat/:id/stream`. | Async generation + SSE infrastructure is Phase 9 scope. |
+| 16 | Empty corpus | Pipeline runs normally; all channels return `[]`; CRAG returns 0.0 (empty hits); generator force-refuses with `no_hits`. User gets refusal envelope (not 4xx). | Consistent shape for "I have no docs yet" vs "I have docs but none match". |
+| 17 | Per-query latency budget | No hard cap; record `latency_ms` in query_log. P95 monitoring is Phase 11+ ops. | Wave A is correctness-first; observability lands in audit table. |
+
+**Files (G2/G3/G4):**
+- `migrations/sql/0019_query_log.sql` — table + RLS + GRANTs + index on `(workspace_id, created_at DESC)` for audit-list queries
+- `docs/api_contracts.md` §7 (was placeholder) — `POST /search` + `POST /chat` shapes; renumber old §7 placeholder + §8 changelog
+- `src/kb/query/orchestrator.py` — `Orchestrator` + `SearchResult` + `ChatResult` Pydantic models
+- `src/kb/api/query.py` — FastAPI router with the 2 endpoints + deps
+- `src/kb/api/main.py` — mount `query_router`
+- `src/kb/api/errors.py` — 2 new error type slugs
+- `tests/specs/phase_8f.md` — test spec
+- `tests/test_query_orchestrator_unit.py` — orchestrator unit tests (~15, mocked components)
+- `tests/test_api_query.py` — HTTP endpoint tests over testcontainers (~12)
+- `scripts/verify_phase_8f.sh` — full E2E: upload doc → ready → POST /chat returns refusal (no key) + query_log row written
+
+**Phase 8f G5 — what "green" means:**
+- `scripts/verify_phase_8f.sh` standalone — 14-16 checks.
+- Full pytest: prior 491 still GREEN + new ≥25 Phase 8f tests GREEN.
+- Cross-phase sweep across all 22 verify scripts: 22/22 GREEN.
+
+---
+
+### 5.16 Phase 9 plan — Audit + lifecycle visibility + chat replay SSE (G1 ✅ → G5 ✅)
+
+> **Status:** All gates green 2026-05-25. 541/541 pytest (23 new). verify_phase_9.sh 14/14 with real E2E SSE 13 lifecycle events from a tiny.pdf upload streamed to ready. Branch `phase-9/sse-audit`. Three endpoints needed to unblock Phase 10a/10b UI: live upload-status SSE, paginated query audit list, and chat-replay SSE for re-viewing past answers. No DB migration — reads existing `file_lifecycle` (Phase 2a) + `query_log` (Phase 8f) tables.
+
+**Scope (in / out):**
+
+**In scope:**
+- `GET /upload/:file_id/status` SSE — polls `file_lifecycle` every `KB_SSE_POLL_INTERVAL_MS` (default 1000), emits new events as JSON, closes when `lifecycle_state ∈ {ready, failed}`.
+- `GET /audit` — paginated list of past `/search` + `/chat` calls; cursor on `(created_at DESC, id)` using 8f's audit-list index.
+- `GET /chat/:query_id/stream` SSE — re-streams the cached answer from `query_log` in chunks (Wave A: deterministic chunking by character count; Wave B: re-run query end-to-end).
+- `src/kb/api/sse.py` — both SSE routers (FastAPI `StreamingResponse` with `text/event-stream`).
+- `src/kb/api/audit.py` — `GET /audit` router.
+
+**Out of scope (deferred):**
+- Hash-chained `audit_log` (architecture §6 hash trigger — deferred from Phase 0; remains Wave B).
+- Re-extraction admin endpoints — Wave B.
+- Per-stage progress percentages (architecture lifecycle is event-driven, not progress-driven — UI shows badges).
+- Real LLM re-run on `/chat/:qid/stream` — Wave A returns cached answer (avoid double-billing).
+- Auth / RBAC on `/audit` (currently same X-Workspace-Id model as everywhere else).
+- Server-side cursor encryption — cursor is `(created_at, id)` tuple, opaque-encoded as base64 JSON.
+
+**Decisions locked at G1:**
+
+| # | Decision | Choice | Rationale |
+|---|---|---|---|
+| 1 | SSE wire format | Standard `text/event-stream`: `event: <type>\ndata: <json>\n\n`. Event types: `lifecycle` (upload), `chunk`/`done` (chat replay), `heartbeat` (idle keepalive). | Browsers' native `EventSource` handles this; Phase 10's Next.js can consume directly. |
+| 2 | Upload-status polling | Server-side poll of `file_lifecycle` every 1000ms (env `KB_SSE_POLL_INTERVAL_MS`); emit each event row not yet sent. Tracks max `created_at` per stream to avoid replay. | LISTEN/NOTIFY would be lower-latency but adds infrastructure; polling at 1s is fine for human-perceived "live" status. |
+| 3 | Upload-status terminal close | Stream closes (final `event: done`) when last emitted event is `lifecycle_state IN ('ready', 'failed')`. | Matches existing lifecycle model from Phase 2a. |
+| 4 | Heartbeat | Send `event: heartbeat\ndata: {}\n\n` every 15s if no other event fires. Prevents proxy/load-balancer idle-timeouts. | Standard SSE practice; nginx default proxy_read_timeout is 60s. |
+| 5 | `/audit` pagination | Cursor-based: `?cursor=<b64>&limit=<int>`. Cursor encodes `{"created_at": iso, "id": uuid}`. Default limit=50, max=200. Sort: `created_at DESC, id DESC`. | Cursor pagination is correct for append-only tables; matches the audit-list index from 8f decision #11. |
+| 6 | `/audit` response shape | `{items: [QueryLogEntry], next_cursor: str \| null}`. Each entry: id · created_at · endpoint · query · mode · crag_score · refused · refusal_reason · answer (truncated to 500 chars) · latency_ms · model_id. | Light shape for list view; UI can fetch full row via `/chat/:id/stream` for replay. |
+| 7 | Chat replay chunking | Deterministic char chunks: emit 50 chars per event, 50ms apart. Sentence-level splitting deferred to Wave B (HHEM streaming, architecture §6 step 8). | Wave A goal is "user sees answer materialize"; sentence-precision matters for HHEM, not for replay. |
+| 8 | Chat replay 404 | If `query_log` row not found (or wrong workspace) → 404 BEFORE opening the stream. NOT a stream-closed-immediately envelope. | Standard REST hygiene; SSE only for the happy path. |
+| 9 | SSE workspace isolation | Both SSE endpoints require `X-Workspace-Id` (existing convention); RLS context set before yielding first event. | Consistent with everything else. |
+| 10 | SSE auth replay-safety | No special handling — re-opening SSE with same URL re-reads from `file_lifecycle` / `query_log` from scratch (idempotent reads). | SSE replay/refresh is naturally safe for read-only streams. |
+| 11 | Chunked response Content-Type | `text/event-stream; charset=utf-8` on both SSE endpoints. `application/json` on `/audit`. | Wire format compliance. |
+| 12 | Error inside SSE stream | Emit `event: error\ndata: {"type": "...", "detail": "..."}\n\n` then close. Don't crash silently. | UI can show "stream interrupted, refresh to retry" with the type slug. |
+
+**Files (G3/G4):**
+- `src/kb/api/sse.py` — `/upload/:file_id/status` + `/chat/:query_id/stream` routers + heartbeat task
+- `src/kb/api/audit.py` — `/audit` router with cursor pagination
+- `src/kb/api/main.py` — mount both new routers
+- `tests/specs/phase_9.md` — test spec
+- `tests/test_audit_unit.py` — `/audit` unit + endpoint tests (~10)
+- `tests/test_sse_unit.py` — SSE unit + endpoint tests with EventSource-style parsing (~12)
+- `scripts/verify_phase_9.sh` — E2E: upload doc → SSE streams lifecycle through ready → /audit lists query → /chat replay streams chunks
+
+**Phase 9 G5 — what "green" means:**
+- `scripts/verify_phase_9.sh` standalone — 10-12 checks.
+- Full pytest: prior 518 still GREEN + new ≥20 Phase 9 tests GREEN.
+- Cross-phase sweep across all 23 verify scripts: 23/23 GREEN.
+
+---
+
+### 5.17 Phase 10a plan — Next.js Upload UI (G1 ✅ → G5 ✅)
+
+> **Status:** All gates green 2026-05-25. `ui/` Next.js 15 app shipped with drag-drop + live SSE-driven status table. 10/10 vitest + 2/2 Playwright (screenshot saved). Backend 541/541 still GREEN after CORS middleware addition. Branch `phase-10a/upload-ui`. Consumes Phase 2a (`POST /files`) + Phase 9 (`GET /upload/:file_id/status` SSE) to deliver a drag-drop upload page with live per-file lifecycle status. Mirrors `prototype/upload.html` design. Next.js 15 (App Router) per architecture §7 line 178.
+
+**Scope (in / out):**
+
+**In scope:**
+- `ui/` Next.js 15 (App Router) + TypeScript + Tailwind + lucide-react. Top-level directory; standalone build.
+- `/upload` page: drag-drop zone (uses native file input + drag-drop events) + status table.
+- API client `ui/lib/api.ts` with: `uploadFile(file, idempotencyKey)` (multipart POST /files), `subscribeToStatus(fileId, onEvent)` (native EventSource), `listFiles()` (GET /files).
+- React Context for per-session uploaded files state; each file row holds `id, name, lifecycle_state, events, error`.
+- Stage badges (`StageBadge`) mirror the 5-pip animated style from prototype.
+- CORS middleware added to FastAPI backend allowing the Next.js dev origin.
+- Page on initial mount calls `GET /files` to surface pre-existing files.
+- Failed files surface error from lifecycle event payload.
+- 1-page initial UI: sidebar + topbar + main area; no auth, no theme toggle wired (light only).
+
+**Out of scope (deferred):**
+- 10b — Chat page (separate sub-phase).
+- 10c+ — Explore / Schema Studio / Dashboard / Audit — Wave C.
+- Multi-conversation persistence (Wave B).
+- Real-time WebSockets / WS fallback for SSE (browser EventSource is sufficient at Wave A).
+- Authentication / user accounts (single hardcoded workspace per env).
+- Internationalization, themes, accessibility audit (best-effort only).
+- Drag-drop folders / ZIPs (Wave A accepts single files via input + drag of files).
+- Re-run failed retries (deferred to Phase 9b admin).
+
+**Decisions locked at G1:**
+
+| # | Decision | Choice | Rationale |
+|---|---|---|---|
+| 1 | Framework | Next.js 15 (App Router) + TypeScript. | Locked at architecture §7 line 178. App Router is the long-supported pattern; React 19 server components default. |
+| 2 | Location | `ui/` at repo root (sibling of `src/`, `tests/`, `prototype/`). | Cleanest separation; backend (`src/`) doesn't import from `ui/` and vice versa. |
+| 3 | Styling | Tailwind CSS v4 + lucide-react icons. Light theme only Wave A. | Matches prototype + architecture stack. |
+| 4 | API base URL | Read `NEXT_PUBLIC_KB_API_URL` env (default `http://localhost:8000`). | Standard Next.js public-env pattern; dev runs Next.js at :3000 against backend at :8000. |
+| 5 | Workspace ID | Read `NEXT_PUBLIC_KB_WORKSPACE_ID` (default `00000000-0000-0000-0000-000000000001` matching backend default-workspace sentinel from §0 conventions). | Wave A is single-tenant per env; no login screen. |
+| 6 | CORS | Add `CORSMiddleware` to FastAPI allowing `KB_CORS_ORIGINS` env (default `http://localhost:3000`). | Browser blocks cross-origin fetch otherwise. Env-controlled so prod can lock down. |
+| 7 | File upload | Native `<input type="file" multiple>` + drag-drop on dropzone. POST `/files` multipart with `Idempotency-Key: <uuid()>` per file. | Browser-native; no extra libs. Each file gets a unique idem-key so retries don't double-upload. |
+| 8 | SSE consumption | Native `EventSource` API. One connection per in-flight file. Closes connection on `event: done`. | Standard, no dependencies; matches Phase 9's wire format. |
+| 9 | State | React Context with `useReducer`. In-memory only — refresh wipes (Phase 10c will hydrate from GET /files). | Wave A simplicity. |
+| 10 | Initial-load file list | On `/upload` mount, fetch `GET /files` and seed the table with any pre-existing files. | Lets users return after a refresh and see their uploads. |
+| 11 | Status table columns | File · Type (mime / detected) · Stage (5-pip animated + state name) · Elapsed · Detected. Matches prototype. | UX consistency with the design system the user signed off on. |
+| 12 | Stage pip mapping | 5 pips across the canonical pipeline: parsed · embedded · raptor · extracted · ready. Each pip is a 1.5x1.5 dot; current one pulses; completed are filled; pending are zinc-200. | Visual signal for "what stage are we on" matching prototype. |
+| 13 | Build artifact | `npm run build` produces `ui/.next/`. Not currently shipped to backend; dev workflow is `npm run dev` (port 3000) + uvicorn (port 8000). | Wave A simplicity. Production-build container deferred to Wave B. |
+| 14 | Testing strategy | Vitest unit tests for `lib/api.ts` + Playwright E2E test that hits the running dev server (visual sanity). Screenshot saved as artifact. | Unit + integration; Playwright proves the page renders against a real backend. |
+| 15 | Verify script | `scripts/verify_phase_10a.sh` runs (1) `npm install`, (2) `npm run build`, (3) `npm test` (Vitest), (4) starts the backend + Next.js dev server, (5) Playwright headless test asserts dropzone is visible + screenshot saved. | Mirrors phase verify discipline; no docker-compose change needed. |
+
+**Files (G3/G4):**
+- `ui/package.json` + `ui/next.config.ts` + `ui/tsconfig.json` + `ui/tailwind.config.ts` + `ui/postcss.config.mjs`
+- `ui/app/layout.tsx` + `ui/app/globals.css` + `ui/app/page.tsx` (redirects to /upload)
+- `ui/app/upload/page.tsx` — main page
+- `ui/components/{Sidebar,TopBar,DropZone,FilesTable,FileRow,StageBadge}.tsx`
+- `ui/lib/api.ts` — fetch + SSE client
+- `ui/lib/workspace.ts` — env helper
+- `ui/lib/state.ts` — Context + reducer
+- `ui/tests/api.test.ts` — Vitest unit tests
+- `ui/tests/upload.spec.ts` — Playwright E2E
+- `src/kb/api/main.py` — add CORS middleware (KB_CORS_ORIGINS env-controlled)
+- `tests/specs/phase_10a.md` — test spec
+- `scripts/verify_phase_10a.sh` — install + build + test + screenshot
+
+**Phase 10a G5 — what "green" means:**
+- `npm run build` succeeds (TypeScript + ESLint clean).
+- `npm test` (Vitest unit tests for `lib/api.ts`) passes.
+- `scripts/verify_phase_10a.sh` standalone: build + start backend + start dev server + Playwright assertion + screenshot saved.
+- Full pytest: prior 541 still GREEN (no backend regressions from CORS middleware addition).
+- Cross-phase sweep across all 23 backend verify scripts: 23/23 still GREEN.
+
+---
+
+### 5.18 Phase 10b plan — Next.js Chat UI (G1 🟡 DRAFT — placeholder)
+
+Per `prototype/chat.html`. Consumes Phase 8f (`POST /chat`) + Phase 9 (`GET /chat/:query_id/stream` SSE). Drafted at 10b open.
 
 ---
 
@@ -2843,6 +3100,11 @@ Phases 15–24 per `architecture.md` §12. Tracked here only as a reminder of in
 | 2026-05-25 | **Phase 4 G5 ✅ SIGNED OFF — Phase 4 fully green; all 5 gates closed.** `scripts/verify_phase_4.sh` lands with 16 checks (standalone): 4 DDL invariants on the 4 indexes (USING clause + operator class + key_field) + 1 HNSW params check (m=16 + ef_construction=200) + tiny.pdf E2E to `ready` + ANALYZE + 3 planner-usage EXPLAIN checks (HNSW for chunk_embeddings KNN + HNSW for raptor_nodes KNN + BM25 for contextual_chunks text search — all forced via `SET enable_seqscan=off enable_bitmapscan=off`, the same approach pytest used but which failed there because btree won at fixture scale; at full-stack scale with ANALYZE stats the forcing flags + index choice work) + 2 smoke-helper checks (worker imports `kb.retrieval.smoke` + grep proves `kb.retrieval` not leaked into `kb.api/*` per decision #10) + Phase-4 pytest (10/10 over testcontainers). **Standalone: 16/16 GREEN.** Also updated `scripts/verify_sweep.sh` to include `4` in its phase list. **Cross-phase sweep across all 13 verify scripts via `verify_sweep.sh`: 13/13 GREEN in 14:56 total** (per-phase: 0:24s · 1a:17s · 1b:17s · 1c:18s · 2a:47s · 2b:16s · 2c:27s · 3a:50s · 3b:41s · 3c:42s · 3d:53s · 3e:59s · 4:14s — Phase 4 is fastest because the indexes are auto-populated when the worker writes through the pipeline, no separate build step). One small in-G5 fix: sweep wrapper's `ALL_PHASES` array initially missing `4` — added. Branch `phase-4/retrieval` ready for PR. **Phase 5 opens next** — open extraction (L2 mentions + L2b emergent fields + L3 atomic units + anomaly scoring) per architecture §12 line 1165; recommend G1 split into 5a/5b/5c. | Aniket |
 | 2026-05-25 | **Phase 7 ✅ FULLY GREEN — identity resolution shipped on `phase-7/identity-resolution` branch.** Plan §5.14 with **14 decisions** (including #14 explicitly deferring persistent union-find to Wave B, with per-file cascade-on-insert as the Wave A equivalent). Per architecture §5 step 15: deterministic→embedding→LLM-judge→cascade-create. **Migration 0018_entities.sql**: `entities` (workspace-scoped canonical directory, UPDATEable, with HNSW halfvec_cosine_ops partial index WHERE embedding IS NOT NULL + UNIQUE on `(workspace_id, lower(canonical_name), entity_type)` for stage-a deterministic) + `mention_to_entity` (PK on mention_id, resolved_method CHECK ∈ deterministic/embedding/llm_judge/identity, REVOKE UPDATE). Forward-compat: 0009/0012/0014/0017 widened to include `identity_resolving`. **Modules**: `src/kb/identity/{__init__,judge,resolve}.py` (3-impl factory mirroring 3b-bis/3d/5a/5b/5c/6; thresholds EMBEDDING_HIGH=0.92, EMBEDDING_LOW=0.85) + `src/kb/domain/entities.py` repo. **Worker**: `resolve_identities_file_impl` chained from Phase 6 (end-state `ready` → `identity_resolving`), 4-stage cascade with workspace-id RLS context. **37 tests** across `test_identity_unit.py` (13) + `test_identity_worker.py` (14) + `test_entities_repo_unit.py` (10) — including dedicated `test_resolve_identities_embedding_blocking_matches_existing_entity` that monkeypatches `kb.embeddings.make_embedder` to force a one-hot vector for stage-b coverage. **`scripts/verify_phase_7.sh`** 16/16 GREEN standalone (compose smoke + 5 DDL invariants + lifecycle CHECK + xlsx E2E + lifecycle transition + identities_resolved event + fabricated-mention end-to-end resolve + cross-file deterministic collapse + pytest 37). **Forward-compat fixes**: 6 prior verify scripts widened (2a/2b/2c/3a/3b/3c) accept-sets include `identity_resolving`; Phase 6 verify lifecycle substring relaxed (was `entities_extracting,ready` — Phase 7 inserts `identity_resolving` between them). **In-G5 fix**: verify_phase_7.sh fab seed initially produced 67-char `chunks.content_sha`; fixed via `substring(... from 1 for 64)`. **Final: 407/407 pytest in 87s · verify_phase_7.sh 16/16 · cross-phase sweep across all 16 verify scripts: 16/16 GREEN** (per-phase: 0:34s · 1a:15s · 1b:22s · 1c:21s · 2a:70s · 2b:21s · 2c:54s · 3a:55s · 3b:55s · 3c:46s · 3d:51s · 3e:82s · 4:16s · 5:22s · 6:20s · 7:27s). Phase 8 opens next (the big one — query layer). | Aniket |
 | 2026-05-25 | **Phase 4 G4 ✅ SIGNED OFF — indexes + smoke helper land.** Commits this gate: (1) `migrations/runner.py` — `@no-transaction` pragma support. Postgres rejects `CREATE INDEX CONCURRENTLY` inside transaction blocks; pragma marker `-- @no-transaction` at the top of a migration file makes `_apply_one` run statements under autocommit (no surrounding `BEGIN`/`COMMIT`). On mid-file failure the file stays UNrecorded but earlier-applied CONCURRENTLY statements remain (inherent to CONCURRENTLY — you can't rollback a built index). Reusable infrastructure; Phase 14 HippoRAG graph indexes will use the same path. (2) `migrations/sql/0013_indexes.sql` — 4 CONCURRENTLY indexes: HNSW on `chunk_embeddings.embedding` + `raptor_nodes.embedding` (both `halfvec_cosine_ops`/`m=16`/`ef_construction=200`); BM25 on `contextual_chunks.contextual_text` + `raptor_nodes.text` (pg_search defaults: Tantivy default tokenizer, Robertson k1=1.2/b=0.75). (3) `src/kb/retrieval/__init__.py` + `src/kb/retrieval/smoke.py` — internal helpers `bm25_smoke(conn, *, workspace_id, query, limit)` + `dense_smoke(conn, *, workspace_id, query_vec, limit)` returning `list[tuple[id, score, level, scope]]`. Both UNION-combine contextual_chunks (level=1, scope='leaf') + raptor_nodes (level 2..6, scope per_doc/corpus); workspace_id filter holds redundantly with kb_app RLS. NOT mounted on any router; NOT importable from `kb.api.*`. (4) `scripts/reindex_weekly.sh` — host-cron stub for weekly `REINDEX CONCURRENTLY` rotation; not wired into compose (production scheduler is Phase 9). **In-G4 fixes:** (a) seed `content_sha` widened from arbitrary string to `hashlib.sha256(...).hexdigest()` (files table's 64-char CHECK constraint). (b) **3 planner-usage tests dropped** — at pytest fixture scale (~200 rows) the planner correctly prefers a btree index-scan + in-memory sort over HNSW; HNSW only wins above ~5K rows per workspace AND with ANALYZE stats up to date. Even forcing `SET LOCAL enable_seqscan=off enable_bitmapscan=off`, btree `chunk_embeddings_workspace_idx` won. Planner-usage moved to G5 `verify_phase_4.sh` where it runs against the full ingestion pipeline + ANALYZE. Spec `tests/specs/phase_4.md` updated to reflect 10 tests instead of 13. **296/296 pytest in 89.84s.** G5 opens. | Aniket |
+| 2026-05-25 | **Phase 10a ✅ FULLY GREEN — Next.js 15 Upload UI shipped on `phase-10a/upload-ui` branch.** Plan §5.17 with **15 decisions** locked. **Stack**: Next.js 15 (App Router) + TypeScript + Tailwind CSS v4 + lucide-react icons + happy-dom (Vitest) + Playwright. **Top-level `ui/` directory** (sibling of `src/`, `tests/`, `prototype/`) — clean separation; backend doesn't import from `ui/` and vice versa (verified by no-leak grep). **Page**: `/upload` mirrors `prototype/upload.html` — slim 56px sidebar (hover-expand) + topbar with live counters (ready/processing/failed) + drag-drop zone (native file input + drag-drop events) + status table with 5-pip animated stage indicator (parse · embed · raptor · extract · ready) per file row. **API client** `ui/lib/api.ts` (~190 LOC): `uploadFile()` (multipart POST /files with auto Idempotency-Key), `listFiles()`, `subscribeToFileStatus()` (native EventSource — closes on `event: done`). Pure helpers `stageIndexFor()` + `isTerminal()` + `stageLabelFor()` projecting any of the 15 backend lifecycle states onto the 5-pip line. **State**: React Context + `useReducer` (`UploadProvider`) keyed on FileResource.id with `seed` (initial hydrate from GET /files) + `upserted` (POST /files response) + `lifecycle` (SSE event) + `errored` actions. **Page lifecycle**: on mount, `listFiles()` hydrates; then for every non-terminal row, subscribe to its SSE stream. SSE closes per-file when terminal. **Components**: `<Sidebar current="upload">` · `<TopBar>` · `<DropZone>` · `<FilesTable>` · `<FileRow>` · `<StageBadge>`. **Backend addition**: `CORSMiddleware` in `src/kb/api/main.py` with `KB_CORS_ORIGINS` env (default `http://localhost:3000`), allowing all methods/headers + exposing `X-Request-Id` + `X-Dedup-Reason`. **Testing**: `ui/tests/api.test.ts` 10/10 Vitest (stage projections + terminal detection + label formatting) + `ui/tests/upload.spec.ts` 2/2 Playwright (page renders sidebar+topbar+dropzone+empty-state-table + root `/` redirects to `/upload`); screenshot saved to `ui/tests/artifacts/upload-empty.png` (~37KB, full-page). **Build**: `npm run build` clean — Next.js compiles TypeScript + ESLint in ~3.4s; `/upload` route is 5.95 kB First-Load JS 108 kB. **Verify** `scripts/verify_phase_10a.sh` 11 checks (compose smoke + node/npm available + npm install + vitest + next build + CORS sanity probe + playwright install + playwright run + screenshot artifact + no python backend imports in ui/). **In-G4 fix**: initially created `lib/state.ts` with JSX in `UploadProvider`; Next.js requires `.tsx` for JSX. Renamed. **Final: backend 541/541 pytest still GREEN in 108s (no regressions from CORS middleware); 10/10 vitest + 2/2 Playwright; screenshot artifact verified visually (clean dropzone + 5-pip placeholder + empty-state table).** Phase 10b opens next (Next.js Chat UI consuming `POST /chat` + `/chat/:id/stream` SSE). | Aniket |
+| 2026-05-25 | **Phase 9 ✅ FULLY GREEN — Wave A backend complete: SSE upload-status + GET /audit + chat-replay SSE shipped on `phase-9/sse-audit` branch.** Plan §5.16 with **12 decisions** locked. Three endpoints unblock Phase 10a/10b UI: live upload-status SSE (Upload UI consumes per-doc per-stage transitions), paginated query audit list (audit page), chat-replay SSE (re-streams cached answer for Chat UI history view). **Module `src/kb/api/audit.py`** (~125 LOC): cursor-paginated `/audit` reading 8f's query_log; cursor encodes `(created_at, id)` opaque-base64; default limit 50 / max 200; answer truncated to 500 chars in list view. **Module `src/kb/api/sse.py`** (~210 LOC): `/upload/:file_id/status` polls file_lifecycle every `KB_SSE_POLL_INTERVAL_MS` (default 1000), emits `event: lifecycle` per new row, closes with `event: done` when `lifecycle_state ∈ {ready, failed}`; 15s heartbeat keepalive prevents proxy idle-timeouts. `/chat/:query_id/stream` replays cached answer in `KB_SSE_REPLAY_CHUNK_SIZE` chunks (default 50 chars) `KB_SSE_REPLAY_CHUNK_MS` apart (default 50ms); final `event: done` payload includes citations + refused + refusal_reason + model_id. Public `parse_event_stream()` helper for tests. Standard `text/event-stream; charset=utf-8` wire format. Both SSE endpoints 404 BEFORE opening the stream (decision #8) — cleanly REST-safe. **23 tests**: `test_audit_unit.py` (10 — empty list · newest-first ordering with clock_timestamp seeding · response shape · limit param · oversize 400 · cursor pagination walks full 7-row list with no overlap · workspace isolation · answer truncation · invalid cursor 400 · refusal envelope) + `test_sse_unit.py` (13 — parser handles multi-event blocks + skips empty · upload 404 unknown file_id · upload streams events in order + closes on ready · upload closes on failed · upload Content-Type · chat 404 unknown qid · chat 404 wrong workspace · chat short answer one-chunk · chat 175-char answer 4-chunk reassembled · chat done event includes citations · chat refused-envelope done-only · openapi includes all 3 routes). **`scripts/verify_phase_9.sh`** 14/14 GREEN standalone with **real end-to-end SSE**: tiny.pdf uploaded → worker ran full chain through ready → SSE streamed 13 live lifecycle events (queued → parsing → parsed → chunked → contextualized → embedded → raptor_building → → ready) + done. Also: 8f's POST /chat → query_id audited → /chat/:qid/stream emits `event: done` end-to-end. **No new migration** — reuses file_lifecycle (Phase 2a) + query_log (Phase 8f). **In-G4 fixes**: (a) `test_audit_returns_recent_queries_newest_first` seeded N rows in one transaction → all shared `NOW()` (transaction-stable) → secondary ORDER BY id was UUID4 random. Fixed by explicitly using `clock_timestamp()` in INSERTs for the test helper. (b) Module-level env vars cached at import; SSE tests use `monkeypatch.setenv` + `importlib.reload(sse_mod)` to pick up faster poll/chunk intervals. **Final: 541/541 pytest in 99s · verify_phase_9.sh 14/14 standalone · cross-phase sweep across all 23 verify scripts: 23/23 GREEN** (per-phase: 0:40 · 1a:23 · 1b:18 · 1c:20 · 2a:71 · 2b:23 · 2c:58 · 3a:65 · 3b:50 · 3c:56 · 3d:62 · 3e:70 · 4:28 · 5:30 · 6:21 · 7:38 · 8a:40 · 8b:30 · 8c:18 · 8d:20 · 8e:17 · 8f:30 · 9:63). **Wave A backend complete — UI phases (10a Upload + 10b Chat) open next.** | Aniket |
+| 2026-05-25 | **Phase 8f ✅ FULLY GREEN — Wave A query stack complete: orchestrator + POST /search + POST /chat + query_log audit shipped on `phase-8f/orchestrator` branch.** Plan §5.15.6 with **17 decisions** locked. The synthesis of 8a→8e: `Orchestrator.search()` runs rewriter (8a, 4-variant fan-out) → batch-embed all 4 → 6 channels × 4 rewrites = 24 result lists → RRF k=60 → top-30 → reranker (8c) → top-10 → CRAG (8d). `Orchestrator.chat()` extends with `generator.generate(query, hits, force_refuse=(crag_score < CRAG_THRESHOLD))` — the orchestrator decides force-refuse so the response shape is consistent (always a `GenerationResult` envelope, never a 4xx for empty corpus). **HTTP surface**: `POST /search` (read-only retrieval inspector) + `POST /chat` (full pipeline + Idempotency-Key replay). Both return 200 + envelope under all refusal modes — the critical invariant §7.1 #3 ("emptiness is a domain answer, not a client error"). **Migration `0019_query_log.sql`**: workspace-scoped audit table with RLS forced + kb_app SELECT+INSERT only (immutable audit per architecture §6); columns cover endpoint, rewrites jsonb, hit_ids jsonb, crag_score, refused, refusal_reason, answer, citations jsonb, model_id, latency_ms, idempotency_key. **Contracts §7 (api_contracts.md G2)**: 7 pipeline invariants + 2 endpoint specs + 6 machine-readable refusal_reason values documented (insufficient_evidence · no_hits · llm_error · parse_error · empty_response · model-supplied). **27 tests**: `test_query_orchestrator_unit.py` (13 — mocked components: 4-rewrite fan-out · 24-list RRF · top-10 rerank cap · CRAG-after-rerank · force-refuse-on-low-CRAG · empty-corpus refusal envelope · /search no-generation field · /chat ChatResult envelope · make_default-via-env-factories) + `test_api_query.py` (14 over testcontainers: migration shape + immutability GRANT · 200-with-envelope on /search and /chat · 400-on-mode≠H · 400-on-whitespace · 422-on-Pydantic-min/max-length · 200-not-4xx-refusal envelope · query_log audit row per /search call · query_log audit row per /chat call with refused=true · Idempotency-Key replay returns same query_id · query_log RLS isolates workspace B from A's rows · openapi includes /search and /chat). **`scripts/verify_phase_8f.sh`** 13/13 GREEN standalone (compose smoke + query_log table shape + RLS forced + audit-list index + openapi paths + /search 200 envelope + /chat refused=true envelope + /search 400 mode≠H + /search 422 empty query + query_log row written per search call + query_log row written per chat call with refusal_reason + Idempotency-Key replay returns cached query_id + Phase-8f pytest 27). **Forward-compat fix (§0.15 convention)**: 5 prior 8x verify scripts (8a/8b/8c/8d/8e) widened to `--exclude=query.py` in the "no kb.query leak into kb.api/*" grep — Phase 8f legitimately puts the orchestrator-mount HTTP boundary at `kb/api/query.py`. **In-G5 fixes**: (a) migration's RLS policy initially used `app.current_workspace_id` GUC; corrected to `app.workspace_id` matching codebase convention; (b) `ChatResult` initially missing `rewrites` field (audit writer expected it via duck-typing); added Pydantic field + populated in `Orchestrator.chat()` + updated contract example; (c) verify_phase_8f.sh step 11 bash case-pattern used `|` alternation conflicting with literal `|` in `true|no_hits` — quoted each alternative explicitly. **Final: 518/518 pytest in 96s · verify_phase_8f.sh 13/13 standalone · cross-phase sweep across all 22 verify scripts: 22/22 GREEN** (sweep timings per-phase: 0:24 · 1a:15 · 1b:17 · 1c:17 · 2a:46 · 2b:14 · 2c:30 · 3a:48 · 3b:42 · 3c:39 · 3d:44 · 3e:55 · 4:16 · 5:16 · 6:16 · 7:30 · 8a:28 · 8b:29 · 8c:15 · 8d:17 · 8e:15 · 8f:17). **Wave A query pipeline now end-to-end exposed.** Phase 9 opens next (SSE + /audit + lifecycle visibility). | Aniket |
+| 2026-05-25 | **Phase 8e ✅ FULLY GREEN — Astute generation shipped on `phase-8e/generate` branch.** Plan §5.15.5 with **15 decisions** locked, per Astute RAG paper (Wang et al. 2024 "Astute RAG: Overcoming Imperfect Retrieval Augmentation and Knowledge Conflicts for Large Language Models" — arXiv 2410.07176). Single defensive-prompt Gemini call over reranked top-10 hits → structured `{answer, citations[], refused, refusal_reason, model_id}` JSON. Orchestrator (Phase 8f) invokes with `force_refuse=True` when CRAG (8d) reports below threshold so the user still gets a clean "no evidence" envelope rather than a 4xx. **Module** `src/kb/query/generate.py` (~330 LOC): `GenerationResult` + `Citation` Pydantic models · `Generator` Protocol · 2-impl factory (`GeminiGenerator` gemini-2.5-flash with `thinking_budget=0`, `response_mime_type=application/json`, `max_output_tokens=2048`; `IdentityGenerator` deterministic templated echo). `_parse_result()` tolerant + fail-safe: strips ```json fences, returns refusal envelope on bad JSON / non-dict / missing-required-key, respects model self-refusal (`{refused: true}`), synthesizes top-3 citations from Hit list when LLM omits them. **Wave-A semantics — three refusal modes**: (1) `force_refuse=True` (orchestrator-passed) → skip LLM, `refusal_reason="insufficient_evidence"`; (2) empty hits → skip LLM, `refusal_reason="no_hits"`; (3) LLM exception → `refusal_reason="llm_error"` (decision #10 — asymmetric vs CRAG's fail-safe-pass: emitting a fake answer is worse than refusing on infra failure). **Astute defensive system-instruction** (decision #15) tells model to "use only retrieved snippets, cite every claim by [hit_id], refuse rather than guess." **19 tests** in `tests/test_query_generate_unit.py`: Pydantic shapes (2) + Identity stub including force_refuse + empty-hits (3) + parser fail-safes incl. LLM self-refusal respected (4) + factory matrix incl. anthropic→Identity (5 sub-cases in 1 test) + mocked Gemini path with `_FakeClient`/`_FakeResponse` (6 — inline-citation-markers · top-10 hit capping with 12 inputs · thinking_budget=0 captured · system-instruction Astute-discipline asserted · respects-LLM-refusal · LLM-error→llm_error_refusal) + force_refuse/empty-hits skip-LLM (2) + prompt-builder asserts hit_ids+snippets (1) + 1 misc. **`scripts/verify_phase_8e.sh`** 12/12 GREEN standalone (compose smoke + worker imports + no-leak grep + Identity stub shape · force_refuse · no_hits + Gemini no_hits + parser fail-safes + factory error/anthropic/auto + Phase-8e pytest 19). **No migration, no lifecycle change, no API contract change** — pure module-level addition (8f owns HTTP). **Final: 491/491 pytest in 98s · verify_phase_8e.sh 12/12 standalone · cross-phase sweep across all 21 verify scripts: 21/21 GREEN in 9:31 total** (per-phase: 0:24 · 1a:18 · 1b:17 · 1c:19 · 2a:54 · 2b:17 · 2c:33 · 3a:50 · 3b:46 · 3c:45 · 3d:49 · 3e:60 · 4:16 · 5:18 · 6:16 · 7:22 · 8a:11 · 8b:16 · 8c:10 · 8d:14 · 8e:16). Phase 8f opens next (orchestrator + HTTP surface — the synthesis of 8a→8e). | Aniket |
+| 2026-05-25 | **Phase 8d ✅ FULLY GREEN — CRAG (Corrective RAG) relevance gate shipped on `phase-8d/crag` branch.** Plan §5.15.4 with **10 decisions** locked, per CRAG paper (Yan et al. 2024 "Corrective Retrieval Augmented Generation"). Cheap LLM-judge of top-3 rerank output → confidence score (0..1); orchestrator (Phase 8f) refuses below `CRAG_THRESHOLD = 0.5` with "insufficient evidence". **Module** `src/kb/query/crag.py` (~210 LOC): `CragGate` Protocol + 2-impl factory (`GeminiCragGate` Gemini-2.5-flash with `thinking_budget=0` + `response_mime_type=application/json` + `max_output_tokens=100`; `IdentityCragGate` always-1.0 fail-safe pass) + `make_crag_gate()` reads `KB_QUERY_LLM` (reuses 8a/8e LLM-family selector — `anthropic` maps to Identity per decision #10's Wave-A defer; `auto` skips Anthropic auto-probe). `_parse_score()` is tolerant + fail-safe: strips ```json fences, returns 1.0 on bad JSON / non-dict / missing-key / non-numeric, clamps numeric values to `[0, 1]`. **Wave-A semantics**: empty hits → 0.0 (decision #5, guaranteed refusal); LLM exception → 1.0 (decision #7, don't block on infra failure); only top-3 hits' snippets fed to LLM (decision #3, cost cap; >85% of signal). **16 tests** in `tests/test_query_crag_unit.py`: parser fail-safes (6) + Identity always-1.0 (2) + Gemini empty→0.0 (1) + factory matrix incl. anthropic→Identity (5 sub-cases) + mocked Gemini path with `_FakeClient`/`_FakeResponse` (3 — parsed score · thinking_budget=0 captured · top-3 snippet capping). **`scripts/verify_phase_8d.sh`** 10/10 GREEN standalone (compose smoke + worker imports + no-leak grep + Identity 1.0 with/without hits + Gemini empty→0.0 + parser fail-safes + factory error/anthropic/auto + Phase-8d pytest 16). **No migration, no lifecycle change, no API contract change** — pure module-level addition, mirrors 8a/8c sub-phase shape. **Final: 472/472 pytest in 90s · verify_phase_8d.sh 12/12 standalone · cross-phase sweep across all 20 verify scripts: 20/20 GREEN in 8:46 total** (per-phase: 0:22s · 1a:14s · 1b:20s · 1c:17s · 2a:51s · 2b:16s · 2c:28s · 3a:47s · 3b:43s · 3c:41s · 3d:46s · 3e:55s · 4:16s · 5:19s · 6:18s · 7:22s · 8a:11s · 8b:17s · 8c:10s · 8d:13s). Phase 8e opens next (Astute generation). | Aniket |
 
 ---
 

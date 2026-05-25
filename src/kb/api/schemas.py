@@ -6,6 +6,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse, Response
+from pydantic import BaseModel, Field
 from starlette.requests import Request
 
 from kb.api.deps import current_workspace_id, kb_app_connection
@@ -30,6 +31,94 @@ from kb.domain.schemas import (
 )
 
 router = APIRouter(prefix="/schemas", tags=["schemas"])
+
+
+# ===========================================================================
+# B7 / WA-14 — Inferred fields (Schema Studio "Inferred" tab)
+# ===========================================================================
+
+
+class InferredFieldOut(BaseModel):
+    id: str
+    workspace_id: str
+    inferred_doc_type: str
+    canonical_name: str
+    description: str | None = None
+    value_type: str | None = None
+    n_docs_observed: int = 0
+    prevalence: float = 0.0
+    stability: float = 0.0
+    value_type_confidence: float = 0.0
+    is_promoted: bool = False
+    promoted_schema_field_id: str | None = None
+    created_at: str | None = None
+
+
+class InferredFieldsListResponse(BaseModel):
+    items: list[InferredFieldOut] = Field(default_factory=list)
+
+
+@router.get(
+    "/inferred-fields",
+    response_model=InferredFieldsListResponse,
+    summary="List inferred_schema_fields (Schema Studio 'Inferred' tab)",
+)
+async def get_inferred_fields(
+    workspace_id: Annotated[str, Depends(current_workspace_id)],
+    conn: Annotated[Connection, Depends(kb_app_connection)],
+    doc_type: str | None = Query(default=None, description="Filter by inferred_doc_type"),
+    only_promotable: bool = Query(
+        default=False,
+        description="Only return rows above auto-promotion thresholds "
+                    "(prevalence >= 0.8 AND stability >= 0.7) that are NOT yet promoted",
+    ),
+    limit: int = Query(default=200, ge=1, le=1000),
+) -> InferredFieldsListResponse:
+    clauses = ["workspace_id = %s"]
+    params: list = [workspace_id]
+    if doc_type is not None:
+        clauses.append("inferred_doc_type = %s")
+        params.append(doc_type)
+    if only_promotable:
+        clauses.append(
+            "is_promoted = false AND prevalence >= 0.8 AND stability >= 0.7"
+        )
+    where = " AND ".join(clauses)
+    params.append(limit)
+    cur = await conn.execute(
+        f"SELECT id::text, workspace_id::text, inferred_doc_type, "
+        f"       canonical_name, description, value_type, n_docs_observed, "
+        f"       prevalence, stability, value_type_confidence, "
+        f"       is_promoted, promoted_schema_field_id::text, created_at "
+        f"FROM inferred_schema_fields "
+        f"WHERE {where} "
+        f"ORDER BY prevalence DESC, stability DESC, n_docs_observed DESC "
+        f"LIMIT %s",
+        tuple(params),
+    )
+    rows = await cur.fetchall()
+    items = [
+        InferredFieldOut(
+            id=str(r[0]),
+            workspace_id=str(r[1]),
+            inferred_doc_type=str(r[2]),
+            canonical_name=str(r[3]),
+            description=r[4],
+            value_type=r[5],
+            n_docs_observed=int(r[6] or 0),
+            prevalence=float(r[7] or 0.0),
+            stability=float(r[8] or 0.0),
+            value_type_confidence=float(r[9] or 0.0),
+            is_promoted=bool(r[10]),
+            promoted_schema_field_id=str(r[11]) if r[11] else None,
+            created_at=(
+                r[12].isoformat() if hasattr(r[12], "isoformat") else
+                (str(r[12]) if r[12] else None)
+            ),
+        )
+        for r in rows
+    ]
+    return InferredFieldsListResponse(items=items)
 
 
 # ---------------------------------------------------------------------------

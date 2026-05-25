@@ -1,0 +1,173 @@
+# config/defaults.yaml
+# --------------------------------------------------------------------------
+# Wave A — global defaults. Resolved at layer 6 (least-specific) per
+# Design 9. Override at layers 1-4 via the config_overrides DB table, or at
+# layer 5 by adding a domain YAML that names this file as its base.
+#
+# Authority of this file: anything NOT shadowed by a higher-layer entry
+# resolves to the value below. Boot-time validation rejects bad shapes via
+# OmegaConf struct merging.
+#
+# Cross-reference: every numerical threshold here is also referenced in
+# `architecture.md` or one of `docs/gaps_design.md` Designs; the YAML is
+# the *operational* source of truth, with the docs serving as the
+# *rationale* + *literature* anchor.
+# --------------------------------------------------------------------------
+
+extraction:
+  # L2 — open-vocab mention extraction (Phase 5a). The 18-type OntoNotes
+  # list is hard-coded in code; this controls the call-time tuning.
+  l2:
+    type_list:
+      - PERSON
+      - NORP
+      - FAC
+      - ORG
+      - GPE
+      - LOC
+      - PRODUCT
+      - EVENT
+      - WORK_OF_ART
+      - LAW
+      - LANGUAGE
+      - DATE
+      - TIME
+      - PERCENT
+      - MONEY
+      - QUANTITY
+      - ORDINAL
+      - CARDINAL
+    confidence_threshold: 0.6
+
+  # L2b — emergent field discovery + auto-promotion (Phase 5b).
+  l2b:
+    auto_promotion:
+      # All four must be cleared to auto-promote.
+      prevalence_threshold: 0.80
+      stability_threshold: 0.90
+      value_type_confidence: 0.90
+      # Default for production scale; demo uses min_doc_count=5 via override.
+      min_doc_count: 20
+
+  # L3 — atomic units + per-type rarity (Phase 5c).
+  l3:
+    # Z-score threshold above which a unit is flagged anomalous.
+    rarity_threshold: 0.95
+    classifier_confidence_min: 0.7
+
+  # L4 — identity resolution (Phase 7).
+  identity:
+    # Above HIGH → auto-accept the embedding-blocking candidate.
+    embedding_high_threshold: 0.92
+    # Above LOW → escalate to LLM judge.
+    embedding_low_threshold: 0.85
+
+retrieval:
+  # 6 channels run today (Phase 8b). Top-K per channel before RRF.
+  per_channel_top_k: 20
+
+  # RRF (Phase 8b).
+  rrf:
+    k: 60
+    post_fusion_top_k: 30
+
+  # Reranker (Phase 8c).
+  rerank:
+    top_k: 10  # Wave A picked 10; architecture default 50 (cost-tuned)
+    timeout_ms: 1500
+    fallback: mxbai-rerank-large-v2
+
+  # CRAG gate (Phase 8d).
+  crag:
+    threshold: 0.5
+    top_n_snippets_to_judge: 3
+
+  # IRCoT escalation budget when CRAG fires low (Wave A WA-10).
+  ircot:
+    max_hops: 2
+    cost_ceiling_usd: 0.05
+
+  # Query rewriter (Phase 8a). HyDE N defaults to 3 in architecture; today
+  # the rewriter ships N=1 — WA-9 raises it.
+  rewriter:
+    hyde_n: 3
+    enable_step_back: true
+    enable_query2doc: true
+
+  # Vocabulary expansion at query time (WA-9).
+  vocab_expansion:
+    enabled: true
+    embedding_similarity_threshold: 0.85
+    max_synonyms_per_term: 5
+
+# Per-stage LLM choices. KB_QUERY_LLM env wins over the value here at
+# selector time; this is the "if everything else falls back to defaults"
+# answer.
+models:
+  extraction_llm: gemini-2.5-flash
+  hard_query_llm: gemini-2.5-pro
+  embedder: gemini-embedding-001
+  reranker: cohere-rerank-3.5
+  faithfulness: hhem-2.1
+  intent_classifier: gemini-2.5-flash
+  conflict_detector: gemini-2.5-flash
+  generation: gemini-2.5-flash
+  generation_hard: gemini-2.5-pro
+
+# Doc-chain detection (Design 3, WA-3).
+doc_chains:
+  detection:
+    title_similarity_threshold: 0.70
+    sender_recipient_overlap: 0.50
+    amendment_phrases:
+      - "amends"
+      - "amendment"
+      - "side letter"
+      - "supersedes"
+    # Hard cap to avoid Enron mega-thread runaway.
+    max_chain_members: 100
+
+# Source authority defaults per doc-type (Design 2, WA-6). Used by the
+# ingest classifier when a doc-type doesn't have its own YAML.
+source_authority:
+  unknown_default: 0.50
+  defaults:
+    audited_filing: 1.00
+    executed_contract: 0.90
+    approved_policy: 0.80
+    lab_report: 0.80
+    meeting_minutes: 0.70
+    internal_memo: 0.60
+    email: 0.50
+    forwarded_email: 0.30
+    draft: 0.30
+    handwritten_note: 0.20
+    external_news: 0.20
+
+# Conflict detection + resolution (Design 2, WA-6).
+conflicts:
+  # Authority gap required for layer-3 resolution to fire.
+  authority_dominance_gap: 0.30
+  # Top-5 rerank-score std-dev that triggers IRCoT escalation alongside
+  # CRAG threshold (architecture §6 step 7).
+  rerank_disagreement_threshold: 0.15
+
+# Conversation memory (Design 8, WA-12).
+conversation:
+  # MTRAG: retrieval rewriting saturates at 6 turns; older turns add noise
+  # to retrieval but remain in generation context.
+  hot_turns: 6
+  # Threshold (turn count) at which Mem0-style summarization triggers.
+  summarize_after_turns: 12
+  anaphora_resolver_cost_budget_usd: 0.001
+
+# Feedback (Design 4, WA-13).
+feedback:
+  re_extraction_severity_threshold: important  # 'minor'|'important'|'blocker'
+  max_re_extraction_attempts_per_doc: 3
+
+# Cost ceilings — protect operators from runaway agent loops.
+budgets:
+  per_query_usd: 0.10
+  per_chat_usd: 0.10
+  per_corpus_rebuild_usd: 5.00

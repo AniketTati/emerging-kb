@@ -10,8 +10,11 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
+import os
+
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from starlette.requests import Request
 
 from kb import __version__
@@ -27,9 +30,20 @@ from kb.api.middleware import (
     RequestIdMiddleware,
     WorkspaceMiddleware,
 )
+from kb.api.audit import router as audit_router
+from kb.api.conflicts import router as conflicts_router
+from kb.api.corrections import router as corrections_router
+from kb.api.dashboard import router as dashboard_router
+from kb.api.sessions import router as sessions_router
 from kb.api.corpus import router as corpus_router
+from kb.api.doc_chains import router as doc_chains_router
+from kb.api.entities import router as entities_router
 from kb.api.files import router as files_router
+from kb.api.query import router as query_router
 from kb.api.readiness import router as ready_router
+from kb.api.settings import router as settings_router
+from kb.api.sse import router as sse_router
+from kb.api.vocabulary import router as vocabulary_router
 from kb.api.schema_hierarchy import router as schema_hierarchy_router
 from kb.api.schema_versions import router as schema_versions_router
 from kb.api.schemas import router as schemas_router
@@ -94,6 +108,21 @@ def build_app() -> FastAPI:
     app.add_middleware(WorkspaceMiddleware)
     app.add_middleware(RequestIdMiddleware)
 
+    # Phase 10a — CORS for the Next.js dev origin. Production deployments
+    # should set KB_CORS_ORIGINS to a comma-separated allowlist.
+    _origins = [o.strip() for o in os.environ.get(
+        "KB_CORS_ORIGINS", "http://localhost:3000"
+    ).split(",") if o.strip()]
+    if _origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=_origins,
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+            expose_headers=["X-Request-Id", "X-Dedup-Reason"],
+        )
+
     app.include_router(health_router)
     app.include_router(ready_router)
     app.include_router(schemas_router)
@@ -101,6 +130,17 @@ def build_app() -> FastAPI:
     app.include_router(schema_hierarchy_router)
     app.include_router(files_router)
     app.include_router(corpus_router)
+    app.include_router(query_router)
+    app.include_router(audit_router)
+    app.include_router(sse_router)
+    app.include_router(settings_router)
+    app.include_router(vocabulary_router)
+    app.include_router(doc_chains_router)
+    app.include_router(entities_router)
+    app.include_router(conflicts_router)
+    app.include_router(sessions_router)
+    app.include_router(corrections_router)
+    app.include_router(dashboard_router)
 
     # Phase 2a — register default parsers (Docling). Idempotent.
     from kb.parsers import register_default_parsers
@@ -234,6 +274,8 @@ def build_app() -> FastAPI:
         CorpusRebuildInFlightError,
         CorpusRebuildNoInputError,
         InvalidParserOverrideError,
+        InvalidQueryError,
+        QueryPipelineError,
     )
 
     @app.exception_handler(InvalidParserOverrideError)
@@ -258,6 +300,23 @@ def build_app() -> FastAPI:
             req, status_code=503, type_slug="corpus-rebuild-in-flight",
             title="A corpus rebuild is already in flight for this workspace",
             detail=str(exc),
+        )
+
+    @app.exception_handler(InvalidQueryError)
+    async def _invalid_query(req: Request, exc: InvalidQueryError):
+        return problem_response(
+            req, status_code=400, type_slug="invalid-query",
+            title="Invalid query body",
+            detail=str(exc),
+        )
+
+    @app.exception_handler(QueryPipelineError)
+    async def _query_pipeline_error(req: Request, exc: QueryPipelineError):
+        # Don't leak internal exception text to clients (decision #14).
+        return problem_response(
+            req, status_code=500, type_slug="query-pipeline-error",
+            title="Internal query-pipeline error",
+            detail="The query pipeline failed after exhausting fail-safes.",
         )
 
     @app.exception_handler(RequestValidationError)

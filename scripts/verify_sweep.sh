@@ -40,7 +40,7 @@ DB_PSQL() {
 }
 
 # Selected phases — default to all 12 in order; CLI args can subset.
-ALL_PHASES=(0 1a 1b 1c 2a 2b 2c 3a 3b 3c 3d 3e 4 5 6 7 8a 8b 8c)
+ALL_PHASES=(0 1a 1b 1c 2a 2b 2c 3a 3b 3c 3d 3e 4 5 6 7 8a 8b 8c 8d 8e 8f 9)
 if (( $# > 0 )); then
     PHASES=("$@")
 else
@@ -131,6 +131,7 @@ echo "[sweep] stack ready in $(($(date +%s) - t0))s"
 # works on parent partitions in PG13+.
 RESET_SQL=$(cat <<'EOF'
 TRUNCATE
+    query_log,
     mention_to_entity,
     entities,
     extracted_entities,
