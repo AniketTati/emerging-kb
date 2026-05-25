@@ -18,7 +18,17 @@ import { StageBadge } from "./StageBadge";
 import type { FilterKey } from "./FilterBar";
 
 
-type Props = { filter: FilterKey; query: string };
+type Props = {
+  filter: FilterKey;
+  query: string;
+  /** True while the next page is in-flight. */
+  loadingMore?: boolean;
+  /** Last error from the pagination fetch (rendered inline if set). */
+  loadError?: string | null;
+  /** Called when the user clicks "Load more". The parent owns the offset
+   *  bookkeeping; this component just renders the trigger. */
+  onLoadMore?: () => void;
+};
 
 
 function matchesFilter(row: FileRow, filter: FilterKey, q: string): boolean {
@@ -64,7 +74,13 @@ function iconFor(mime: string) {
 }
 
 
-export function FilesTable({ filter, query }: Props) {
+export function FilesTable({
+  filter,
+  query,
+  loadingMore = false,
+  loadError = null,
+  onLoadMore,
+}: Props) {
   const { state } = useUploadStore();
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [details, setDetails] = useState<Record<string, FileDetails | "loading" | "error">>({});
@@ -97,24 +113,49 @@ export function FilesTable({ filter, query }: Props) {
     .map((id) => state.rows[id])
     .filter((row): row is FileRow => !!row && matchesFilter(row, filter, query));
 
+  const loadedCount = state.order.length;
+  const totalCount = state.total ?? loadedCount;
+  const hasMore = state.total !== null && loadedCount < state.total;
+  const isFiltered = filter !== "all" || query.length > 0;
+
   if (rows.length === 0) {
     return (
-      <div className="rounded-lg border border-dashed border-zinc-200 bg-white px-6 py-10 text-center">
-        <div className="text-sm text-zinc-700">
-          {state.order.length === 0
-            ? "No uploads yet."
-            : "No files match the current filter."}
+      <div className="space-y-3">
+        <div className="rounded-lg border border-dashed border-zinc-200 bg-white px-6 py-10 text-center">
+          <div className="text-sm text-zinc-700">
+            {loadedCount === 0
+              ? "No uploads yet."
+              : isFiltered && hasMore
+                ? `No files in the first ${loadedCount} match the current filter.`
+                : "No files match the current filter."}
+          </div>
+          <div className="text-xs text-zinc-500 mt-1">
+            {loadedCount === 0
+              ? "Drop files above to get started."
+              : isFiltered && hasMore
+                ? "Try \"Load more\" below — matches may exist further back."
+                : "Adjust filters or drop more files above."}
+          </div>
         </div>
-        <div className="text-xs text-zinc-500 mt-1">
-          Drop files above to get started.
-        </div>
+        {hasMore && (
+          <LoadMoreFooter
+            loadedCount={loadedCount}
+            totalCount={totalCount}
+            visibleCount={0}
+            isFiltered={isFiltered}
+            loadingMore={loadingMore}
+            loadError={loadError}
+            onLoadMore={onLoadMore}
+          />
+        )}
       </div>
     );
   }
 
   return (
-    <div className="rounded-lg border border-zinc-200 overflow-hidden bg-white">
-      <div className="grid grid-cols-[1fr_160px_120px_180px_120px_80px] gap-3 px-4 py-2.5 text-[11px] uppercase tracking-wider text-zinc-500 bg-zinc-50 border-b border-zinc-200">
+    <div className="space-y-3">
+      <div className="rounded-lg border border-zinc-200 overflow-hidden bg-white">
+        <div className="grid grid-cols-[1fr_160px_120px_180px_120px_80px] gap-3 px-4 py-2.5 text-[11px] uppercase tracking-wider text-zinc-500 bg-zinc-50 border-b border-zinc-200">
         <div>File</div>
         <div>Type</div>
         <div>Status</div>
@@ -189,6 +230,94 @@ export function FilesTable({ filter, query }: Props) {
           </div>
         );
       })}
+      </div>
+
+      <LoadMoreFooter
+        loadedCount={loadedCount}
+        totalCount={totalCount}
+        visibleCount={rows.length}
+        isFiltered={isFiltered}
+        loadingMore={loadingMore}
+        loadError={loadError}
+        onLoadMore={hasMore ? onLoadMore : undefined}
+      />
+    </div>
+  );
+}
+
+
+/** Footer rendered below the files table. Shows where the user is in the
+ *  paginated dataset and offers a "Load more" button when more rows remain.
+ *
+ *  Three distinct cases:
+ *    - Fully loaded, no filter   → "All N files loaded"
+ *    - Fully loaded, filtered    → "X of N match the current filter"
+ *    - More to fetch             → "Showing N of M · [Load more]"  (+ filter hint)
+ *
+ *  Surfacing "filtered" vs "loaded" totals matters because filtering happens
+ *  client-side: a match further back in the timeline isn't visible until the
+ *  user pages forward. The hint nudges them to keep loading. */
+function LoadMoreFooter({
+  loadedCount,
+  totalCount,
+  visibleCount,
+  isFiltered,
+  loadingMore,
+  loadError,
+  onLoadMore,
+}: {
+  loadedCount: number;
+  totalCount: number;
+  visibleCount: number;
+  isFiltered: boolean;
+  loadingMore: boolean;
+  loadError: string | null;
+  onLoadMore?: () => void;
+}) {
+  const hasMore = !!onLoadMore && loadedCount < totalCount;
+
+  let summary: string;
+  if (!hasMore) {
+    summary = isFiltered
+      ? `${visibleCount} of ${totalCount} match the current filter`
+      : `All ${totalCount} files loaded`;
+  } else if (isFiltered) {
+    summary = `${visibleCount} match · ${loadedCount} of ${totalCount} loaded`;
+  } else {
+    summary = `Showing ${loadedCount} of ${totalCount}`;
+  }
+
+  return (
+    <div
+      className="flex items-center justify-between gap-3 px-1 text-xs text-zinc-500"
+      data-testid="files-pagination"
+    >
+      <div className="mono" data-testid="files-pagination-summary">
+        {summary}
+        {isFiltered && hasMore && (
+          <span className="ml-2 text-zinc-400">
+            (filter applies to loaded rows only — load more to find matches further back)
+          </span>
+        )}
+      </div>
+      <div className="flex items-center gap-3">
+        {loadError && (
+          <span className="text-red-600 mono" data-testid="files-pagination-error">
+            {loadError}
+          </span>
+        )}
+        {hasMore && (
+          <button
+            type="button"
+            onClick={onLoadMore}
+            disabled={loadingMore}
+            data-testid="files-load-more"
+            className="rounded-md border border-zinc-200 bg-white px-3 py-1.5 text-xs text-zinc-700 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {loadingMore ? "Loading…" : "Load more"}
+          </button>
+        )}
+      </div>
     </div>
   );
 }

@@ -55,21 +55,17 @@ _MAX_OUTPUT_TOKENS = 6000  # statements can have many transactions
 
 
 def _parse_transactions(raw: str) -> list[dict[str, Any]]:
-    text = raw.strip()
-    if text.startswith("```"):
-        lines = text.splitlines()
-        if len(lines) >= 2 and lines[-1].strip() == "```":
-            lines = lines[1:-1]
-        else:
-            lines = lines[1:]
-        text = "\n".join(lines)
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError:
-        return []
-    raw_list = data.get("transactions") if isinstance(data, dict) else (data if isinstance(data, list) else None)
-    if not isinstance(raw_list, list):
-        return []
+    """Tolerant of truncation — bank statements with 50+ transactions
+    overflow even the 6000-token cap on occasion."""
+    from kb.extraction.json_recovery import parse_tolerant_array_in_object
+
+    raw_list, truncated = parse_tolerant_array_in_object(raw, "transactions")
+    if truncated:
+        import logging
+        logging.getLogger(__name__).warning(
+            "transactions response was truncated; recovered %d rows",
+            len(raw_list),
+        )
     out: list[dict[str, Any]] = []
     for item in raw_list:
         if not isinstance(item, dict):

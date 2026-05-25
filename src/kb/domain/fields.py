@@ -31,16 +31,21 @@ async def insert_proposed_field(
     value_type: str,
     is_pii: bool,
     model_id: str,
+    source_chunk_id: str | None = None,
+    source_char_start: int | None = None,
+    source_char_end: int | None = None,
 ) -> str:
     cur = await conn.execute(
         "INSERT INTO proposed_fields "
         "(file_id, workspace_id, inferred_doc_type, field_name, field_description, "
-        "value_text, value_type, is_pii, model_id) "
-        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) "
+        "value_text, value_type, is_pii, model_id, "
+        "source_chunk_id, source_char_start, source_char_end) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
         "RETURNING id::text",
         (
             file_id, workspace_id, inferred_doc_type, field_name, field_description,
             value_text, value_type, is_pii, model_id,
+            source_chunk_id, source_char_start, source_char_end,
         ),
     )
     return (await cur.fetchone())[0]

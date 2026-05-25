@@ -87,6 +87,56 @@ test("Needs-attention chip surfaces the low-authority file", async ({
   ).toHaveCount(0);
 });
 
+test("paginates: Load more appends a second page below the first", async ({
+  page,
+}) => {
+  // Intercept /files to force pagination even with the small demo corpus.
+  // Page 1: first 3 items + truthful total. Page 2: next 3. Page 3+: empty.
+  await page.route("**/files?limit=*&offset=*", async (route, request) => {
+    const url = new URL(request.url());
+    const offset = Number(url.searchParams.get("offset") ?? 0);
+    const upstream = await page.request.get(
+      `${process.env.KB_API_URL || "http://localhost:8000"}/files?limit=200&offset=0`,
+      { headers: { "X-Test-Workspace": "00000000-0000-0000-0000-000000000001" } },
+    );
+    const upstreamJson = await upstream.json();
+    const all: unknown[] = upstreamJson.items;
+    const slice = all.slice(offset, offset + 3);
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        items: slice,
+        total: all.length,
+        limit: 3,
+        offset,
+      }),
+    });
+  });
+
+  await page.goto("/upload");
+
+  await expect(
+    page.locator('[data-testid="file-row"]').first(),
+  ).toBeVisible({ timeout: 10_000 });
+
+  // First page = 3 rows.
+  await expect(page.locator('[data-testid="file-row"]')).toHaveCount(3);
+
+  // Pagination footer shows "Showing 3 of N" + Load more button.
+  const summary = page.getByTestId("files-pagination-summary");
+  await expect(summary).toContainText(/Showing 3 of/);
+
+  const loadMore = page.getByTestId("files-load-more");
+  await expect(loadMore).toBeVisible();
+  await loadMore.click();
+
+  // Second page appended → now 6 rows.
+  await expect(page.locator('[data-testid="file-row"]')).toHaveCount(6);
+  await expect(summary).toContainText(/Showing 6 of/);
+});
+
+
 test("row expand fetches /files/:id/details and renders the timeline", async ({
   page,
 }) => {

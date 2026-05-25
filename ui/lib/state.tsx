@@ -24,15 +24,23 @@ export type FileRow = {
   doc_status?: string | null;
 };
 
-export type State = { rows: Record<string, FileRow>; order: string[] };
+export type State = {
+  rows: Record<string, FileRow>;
+  order: string[];
+  /** Server-reported total. `null` until the first /files response lands —
+   *  letting the UI distinguish "haven't fetched yet" from "fetched, 0 files".
+   *  When `order.length < total`, more pages remain. */
+  total: number | null;
+};
 
 type Action =
-  | { type: "seed"; files: FileResource[] }
+  | { type: "seed"; files: FileResource[]; total: number }
+  | { type: "appendPage"; files: FileResource[]; total: number }
   | { type: "upserted"; file: FileResource }
   | { type: "lifecycle"; event: LifecycleEvent }
   | { type: "errored"; fileId: string; error: string };
 
-const initialState: State = { rows: {}, order: [] };
+const initialState: State = { rows: {}, order: [], total: null };
 
 function rowFromFile(file: FileResource, now: number): FileRow {
   return {
@@ -60,7 +68,22 @@ export function reducer(state: State, action: Action): State {
         rows[f.id] = rowFromFile(f, now);
         order.push(f.id);
       }
-      return { rows, order };
+      return { rows, order, total: action.total };
+    }
+    case "appendPage": {
+      // Add more files at the END of the order array. Skips any IDs we
+      // already track (new uploads dispatched via `upserted` could
+      // overlap with a re-fetched page) so duplicates don't accumulate.
+      const rows = { ...state.rows };
+      const order = [...state.order];
+      const seen = new Set(order);
+      for (const f of action.files) {
+        if (seen.has(f.id)) continue;
+        seen.add(f.id);
+        rows[f.id] = rowFromFile(f, now);
+        order.push(f.id);
+      }
+      return { rows, order, total: action.total };
     }
     case "upserted": {
       const existing = state.rows[action.file.id];
@@ -78,7 +101,14 @@ export function reducer(state: State, action: Action): State {
           }
         : rowFromFile(action.file, now);
       const order = existing ? state.order : [action.file.id, ...state.order];
-      return { rows: { ...state.rows, [action.file.id]: row }, order };
+      // New uploads bump `total` by one so the "X of Y" counter stays
+      // accurate without round-tripping /files.
+      const total = existing
+        ? state.total
+        : state.total !== null
+          ? state.total + 1
+          : state.total;
+      return { rows: { ...state.rows, [action.file.id]: row }, order, total };
     }
     case "lifecycle": {
       const ev = action.event;

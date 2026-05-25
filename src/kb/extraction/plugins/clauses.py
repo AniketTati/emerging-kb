@@ -59,26 +59,22 @@ _USER_TEMPLATE = (
     '}}]}}\n'
     "Omit any field you cannot determine. clause_type is required."
 )
-_MAX_OUTPUT_TOKENS = 4000
+_MAX_OUTPUT_TOKENS = 8000
 
 
 def _parse_clauses(raw: str) -> list[dict[str, Any]]:
-    """Tolerant JSON parser — strip fences, accept dict-of-list or array."""
-    text = raw.strip()
-    if text.startswith("```"):
-        lines = text.splitlines()
-        if len(lines) >= 2 and lines[-1].strip() == "```":
-            lines = lines[1:-1]
-        else:
-            lines = lines[1:]
-        text = "\n".join(lines)
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError:
-        return []
-    raw_list = data.get("clauses") if isinstance(data, dict) else (data if isinstance(data, list) else None)
-    if not isinstance(raw_list, list):
-        return []
+    """Tolerant JSON parser — strips fences AND recovers truncated output
+    so long contracts with 10+ clauses don't drop the entire list when
+    Gemini hits the output cap."""
+    from kb.extraction.json_recovery import parse_tolerant_array_in_object
+
+    raw_list, truncated = parse_tolerant_array_in_object(raw, "clauses")
+    if truncated:
+        import logging
+        logging.getLogger(__name__).warning(
+            "clauses response was truncated; recovered %d clauses",
+            len(raw_list),
+        )
     out: list[dict[str, Any]] = []
     for item in raw_list:
         if not isinstance(item, dict):
@@ -100,9 +96,20 @@ class ClausesPlugin:
     UNIT_TYPE = "clause"
 
     def matches(self, file_meta: FileMeta) -> bool:
-        if file_meta.mime_type != "application/pdf":
-            return False
+        # E3 fix: gate on doc_type, not file format. A legal contract is a
+        # legal contract whether it arrived as a PDF, plain text, or
+        # markdown — the prototype demo corpus has the MSA as PDF and
+        # the Amendment as .txt; both should produce clause atomic units.
+        # Spreadsheets + emails are handled by other plugins.
         if not file_meta.inferred_doc_type:
+            return False
+        # Format guard — clause extraction needs prose. Skip mime types
+        # where another plugin owns the unit shape.
+        if (file_meta.mime_type or "").lower() in (
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "application/vnd.ms-excel",
+            "message/rfc822",
+        ):
             return False
         dt = file_meta.inferred_doc_type.lower()
         if dt in _CONTRACT_DOC_TYPES:

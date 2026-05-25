@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { listFiles, subscribeToFileStatus } from "@/lib/api";
 import { UploadProvider, useUploadStore } from "@/lib/state";
 import { Sidebar } from "@/components/Sidebar";
@@ -9,18 +9,25 @@ import { DropZone } from "@/components/DropZone";
 import { FilesTable } from "@/components/FilesTable";
 import { FilterBar, type FilterKey } from "@/components/FilterBar";
 
+/** Page size for the /upload file list. The backend caps at 200; 50 is
+ *  big enough to feel "instant" for typical workspaces while keeping the
+ *  initial bundle and SSE-subscribe-on-mount work bounded. */
+const PAGE_SIZE = 50;
+
 function UploadShell() {
   const { state, dispatch } = useUploadStore();
   const subscribed = useRef<Set<string>>(new Set());
   const [filter, setFilter] = useState<FilterKey>("all");
   const [query, setQuery] = useState("");
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    listFiles()
+    listFiles({ limit: PAGE_SIZE, offset: 0 })
       .then((r) => {
         if (cancelled) return;
-        dispatch({ type: "seed", files: r.items });
+        dispatch({ type: "seed", files: r.items, total: r.total });
       })
       .catch(() => {
         // Backend unreachable; user can still drop files.
@@ -29,6 +36,23 @@ function UploadShell() {
       cancelled = true;
     };
   }, [dispatch]);
+
+  const onLoadMore = useCallback(async () => {
+    if (loadingMore) return;
+    setLoadingMore(true);
+    setLoadError(null);
+    try {
+      const r = await listFiles({
+        limit: PAGE_SIZE,
+        offset: state.order.length,
+      });
+      dispatch({ type: "appendPage", files: r.items, total: r.total });
+    } catch (e) {
+      setLoadError(e instanceof Error ? e.message : "Failed to load more");
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [dispatch, loadingMore, state.order.length]);
 
   // Keep ES handles in a ref so we can close them ONLY when the component
   // unmounts. Previous version listed `state.rows` in the dep array, so
@@ -100,7 +124,13 @@ function UploadShell() {
               query={query}
               onQueryChange={setQuery}
             />
-            <FilesTable filter={filter} query={query} />
+            <FilesTable
+              filter={filter}
+              query={query}
+              loadingMore={loadingMore}
+              loadError={loadError}
+              onLoadMore={onLoadMore}
+            />
           </div>
         </div>
       </main>

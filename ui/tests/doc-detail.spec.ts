@@ -210,6 +210,35 @@ test("click a mention not in cells → 'not in source body' banner", async ({
   });
 });
 
+test("PR2 exact citation: clicking an inferred field highlights the verbatim source span", async ({
+  page,
+}) => {
+  // After PR2 migration + backfill, proposed_fields carry worker-resolved
+  // source_chunk_id + char offsets. Clicking the row should publish an
+  // 'exact' citation, and the source pane should highlight the verbatim
+  // text the resolver located (not fuzzy text-search).
+  await page.goto("/upload");
+  await page
+    .locator('[data-testid="file-row-link"]', { hasText: "vertex-msa.pdf" })
+    .click();
+
+  // Open Inferred fields accordion.
+  const fields = page.getByTestId("doc-detail-fields");
+  await fields.locator("button").first().click();
+
+  // Click the agreement_name field (value: "MASTER SERVICES AGREEMENT")
+  // — guaranteed to be at offset 0 in the chunk.
+  await fields
+    .getByRole("button", { name: /agreement_name/i })
+    .click();
+
+  // Source pane citing-banner shows the new exact label shape: chunk hash + range.
+  await expect(page.getByText(/↳ citing:/)).toBeVisible();
+  await expect(page.getByText(/chunk [a-f0-9]{8}…\[\d+-\d+\]/)).toBeVisible({
+    timeout: 5_000,
+  });
+});
+
 test("processing log renders lifecycle events with relative timing", async ({
   page,
 }) => {

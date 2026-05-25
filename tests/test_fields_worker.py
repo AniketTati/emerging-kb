@@ -166,12 +166,15 @@ async def test_extract_fields_writes_proposed_and_inferred_rows(
         )
         rows = await cur.fetchall()
         assert len(rows) == 2
-        # n_docs_observed = 1 (only 1 file seeded) → prevalence = 1.0,
-        # but min_docs threshold (5) NOT met → is_promoted = False
+        # PR5: default min_docs lowered to 1 so single-doc demo corpora
+        # exercise the L4 closed-world path. With n=1 and prevalence=1.0
+        # the fields auto-promote. The threshold-not-met case is now
+        # covered by `test_extract_fields_does_not_promote_below_threshold`
+        # which explicitly sets KB_PROMOTION_MIN_DOCS=20.
         for r in rows:
             assert r[1] == 1  # n_docs_observed
             assert r[2] == pytest.approx(1.0)
-            assert r[3] is False
+            assert r[3] is True  # was False under the old min_docs=5
 
 
 async def test_extract_fields_promotes_when_threshold_crosses(

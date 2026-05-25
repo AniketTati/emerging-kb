@@ -1157,9 +1157,10 @@ async def extract_mentions_file_impl(file_id: str) -> None:
     from kb.domain.mentions import (
         delete_mentions_for_file,
         insert_mention,
-        read_contextual_chunks_for_file,
+        read_chunks_for_file_with_source,
     )
     from kb.extraction.mentions import MentionExtractionError, make_mention_extractor
+    from kb.extraction.source_resolver import resolve as resolve_source_position
 
     settings = get_settings()
     db_url = settings.database_url
@@ -1189,7 +1190,7 @@ async def extract_mentions_file_impl(file_id: str) -> None:
                 "SELECT set_config('app.workspace_id', %s, true)",
                 (str(workspace_id),),
             )
-            chunks = await read_contextual_chunks_for_file(conn, file_id=file_id)
+            chunks = await read_chunks_for_file_with_source(conn, file_id=file_id)
 
     # Phase 2: build extractor + extract per chunk under semaphore.
     extractor = make_mention_extractor()
@@ -1199,21 +1200,22 @@ async def extract_mentions_file_impl(file_id: str) -> None:
     # Use the joined contextual_text as both doc context AND chunk text. The
     # contextual prefix from 3b already gives intra-doc context; a few-chunk
     # join would help but adds cost without clear win at Wave A scale.
-    async def _extract_one(cc_id: str, cc_text: str):
+    async def _extract_one(cc_id: str, cc_text: str, chunk_id: str, chunk_text: str):
         async with semaphore:
             try:
                 result = await extractor.extract(
                     doc_text=cc_text, chunk_text=cc_text
                 )
-                return cc_id, result
-            except MentionExtractionError as exc:
+                return cc_id, chunk_id, chunk_text, result
+            except MentionExtractionError:
                 # Single-chunk failure shouldn't fail the whole file —
                 # log and return empty so other chunks proceed.
                 traceback.print_exc()
-                return cc_id, None
+                return cc_id, chunk_id, chunk_text, None
 
     results = await asyncio.gather(*(
-        _extract_one(cc_id, cc_text) for cc_id, cc_text in chunks
+        _extract_one(cc_id, cc_text, chunk_id, chunk_text)
+        for cc_id, cc_text, chunk_id, chunk_text in chunks
     ))
 
     # Phase 3: atomic DB write — DELETE existing + INSERT all new in one tx.
@@ -1227,11 +1229,21 @@ async def extract_mentions_file_impl(file_id: str) -> None:
             )
             await delete_mentions_for_file(conn, file_id=file_id)
 
-            for cc_id, result in results:
+            for cc_id, chunk_id, chunk_text, result in results:
                 if result is None:
                     continue
                 model_id_used = result.model_id
                 for mention in result.mentions:
+                    # Resolve the exact char range in the original chunk
+                    # body so the doc-detail citation UI can highlight
+                    # without fuzzy text-search. Returns None when the
+                    # mention only appears in the contextual prefix.
+                    pos = resolve_source_position(
+                        mention.mention_text, chunk_text,
+                    )
+                    src_chunk = chunk_id if pos else None
+                    src_start = pos.char_start if pos else None
+                    src_end = pos.char_end if pos else None
                     await insert_mention(
                         conn,
                         contextual_chunk_id=cc_id,
@@ -1243,6 +1255,9 @@ async def extract_mentions_file_impl(file_id: str) -> None:
                         end_offset=mention.end_offset,
                         confidence=mention.confidence,
                         model_id=result.model_id,
+                        source_chunk_id=src_chunk,
+                        source_char_start=src_start,
+                        source_char_end=src_end,
                     )
                     total_inserted += 1
 
@@ -1334,6 +1349,18 @@ async def extract_fields_file_impl(file_id: str) -> None:
             page_rows = await cur.fetchall()
             doc_text = "\n\n".join(r[0] for r in page_rows if r[0])
 
+            # Also pull every chunk for the file so the resolver can map
+            # each proposed-field value_text back to a (chunk_id, char
+            # offset) at insert time. Citation UI uses these.
+            cur = await conn.execute(
+                "SELECT id::text, text FROM chunks WHERE file_id = %s "
+                "ORDER BY chunk_index ASC",
+                (file_id,),
+            )
+            file_chunks: list[tuple[str, str]] = [
+                (r[0], r[1] or "") for r in await cur.fetchall()
+            ]
+
     # Phase 2: classify + propose (LLM calls).
     extractor = make_field_extractor()
     try:
@@ -1377,9 +1404,26 @@ async def extract_fields_file_impl(file_id: str) -> None:
 
             await delete_proposed_fields_for_file(conn, file_id=file_id)
 
+            from kb.extraction.source_resolver import (
+                resolve as resolve_source_position,
+            )
+
             n_proposed = 0
             if proposal is not None:
                 for f in proposal.fields:
+                    # Find the first chunk whose body contains the
+                    # extracted value_text — that's the field's source
+                    # provenance for the citation UI. Skipped when the
+                    # LLM paraphrased or for fields with no value_text.
+                    src_chunk = src_start = src_end = None
+                    if f.value_text:
+                        for cid, ctext in file_chunks:
+                            pos = resolve_source_position(f.value_text, ctext)
+                            if pos:
+                                src_chunk = cid
+                                src_start = pos.char_start
+                                src_end = pos.char_end
+                                break
                     await insert_proposed_field(
                         conn,
                         file_id=file_id,
@@ -1391,6 +1435,9 @@ async def extract_fields_file_impl(file_id: str) -> None:
                         value_type=f.value_type,
                         is_pii=f.is_pii,
                         model_id=proposal.model_id,
+                        source_chunk_id=src_chunk,
+                        source_char_start=src_start,
+                        source_char_end=src_end,
                     )
                     n_proposed += 1
 
@@ -1552,6 +1599,19 @@ async def extract_atomic_units_file_impl(file_id: str) -> None:
             traceback.print_exc()
             units = []
 
+    # Pre-fetch chunks for source-position resolution. For row-style
+    # units (xlsx) we already have parameters.row_index; for clause-style
+    # units the resolver finds the summary text in the source chunk.
+    unit_chunks: list[tuple[str, str]] = []
+    if units:
+        async with open_connection(db_url) as conn:
+            cur = await conn.execute(
+                "SELECT id::text, text FROM chunks WHERE file_id = %s "
+                "ORDER BY chunk_index ASC",
+                (file_id,),
+            )
+            unit_chunks = [(r[0], r[1] or "") for r in await cur.fetchall()]
+
     # Phase 2: atomic write — DELETE existing + INSERT new + JIT anomaly.
     async with open_connection(db_url) as conn:
         async with conn.transaction():
@@ -1567,9 +1627,28 @@ async def extract_atomic_units_file_impl(file_id: str) -> None:
                 else "gemini-2.5-flash"
             )
 
+            from kb.extraction.source_resolver import (
+                resolve as resolve_source_position,
+            )
+
             inserted_ids: list[str] = []
             inserted_params: list[dict] = []
             for u in units:
+                # For clause-style units the LLM returns parameters.summary
+                # — find which chunk's body contains it and store the
+                # offset. For row-style xlsx units, parameters.row_index +
+                # sheet_name already pinpoint the source so we leave the
+                # offset columns null.
+                src_chunk = src_start = src_end = None
+                summary = (u.parameters or {}).get("summary")
+                if isinstance(summary, str) and summary.strip():
+                    for cid, ctext in unit_chunks:
+                        pos = resolve_source_position(summary, ctext)
+                        if pos:
+                            src_chunk = cid
+                            src_start = pos.char_start
+                            src_end = pos.char_end
+                            break
                 uid = await insert_atomic_unit(
                     conn,
                     file_id=file_id,
@@ -1579,6 +1658,9 @@ async def extract_atomic_units_file_impl(file_id: str) -> None:
                     anchor_chunk_id=u.anchor_chunk_id,
                     rarity_score=None,
                     model_id=model_id_used,
+                    source_chunk_id=src_chunk,
+                    source_char_start=src_start,
+                    source_char_end=src_end,
                 )
                 inserted_ids.append(uid)
                 inserted_params.append(u.parameters)
@@ -2334,9 +2416,12 @@ async def extract_triples_file_impl(file_id: str) -> None:
                 (workspace_id_str,),
             )
 
-            # Read this file's contextual chunks (chunk_id + text).
+            # Read this file's contextual chunks (cc_id + cc_text + source
+            # chunk_id + source chunk_text). Source pair powers the
+            # citation-position resolver.
             cur = await conn.execute(
-                "SELECT cc.id::text, cc.contextual_text "
+                "SELECT cc.id::text, cc.contextual_text, "
+                "       c.id::text, c.text "
                 "FROM contextual_chunks cc "
                 "JOIN chunks c ON c.id = cc.chunk_id "
                 "WHERE cc.file_id = %s "
@@ -2357,21 +2442,36 @@ async def extract_triples_file_impl(file_id: str) -> None:
                 )
                 return
 
+            from kb.extraction.source_resolver import (
+                resolve as resolve_source_position,
+            )
+
             total_triples = 0
-            for chunk_id, chunk_text in chunk_rows:
-                if not chunk_text:
+            for _cc_id, cc_text, src_chunk_id, src_chunk_text in chunk_rows:
+                if not cc_text:
                     continue
                 try:
-                    result = await extractor.extract(chunk_text=chunk_text)
+                    result = await extractor.extract(chunk_text=cc_text)
                 except TripleExtractionError:
                     traceback.print_exc()
                     continue  # advisory — skip this chunk, keep going
                 if not result.triples:
                     continue
-                triples_to_insert = [
-                    (t.subject, t.predicate, t.object, t.confidence, chunk_id)
-                    for t in result.triples
-                ]
+                triples_to_insert: list[tuple] = []
+                for t in result.triples:
+                    # Resolve subject + object positions in the ORIGINAL
+                    # chunk text. None when the snippet only appears in
+                    # the contextual prefix (UI shows "no source loc").
+                    s_pos = resolve_source_position(t.subject, src_chunk_text or "")
+                    o_pos = resolve_source_position(t.object, src_chunk_text or "")
+                    triples_to_insert.append((
+                        t.subject, t.predicate, t.object, t.confidence,
+                        src_chunk_id,
+                        s_pos.char_start if s_pos else None,
+                        s_pos.char_end if s_pos else None,
+                        o_pos.char_start if o_pos else None,
+                        o_pos.char_end if o_pos else None,
+                    ))
                 inserted_ids = await insert_triples_batch(
                     conn,
                     workspace_id=workspace_id_str,

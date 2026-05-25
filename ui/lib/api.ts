@@ -128,11 +128,19 @@ async function _handle<T>(resp: Response): Promise<T> {
 // File ops
 // ---------------------------------------------------------------------------
 
-export async function listFiles(): Promise<{ items: FileResource[]; total: number }> {
-  const resp = await fetch(`${KB_API_URL}/files`, {
-    headers: workspaceHeaders(),
-    cache: "no-store",
-  });
+/** GET /files — paginated. Backend caps `limit` at 200; default 50.
+ *
+ *  Returns `{items, total, limit, offset}` so the caller can decide whether
+ *  more pages exist (`offset + items.length < total`). */
+export async function listFiles(
+  opts?: { limit?: number; offset?: number },
+): Promise<{ items: FileResource[]; total: number; limit: number; offset: number }> {
+  const limit = opts?.limit ?? 50;
+  const offset = opts?.offset ?? 0;
+  const resp = await fetch(
+    `${KB_API_URL}/files?limit=${limit}&offset=${offset}`,
+    { headers: workspaceHeaders(), cache: "no-store" },
+  );
   return _handle(resp);
 }
 
@@ -151,7 +159,17 @@ export async function getFileDetails(fileId: string): Promise<FileDetails> {
 // is paginated; types mirror the Pydantic shapes from src/kb/api/files.py.
 // ---------------------------------------------------------------------------
 
-export type ProposedField = {
+/** Worker-resolved source position (migration 0032). Present where the
+ *  resolver successfully located the LLM-extracted snippet in the chunk
+ *  text. UI uses these for deterministic citation highlighting. */
+type SourcePos = {
+  source_chunk_id?: string | null;
+  source_char_start?: number | null;
+  source_char_end?: number | null;
+  source_page_numbers?: number[] | null;
+};
+
+export type ProposedField = SourcePos & {
   id: string;
   field_name: string;
   field_description: string | null;
@@ -161,7 +179,7 @@ export type ProposedField = {
   model_id: string | null;
 };
 
-export type AtomicUnit = {
+export type AtomicUnit = SourcePos & {
   id: string;
   unit_type: string;
   parameters: Record<string, unknown>;
@@ -170,7 +188,7 @@ export type AtomicUnit = {
   model_id: string | null;
 };
 
-export type Mention = {
+export type Mention = SourcePos & {
   id: string;
   mention_text: string;
   mention_type: string;
@@ -180,7 +198,6 @@ export type Mention = {
   confidence: number | null;
   canonical_entity_id: string | null;
   canonical_name: string | null;
-  source_page_numbers: number[] | null;
 };
 
 export type EntityMentioned = {
@@ -199,7 +216,22 @@ export type TripleInDoc = {
   confidence: number | null;
   chunk_id: string | null;
   source_page_numbers: number[] | null;
+  subject_char_start: number | null;
+  subject_char_end: number | null;
+  object_char_start: number | null;
+  object_char_end: number | null;
 };
+
+export type ChunkBody = {
+  id: string;
+  file_id: string;
+  chunk_index: number;
+  text: string;
+  source_page_numbers: number[];
+};
+
+export const getChunk = (id: string) =>
+  _getJson<ChunkBody>(`/chunks/${id}`);
 
 export type ExtractedEntityInstance = {
   id: string;
