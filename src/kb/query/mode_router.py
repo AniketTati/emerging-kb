@@ -1,4 +1,4 @@
-"""B4a / WA-10 — Mode-conditional retrieval routing.
+"""B4a + B4b / WA-10 — Mode-conditional retrieval routing.
 
 After the planner emits a `Plan`, the orchestrator hands it here. We
 adjust the candidate hit list according to the chosen mode:
@@ -21,10 +21,16 @@ adjust the candidate hit list according to the chosen mode:
                 These modes mostly tune *upstream* retrieval; in Wave A
                 we surface the mode for observability but don't re-rank.
 
-  Q → raises QModeNotImplementedError. Q-mode lands in B4b with its
-                10-layer SQL defense pipeline.
+  Q → B4b structured-query handler. Compiles plan.q_payload via the
+                kb.q_planner pipeline, executes, and emits ONE synthesized
+                Hit carrying the aggregate result (rendered as a snippet
+                + an 'aggregate' modality marker for citation polymorphism).
+                If plan.q_payload is missing, the handler refuses cleanly
+                with a synthetic refusal Hit so the orchestrator + generator
+                downstream can produce a useful refusal message.
 
-Pure-Python; safe to test without a DB by passing a mock connection.
+Pure-Python (with DB calls for K/T/Q); safe to test by passing a mock
+connection.
 """
 
 from __future__ import annotations
@@ -42,7 +48,10 @@ from kb.query.rrf import Hit
 
 
 class QModeNotImplementedError(RuntimeError):
-    """Raised when the planner emits mode='Q' before B4b lands."""
+    """Legacy — kept for back-compat. With B4b shipped, the Q handler no
+    longer raises this; the orchestrator now receives a synthesized Hit
+    that carries the aggregate result. Tests that assert the legacy
+    behavior should be updated to inspect the returned Hit instead."""
 
 
 # ---------------------------------------------------------------------------
@@ -69,8 +78,9 @@ async def apply_mode(
         return list(hits)
 
     if mode == "Q":
-        raise QModeNotImplementedError(
-            "Q-mode (SQL aggregation) ships in B4b — currently refused"
+        return await _route_q_mode(
+            plan, hits, conn,
+            workspace_id=workspace_id, query=query,
         )
 
     if mode == "K":
@@ -331,3 +341,184 @@ def _tag_mode(hits: list[Hit], mode: str) -> list[Hit]:
             snippet=h.snippet, metadata=new_meta,
         ))
     return out
+
+
+# ---------------------------------------------------------------------------
+# Q-mode — structured aggregate query (B4b)
+# ---------------------------------------------------------------------------
+
+
+def _q_refusal_hit(reason: str) -> Hit:
+    """Build a synthetic Hit representing a Q-mode refusal. The orchestrator
+    surfaces this through the normal citation pipeline; the generator's
+    refusal logic kicks in when it sees `metadata.q_refused=True`."""
+    return Hit(
+        id="q-mode-refusal",
+        kind="aggregate",
+        score=0.0,
+        snippet=f"Q-mode refused: {reason}",
+        metadata={
+            "mode_applied": "Q",
+            "aggregate": True,
+            "q_refused": True,
+            "q_refusal_reason": reason,
+        },
+    )
+
+
+async def _route_q_mode(
+    plan: Plan,
+    hits: list[Hit],
+    conn: Any,
+    *,
+    workspace_id: str,
+    query: str,
+) -> list[Hit]:
+    """Compile + execute the planner's Q payload. Returns a single
+    synthesized Hit carrying the aggregate result (or a refusal).
+
+    The Hit's kind='aggregate' + metadata.aggregate=True makes the Design 5
+    polymorphic citation builder pick the 'aggregate' modality, so the
+    citation carries `audit_query_id` and `row_count` automatically."""
+    if not plan.q_payload:
+        # Planner didn't produce a Q payload — Identity planner emits
+        # mode='Q' from heuristics ("how many") but doesn't know how to
+        # build the SQL. The Gemini planner is required for real Q
+        # queries; this branch trips on Identity + an aggregation query.
+        return [_q_refusal_hit(
+            "no Q payload — the Identity planner cannot emit SQL; "
+            "configure KB_PLANNER=gemini for aggregations"
+        )]
+
+    if conn is None:
+        return [_q_refusal_hit("Q-mode requires a database connection")]
+
+    from kb.domain.audit_queries import insert_audit_query
+    from kb.q_planner import (
+        DEFAULT_ROW_CAP,
+        DEFAULT_TIMEOUT_MS,
+        QPlanValidationError,
+        compile_plan,
+        execute,
+        parse_plan,
+        validate,
+    )
+    from kb.q_planner.artifact import persist_csv_artifact
+    from kb.q_planner.grammar import QPlanParseError
+
+    # Layers 2 + 3 + 4 (grammar parse — operator / aggregation / set_op enums)
+    try:
+        parsed = parse_plan(plan.q_payload)
+    except QPlanParseError as exc:
+        return [_q_refusal_hit(f"plan parse error: {exc}")]
+
+    # Layer 1 (catalog whitelist + type checks)
+    try:
+        validated = validate(parsed)
+    except QPlanValidationError as exc:
+        return [_q_refusal_hit(f"plan validation error: {exc}")]
+
+    # Layers 5 + 6 (compile to parameterized SQL — no escape hatch)
+    try:
+        sql, params = compile_plan(
+            validated, workspace_id=workspace_id, row_cap=DEFAULT_ROW_CAP,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return [_q_refusal_hit(f"plan compile error: {exc}")]
+
+    # Layers 7 + 8 + 9 (execute with read_only + timeout + row cap)
+    result = await execute(
+        conn, sql, params,
+        row_cap=DEFAULT_ROW_CAP,
+        timeout_ms=DEFAULT_TIMEOUT_MS,
+    )
+
+    # Layer 10 — persist audit row (+ best-effort CSV artifact).
+    # audit_queries is APPEND-ONLY (kb_app has SELECT+INSERT only), so we
+    # can't UPDATE the csv_artifact_key after insert. Workflow:
+    #   1. Pre-compute the audit_query_id (UUID) client-side.
+    #   2. Upload the CSV under that key (best-effort; may fail silently).
+    #   3. INSERT the row in one shot with the key already set.
+    import uuid as _uuid
+    audit_id = str(_uuid.uuid4())
+    csv_key: str | None = None
+
+    if result.status == "ok" and result.row_count > 0:
+        csv_key = await persist_csv_artifact(
+            workspace_id=workspace_id,
+            audit_query_id=audit_id,
+            column_names=result.column_names,
+            rows=result.rows,
+        )
+
+    try:
+        await insert_audit_query(
+            conn,
+            workspace_id=workspace_id,
+            query_log_id=None,
+            plan=plan.q_payload,
+            compiled_sql=sql,
+            params=list(params),
+            row_count=result.row_count,
+            runtime_ms=result.runtime_ms,
+            status=result.status,
+            refusal_reason=result.error_message,
+            csv_artifact_key=csv_key,
+            audit_query_id=audit_id,
+        )
+    except Exception as exc:  # noqa: BLE001
+        # Audit insert failure must not block the answer.
+        import logging
+        logging.getLogger(__name__).warning(
+            "Q-mode audit_query insert failed: %s", exc,
+        )
+        audit_id = "audit-insert-failed"
+
+    # Synthesize the single aggregate Hit.
+    if result.status == "ok":
+        snippet = _format_aggregate_snippet(result.column_names, result.rows)
+        return [Hit(
+            id=audit_id,
+            kind="aggregate",
+            score=1.0,
+            snippet=snippet,
+            metadata={
+                "mode_applied": "Q",
+                "aggregate": True,
+                "audit_query_id": audit_id,
+                "row_count": result.row_count,
+                "csv_artifact_key": csv_key,
+                "Q_plan_id": audit_id,
+                "column_names": list(result.column_names),
+            },
+        )]
+
+    # Non-ok status: refusal Hit.
+    return [_q_refusal_hit(
+        f"{result.status}: {result.error_message or 'no detail'}"
+    )]
+
+
+def _format_aggregate_snippet(
+    column_names: tuple[str, ...] | list[str],
+    rows: tuple[tuple, ...] | list[tuple],
+    *,
+    max_rows: int = 5,
+) -> str:
+    """Human-readable rendering of the aggregate result. Powers the
+    generator's answer template ("Across 18 contracts, total cap $X")
+    when KB_QUERY_LLM=identity. The Gemini generator gets the same
+    snippet + can paraphrase."""
+    if not rows:
+        return f"Aggregate query returned no rows. Columns: {list(column_names)}."
+    cols = list(column_names)
+    head_rows = rows[:max_rows]
+    lines = [f"Aggregate result over {len(rows)} row(s):"]
+    for r in head_rows:
+        pairs = []
+        for c, v in zip(cols, r):
+            pairs.append(f"{c}={v}")
+        lines.append("  " + ", ".join(pairs))
+    if len(rows) > max_rows:
+        lines.append(f"  ... ({len(rows) - max_rows} more rows in CSV artifact)")
+    return "\n".join(lines)

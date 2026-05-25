@@ -170,16 +170,22 @@ async def test_search_accepts_T_mode(client, test_workspace):
     assert body["mode"] == "T"
 
 
-async def test_search_rejects_Q_until_b4b(client, test_workspace):
-    """Q-mode is API-gated until B4b's SQL pipeline ships."""
-    resp = await client.post(
-        "/search",
-        headers=headers(test_workspace),
-        json={"query": "how many invoices", "mode": "Q"},
-    )
-    assert resp.status_code == 400
+async def test_search_accepts_Q_mode_after_b4b(client, test_workspace):
+    """With B4b shipped, Q-mode no longer 400s at the API. The Identity
+    planner can't emit a Q payload from a raw query, so the request
+    falls through to a synthesized refusal Hit (no audit_queries row),
+    but the envelope is shape-valid."""
+    reset_orchestrator()
+    with _env(KB_INTENT_CLASSIFIER="identity", KB_PLANNER="identity"):
+        reset_orchestrator()
+        resp = await client.post(
+            "/search",
+            headers=headers(test_workspace),
+            json={"query": "how many invoices", "mode": "Q"},
+        )
+    assert resp.status_code == 200
     body = resp.json()
-    assert "B4b" in body["detail"] or "B4b" in body["title"]
+    assert body["mode"] == "Q"
 
 
 async def test_search_rejects_unknown_mode(client, test_workspace):
@@ -239,8 +245,10 @@ async def test_chat_envelope_includes_intent_and_plan(client, test_workspace):
 
 
 async def test_chat_planner_can_override_H_default(client, test_workspace):
-    """The planner upgrades 'H' to 'Q' on an aggregation query — Q then
-    triggers the orchestrator's refusal envelope (until B4b)."""
+    """The planner upgrades 'H' to 'Q' on an aggregation query. With B4b
+    shipped, Q-mode now executes — but the Identity planner can't emit
+    a Q payload, so the synthesized refusal Hit short-circuits the
+    generator to a no_hits-style answer. Either way, body['mode'] is 'Q'."""
     reset_orchestrator()
     with _env(
         KB_QUERY_LLM="identity",
@@ -257,9 +265,13 @@ async def test_chat_planner_can_override_H_default(client, test_workspace):
     assert resp.status_code == 200
     body = resp.json()
     assert body["mode"] == "Q"
-    # Q-mode backstop in orchestrator → refusal envelope.
-    assert body["generation"]["refused"] is True
-    assert body["generation"]["refusal_reason"] == "q_mode_not_implemented"
+    # The synthesized Q-refusal hit shows up in hits with q_refused metadata.
+    refusal_hits = [
+        h for h in body["hits"]
+        if (h.get("metadata") or {}).get("q_refused")
+    ]
+    assert len(refusal_hits) == 1
+    assert "no Q payload" in refusal_hits[0]["metadata"]["q_refusal_reason"]
 
 
 async def test_chat_persists_intent_and_plan_to_query_log(

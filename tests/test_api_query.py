@@ -111,8 +111,10 @@ async def test_post_search_422_on_oversize_query(client, test_workspace):
 
 
 async def test_post_search_400_on_unsupported_mode(client, test_workspace):
+    """Any mode outside the 12 spec values is 400. (Q is now supported
+    in B4b; this test covers the catch-all for unknown modes.)"""
     resp = await client.post(
-        "/search", json={"query": "q", "mode": "Q"},
+        "/search", json={"query": "q", "mode": "Z"},
         headers=headers(test_workspace),
     )
     assert resp.status_code == 400

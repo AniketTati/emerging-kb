@@ -74,23 +74,14 @@ def reset_orchestrator() -> None:
 # ---------------------------------------------------------------------------
 
 
-# B4a — all 12 modes pass the API validator. Q-mode is gated by the
-# orchestrator (refusal envelope) until B4b lands the SQL pipeline.
+# B4a + B4b — all 12 modes pass the API validator. Q-mode pipeline is
+# wired in kb.query.mode_router via kb.q_planner (Design 1 10 layers).
 _ALLOWED_MODES: set[str] = {
-    "E", "F", "S", "H", "T", "M", "G", "D", "C", "A", "K",
+    "E", "F", "S", "H", "T", "M", "G", "D", "C", "A", "Q", "K",
 }
-# Q lives in _MODES_DEFERRED until B4b — accepting it would invite callers
-# to depend on a contract we haven't shipped yet. 400 with a clear pointer
-# is friendlier than letting the orchestrator surface a refused envelope.
-_MODES_DEFERRED: set[str] = {"Q"}
 
 
 def _validate_request(body: QueryRequest) -> None:
-    if body.mode in _MODES_DEFERRED:
-        raise InvalidQueryError(
-            f"mode={body.mode!r} (SQL aggregation) ships in B4b — "
-            f"not yet available"
-        )
     if body.mode not in _ALLOWED_MODES:
         raise InvalidQueryError(
             f"mode={body.mode!r} not supported; expected one of "

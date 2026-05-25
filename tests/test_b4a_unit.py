@@ -378,10 +378,16 @@ async def test_apply_mode_H_pass_through():
     assert out[0].id == "h1"
 
 
-async def test_apply_mode_Q_raises_until_b4b():
+async def test_apply_mode_Q_returns_refusal_hit_without_payload():
+    """B4b — Q-mode without a Q payload (Identity planner can't emit SQL)
+    returns a synthetic refusal Hit instead of raising. The legacy
+    QModeNotImplementedError is preserved for back-compat but no longer
+    fires from apply_mode."""
     plan = Plan(mode="Q", intent="aggregation")
-    with pytest.raises(QModeNotImplementedError):
-        await apply_mode(plan, [], workspace_id="ws", query="q", conn=None)
+    out = await apply_mode(plan, [], workspace_id="ws", query="q", conn=None)
+    assert len(out) == 1
+    assert out[0].metadata["q_refused"] is True
+    assert "no Q payload" in out[0].metadata["q_refusal_reason"]
 
 
 async def test_apply_mode_K_no_conn_falls_through_with_annotation():
