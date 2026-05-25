@@ -1,8 +1,8 @@
-"""Phase 9 — GET /audit endpoint (paginated query_log list).
+"""Phase 9 + B5 / WA-11 — Audit endpoints.
 
-Reads Phase 8f's `query_log` table. Cursor pagination on
-`(created_at DESC, id DESC)` — uses the audit-list index from 8f
-decision #11. Wave A serves up to 200 rows/page.
+GET /audit              — paginated query_log list (Phase 9)
+GET /audit-log          — paginated audit_log list (B5)
+GET /audit-log/integrity — verify hash-chain integrity for the workspace (B5)
 """
 
 from __future__ import annotations
@@ -18,6 +18,11 @@ from pydantic import BaseModel, Field
 from kb.api.deps import current_workspace_id, kb_app_connection
 from kb.api.errors import BadRequestError
 from kb.db.pool import Connection
+from kb.domain.audit_chain import (
+    ChainWalkResult,
+    read_audit_log,
+    walk_chain,
+)
 
 
 _DEFAULT_LIMIT = 50
@@ -140,3 +145,85 @@ async def get_audit(
         )
 
     return AuditResponse(items=items, next_cursor=next_cursor)
+
+
+# ===========================================================================
+# B5 — audit_log + integrity endpoints
+# ===========================================================================
+
+
+class AuditLogItem(BaseModel):
+    id: str
+    workspace_id: str
+    created_at: str
+    actor: str
+    action: str
+    entity_type: str | None = None
+    entity_id: str | None = None
+    query_id: str | None = None
+    payload: dict
+    prev_hash: str
+    hash: str
+
+
+class AuditLogListResponse(BaseModel):
+    items: list[AuditLogItem] = Field(default_factory=list)
+
+
+class IntegrityResponse(BaseModel):
+    ok: bool
+    workspace_id: str
+    total_rows: int
+    broken_at_row_id: str | None = None
+    broken_at_position: int | None = None
+    expected_hash: str | None = None
+    actual_hash: str | None = None
+    notes: str | None = None
+
+
+@router.get(
+    "/audit-log",
+    summary="List service-level audit events (hash-chained) for this workspace",
+    response_model=AuditLogListResponse,
+)
+async def get_audit_log(
+    workspace_id: Annotated[str, Depends(current_workspace_id)],
+    conn: Annotated[Connection, Depends(kb_app_connection)],
+    limit: int = Query(default=100, ge=1, le=500),
+) -> AuditLogListResponse:
+    rows = await read_audit_log(conn, workspace_id=workspace_id, limit=limit)
+    return AuditLogListResponse(items=[
+        AuditLogItem(
+            id=r.id, workspace_id=r.workspace_id, created_at=r.created_at,
+            actor=r.actor, action=r.action,
+            entity_type=r.entity_type, entity_id=r.entity_id,
+            query_id=r.query_id, payload=r.payload,
+            prev_hash=r.prev_hash, hash=r.hash,
+        )
+        for r in rows
+    ])
+
+
+@router.get(
+    "/audit-log/integrity",
+    summary="Walk the audit_log SHA-256 chain for this workspace; report the first divergence",
+    response_model=IntegrityResponse,
+)
+async def get_audit_log_integrity(
+    workspace_id: Annotated[str, Depends(current_workspace_id)],
+    conn: Annotated[Connection, Depends(kb_app_connection)],
+    limit: int = Query(default=5000, ge=1, le=50000),
+) -> IntegrityResponse:
+    result: ChainWalkResult = await walk_chain(
+        conn, workspace_id=workspace_id, limit=limit,
+    )
+    return IntegrityResponse(
+        ok=result.ok,
+        workspace_id=result.workspace_id,
+        total_rows=result.total_rows,
+        broken_at_row_id=result.broken_at_row_id,
+        broken_at_position=result.broken_at_position,
+        expected_hash=result.expected_hash,
+        actual_hash=result.actual_hash,
+        notes=result.notes,
+    )
