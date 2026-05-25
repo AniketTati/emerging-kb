@@ -28,7 +28,7 @@ from kb.layered_config import (
     resolve_config,
     revoke_override,
 )
-from kb.layered_config.repo import ALLOWED_SCOPE_KINDS
+from kb.layered_config.repo import ALLOWED_SCOPE_KINDS, read_workspace_overrides
 
 
 router = APIRouter(prefix="/settings", tags=["settings"])
@@ -210,3 +210,52 @@ async def delete_override(
         config_key=body.config_key,
     )
     return OverrideResponse(revoked=revoked)
+
+
+# ---------------------------------------------------------------------------
+# B7 / WA-14 — GET /settings/overrides
+# ---------------------------------------------------------------------------
+
+
+class OverrideOut(BaseModel):
+    id: str
+    workspace_id: str
+    scope_kind: str
+    scope_id: str | None
+    config_key: str
+    config_value: Any
+    reason: str | None
+    set_by: str | None
+    set_at: str
+    active: bool
+
+
+class OverridesListResponse(BaseModel):
+    items: list[OverrideOut] = Field(default_factory=list)
+
+
+@router.get(
+    "/overrides",
+    response_model=OverridesListResponse,
+    summary="List active config overrides for this workspace (Settings UI)",
+)
+async def get_overrides(
+    workspace_id: Annotated[str, Depends(current_workspace_id)],
+    conn: Annotated[Connection, Depends(kb_app_connection)],
+) -> OverridesListResponse:
+    rows = await read_workspace_overrides(conn, workspace_id=workspace_id)
+    return OverridesListResponse(items=[
+        OverrideOut(
+            id=str(r.id),
+            workspace_id=str(r.workspace_id),
+            scope_kind=str(r.scope_kind),
+            scope_id=str(r.scope_id) if r.scope_id else None,
+            config_key=str(r.config_key),
+            config_value=r.config_value,
+            reason=r.reason,
+            set_by=r.set_by,
+            set_at=str(r.set_at),
+            active=bool(r.active),
+        )
+        for r in rows
+    ])
