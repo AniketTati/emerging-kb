@@ -74,10 +74,27 @@ def reset_orchestrator() -> None:
 # ---------------------------------------------------------------------------
 
 
+# B4a — all 12 modes pass the API validator. Q-mode is gated by the
+# orchestrator (refusal envelope) until B4b lands the SQL pipeline.
+_ALLOWED_MODES: set[str] = {
+    "E", "F", "S", "H", "T", "M", "G", "D", "C", "A", "K",
+}
+# Q lives in _MODES_DEFERRED until B4b — accepting it would invite callers
+# to depend on a contract we haven't shipped yet. 400 with a clear pointer
+# is friendlier than letting the orchestrator surface a refused envelope.
+_MODES_DEFERRED: set[str] = {"Q"}
+
+
 def _validate_request(body: QueryRequest) -> None:
-    if body.mode != "H":
+    if body.mode in _MODES_DEFERRED:
         raise InvalidQueryError(
-            f"mode={body.mode!r} not supported in Wave A (only 'H')"
+            f"mode={body.mode!r} (SQL aggregation) ships in B4b — "
+            f"not yet available"
+        )
+    if body.mode not in _ALLOWED_MODES:
+        raise InvalidQueryError(
+            f"mode={body.mode!r} not supported; expected one of "
+            f"{sorted(_ALLOWED_MODES)}"
         )
     # min/max length is enforced by Pydantic; this is belt-and-braces for
     # whitespace-only queries that pass the min_length check.
@@ -112,6 +129,13 @@ async def _write_query_log(
     faithfulness_score: float | None = None
     faithfulness_regenerations: int = 0
     citation_modalities: list[str] | None = None
+    # B4a — intent + planner observability
+    intent_label: str | None = None
+    intent_conf: float | None = None
+    plan_payload: Any = None
+    # The mode actually executed (may differ from the request's mode
+    # when the planner overrode 'H' with something more precise).
+    mode_used: str = body.mode
 
     if chat_result is not None:
         gen = chat_result.generation
@@ -124,6 +148,17 @@ async def _write_query_log(
         faithfulness_score = chat_result.faithfulness_score
         faithfulness_regenerations = chat_result.faithfulness_regenerations
         citation_modalities = chat_result.citation_modalities or None
+        intent_label = chat_result.intent
+        intent_conf = chat_result.intent_confidence
+        plan_payload = chat_result.plan
+        if chat_result.mode:
+            mode_used = chat_result.mode
+    elif search_result is not None:
+        intent_label = search_result.intent
+        intent_conf = search_result.intent_confidence
+        plan_payload = search_result.plan
+        if search_result.mode:
+            mode_used = search_result.mode
 
     hit_ids_payload = [
         {"id": h.id, "kind": h.kind, "score": h.score}
@@ -140,21 +175,23 @@ async def _write_query_log(
                 refused, refusal_reason, answer, citations, model_id,
                 latency_ms, idempotency_key,
                 faithfulness_score, faithfulness_verdict,
-                faithfulness_regenerations, citation_modalities
+                faithfulness_regenerations, citation_modalities,
+                intent, intent_confidence, plan
             ) VALUES (
                 %s, %s, %s, %s, %s,
                 %s::jsonb, %s::jsonb, %s,
                 %s, %s, %s, %s::jsonb, %s,
                 %s, %s,
                 %s, %s,
-                %s, %s
+                %s, %s,
+                %s, %s, %s::jsonb
             )
             """,
             (
                 query_id,
                 workspace_id,
                 body.query,
-                body.mode,
+                mode_used,
                 endpoint,
                 json.dumps(rewrites_payload),
                 json.dumps(hit_ids_payload),
@@ -170,6 +207,9 @@ async def _write_query_log(
                 faithfulness_verdict,
                 faithfulness_regenerations,
                 citation_modalities,
+                intent_label,
+                intent_conf,
+                json.dumps(plan_payload) if plan_payload is not None else None,
             ),
         )
     except Exception as exc:  # noqa: BLE001 — audit is best-effort
@@ -200,7 +240,8 @@ async def post_search(
     orchestrator = get_orchestrator()
     try:
         result = await orchestrator.search(
-            body.query, workspace_id=workspace_id, conn=conn
+            body.query, workspace_id=workspace_id, conn=conn,
+            requested_mode=body.mode,
         )
     except Exception as exc:  # noqa: BLE001
         _LOG.exception("search pipeline failed: %s", exc)
@@ -255,7 +296,8 @@ async def post_chat(
     orchestrator = get_orchestrator()
     try:
         result = await orchestrator.chat(
-            body.query, workspace_id=workspace_id, conn=conn
+            body.query, workspace_id=workspace_id, conn=conn,
+            requested_mode=body.mode,
         )
     except Exception as exc:  # noqa: BLE001
         _LOG.exception("chat pipeline failed: %s", exc)

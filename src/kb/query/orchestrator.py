@@ -50,6 +50,9 @@ from kb.query.generate import (
     Generator,
     make_generator,
 )
+from kb.query.intent import IntentClassifier, IntentResult, make_intent_classifier
+from kb.query.mode_router import QModeNotImplementedError, apply_mode
+from kb.query.planner import Plan, Planner, make_planner
 from kb.query.rerank import Reranker, make_reranker
 from kb.query.rewriter import QueryRewriter, Rewrites, make_query_rewriter
 from kb.query.rrf import DEFAULT_K, Hit, rrf_fuse
@@ -69,6 +72,11 @@ class SearchResult(BaseModel):
     hits: list[Hit] = Field(default_factory=list)
     crag_score: float = 0.0
     latency_ms: int = 0
+    # B4a — intent + planner observability (also persisted in query_log).
+    intent: str | None = None
+    intent_confidence: float | None = None
+    mode: str | None = None
+    plan: dict[str, Any] | None = None
 
 
 class ChatResult(BaseModel):
@@ -88,6 +96,11 @@ class ChatResult(BaseModel):
     faithfulness_model_id: str | None = None
     # B3 / WA-7 — denormalized distinct modalities for dashboard filtering.
     citation_modalities: list[str] = Field(default_factory=list)
+    # B4a — intent + planner observability.
+    intent: str | None = None
+    intent_confidence: float | None = None
+    mode: str | None = None
+    plan: dict[str, Any] | None = None
 
 
 class Orchestrator:
@@ -106,6 +119,8 @@ class Orchestrator:
         crag: CragGate,
         generator: Generator,
         faithfulness: FaithfulnessGate | None = None,
+        intent_classifier: IntentClassifier | None = None,
+        planner: Planner | None = None,
         run_channels: Any = run_all_channels,
         crag_threshold: float = CRAG_THRESHOLD,
     ) -> None:
@@ -116,6 +131,9 @@ class Orchestrator:
         self._generator = generator
         # B3 / WA-8 — faithfulness gate (default Identity = always-pass).
         self._faithfulness = faithfulness or make_faithfulness_gate()
+        # B4a / WA-9 + WA-10 — intent classifier + planner (Identity defaults).
+        self._intent_classifier = intent_classifier or make_intent_classifier()
+        self._planner = planner or make_planner()
         self._run_channels = run_channels
         self._crag_threshold = crag_threshold
 
@@ -129,6 +147,8 @@ class Orchestrator:
             crag=make_crag_gate(),
             generator=make_generator(),
             faithfulness=make_faithfulness_gate(),
+            intent_classifier=make_intent_classifier(),
+            planner=make_planner(),
         )
 
     # ------------------------------------------------------------------
@@ -141,13 +161,20 @@ class Orchestrator:
         *,
         workspace_id: str,
         conn: Any = None,
+        requested_mode: str | None = None,
     ) -> SearchResult:
-        """Run rewriter → channels × rewrites → RRF → rerank → CRAG.
-
-        Returns reranked top-10 + CRAG score. No generation.
+        """Run intent → planner → rewriter → channels → RRF → rerank →
+        mode router → CRAG. Returns reranked top-10 + CRAG score.
+        No generation.
         """
         t0 = time.monotonic()
         query_id = str(uuid.uuid4())
+
+        # B4a — intent classifier + planner ahead of retrieval.
+        intent = await self._intent_classifier.classify(query)
+        plan = await self._planner.plan(
+            query, intent, requested_mode=requested_mode,
+        )
 
         rewrites = await self._rewriter.rewrite(query)
         hits = await self._retrieve_and_rerank(
@@ -155,6 +182,11 @@ class Orchestrator:
             rewrites=rewrites,
             workspace_id=workspace_id,
             conn=conn,
+        )
+        # B4a — apply mode-conditional routing. Q-mode raises until B4b.
+        hits = await apply_mode(
+            plan, hits,
+            workspace_id=workspace_id, query=query, conn=conn,
         )
         crag_score = await self._crag.assess(query, hits)
 
@@ -167,6 +199,10 @@ class Orchestrator:
             hits=hits,
             crag_score=crag_score,
             latency_ms=latency_ms,
+            intent=intent.label,
+            intent_confidence=intent.confidence,
+            mode=plan.mode,
+            plan=plan.to_dict(),
         )
 
     async def chat(
@@ -175,8 +211,10 @@ class Orchestrator:
         *,
         workspace_id: str,
         conn: Any = None,
+        requested_mode: str | None = None,
     ) -> ChatResult:
-        """Run search → CRAG-gated generation → HHEM faithfulness gate.
+        """Run intent → planner → search → mode router → CRAG-gated
+        generation → HHEM faithfulness gate.
 
         When CRAG < threshold, generator is force-refused so the response
         shape is consistent (always a `GenerationResult`).
@@ -185,9 +223,18 @@ class Orchestrator:
         builder, then run the faithfulness gate. On 'refused' verdict we
         regenerate up to MAX_REGENERATIONS times before surfacing the
         refusal (architecture §6 step 9).
+
+        Q-mode raises QModeNotImplementedError until B4b lands the 10-
+        layer SQL defense pipeline. The orchestrator catches it and
+        substitutes a clear refusal so /chat keeps a stable shape.
         """
         t0 = time.monotonic()
         query_id = str(uuid.uuid4())
+
+        intent = await self._intent_classifier.classify(query)
+        plan = await self._planner.plan(
+            query, intent, requested_mode=requested_mode,
+        )
 
         rewrites = await self._rewriter.rewrite(query)
         hits = await self._retrieve_and_rerank(
@@ -196,6 +243,21 @@ class Orchestrator:
             workspace_id=workspace_id,
             conn=conn,
         )
+        try:
+            hits = await apply_mode(
+                plan, hits,
+                workspace_id=workspace_id, query=query, conn=conn,
+            )
+        except QModeNotImplementedError as exc:
+            # Q-mode pipeline ships in B4b; return a refusal envelope so
+            # the API stays stable.
+            return self._q_mode_refusal_envelope(
+                query_id=query_id, query=query,
+                rewrites=rewrites, intent=intent, plan=plan,
+                latency_ms=int((time.monotonic() - t0) * 1000),
+                reason=str(exc),
+            )
+
         crag_score = await self._crag.assess(query, hits)
 
         force_refuse = crag_score < self._crag_threshold
@@ -246,6 +308,49 @@ class Orchestrator:
             faithfulness_regenerations=regenerations,
             faithfulness_model_id=faithfulness.model_id or None,
             citation_modalities=modalities,
+            intent=intent.label,
+            intent_confidence=intent.confidence,
+            mode=plan.mode,
+            plan=plan.to_dict(),
+        )
+
+    def _q_mode_refusal_envelope(
+        self,
+        *,
+        query_id: str,
+        query: str,
+        rewrites: Rewrites,
+        intent: IntentResult,
+        plan: Plan,
+        latency_ms: int,
+        reason: str,
+    ) -> ChatResult:
+        """Build a stable refusal envelope when Q-mode is requested before
+        the B4b pipeline lands. Keeps /chat's response shape unchanged."""
+        gen = GenerationResult(
+            answer="",
+            citations=[],
+            refused=True,
+            refusal_reason="q_mode_not_implemented",
+            model_id="planner",
+        )
+        return ChatResult(
+            query_id=query_id,
+            query=query,
+            rewrites=self._rewrites_to_dict(rewrites),
+            generation=gen,
+            hits=[],
+            crag_score=0.0,
+            latency_ms=latency_ms,
+            faithfulness_verdict="skipped",
+            faithfulness_score=0.0,
+            faithfulness_regenerations=0,
+            faithfulness_model_id=None,
+            citation_modalities=[],
+            intent=intent.label,
+            intent_confidence=intent.confidence,
+            mode=plan.mode,
+            plan=plan.to_dict(),
         )
 
     async def _assess_faithfulness(
