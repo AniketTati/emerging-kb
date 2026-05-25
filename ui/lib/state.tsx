@@ -18,6 +18,10 @@ export type FileRow = {
   startedAt: number;        // ms epoch
   updatedAt: number;
   error?: string;
+  // Surfaced by the widened /files response (Phase 5b + B2).
+  inferred_doc_type?: string | null;
+  source_authority?: number | null;
+  doc_status?: string | null;
 };
 
 export type State = { rows: Record<string, FileRow>; order: string[] };
@@ -40,6 +44,9 @@ function rowFromFile(file: FileResource, now: number): FileRow {
     events: [],
     startedAt: now,
     updatedAt: now,
+    inferred_doc_type: file.inferred_doc_type ?? null,
+    source_authority: file.source_authority ?? null,
+    doc_status: file.doc_status ?? null,
   };
 }
 
@@ -58,7 +65,17 @@ export function reducer(state: State, action: Action): State {
     case "upserted": {
       const existing = state.rows[action.file.id];
       const row: FileRow = existing
-        ? { ...existing, lifecycle_state: action.file.lifecycle_state, updatedAt: now }
+        ? {
+            ...existing,
+            lifecycle_state: action.file.lifecycle_state,
+            updatedAt: now,
+            // Re-merge the per-doc fields — a later /files refetch
+            // may surface inferred_doc_type/source_authority after
+            // the file moves past `fields_extracting`.
+            inferred_doc_type: action.file.inferred_doc_type ?? existing.inferred_doc_type,
+            source_authority: action.file.source_authority ?? existing.source_authority,
+            doc_status: action.file.doc_status ?? existing.doc_status,
+          }
         : rowFromFile(action.file, now);
       const order = existing ? state.order : [action.file.id, ...state.order];
       return { rows: { ...state.rows, [action.file.id]: row }, order };

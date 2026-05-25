@@ -3,7 +3,7 @@
 import { Search, RefreshCw } from "lucide-react";
 import { useUploadStore } from "@/lib/state";
 
-export type FilterKey = "all" | "processing" | "ready" | "failed";
+export type FilterKey = "all" | "processing" | "ready" | "failed" | "attention";
 
 type Props = {
   active: FilterKey;
@@ -27,6 +27,16 @@ export function FilterBar({ active, onChange, query, onQueryChange }: Props) {
     ).length,
     ready: rows.filter((r) => r.lifecycle_state === "ready").length,
     failed: rows.filter((r) => r.lifecycle_state === "failed").length,
+    // Needs-attention: failed, low source_authority, or non-`live` doc_status.
+    // Mirrors matchesFilter("attention") in FilesTable.
+    attention: rows.filter((r) => {
+      const lowAuth =
+        r.source_authority !== null &&
+        r.source_authority !== undefined &&
+        r.source_authority < 0.5;
+      const notLive = r.doc_status && r.doc_status !== "live";
+      return r.lifecycle_state === "failed" || lowAuth || notLive;
+    }).length,
   };
 
   const chip = (key: FilterKey, label: string) => {
@@ -57,6 +67,7 @@ export function FilterBar({ active, onChange, query, onQueryChange }: Props) {
         {chip("processing", "Processing")}
         {chip("ready", "Ready")}
         {chip("failed", "Failed")}
+        {chip("attention", "Needs attention")}
       </div>
 
       <div className="flex-1 relative">

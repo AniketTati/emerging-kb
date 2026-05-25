@@ -15,7 +15,6 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from kb.db.pool import Connection
 
-
 # ---------------------------------------------------------------------------
 # Pydantic — request bodies + response shapes
 # ---------------------------------------------------------------------------
@@ -40,6 +39,15 @@ class FileResponse(BaseModel):
     lifecycle_state: str
     created_at: str
     updated_at: str
+    # Phase 5b / WA-6 / B2 — fields added after Phase 2a. Always present
+    # in the response now; values may be null on rows that haven't yet
+    # reached the lifecycle stage that populates them (e.g.
+    # `inferred_doc_type` is null until the file passes through
+    # `fields_extracting`).
+    inferred_doc_type: str | None = None
+    source_authority: float | None = None
+    source_authority_reason: str | None = None
+    doc_status: str | None = None
 
 
 class LifecycleEvent(BaseModel):
@@ -52,6 +60,29 @@ class LifecycleEvent(BaseModel):
 
 class FileWithLifecycleResponse(FileResponse):
     lifecycle: list[LifecycleEvent]
+
+
+class FileDetailsResponse(BaseModel):
+    """Rich rollups for the Upload-page row-expand: per-doc counts +
+    timing + chain membership. Wave-A demo surface — additive over
+    FileWithLifecycleResponse so callers can fetch one or both."""
+    file: FileResponse
+    lifecycle: list[LifecycleEvent]
+    # Counts derived from join tables. None means "not yet computable"
+    # for files that haven't reached the relevant lifecycle stage.
+    n_pages: int = 0
+    n_chunks: int = 0
+    n_contextual_chunks: int = 0
+    n_mentions: int = 0
+    n_atomic_units: int = 0
+    n_entities_linked: int = 0
+    n_triples: int = 0
+    # Doc-chain membership (WA-3). chain_id is null for files not in any
+    # detected chain.
+    chain_id: str | None = None
+    chain_role: str | None = None
+    chain_version_index: int | None = None
+    is_current_version: bool | None = None
 
 
 class FileListResponse(BaseModel):
@@ -90,7 +121,9 @@ def _iso(ts: datetime) -> str:
 
 _FILE_COLS = (
     "id, name, content_sha, mime_type, size_bytes, doc_type, "
-    "lifecycle_state, created_at, updated_at"
+    "lifecycle_state, created_at, updated_at, "
+    "inferred_doc_type, source_authority, source_authority_reason, "
+    "doc_status"
 )
 
 
@@ -105,6 +138,10 @@ def _row_to_file(row: tuple) -> FileResponse:
         lifecycle_state=row[6],
         created_at=_iso(row[7]),
         updated_at=_iso(row[8]),
+        inferred_doc_type=row[9],
+        source_authority=(float(row[10]) if row[10] is not None else None),
+        source_authority_reason=row[11],
+        doc_status=row[12],
     )
 
 
@@ -251,6 +288,431 @@ async def get_file_with_lifecycle(
     return FileWithLifecycleResponse(
         **file_resp.model_dump(), lifecycle=events,
     )
+
+
+async def get_file_details(
+    conn: Connection, file_id: str,
+) -> FileDetailsResponse:
+    """Returns FileWithLifecycleResponse content plus join-table
+    rollups: page / chunk / mention / atomic_unit / linked-entity /
+    triple counts + doc-chain membership.
+
+    Single function rather than 7 separate endpoints because the UI
+    row-expand wants all of them at once. None of the underlying
+    counts are expensive (each is a single indexed COUNT(*) per
+    file_id). For corpora >100K docs we'd add materialized rollups
+    in `files`; Wave-A scale doesn't need it."""
+    file_resp = await get_file(conn, file_id)
+
+    # Lifecycle history (same as get_file_with_lifecycle).
+    cur = await conn.execute(
+        "SELECT from_state, to_state, event, payload, created_at "
+        "FROM file_lifecycle "
+        "WHERE file_id = %s "
+        "ORDER BY created_at ASC, id ASC",
+        (file_id,),
+    )
+    rows = await cur.fetchall()
+    events = [
+        LifecycleEvent(
+            from_state=r[0],
+            to_state=r[1],
+            event=r[2],
+            payload=(r[3] if isinstance(r[3], dict)
+                    else (json.loads(r[3]) if r[3] else {})),
+            created_at=_iso(r[4]),
+        )
+        for r in rows
+    ]
+
+    # Rollups in one round-trip. Tables that don't exist yet on older
+    # workspaces (or older test schemas) won't FAIL the request — each
+    # subquery uses to_regclass + COALESCE so missing tables yield 0.
+    cur = await conn.execute(
+        """
+        SELECT
+          COALESCE((SELECT COUNT(*)::int FROM raw_pages          WHERE file_id = %s), 0) AS n_pages,
+          COALESCE((SELECT COUNT(*)::int FROM chunks             WHERE file_id = %s), 0) AS n_chunks,
+          COALESCE((SELECT COUNT(*)::int FROM contextual_chunks  WHERE file_id = %s), 0) AS n_ctx,
+          COALESCE((SELECT COUNT(*)::int FROM extracted_mentions WHERE file_id = %s), 0) AS n_mentions,
+          COALESCE((SELECT COUNT(*)::int FROM atomic_units       WHERE file_id = %s), 0) AS n_au,
+          COALESCE((SELECT COUNT(DISTINCT me.entity_id)::int
+                      FROM mention_to_entity me
+                      JOIN extracted_mentions em ON em.id = me.mention_id
+                     WHERE em.file_id = %s), 0)                          AS n_entities_linked,
+          COALESCE((SELECT COUNT(*)::int FROM extracted_triples  WHERE file_id = %s), 0) AS n_triples
+        """,
+        (file_id, file_id, file_id, file_id, file_id, file_id, file_id),
+    )
+    rollups = await cur.fetchone() or (0, 0, 0, 0, 0, 0, 0)
+
+    # Chain membership lookup.
+    cur = await conn.execute(
+        """
+        SELECT m.chain_id::text, m.role, m.version_index,
+               (c.current_version_id = m.doc_id) AS is_current
+          FROM doc_chain_members m
+          JOIN doc_chains c ON c.id = m.chain_id
+         WHERE m.doc_id = %s
+         LIMIT 1
+        """,
+        (file_id,),
+    )
+    chain_row = await cur.fetchone()
+    chain_id = chain_role = None
+    chain_vidx: int | None = None
+    is_current: bool | None = None
+    if chain_row:
+        chain_id = str(chain_row[0])
+        chain_role = str(chain_row[1])
+        chain_vidx = int(chain_row[2]) if chain_row[2] is not None else None
+        is_current = bool(chain_row[3])
+
+    return FileDetailsResponse(
+        file=file_resp,
+        lifecycle=events,
+        n_pages=int(rollups[0]),
+        n_chunks=int(rollups[1]),
+        n_contextual_chunks=int(rollups[2]),
+        n_mentions=int(rollups[3]),
+        n_atomic_units=int(rollups[4]),
+        n_entities_linked=int(rollups[5]),
+        n_triples=int(rollups[6]),
+        chain_id=chain_id,
+        chain_role=chain_role,
+        chain_version_index=chain_vidx,
+        is_current_version=is_current,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Doc-detail surfaces — one focused, paginated query per UI accordion.
+#
+# Each layer of the pipeline lives in its own table; the UI's doc-detail page
+# binds one accordion to one endpoint. Lists are paginated so a 500-page doc
+# with thousands of mentions doesn't blow up a single response.
+# ---------------------------------------------------------------------------
+
+
+class ProposedField(BaseModel):
+    id: str
+    field_name: str
+    field_description: str | None
+    value_text: str | None
+    value_type: str | None
+    is_pii: bool
+    model_id: str | None
+
+
+class AtomicUnit(BaseModel):
+    id: str
+    unit_type: str
+    parameters: dict[str, Any]
+    anchor_chunk_id: str | None
+    rarity_score: float | None
+    model_id: str | None
+
+
+class Mention(BaseModel):
+    id: str
+    mention_text: str
+    mention_type: str
+    chunk_id: str | None
+    start_offset: int | None
+    end_offset: int | None
+    confidence: float | None
+    canonical_entity_id: str | None
+    canonical_name: str | None
+    # Pages the mention's chunk spans — surfaced so the doc-detail
+    # source viewer can jump PDF pages on click. Null for non-paginated
+    # formats (md/txt/eml).
+    source_page_numbers: list[int] | None = None
+
+
+class EntityMentioned(BaseModel):
+    entity_id: str
+    canonical_name: str
+    entity_type: str
+    mentions_in_doc: int
+    total_mentions: int
+
+
+class TripleInDoc(BaseModel):
+    id: str
+    subject_text: str
+    predicate_text: str
+    object_text: str
+    confidence: float | None
+    chunk_id: str | None
+    source_page_numbers: list[int] | None = None
+
+
+class ExtractedEntityInstance(BaseModel):
+    id: str
+    schema_entity_id: str
+    schema_entity_name: str | None
+    parent_entity_id: str | None
+    fields: dict[str, Any]
+
+
+class CitationByQuery(BaseModel):
+    query_id: str
+    query: str
+    answer: str | None
+    endpoint: str
+    created_at: str | None
+
+
+class PaginatedList(BaseModel):
+    """Wrapper so each accordion knows total + offset/limit without an
+    extra COUNT(*) round-trip per scroll."""
+    items: list[Any]
+    total: int
+    limit: int
+    offset: int
+
+
+async def list_proposed_fields(
+    conn: Connection, file_id: str,
+) -> list[ProposedField]:
+    """L3 open-world: fields Gemini inferred this doc has, irrespective of
+    any closed-world schema. Usually <30 per doc — no pagination."""
+    cur = await conn.execute(
+        """
+        SELECT id::text, field_name, field_description, value_text,
+               value_type, is_pii, model_id
+          FROM proposed_fields
+         WHERE file_id = %s
+         ORDER BY field_name ASC
+        """,
+        (file_id,),
+    )
+    rows = await cur.fetchall()
+    return [
+        ProposedField(
+            id=r[0], field_name=r[1], field_description=r[2],
+            value_text=r[3], value_type=r[4], is_pii=bool(r[5]),
+            model_id=r[6],
+        )
+        for r in rows
+    ]
+
+
+async def list_extracted_entities(
+    conn: Connection, file_id: str,
+) -> list[ExtractedEntityInstance]:
+    """L4 closed-world: instances of schema_entities populated from this
+    doc. Joined to schema_entities for the human-readable name."""
+    cur = await conn.execute(
+        """
+        SELECT ee.id::text, ee.schema_entity_id::text,
+               se.name, ee.parent_entity_id::text, ee.fields
+          FROM extracted_entities ee
+          LEFT JOIN schema_entities se ON se.id = ee.schema_entity_id
+         WHERE ee.file_id = %s
+         ORDER BY ee.created_at ASC
+        """,
+        (file_id,),
+    )
+    rows = await cur.fetchall()
+    return [
+        ExtractedEntityInstance(
+            id=r[0], schema_entity_id=r[1], schema_entity_name=r[2],
+            parent_entity_id=r[3],
+            fields=(r[4] if isinstance(r[4], dict) else (json.loads(r[4]) if r[4] else {})),
+        )
+        for r in rows
+    ]
+
+
+async def list_atomic_units(
+    conn: Connection, file_id: str, *, limit: int = 50, offset: int = 0,
+) -> tuple[list[AtomicUnit], int]:
+    cur = await conn.execute(
+        "SELECT COUNT(*) FROM atomic_units WHERE file_id = %s",
+        (file_id,),
+    )
+    total = int((await cur.fetchone())[0])
+    cur = await conn.execute(
+        """
+        SELECT id::text, unit_type, parameters, anchor_chunk_id::text,
+               rarity_score, model_id
+          FROM atomic_units
+         WHERE file_id = %s
+         ORDER BY rarity_score DESC NULLS LAST, created_at ASC
+         LIMIT %s OFFSET %s
+        """,
+        (file_id, limit, offset),
+    )
+    rows = await cur.fetchall()
+    items = [
+        AtomicUnit(
+            id=r[0], unit_type=r[1],
+            parameters=(r[2] if isinstance(r[2], dict) else (json.loads(r[2]) if r[2] else {})),
+            anchor_chunk_id=r[3],
+            rarity_score=(float(r[4]) if r[4] is not None else None),
+            model_id=r[5],
+        )
+        for r in rows
+    ]
+    return items, total
+
+
+async def list_mentions(
+    conn: Connection, file_id: str, *,
+    limit: int = 100, offset: int = 0, mention_type: str | None = None,
+) -> tuple[list[Mention], int]:
+    where = ["em.file_id = %s"]
+    params: list[Any] = [file_id]
+    if mention_type:
+        where.append("em.mention_type = %s")
+        params.append(mention_type)
+    where_sql = " AND ".join(where)
+
+    cur = await conn.execute(
+        f"SELECT COUNT(*) FROM extracted_mentions em WHERE {where_sql}",
+        tuple(params),
+    )
+    total = int((await cur.fetchone())[0])
+
+    cur = await conn.execute(
+        f"""
+        SELECT em.id::text, em.mention_text, em.mention_type,
+               em.contextual_chunk_id::text, em.start_offset, em.end_offset,
+               em.confidence, m2e.entity_id::text, e.canonical_name,
+               c.source_page_numbers
+          FROM extracted_mentions em
+          LEFT JOIN mention_to_entity m2e ON m2e.mention_id = em.id
+          LEFT JOIN entities e ON e.id = m2e.entity_id
+          LEFT JOIN contextual_chunks cc ON cc.id = em.contextual_chunk_id
+          LEFT JOIN chunks c ON c.id = cc.chunk_id
+         WHERE {where_sql}
+         ORDER BY em.contextual_chunk_id ASC, em.start_offset ASC
+         LIMIT %s OFFSET %s
+        """,
+        tuple([*params, limit, offset]),
+    )
+    rows = await cur.fetchall()
+    items = [
+        Mention(
+            id=r[0], mention_text=r[1], mention_type=r[2], chunk_id=r[3],
+            start_offset=(int(r[4]) if r[4] is not None else None),
+            end_offset=(int(r[5]) if r[5] is not None else None),
+            confidence=(float(r[6]) if r[6] is not None else None),
+            canonical_entity_id=r[7], canonical_name=r[8],
+            source_page_numbers=(list(r[9]) if r[9] else None),
+        )
+        for r in rows
+    ]
+    return items, total
+
+
+async def list_entities_mentioned(
+    conn: Connection, file_id: str, *,
+    limit: int = 50, offset: int = 0,
+) -> tuple[list[EntityMentioned], int]:
+    cur = await conn.execute(
+        """
+        SELECT COUNT(DISTINCT m2e.entity_id)
+          FROM mention_to_entity m2e
+          JOIN extracted_mentions em ON em.id = m2e.mention_id
+         WHERE em.file_id = %s
+        """,
+        (file_id,),
+    )
+    total = int((await cur.fetchone())[0])
+    cur = await conn.execute(
+        """
+        SELECT e.id::text, e.canonical_name, e.entity_type,
+               COUNT(em.id)::int AS in_doc, e.mention_count
+          FROM mention_to_entity m2e
+          JOIN extracted_mentions em ON em.id = m2e.mention_id
+          JOIN entities e ON e.id = m2e.entity_id
+         WHERE em.file_id = %s
+         GROUP BY e.id, e.canonical_name, e.entity_type, e.mention_count
+         ORDER BY in_doc DESC, e.canonical_name ASC
+         LIMIT %s OFFSET %s
+        """,
+        (file_id, limit, offset),
+    )
+    rows = await cur.fetchall()
+    items = [
+        EntityMentioned(
+            entity_id=r[0], canonical_name=r[1], entity_type=r[2],
+            mentions_in_doc=int(r[3]), total_mentions=int(r[4]),
+        )
+        for r in rows
+    ]
+    return items, total
+
+
+async def list_triples_in_doc(
+    conn: Connection, file_id: str, *,
+    limit: int = 50, offset: int = 0,
+) -> tuple[list[TripleInDoc], int]:
+    cur = await conn.execute(
+        "SELECT COUNT(*) FROM extracted_triples WHERE file_id = %s",
+        (file_id,),
+    )
+    total = int((await cur.fetchone())[0])
+    cur = await conn.execute(
+        """
+        SELECT t.id::text, t.subject_text, t.predicate_text, t.object_text,
+               t.confidence, t.chunk_id::text, c.source_page_numbers
+          FROM extracted_triples t
+          LEFT JOIN chunks c ON c.id = t.chunk_id
+         WHERE t.file_id = %s
+         ORDER BY t.confidence DESC NULLS LAST, t.created_at ASC
+         LIMIT %s OFFSET %s
+        """,
+        (file_id, limit, offset),
+    )
+    rows = await cur.fetchall()
+    items = [
+        TripleInDoc(
+            id=r[0], subject_text=r[1], predicate_text=r[2],
+            object_text=r[3],
+            confidence=(float(r[4]) if r[4] is not None else None),
+            chunk_id=r[5],
+            source_page_numbers=(list(r[6]) if r[6] else None),
+        )
+        for r in rows
+    ]
+    return items, total
+
+
+async def list_citations_of_doc(
+    conn: Connection, file_id: str, *,
+    limit: int = 20, offset: int = 0,
+) -> tuple[list[CitationByQuery], int]:
+    """Find query_log rows that cited this doc. citations is jsonb shaped
+    like [{"file_id": "...", "modality": "...", ...}]. The `@>` containment
+    operator can use a GIN index on `citations` (added in this PR)."""
+    target = json.dumps([{"file_id": file_id}])
+    cur = await conn.execute(
+        "SELECT COUNT(*) FROM query_log WHERE citations @> %s::jsonb",
+        (target,),
+    )
+    total = int((await cur.fetchone())[0])
+    cur = await conn.execute(
+        """
+        SELECT id::text, query, answer, endpoint, created_at
+          FROM query_log
+         WHERE citations @> %s::jsonb
+         ORDER BY created_at DESC
+         LIMIT %s OFFSET %s
+        """,
+        (target, limit, offset),
+    )
+    rows = await cur.fetchall()
+    items = [
+        CitationByQuery(
+            query_id=r[0], query=r[1], answer=r[2], endpoint=r[3],
+            created_at=(_iso(r[4]) if r[4] else None),
+        )
+        for r in rows
+    ]
+    return items, total
 
 
 async def soft_delete_file(

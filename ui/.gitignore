@@ -7,3 +7,4 @@ out/
 tests/artifacts/*.png
 playwright-report/
 test-results/
+tsconfig.tsbuildinfo
