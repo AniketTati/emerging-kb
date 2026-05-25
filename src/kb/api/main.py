@@ -27,10 +27,12 @@ from kb.api.middleware import (
     RequestIdMiddleware,
     WorkspaceMiddleware,
 )
+from kb.api.audit import router as audit_router
 from kb.api.corpus import router as corpus_router
 from kb.api.files import router as files_router
 from kb.api.query import router as query_router
 from kb.api.readiness import router as ready_router
+from kb.api.sse import router as sse_router
 from kb.api.schema_hierarchy import router as schema_hierarchy_router
 from kb.api.schema_versions import router as schema_versions_router
 from kb.api.schemas import router as schemas_router
@@ -103,6 +105,8 @@ def build_app() -> FastAPI:
     app.include_router(files_router)
     app.include_router(corpus_router)
     app.include_router(query_router)
+    app.include_router(audit_router)
+    app.include_router(sse_router)
 
     # Phase 2a — register default parsers (Docling). Idempotent.
     from kb.parsers import register_default_parsers
