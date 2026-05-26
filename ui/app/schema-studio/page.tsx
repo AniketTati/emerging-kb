@@ -944,10 +944,88 @@ function TypedTab({
       ) : entities.length === 0 ? (
         <EmptyState title="No entity types defined" body="This schema has no entity types yet." />
       ) : (
-        <div className="space-y-3">
-          {entities.map((e) => (
-            <TypedEntityCard key={e.id} schemaId={activeSchemaId!} entity={e} />
-          ))}
+        <TypedEntityTree
+          schemaId={activeSchemaId!}
+          entities={entities}
+        />
+      )}
+    </div>
+  );
+}
+
+
+/**
+ * Hierarchical tree renderer for typed entities — doc_root parents
+ * at the top level, each with its sub_entity children indented below.
+ *
+ * Sub_entities surface as a `contains many` arrow with the cardinality
+ * shown. Click anywhere on a card to expand the field list (lazy
+ * fetched via `listSchemaEntityFields`).
+ *
+ * Legacy schemas with only one anonymous "Doc" entity render as a
+ * single doc_root with no children — visually identical to the old
+ * flat list so the existing UX isn't broken during rollout.
+ */
+function TypedEntityTree({
+  schemaId, entities,
+}: {
+  schemaId: string;
+  entities: SchemaEntity[];
+}) {
+  // Partition into doc-roots and the children that hang off each one.
+  // Sub-entities without a known parent fall back to a "Orphaned"
+  // bucket so they're visible (data anomaly — should not happen post-
+  // bootstrap, but defensive).
+  const docRoots = entities.filter(
+    (e) => (e.kind ?? "doc_root") === "doc_root",
+  );
+  const subByParent: Record<string, SchemaEntity[]> = {};
+  const orphans: SchemaEntity[] = [];
+  for (const e of entities) {
+    if ((e.kind ?? "doc_root") !== "sub_entity") continue;
+    if (e.parent_type_id && entities.some((p) => p.id === e.parent_type_id)) {
+      const k = e.parent_type_id;
+      (subByParent[k] = subByParent[k] || []).push(e);
+    } else {
+      orphans.push(e);
+    }
+  }
+
+  return (
+    <div className="space-y-4" data-testid="typed-entity-tree">
+      {docRoots.map((parent) => {
+        const children = subByParent[parent.id] || [];
+        return (
+          <div key={parent.id} className="space-y-2">
+            <TypedEntityCard schemaId={schemaId} entity={parent} />
+            {children.length > 0 && (
+              <div className="ml-6 pl-4 border-l-2 border-zinc-200 space-y-2">
+                <div className="text-[10px] uppercase tracking-wider text-zinc-400 mt-1">
+                  contains many ↓
+                </div>
+                {children.map((c) => (
+                  <TypedEntityCard
+                    key={c.id}
+                    schemaId={schemaId}
+                    entity={c}
+                    nested
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
+      {orphans.length > 0 && (
+        <div className="mt-6 pt-4 border-t border-amber-200">
+          <div className="text-[10px] uppercase tracking-wider text-amber-700 mb-2">
+            Orphaned sub-entities (no parent_type_id found in this schema)
+          </div>
+          <div className="space-y-2">
+            {orphans.map((e) => (
+              <TypedEntityCard key={e.id} schemaId={schemaId} entity={e} nested />
+            ))}
+          </div>
         </div>
       )}
     </div>
@@ -956,8 +1034,14 @@ function TypedTab({
 
 
 function TypedEntityCard({
-  schemaId, entity,
-}: { schemaId: string; entity: SchemaEntity }) {
+  schemaId, entity, nested = false,
+}: {
+  schemaId: string;
+  entity: SchemaEntity;
+  /** When true, render a slightly more compact card (used by the
+   *  TypedEntityTree to indicate this is a child of a doc_root). */
+  nested?: boolean;
+}) {
   const [open, setOpen] = useState(false);
   const [fields, setFields] = useState<SchemaField[] | null>(null);
 
@@ -974,8 +1058,18 @@ function TypedEntityCard({
     setOpen(!open);
   }
 
+  // Sub_entity badge — small purple chip so the user can scan a long
+  // tree and immediately see which rows are repeated children.
+  const kind = entity.kind ?? "doc_root";
+
   return (
-    <div className="rounded-lg border border-zinc-200 bg-white">
+    <div
+      className={`rounded-lg border bg-white ${
+        nested ? "border-zinc-200" : "border-zinc-300"
+      }`}
+      data-testid="typed-entity-card"
+      data-kind={kind}
+    >
       <button
         type="button"
         onClick={toggle}
@@ -985,7 +1079,14 @@ function TypedEntityCard({
         <span className="text-[10px] mono px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-700">
           {entity.lifecycle_state}
         </span>
-        <span className="text-sm font-medium text-zinc-900">{entity.name}</span>
+        {kind === "sub_entity" && (
+          <span className="text-[10px] mono px-1.5 py-0.5 rounded bg-violet-50 text-violet-700 border border-violet-200">
+            contains many
+          </span>
+        )}
+        <span className={`text-sm font-medium text-zinc-900 ${nested ? "" : "font-semibold"}`}>
+          {entity.name}
+        </span>
         {entity.description && (
           <span className="text-xs text-zinc-500 truncate ml-2">
             {entity.description}

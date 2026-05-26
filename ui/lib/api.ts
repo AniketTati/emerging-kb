@@ -862,6 +862,14 @@ export type SchemaEntity = {
   name: string;
   description: string | null;
   lifecycle_state: string;
+  /** 'doc_root' = parent doc-level type; 'sub_entity' = repeated
+   *  child collection (transaction, line_item, clause, …). Schema
+   *  Studio's Typed tab uses this + `parent_type_id` to render the
+   *  parent → children tree. */
+  kind?: "doc_root" | "sub_entity";
+  /** For sub_entity, the doc_root entity-type id this collection
+   *  belongs to. null for doc_root. */
+  parent_type_id?: string | null;
 };
 
 export type SchemaField = {
