@@ -1275,10 +1275,14 @@ async def extract_mentions_file_impl(file_id: str) -> None:
                 },
             )
 
-    # Phase 5b §5.12.2 #8: chain extract_fields_file.
+    # KV+Tables collapse: defer the new single-call extractor that
+    # replaces both extract_fields_file and the LLM-driven portion of
+    # extract_atomic_units_file. The chained downstream is the same
+    # extract_schema_entities_file once KV+Tables transitions lifecycle
+    # to entities_extracting.
     try:
         await procrastinate_app.configure_task(
-            name="extract_fields_file"
+            name="extract_kv_tables_file"
         ).defer_async(file_id=file_id)
     except Exception:  # noqa: BLE001
         traceback.print_exc()
@@ -1574,6 +1578,393 @@ async def extract_fields_file_impl(file_id: str) -> None:
     try:
         await procrastinate_app.configure_task(
             name="extract_atomic_units_file"
+        ).defer_async(file_id=file_id)
+    except Exception:  # noqa: BLE001
+        traceback.print_exc()
+
+
+# ---------------------------------------------------------------------------
+# Phase 5d — extract_kv_tables_file_impl (KV+Tables collapse)
+# ---------------------------------------------------------------------------
+
+
+async def extract_kv_tables_file_impl(file_id: str) -> None:
+    """KV+Tables collapse — ONE LLM call covers L2b (classify+propose) AND
+    L3 (atomic_units) for this file.
+
+    Pipeline before this task: mentions_extracting (mentions written) →
+    fields_extracting (this task) → entities_extracting (skipping the
+    legacy 'units_extracting' slot).
+
+    What this writes in a single transaction:
+      - files.inferred_doc_type
+      - proposed_fields  (from KV+Tables scalars)
+      - inferred_schema_fields + schema_fields (via cluster + promote)
+      - domain_vocabulary (discovery, best-effort)
+      - atomic_units (from KV+Tables tables[] rows — replaces plugin call)
+
+    The downstream extract_schema_entities_file task is unchanged: it
+    still bootstraps sub_entity types from atomic_units in Phase 1.5,
+    so the nested-entity refactor work continues to pay off.
+
+    Net LLM-call savings: 5 → 2 per doc (mentions + KV+Tables).
+
+    Per-stage idempotency: returns if already past fields_extracting.
+    """
+    from kb.config import get_settings
+    from kb.domain.atomic_units import (
+        delete_atomic_units_for_file,
+        insert_atomic_unit,
+        read_existing_unit_parameters,
+        update_atomic_unit_rarity,
+    )
+    from kb.domain.conflicts import apply_source_authority_from_config
+    from kb.domain.fields import (
+        count_docs_of_doctype,
+        delete_proposed_fields_for_file,
+        insert_proposed_field,
+        mark_inferred_field_promoted,
+        read_proposed_fields_for_doctype,
+        update_file_inferred_doc_type,
+        upsert_inferred_schema_field,
+    )
+    from kb.extraction.anomaly import score_units_jit
+    from kb.extraction.entities import build_chunk_indexed_text
+    from kb.extraction.kv_tables import (
+        KVTablesExtractionError,
+        make_kv_tables_extractor,
+    )
+    from kb.extraction.promotion import (
+        PromotionThresholds,
+        cluster_fields_for_doctype,
+        ensure_auto_schema_entity,
+        promote_field,
+        should_promote,
+    )
+
+    settings = get_settings()
+    db_url = settings.database_url
+
+    # Phase 1: state check + read chunks for the LLM input.
+    chunks: list[tuple[str, str]] = []
+    workspace_id_str = ""
+    async with open_connection(db_url) as conn:
+        async with conn.transaction():
+            cur = await conn.execute(
+                "SELECT workspace_id, lifecycle_state FROM files WHERE id = %s",
+                (file_id,),
+            )
+            row = await cur.fetchone()
+            if row is None:
+                raise FileNotFoundError(file_id)
+            workspace_id, lifecycle_state = row
+
+            # KV+Tables runs in the fields_extracting slot. Anything past
+            # it (units_extracting / entities_extracting / ready / failed
+            # / deleted) means an earlier ingest already processed this
+            # file — no-op.
+            if lifecycle_state in (
+                "units_extracting",
+                "entities_extracting",
+                "ready",
+                "failed",
+                "deleted",
+            ):
+                return
+            if lifecycle_state != "fields_extracting":
+                return
+
+            workspace_id_str = str(workspace_id)
+            await conn.execute(
+                "SELECT set_config('app.workspace_id', %s, true)",
+                (workspace_id_str,),
+            )
+
+            # Read chunks paired with their contextual text. The LLM
+            # sees `contextual_text` (carries Anthropic-style context
+            # prefixes). For storage we need BOTH ids:
+            #   - `chunks.id` for proposed_fields/atomic_units.source_chunk_id
+            #     (FKs added in migration 0032)
+            #   - `contextual_chunks.id` for atomic_units.anchor_chunk_id
+            #     (original FK from 0016)
+            cur = await conn.execute(
+                "SELECT c.id::text, cc.id::text, cc.contextual_text "
+                "FROM contextual_chunks cc "
+                "JOIN chunks c ON c.id = cc.chunk_id "
+                "WHERE cc.file_id = %s "
+                "ORDER BY c.chunk_index ASC",
+                (file_id,),
+            )
+            chunk_rows = await cur.fetchall()
+            # chunks list shape: [(chunks.id, contextual_text), ...] for
+            # build_chunk_indexed_text; cc_ids parallel list for anchor.
+            chunks = [(r[0], r[2] or "") for r in chunk_rows]
+            cc_ids: list[str] = [r[1] for r in chunk_rows]
+
+            # Existing sub_entity type names in this workspace — passed
+            # as hints so the LLM reuses table names across docs of the
+            # same kind (e.g. "transactions" not "txns").
+            cur = await conn.execute(
+                "SELECT DISTINCT name FROM schema_entities "
+                "WHERE workspace_id = %s AND kind = 'sub_entity' "
+                "AND lifecycle_state = 'active'",
+                (workspace_id_str,),
+            )
+            existing_hints: list[str] = [r[0] for r in await cur.fetchall()]
+
+    chunk_indexed_text = build_chunk_indexed_text(chunks) if chunks else ""
+
+    # Phase 2: KV+Tables LLM call (single round-trip).
+    extractor = make_kv_tables_extractor()
+    try:
+        payload = await extractor.extract(
+            chunk_indexed_text=chunk_indexed_text,
+            doc_type_hint=None,
+            existing_sub_entity_hints=existing_hints or None,
+        )
+    except KVTablesExtractionError:
+        # Don't block the chain on extractor failure — log + advance
+        # with empty payload. Admin re-extract endpoint can rerun later.
+        traceback.print_exc()
+        from kb.extraction.kv_tables import KVTablesPayload
+        payload = KVTablesPayload(model_id="identity")
+
+    doc_type = payload.doc_type or "unknown"
+
+    # Phase 3: atomic write across files / proposed_fields /
+    # inferred_schema_fields / schema_fields / atomic_units.
+    async with open_connection(db_url) as conn:
+        async with conn.transaction():
+            await conn.execute(
+                "SELECT set_config('app.workspace_id', %s, true)",
+                (workspace_id_str,),
+            )
+
+            await update_file_inferred_doc_type(
+                conn, file_id=file_id, doc_type=doc_type,
+            )
+
+            # WA-6 / B2 — source_authority side-effect, ungated.
+            try:
+                await apply_source_authority_from_config(
+                    conn,
+                    file_id=file_id,
+                    workspace_id=workspace_id_str,
+                    inferred_doc_type=doc_type,
+                )
+            except Exception:  # noqa: BLE001
+                traceback.print_exc()
+
+            # ---- Scalars → proposed_fields ----
+            await delete_proposed_fields_for_file(conn, file_id=file_id)
+
+            n_proposed = 0
+            for sc in payload.scalars:
+                src_chunk_id = None
+                if (
+                    sc.source_chunk is not None
+                    and 0 <= sc.source_chunk < len(chunks)
+                ):
+                    src_chunk_id = chunks[sc.source_chunk][0]
+                await insert_proposed_field(
+                    conn,
+                    file_id=file_id,
+                    workspace_id=workspace_id_str,
+                    inferred_doc_type=doc_type,
+                    field_name=sc.name,
+                    field_description=sc.description,
+                    value_text=sc.value,
+                    value_type=sc.value_type,
+                    is_pii=sc.is_pii,
+                    model_id=payload.model_id,
+                    source_chunk_id=src_chunk_id,
+                    source_char_start=None,
+                    source_char_end=None,
+                )
+                n_proposed += 1
+
+            # ---- Cluster + vocabulary + promote (unchanged from L2b) ----
+            proposed_per_doc = await read_proposed_fields_for_doctype(
+                conn, workspace_id=workspace_id_str, inferred_doc_type=doc_type,
+            )
+            n_docs = await count_docs_of_doctype(
+                conn, workspace_id=workspace_id_str, inferred_doc_type=doc_type,
+            )
+            clusters = cluster_fields_for_doctype(
+                proposed_per_doc=proposed_per_doc,
+                total_docs_of_type=n_docs,
+            )
+
+            # Vocabulary discovery (best-effort).
+            try:
+                from kb.domain.vocabulary import upsert_vocabulary
+                from kb.extraction.vocabulary import (
+                    discover_vocabulary_candidates,
+                )
+
+                cluster_names_for_embed = [c.canonical_name for c in clusters]
+                if cluster_names_for_embed:
+                    embedder = make_embedder()
+                    embeddings = await embedder.embed_batch(
+                        cluster_names_for_embed,
+                    )
+                    name_embed_map = {
+                        n: list(e) for n, e in zip(
+                            cluster_names_for_embed, embeddings,
+                        )
+                    }
+                    vocab_candidates = discover_vocabulary_candidates(
+                        clusters=clusters,
+                        name_embeddings=name_embed_map,
+                    )
+                    domain_id = (
+                        os.environ.get("KB_DEFAULT_DOMAIN")
+                        or f"workspace:{workspace_id}"
+                    )
+                    for cand in vocab_candidates:
+                        await upsert_vocabulary(
+                            conn,
+                            domain_id=domain_id,
+                            canonical_term=cand.canonical_term,
+                            synonyms=cand.synonyms,
+                            source="discovered",
+                            confidence=cand.confidence,
+                            n_docs_observed=cand.n_docs_observed,
+                        )
+            except Exception:  # noqa: BLE001
+                traceback.print_exc()
+
+            # UPSERT inferred_schema_fields + promote crossed clusters.
+            thresholds = PromotionThresholds.from_env()
+            promotion_count = 0
+            schema_entity_id: str | None = None
+            for cluster in clusters:
+                inferred_id = await upsert_inferred_schema_field(
+                    conn,
+                    workspace_id=workspace_id_str,
+                    inferred_doc_type=doc_type,
+                    canonical_name=cluster.canonical_name,
+                    description=cluster.description,
+                    value_type=cluster.value_type,
+                    n_docs_observed=cluster.n_docs_observed,
+                    prevalence=cluster.prevalence,
+                    stability=cluster.stability,
+                    value_type_confidence=cluster.value_type_confidence,
+                )
+                if should_promote(cluster, thresholds):
+                    if schema_entity_id is None:
+                        _, schema_entity_id = await ensure_auto_schema_entity(
+                            conn,
+                            workspace_id=workspace_id_str,
+                            doc_type=doc_type,
+                        )
+                    schema_field_id = await promote_field(
+                        conn,
+                        workspace_id=workspace_id_str,
+                        schema_entity_id=schema_entity_id,
+                        canonical_name=cluster.canonical_name,
+                        description=cluster.description,
+                        value_type=cluster.value_type,
+                    )
+                    await mark_inferred_field_promoted(
+                        conn,
+                        inferred_field_id=inferred_id,
+                        promoted_schema_field_id=schema_field_id,
+                    )
+                    promotion_count += 1
+
+            # ---- Tables → atomic_units ----
+            await delete_atomic_units_for_file(conn, file_id=file_id)
+
+            inserted_ids: list[str] = []
+            inserted_params: list[dict] = []
+            inserted_types: list[str] = []
+            total_rows = 0
+            for tbl in payload.tables:
+                # Each row of each table → one atomic_unit. unit_type is
+                # the table.name (snake_case) — the L4 Phase 1.5
+                # bootstrap will create matching sub_entity types.
+                for row in tbl.rows:
+                    src_chunk_id = None  # FK → chunks.id
+                    anchor_cc_id = None  # FK → contextual_chunks.id
+                    if (
+                        row.source_chunk is not None
+                        and 0 <= row.source_chunk < len(chunks)
+                    ):
+                        src_chunk_id = chunks[row.source_chunk][0]
+                        anchor_cc_id = cc_ids[row.source_chunk]
+                    uid = await insert_atomic_unit(
+                        conn,
+                        file_id=file_id,
+                        workspace_id=workspace_id_str,
+                        unit_type=tbl.name,
+                        parameters=row.values,
+                        anchor_chunk_id=anchor_cc_id,
+                        rarity_score=None,
+                        model_id=payload.model_id,
+                        source_chunk_id=src_chunk_id,
+                        source_char_start=row.source_char_start,
+                        source_char_end=row.source_char_end,
+                    )
+                    inserted_ids.append(uid)
+                    inserted_params.append(row.values)
+                    inserted_types.append(tbl.name)
+                    total_rows += 1
+
+            # JIT anomaly scoring — score per unit_type so cohorts
+            # match (transactions only compared to other transactions).
+            distinct_unit_types = sorted(set(inserted_types))
+            for ut in distinct_unit_types:
+                idx_for_type = [
+                    i for i, t in enumerate(inserted_types) if t == ut
+                ]
+                params_for_type = [inserted_params[i] for i in idx_for_type]
+                ids_for_type = [inserted_ids[i] for i in idx_for_type]
+                historical = await read_existing_unit_parameters(
+                    conn, workspace_id=workspace_id_str, unit_type=ut,
+                )
+                scores = score_units_jit(params_for_type, historical)
+                for uid, sc in zip(ids_for_type, scores, strict=True):
+                    if sc is not None:
+                        await update_atomic_unit_rarity(
+                            conn, unit_id=uid, rarity_score=float(sc),
+                        )
+
+            # Lifecycle: jump straight to entities_extracting, skipping
+            # the legacy units_extracting slot (the L3 plugin call no
+            # longer happens — KV+Tables ate that work).
+            await transition_lifecycle(
+                conn,
+                workspace_id=workspace_id_str,
+                file_id=file_id,
+                to_state="entities_extracting",
+                event="kv_tables_extracted",
+                payload={
+                    "doc_type": doc_type,
+                    "scalar_count": n_proposed,
+                    "n_clusters": len(clusters),
+                    "promotions": promotion_count,
+                    "table_count": len(payload.tables),
+                    "row_count": total_rows,
+                    "unit_types": distinct_unit_types,
+                    "model_id": payload.model_id,
+                    "input_tokens": payload.input_token_count,
+                    "output_tokens": payload.output_token_count,
+                },
+            )
+
+    # Chain extract_schema_entities_file + extract_triples_file in
+    # parallel — same downstream wiring as the legacy atomic_units task.
+    try:
+        await procrastinate_app.configure_task(
+            name="extract_schema_entities_file"
+        ).defer_async(file_id=file_id)
+    except Exception:  # noqa: BLE001
+        traceback.print_exc()
+
+    try:
+        await procrastinate_app.configure_task(
+            name="extract_triples_file"
         ).defer_async(file_id=file_id)
     except Exception:  # noqa: BLE001
         traceback.print_exc()
@@ -3018,8 +3409,29 @@ async def extract_fields_file(file_id: str) -> None:
     workspace+doc_type, auto-promotes if thresholds cross. Chains
     extract_atomic_units_file. Lifecycle: fields_extracting →
     units_extracting (or failed).
+
+    NOTE: Superseded by extract_kv_tables_file in the KV+Tables collapse.
+    Retained here for rollback safety until the demo corpus has been
+    re-extracted and verified end-to-end.
     """
     await extract_fields_file_impl(file_id)
+
+
+@procrastinate_app.task(name="extract_kv_tables_file", queue="kb", pass_context=False)
+async def extract_kv_tables_file(file_id: str) -> None:
+    """KV+Tables collapse — replaces extract_fields_file + the LLM-driven
+    portion of extract_atomic_units_file.
+
+    Single LLM call returns scalars + N typed tables. Scalars feed the
+    existing L2b promotion pipeline (proposed_fields → inferred_schema_
+    fields → schema_fields). Table rows land in atomic_units, where
+    Phase 1.5 bootstrap in extract_schema_entities_file promotes them to
+    extracted_entities under typed sub_entity schemas.
+
+    Lifecycle: fields_extracting → entities_extracting (skipping
+    'units_extracting' — the legacy plugin slot is now dead code).
+    """
+    await extract_kv_tables_file_impl(file_id)
 
 
 @procrastinate_app.task(name="extract_atomic_units_file", queue="kb", pass_context=False)
