@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import os
 import traceback
 
 from kb.chunking import Chunk, ChunkingError, chunk_pages
@@ -1453,6 +1454,66 @@ async def extract_fields_file_impl(file_id: str) -> None:
                 proposed_per_doc=proposed_per_doc,
                 total_docs_of_type=n_docs,
             )
+
+            # WA-2 / Design 6 — vocabulary discovery. When two clusters
+            # in the same doc_type have semantically similar canonical
+            # names ("non_compete" + "non_competition_clause"), emit a
+            # synonym entry into `domain_vocabulary` so the query-time
+            # BM25 expansion (architecture §6 step 2.5) can union them
+            # together. Pre-fix: discovery function existed in
+            # extraction/vocabulary.py but nothing called it, so the
+            # table stayed empty + the Schema-Studio Vocabulary tab
+            # had nothing to show.
+            try:
+                from kb.extraction.vocabulary import (
+                    discover_vocabulary_candidates,
+                )
+                from kb.domain.vocabulary import upsert_vocabulary
+
+                # Embed every cluster's canonical_name in one batch so
+                # the pairwise cosine in discover_vocabulary_candidates
+                # can compute similarity. The embedder is the same one
+                # used for chunks (Gemini Embedding 001, 3072-dim).
+                cluster_names_for_embed = [c.canonical_name for c in clusters]
+                if cluster_names_for_embed:
+                    from kb.embeddings import make_embedder
+                    embedder = make_embedder()
+                    embeddings = await embedder.embed_batch(
+                        cluster_names_for_embed,
+                    )
+                    name_embed_map = {
+                        n: list(e) for n, e in zip(
+                            cluster_names_for_embed, embeddings,
+                        )
+                    }
+                    vocab_candidates = discover_vocabulary_candidates(
+                        clusters=clusters,
+                        name_embeddings=name_embed_map,
+                    )
+                    # Resolve the workspace's domain_id for this
+                    # vocabulary scope. Falls back to a workspace-
+                    # scoped sentinel when no domain config maps the
+                    # workspace explicitly — that way vocab still
+                    # accumulates per workspace and we can promote
+                    # to a shared domain later.
+                    domain_id = (
+                        os.environ.get("KB_DEFAULT_DOMAIN")
+                        or f"workspace:{workspace_id}"
+                    )
+                    for cand in vocab_candidates:
+                        await upsert_vocabulary(
+                            conn,
+                            domain_id=domain_id,
+                            canonical_term=cand.canonical_term,
+                            synonyms=cand.synonyms,
+                            source="discovered",
+                            confidence=cand.confidence,
+                            n_docs_observed=cand.n_docs_observed,
+                        )
+            except Exception:  # noqa: BLE001
+                # Vocabulary discovery is best-effort observability
+                # — never fail the ingest chain over it.
+                traceback.print_exc()
 
             # UPSERT inferred_schema_fields rows + check promotion.
             thresholds = PromotionThresholds.from_env()

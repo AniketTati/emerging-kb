@@ -611,11 +611,64 @@ async def route_correction(
             notes = "source_authority correction missing file_id/authority"
 
     elif scope == "extraction":
+        # Wave A close-up (Design 4 §"Pipeline integration") — defer
+        # targeted re-extraction tasks for the implicated docs when
+        # the severity warrants it. The worker re-runs the field +
+        # atomic-unit extraction on each file; the new extracted_*
+        # rows OVERWRITE the old ones via per-file idempotency.
+        #
+        # Best-effort: a defer failure (procrastinate misconfigured,
+        # network blip) leaves the correction at status='fixing' so
+        # an operator can re-route manually. We never fail the
+        # correction submission over the defer.
+        implicated = [
+            str(d) for d in (target.get("implicated_docs") or [])
+            if d
+        ]
+        deferred_for: list[str] = []
+        if (
+            implicated
+            and correction.severity in ("blocker", "important")
+        ):
+            try:
+                from kb.workers.tasks import procrastinate_app
+                for file_id in implicated:
+                    try:
+                        await procrastinate_app.configure_task(
+                            name="extract_fields_file"
+                        ).defer_async(file_id=file_id)
+                        await procrastinate_app.configure_task(
+                            name="extract_atomic_units_file"
+                        ).defer_async(file_id=file_id)
+                        deferred_for.append(file_id)
+                    except Exception as exc:  # noqa: BLE001
+                        # Per-file failure — keep going so the other
+                        # implicated docs still get re-extracted.
+                        notes = (
+                            (notes or "")
+                            + f"; defer failed for {file_id}: {exc}"
+                        )
+            except ImportError:
+                # Procrastinate not importable in some test paths.
+                deferred_for = []
+
         final_status = "fixing"
-        notes = (
-            "extraction correction recorded; targeted re-extraction worker "
-            "is scheduled (Wave A: deferred to follow-up commit)"
-        )
+        resolution["deferred_re_extraction_for"] = deferred_for
+        if deferred_for:
+            notes = (
+                f"extraction correction recorded; targeted re-extraction "
+                f"deferred for {len(deferred_for)} doc(s)"
+            )
+        elif implicated:
+            notes = (
+                "extraction correction recorded; re-extraction defer "
+                "skipped (procrastinate unavailable or per-file failure)"
+            )
+        else:
+            notes = (
+                "extraction correction recorded; no implicated_docs "
+                "supplied so no re-extraction was triggered"
+            )
 
     elif scope in ("answer", "citation"):
         final_status = "triaged"

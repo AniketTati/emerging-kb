@@ -30,26 +30,49 @@ from pydantic import BaseModel
 
 DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
 DEFAULT_ANTHROPIC_MODEL = "claude-opus-4-7"
-_MAX_OUTPUT_TOKENS = 600  # ~200 tokens × 3 rewrites
+_MAX_OUTPUT_TOKENS = 900  # ~200 tokens × 3 rewrites + ~300 tokens for ToC
+
+# Tree-of-Clarifications cap. Architecture §6 step 2 says "2-4 branches".
+# We default to 3 to match the HyDE×N=3 ensemble cadence.
+_TOC_MAX_BRANCHES = 4
 
 _SYSTEM_PROMPT = (
     "You are a query-rewriting system for retrieval-augmented generation. "
-    "Given a user query, produce 3 reformulations:\n"
+    "Given a user query, produce 3 reformulations plus an optional "
+    "Tree-of-Clarifications branch set when the query is ambiguous.\n"
     "  - step_back: a more abstract version capturing the underlying concept.\n"
     "  - hyde: a synthetic 'ideal answer' paragraph that would match documents.\n"
     "  - query2doc: a search-friendly expansion enriched with synonyms/keywords.\n"
-    "Output JSON exactly: {\"step_back\": str, \"hyde\": str, \"query2doc\": str}."
+    "  - clarifications: a list of 2-4 disambiguated rewrites IF the query is "
+    "    ambiguous (multiple plausible interpretations of a key term, entity, "
+    "    or scope). Each branch should be a complete standalone query that "
+    "    resolves the ambiguity one way. If the query is clear / unambiguous, "
+    "    return an empty list. Examples of ambiguous queries: 'Tell me about "
+    "    the Q1 results' (Q1 of which year?), 'What's the rate?' (which tier? "
+    "    which contract?), 'How is John doing?' (which John? on what axis?).\n"
+    "Output JSON exactly: "
+    "{\"step_back\": str, \"hyde\": str, \"query2doc\": str, "
+    " \"clarifications\": list[str]}."
 )
 
 
 class Rewrites(BaseModel):
-    """4 query variants. Original passes through unchanged for fidelity in
-    case the rewrites drift semantically."""
+    """4 query variants + optional Tree-of-Clarifications branches.
+
+    `original` passes through unchanged for fidelity in case the rewrites
+    drift semantically. `clarifications` is empty for clear queries and
+    populated (2-4 entries) when the LLM detected ambiguity per
+    architecture §6 step 2 (Tree-of-Clarifications, Kim et al. 2023).
+    """
 
     original: str
     step_back: str
     hyde: str
     query2doc: str
+    # Empty list when the query is unambiguous. When populated, each
+    # entry is a fully-formed disambiguated query that the retrieval
+    # channels run alongside the other 4 variants. RRF dedupes overlap.
+    clarifications: list[str] = []
 
 
 class QueryRewriter(Protocol):
@@ -112,11 +135,30 @@ def _parse_rewrites(raw: str, *, original: str) -> Rewrites:
             return v
         return original
 
+    # Tree-of-Clarifications: parse the list, drop empty/non-string
+    # entries, dedupe against the original (we already have it), cap
+    # at _TOC_MAX_BRANCHES.
+    clarifications: list[str] = []
+    raw_clarifications = data.get("clarifications") or []
+    if isinstance(raw_clarifications, list):
+        seen: set[str] = {original.strip().lower()}
+        for c in raw_clarifications:
+            if not isinstance(c, str):
+                continue
+            cs = c.strip()
+            if not cs or cs.lower() in seen:
+                continue
+            seen.add(cs.lower())
+            clarifications.append(cs)
+            if len(clarifications) >= _TOC_MAX_BRANCHES:
+                break
+
     return Rewrites(
         original=original,
         step_back=_safe("step_back"),
         hyde=_safe("hyde"),
         query2doc=_safe("query2doc"),
+        clarifications=clarifications,
     )
 
 

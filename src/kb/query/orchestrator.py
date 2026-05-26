@@ -63,7 +63,7 @@ from kb.query.citations import (
 )
 from kb.query.conflict_resolution import (
     build_conflict_prompt_block,
-    persist_unresolved_conflicts,
+    persist_fact_conflicts,
     resolve_conflicts_for_hits,
 )
 from kb.query.crag import CRAG_THRESHOLD, CragGate, make_crag_gate
@@ -102,7 +102,7 @@ class SearchResult(BaseModel):
 
     query_id: str
     query: str
-    rewrites: dict[str, str]
+    rewrites: dict[str, Any]
     hits: list[Hit] = Field(default_factory=list)
     crag_score: float = 0.0
     latency_ms: int = 0
@@ -122,7 +122,7 @@ class ChatResult(BaseModel):
 
     query_id: str
     query: str
-    rewrites: dict[str, str] = Field(default_factory=dict)
+    rewrites: dict[str, Any] = Field(default_factory=dict)  # values are str or list[str] (ToC)
     generation: GenerationResult
     hits: list[Hit] = Field(default_factory=list)
     crag_score: float = 0.0
@@ -132,6 +132,14 @@ class ChatResult(BaseModel):
     faithfulness_score: float | None = None       # 0.0 - 1.0
     faithfulness_regenerations: int = 0
     faithfulness_model_id: str | None = None
+    # Wave A close-up — sentence-level HHEM verdicts (architecture §6
+    # step 8 "generation is STREAMED to the chat UI sentence-by-sentence").
+    # The HHEM gate already produces per-claim scores; surfacing them
+    # here lets the UI render a per-sentence pass/fail marker beside
+    # each claim. List of {text, score, pass} dicts, ordered as the
+    # sentences appear in the answer. Empty when the gate skipped
+    # (e.g. mode-bypass or no answer).
+    faithfulness_per_sentence: list[dict[str, Any]] = Field(default_factory=list)
     # B3 / WA-7 — denormalized distinct modalities for dashboard filtering.
     citation_modalities: list[str] = Field(default_factory=list)
     # B4a — intent + planner observability.
@@ -188,6 +196,14 @@ class Orchestrator:
         self._context_resolver = context_resolver or make_context_resolver()
         self._run_channels = run_channels
         self._crag_threshold = crag_threshold
+        # Wave A close-up — Design 8 Tier 2 summarizer. Lazy-initialised
+        # on first use so the Identity / Gemini factory cost is paid only
+        # once per process lifetime, and tests that pass their own
+        # context_resolver don't accidentally trigger a Gemini client.
+        self._turn_summarizer: Any = None
+        # Wave A close-up — IRCoT reformulator (architecture §6 step 7).
+        # Same lazy-init pattern as the summarizer.
+        self._reformulator: Any = None
 
     @classmethod
     def make_default(cls) -> "Orchestrator":
@@ -515,6 +531,78 @@ class Orchestrator:
             "bypassed": plan.mode != "H",
         })
 
+        # WA close-up — IRCoT escalation (architecture §6 step 7).
+        # When CRAG returns low confidence on an H-mode query, give the
+        # system ONE more chance: reformulate via Gemini using the
+        # current hits as evidence, retrieve again, recompute CRAG.
+        # max_hops=2 per spec; cost ~$0.001/hop. Without this, every
+        # borderline-confidence query refused immediately even when a
+        # follow-up question would have surfaced the answer.
+        ircot_hops_payload: list[dict[str, Any]] = []
+        if (
+            plan.mode == "H"
+            and crag_score < self._crag_threshold
+            and conn is not None
+            and hits
+        ):
+            try:
+                from kb.query.ircot import (
+                    DEFAULT_MAX_HOPS_CRAG,
+                    escalate_with_ircot,
+                    make_default_reformulator,
+                )
+
+                if self._reformulator is None:
+                    self._reformulator = make_default_reformulator()
+
+                async def _ircot_retrieve(q: str) -> list[Hit]:
+                    sub_rewrites = await self._rewriter.rewrite(q)
+                    return await self._retrieve_and_rerank(
+                        query=q,
+                        rewrites=sub_rewrites,
+                        workspace_id=workspace_id,
+                        conn=conn,
+                    )
+
+                async def _ircot_crag(q: str, hs: list[Hit]) -> float:
+                    return await self._crag.assess(q, hs)
+
+                await emit("ircot_escalating", {
+                    "crag_before": round(crag_score, 3),
+                    "threshold": self._crag_threshold,
+                    "max_hops": DEFAULT_MAX_HOPS_CRAG,
+                })
+                ircot_result = await escalate_with_ircot(
+                    original_query=effective_query,
+                    hits=hits,
+                    crag_score=crag_score,
+                    threshold=self._crag_threshold,
+                    crag_assess=_ircot_crag,
+                    retrieve=_ircot_retrieve,
+                    reformulator=self._reformulator,
+                    max_hops=DEFAULT_MAX_HOPS_CRAG,
+                )
+                hits = ircot_result.final_hits
+                crag_score = ircot_result.final_crag
+                ircot_hops_payload = [
+                    {
+                        "hop_index": hop.hop_index,
+                        "reformulated_query": hop.reformulated_query,
+                        "n_hits_added": hop.n_hits_added,
+                        "crag_after": round(hop.crag_after, 3),
+                    }
+                    for hop in ircot_result.hops
+                ]
+                await emit("ircot_completed", {
+                    "hops": ircot_hops_payload,
+                    "crag_after": round(crag_score, 3),
+                    "terminated_reason": ircot_result.terminated_reason,
+                })
+            except Exception:
+                # IRCoT is best-effort: never break the chat over it.
+                # On failure we proceed to the pre-IRCoT refusal path.
+                pass
+
         # CRAG asks "do these snippets answer the query?" — a question
         # that only makes sense for FACT-style asks ("what's the payment
         # cap"). For corpus-scope asks ("summarize the corpus", "what
@@ -596,7 +684,7 @@ class Orchestrator:
                         conflict_context = build_conflict_prompt_block(
                             conflict_resolutions,
                         ) or None
-                        await persist_unresolved_conflicts(
+                        await persist_fact_conflicts(
                             conn,
                             workspace_id=workspace_id,
                             resolutions=conflict_resolutions,
@@ -704,6 +792,40 @@ class Orchestrator:
                 "refusal_reason": "faithfulness_gate_refused",
             })
 
+        # Wave A close-up — sentence-level HHEM exposure (architecture
+        # §6 step 8). The HHEM gate already computes per-claim scores;
+        # surface them so the chat UI can render a per-sentence
+        # pass/fail marker beside each claim. Also emits one SSE event
+        # per sentence so the UI's pipeline-event timeline shows
+        # "claim 1: pass · claim 2: refused · claim 3: pass" inline.
+        per_sentence: list[dict[str, Any]] = []
+        if not generation.refused and (faithfulness.per_claim_scores or ()):
+            from kb.query.faithfulness import (
+                split_sentences,
+                verdict_from_score,
+            )
+            sentences = split_sentences(generation.answer or "")
+            scores = list(faithfulness.per_claim_scores or ())
+            # Defensive: pair up by index in case the gate produced
+            # fewer/more scores than sentences (shouldn't happen but
+            # keeps us crash-free).
+            n = min(len(sentences), len(scores))
+            for i in range(n):
+                v = verdict_from_score(scores[i])
+                per_sentence.append({
+                    "index": i,
+                    "text": sentences[i],
+                    "score": float(scores[i]),
+                    "verdict": v,
+                })
+                # Stream each sentence verdict so the UI can render
+                # per-sentence chips progressively.
+                await emit("sentence_validated", {
+                    "index": i,
+                    "score": round(float(scores[i]), 3),
+                    "verdict": v,
+                })
+
         # ---- Citation enrichment (Design 5) ----
         await self._enrich_citations(generation, hits, conn)
         await emit("citations_enriched", {
@@ -745,6 +867,7 @@ class Orchestrator:
             faithfulness_score=faithfulness.score,
             faithfulness_regenerations=regenerations,
             faithfulness_model_id=faithfulness.model_id or None,
+            faithfulness_per_sentence=per_sentence,
             citation_modalities=modalities,
             intent=intent.label,
             intent_confidence=intent.confidence,
@@ -1081,7 +1204,91 @@ class Orchestrator:
             except Exception:  # noqa: BLE001
                 pass
 
+        # Tier 2 (Design 8) — Mem0-style rolling summary refresh.
+        # The session's `older_turn_summary` column was historically
+        # written by nothing, so conversations past 6 turns silently
+        # lost their mid-range context. We refresh it every Nth turn
+        # once the verbatim window starts displacing turns. Wrapped
+        # in try/except since the summary is best-effort — failing
+        # here would degrade the answer the user just got, which is
+        # the wrong tradeoff for a cosmetic memory feature.
+        try:
+            await self._maybe_refresh_tier2_summary(
+                conn=conn, session=session, turn_index=turn_index,
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
         return turn_index
+
+    async def _maybe_refresh_tier2_summary(
+        self,
+        *,
+        conn: Any,
+        session: Any,
+        turn_index: int,
+    ) -> None:
+        """Refresh `chat_sessions.older_turn_summary` (Design 8 Tier 2)
+        when the just-persisted turn pushed an older turn out of the
+        Tier-1 verbatim window. No-op otherwise.
+
+        Cadence (default): summarize every 3rd new "displaced" turn,
+        starting at turn_index=6 (the first turn whose persistence
+        evicts turn 0 from the K=6 hot window).
+        """
+        from kb.query.turn_summarizer import (
+            DEFAULT_HOT_TURNS,
+            should_summarize,
+        )
+        from kb.domain.chat_memory import (
+            DEFAULT_HOT_TURNS as _HOT,
+            read_turns_for_session,
+            update_session_carry_forward,
+        )
+
+        # Defensive: keep the two HOT_TURNS constants in lockstep.
+        # If someone bumps chat_memory's value, we won't silently mis-
+        # align the windows.
+        hot_turns = _HOT if _HOT == DEFAULT_HOT_TURNS else DEFAULT_HOT_TURNS
+
+        if not should_summarize(turn_index=turn_index, hot_turns=hot_turns):
+            return
+
+        # Read every turn that has aged out of the verbatim window —
+        # i.e. turn_index <= turn_index - hot_turns. The summarizer
+        # also receives the existing summary so we never lose deeper
+        # history (it gets folded in + log-compressed).
+        cutoff_idx = turn_index - hot_turns
+        all_turns = await read_turns_for_session(
+            conn, session_id=session.id,
+        )
+        displaced = [t for t in all_turns if t.turn_index <= cutoff_idx]
+        if not displaced:
+            return
+
+        summarizer = self._turn_summarizer
+        if summarizer is None:
+            from kb.query.turn_summarizer import make_default_turn_summarizer
+            summarizer = make_default_turn_summarizer()
+            # Cache for subsequent calls in this orchestrator's lifetime.
+            self._turn_summarizer = summarizer
+
+        new_summary = await summarizer.summarize(
+            older_turn_summary=session.older_turn_summary or None,
+            displaced_turns=displaced,
+        )
+        if not new_summary or new_summary == (session.older_turn_summary or ""):
+            return
+
+        try:
+            await update_session_carry_forward(
+                conn,
+                session_id=session.id,
+                older_turn_summary=new_summary,
+            )
+        except Exception:  # noqa: BLE001
+            # Same fail-quiet logic as the rest of _persist_turn.
+            pass
 
     # ------------------------------------------------------------------
     # Internals
@@ -1095,19 +1302,41 @@ class Orchestrator:
         workspace_id: str,
         conn: Any,
     ) -> list[Hit]:
-        """Fan out 4 rewrites × 6 channels → RRF → rerank → top-10."""
+        """Fan out N rewrites × 6 channels → RRF → rerank → top-10."""
         rewrite_texts = self._iter_rewrites(rewrites)
 
-        # Batch-embed all 4 rewrites in one call (dense channels need vectors).
+        # Batch-embed all rewrites in one call (dense channels need vectors).
         embeddings = await self._embedder.embed_batch(rewrite_texts)
 
+        # WA-2 / Design 6 — pre-compute the BM25-side vocabulary-
+        # expanded form of each rewrite. We DON'T mutate the rewrite
+        # itself (dense channels still embed the original — augmenting
+        # with OR-of-synonyms would pollute the vector). Done once
+        # per rewrite, in parallel with the channel call below.
+        from kb.query.vocabulary_expansion import expand_query_with_vocabulary
+        bm25_texts: list[str] = []
+        for rt in rewrite_texts:
+            try:
+                augmented, _expansions = await expand_query_with_vocabulary(
+                    conn, workspace_id=workspace_id, query=rt,
+                )
+                bm25_texts.append(augmented)
+            except Exception:
+                # Belt-and-braces: the helper itself is fail-safe but
+                # if its import / call raises, fall back to the
+                # original rewrite for that variant.
+                bm25_texts.append(rt)
+
         all_lists: list[list[Hit]] = []
-        for rewrite_text, emb in zip(rewrite_texts, embeddings):
+        for rewrite_text, emb, bm25_text in zip(
+            rewrite_texts, embeddings, bm25_texts,
+        ):
             channel_results = await self._run_channels(
                 conn,
                 workspace_id=workspace_id,
                 query=rewrite_text,
                 query_vec=emb.vector,
+                bm25_query=bm25_text,
             )
             # `channel_results` is dict[str, list[Hit]] — collect per-channel lists.
             for channel_hits in channel_results.values():
@@ -1124,22 +1353,33 @@ class Orchestrator:
 
     @staticmethod
     def _iter_rewrites(rewrites: Rewrites) -> list[str]:
-        """Return the 4 query variants as a list of strings."""
+        """Return all query variants as a list of strings — the four
+        canonical ones plus any Tree-of-Clarifications disambiguation
+        branches the rewriter emitted. RRF dedupes overlap so adding
+        branches never hurts; the cap is enforced upstream in the
+        rewriter (≤4 branches per spec)."""
         return [
             rewrites.original,
             rewrites.step_back,
             rewrites.hyde,
             rewrites.query2doc,
+            *rewrites.clarifications,
         ]
 
     @staticmethod
-    def _rewrites_to_dict(rewrites: Rewrites) -> dict[str, str]:
-        return {
+    def _rewrites_to_dict(rewrites: Rewrites) -> dict[str, Any]:
+        """Surface every variant + the ToC branch list separately so
+        the plan inspector can show "ambiguous query → 3 branches"
+        without conflating them with the canonical 4 rewrites."""
+        out: dict[str, Any] = {
             "original": rewrites.original,
             "step_back": rewrites.step_back,
             "hyde": rewrites.hyde,
             "query2doc": rewrites.query2doc,
         }
+        if rewrites.clarifications:
+            out["clarifications"] = list(rewrites.clarifications)
+        return out
 
 
 __all__ = [

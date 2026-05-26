@@ -471,7 +471,8 @@ async def test_orchestrator_retries_then_abstains_when_gate_refuses():
         async def rerank(self, q, hits, *, top_k):
             return hits
 
-    async def stub_channels(conn, *, workspace_id, query, query_vec):
+    async def stub_channels(conn, *, workspace_id, query, query_vec,
+                            limit=20, bm25_query=None):
         return {}
 
     orch = Orchestrator(
@@ -530,7 +531,8 @@ async def test_orchestrator_does_not_retry_when_generator_already_refused():
         async def rerank(self, q, hits, *, top_k):
             return hits
 
-    async def stub_channels(conn, *, workspace_id, query, query_vec):
+    async def stub_channels(conn, *, workspace_id, query, query_vec,
+                            limit=20, bm25_query=None):
         return {}
 
     orch = Orchestrator(

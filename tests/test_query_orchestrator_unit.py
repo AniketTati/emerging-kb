@@ -61,9 +61,11 @@ def _make_run_channels(per_query_hits: list[Hit]):
     call_log: list[dict[str, Any]] = []
 
     async def _run(conn: Any, *, workspace_id: str, query: str,
-                   query_vec: list[float], limit: int = 20) -> dict[str, list[Hit]]:
+                   query_vec: list[float], limit: int = 20,
+                   bm25_query: str | None = None) -> dict[str, list[Hit]]:
         call_log.append({"query": query, "workspace_id": workspace_id,
-                         "query_vec": query_vec, "limit": limit})
+                         "query_vec": query_vec, "limit": limit,
+                         "bm25_query": bm25_query})
         return {
             "bm25_chunks": list(per_query_hits),
             "bm25_raptor": list(per_query_hits),

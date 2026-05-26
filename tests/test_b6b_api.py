@@ -348,6 +348,90 @@ async def test_route_extraction_sets_fixing(db_url_superuser, test_workspace):
     assert outcome.final_status == "fixing"
 
 
+async def test_route_extraction_blocker_defers_re_extraction(
+    db_url_superuser, test_workspace,
+):
+    """Wave A close-up (Design 4 §"Pipeline integration"): a blocker
+    correction on an extraction with implicated_docs must defer the
+    targeted re-extraction tasks. Prior to this commit the route just
+    set status='fixing' with a "(Wave A: deferred to follow-up commit)"
+    note — the actual procrastinate defer never ran, so corrections
+    sat there and the system never learned from them.
+
+    We monkeypatch the procrastinate task's `defer_async` so the test
+    runs without a live broker, and assert that defer was called once
+    per implicated doc for both extraction subtasks.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    doc_a = str(uuid.uuid4())
+    doc_b = str(uuid.uuid4())
+
+    async with await psycopg.AsyncConnection.connect(db_url_superuser) as conn:
+        await conn.execute(
+            "SELECT set_config('app.workspace_id', %s, true)", (test_workspace,),
+        )
+        cid = await insert_correction(
+            conn, workspace_id=test_workspace, scope="extraction",
+            target={
+                "doc_id": doc_a,
+                "field_name": "cap",
+                "implicated_docs": [doc_a, doc_b],
+            },
+            severity="blocker",
+            observed_value="wrong",
+            correct_value="right",
+        )
+        rec = await read_correction(conn, correction_id=cid)
+
+        # Patch the defer call site so we don't need a live broker.
+        with patch(
+            "kb.workers.tasks.procrastinate_app.configure_task"
+        ) as mock_configure:
+            mock_task = AsyncMock()
+            mock_configure.return_value = mock_task
+            outcome = await route_correction(conn, correction=rec)
+
+    assert outcome.final_status == "fixing"
+    deferred = outcome.resolution.get("deferred_re_extraction_for") or []
+    assert sorted(deferred) == sorted([doc_a, doc_b]), (
+        f"expected both implicated docs to be deferred; got {deferred}"
+    )
+    # 2 implicated docs × 2 extraction tasks = 4 configure_task calls
+    assert mock_configure.call_count == 4
+    # Each configure_task() returned object had defer_async called once.
+    assert mock_task.defer_async.call_count == 4
+
+
+async def test_route_extraction_low_severity_does_not_defer(
+    db_url_superuser, test_workspace,
+):
+    """Same shape but with severity='minor' — re-extraction must NOT
+    fire, since low-impact feedback shouldn't churn the worker queue.
+    Routing still sets status='fixing'."""
+    from unittest.mock import patch
+
+    doc_a = str(uuid.uuid4())
+    async with await psycopg.AsyncConnection.connect(db_url_superuser) as conn:
+        await conn.execute(
+            "SELECT set_config('app.workspace_id', %s, true)", (test_workspace,),
+        )
+        cid = await insert_correction(
+            conn, workspace_id=test_workspace, scope="extraction",
+            target={"doc_id": doc_a, "implicated_docs": [doc_a]},
+            severity="minor",
+        )
+        rec = await read_correction(conn, correction_id=cid)
+        with patch(
+            "kb.workers.tasks.procrastinate_app.configure_task"
+        ) as mock_configure:
+            outcome = await route_correction(conn, correction=rec)
+
+    assert outcome.final_status == "fixing"
+    assert outcome.resolution.get("deferred_re_extraction_for") == []
+    assert mock_configure.call_count == 0
+
+
 async def test_route_answer_triages(db_url_superuser, test_workspace):
     async with await psycopg.AsyncConnection.connect(db_url_superuser) as conn:
         await conn.execute(
