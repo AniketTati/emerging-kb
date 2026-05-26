@@ -219,6 +219,47 @@ async def test_explore_entity_profile_404_for_missing_id(
     assert resp.status_code == 404
 
 
+async def test_explore_search_sort_name_orders_alphabetically(
+    client, test_workspace, db_url_superuser,
+):
+    """`sort=name` orders documents A→Z by filename (case-insensitive)."""
+    fids = [str(uuid.uuid4()) for _ in range(3)]
+    seeds = list(zip(fids, ["zebra.pdf", "apple.pdf", "Mango.pdf"]))
+
+    async with await psycopg.AsyncConnection.connect(db_url_superuser) as conn:
+        await conn.execute(
+            "SELECT set_config('app.workspace_id', %s, true)", (test_workspace,),
+        )
+        for i, (fid, name) in enumerate(seeds):
+            await conn.execute(
+                "INSERT INTO files (id, workspace_id, name, mime_type, "
+                "size_bytes, content_sha, object_key, lifecycle_state) "
+                "VALUES (%s, %s, %s, 'application/pdf', 0, %s, %s, 'ready')",
+                (fid, test_workspace, name, "c" * 63 + str(i), f"k/{fid}"),
+            )
+        await conn.commit()
+
+    resp = await client.get(
+        "/explore/search?kind=document&sort=name&limit=20",
+        headers=headers(test_workspace),
+    )
+    assert resp.status_code == 200
+    titles = [h["title"] for h in resp.json()["items"]]
+    # apple → Mango → zebra (case-insensitive A→Z).
+    assert titles == ["apple.pdf", "Mango.pdf", "zebra.pdf"]
+
+
+async def test_explore_search_sort_unknown_falls_back_to_relevance(
+    client, test_workspace,
+):
+    """Unknown `sort=` value should not 4xx — server clamps to relevance."""
+    resp = await client.get(
+        "/explore/search?kind=document&sort=garbage",
+        headers=headers(test_workspace),
+    )
+    assert resp.status_code == 200
+
+
 async def test_explore_entity_profile_returns_buckets_for_seeded_entity(
     client, test_workspace, db_url_superuser,
 ):

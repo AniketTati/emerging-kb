@@ -83,6 +83,7 @@ const KIND_TO_RAIL: Record<ExploreKind, RailItem> = Object.fromEntries(
 
 
 type DateRange = "any" | "7d" | "30d" | "365d";
+type SortOrder = "relevance" | "name" | "recent";
 
 const PAGE_SIZE = 60;
 const FILTER_DOCTYPE_TOP_N = 6;
@@ -103,6 +104,7 @@ type ExploreUrlState = {
   anomaly: boolean;
   conflicts: boolean;
   chain: boolean;
+  sort: SortOrder;
 };
 
 function parseExploreUrl(sp: URLSearchParams): ExploreUrlState {
@@ -118,6 +120,9 @@ function parseExploreUrl(sp: URLSearchParams): ExploreUrlState {
     anomaly: sp.get("anomaly") === "1",
     conflicts: sp.get("conflicts") === "1",
     chain: sp.get("chain") === "1",
+    sort: (["relevance", "name", "recent"].includes(sp.get("sort") ?? "")
+      ? (sp.get("sort") as SortOrder)
+      : "relevance"),
   };
 }
 
@@ -130,6 +135,7 @@ function buildExploreSearchString(s: ExploreUrlState): string {
   if (s.anomaly) params.set("anomaly", "1");
   if (s.conflicts) params.set("conflicts", "1");
   if (s.chain) params.set("chain", "1");
+  if (s.sort !== "relevance") params.set("sort", s.sort);
   const qs = params.toString();
   return qs ? `?${qs}` : "";
 }
@@ -215,6 +221,7 @@ export default function ExplorePage() {
       hasAnomaly: url.anomaly,
       hasConflicts: url.conflicts,
       hasChain: url.chain,
+      sort: url.sort,
       offset: forOffset,
       limit: PAGE_SIZE,
     };
@@ -237,7 +244,7 @@ export default function ExplorePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     url.q, url.kind, JSON.stringify(url.docTypes), url.date,
-    url.anomaly, url.conflicts, url.chain,
+    url.anomaly, url.conflicts, url.chain, url.sort,
   ]);
 
   useEffect(() => { refetchFromStart(); }, [refetchFromStart]);
@@ -497,6 +504,19 @@ export default function ExplorePage() {
                     </>
                   )}
                 </div>
+                <label className="text-[11px] text-zinc-500 flex items-center gap-1.5">
+                  Sort
+                  <select
+                    value={url.sort}
+                    onChange={(e) => update({ sort: e.target.value as SortOrder })}
+                    className="bg-white border border-zinc-200 rounded px-2 py-1 text-[11px] mono text-zinc-700 hover:border-zinc-400 focus:outline-none focus:ring-1 focus:ring-zinc-300 cursor-pointer"
+                    data-testid="explore-sort"
+                  >
+                    <option value="relevance">relevance</option>
+                    <option value="name">name (A→Z)</option>
+                    <option value="recent">most recent</option>
+                  </select>
+                </label>
               </div>
 
               {!loading && items.length === 0 && (
@@ -812,22 +832,13 @@ function EntityCard({
           </div>
 
           <div className="mt-3 pt-3 border-t border-zinc-100 flex items-center gap-3 text-[11px] text-zinc-500">
-            <button
-              type="button"
-              disabled
-              title="Entity profile page lands in a later pass"
-              className="flex items-center gap-1 text-zinc-400 cursor-not-allowed"
+            <a
+              href={`/explore/entity/${hit.id}`}
+              className="flex items-center gap-1 text-zinc-600 hover:text-zinc-900"
+              data-testid="entity-open-profile"
             >
               <ExternalLink className="w-3 h-3" /> Open profile
-            </button>
-            <button
-              type="button"
-              disabled
-              title="Graph view (HippoRAG neighbors) coming later"
-              className="flex items-center gap-1 text-zinc-400 cursor-not-allowed"
-            >
-              <GitMerge className="w-3 h-3" /> Show as graph
-            </button>
+            </a>
             <span className="ml-auto text-[10px] mono text-zinc-400">
               {mentionCount > 0 ? `${mentionCount} mentions · ` : ""}
               {hit.id.slice(0, 8)}…

@@ -315,6 +315,121 @@ async def test_post_email_creates_file(client, test_workspace):
     assert resp.json()["mime_type"] == "message/rfc822"
 
 
+# ===========================================================================
+# POST /files/:id/re-extract  (Upload "Re-extract" / failed-row recovery)
+# ===========================================================================
+
+
+async def test_re_extract_404_for_missing_file(client, test_workspace):
+    fake_id = str(uuid.uuid4())
+    resp = await client.post(
+        f"/files/{fake_id}/re-extract",
+        headers=headers(test_workspace, idempotency_key=str(uuid.uuid4())),
+    )
+    # get_file raises an HTTPException with 404 when the row is absent.
+    assert resp.status_code == 404
+
+
+async def test_re_extract_default_stage_enqueues_two_tasks(
+    client, test_workspace, monkeypatch,
+):
+    """`stage` defaults to 'extraction' → defers extract_fields_file +
+    extract_atomic_units_file. Returns 202 + the deferred task names."""
+    # Seed a file via the normal POST path so RLS + lifecycle are real.
+    resp = await client.post(
+        "/files",
+        files={"file": ("re.pdf", _TINY_PDF, "application/pdf")},
+        headers=headers(test_workspace, idempotency_key=str(uuid.uuid4())),
+    )
+    assert resp.status_code == 201, resp.text
+    file_id = resp.json()["id"]
+
+    # Stub procrastinate.configure_task → defer_async so the test
+    # doesn't require a running worker.
+    deferred: list[str] = []
+
+    class _FakeDeferred:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        async def defer_async(self, **kwargs):  # noqa: ARG002
+            deferred.append(self.name)
+            return 1  # job id
+
+    class _FakeApp:
+        def configure_task(self, name: str):
+            return _FakeDeferred(name)
+
+    from kb.workers import tasks as _tasks_mod
+    monkeypatch.setattr(_tasks_mod, "procrastinate_app", _FakeApp())
+
+    resp = await client.post(
+        f"/files/{file_id}/re-extract",
+        headers=headers(test_workspace, idempotency_key=str(uuid.uuid4())),
+    )
+    assert resp.status_code == 202, resp.text
+    body = resp.json()
+    assert body["file_id"] == file_id
+    assert body["stage"] == "extraction"
+    assert set(body["deferred"]) == {
+        "extract_fields_file", "extract_atomic_units_file",
+    }
+    assert set(deferred) == {
+        "extract_fields_file", "extract_atomic_units_file",
+    }
+
+
+async def test_re_extract_stage_parsing_enqueues_parse_only(
+    client, test_workspace, monkeypatch,
+):
+    """`stage=parsing` re-runs the whole pipeline from parse_file —
+    used by the Upload "Re-parse from scratch" recovery action."""
+    resp = await client.post(
+        "/files",
+        files={"file": ("rp.pdf", _TINY_PDF, "application/pdf")},
+        headers=headers(test_workspace, idempotency_key=str(uuid.uuid4())),
+    )
+    file_id = resp.json()["id"]
+
+    deferred: list[str] = []
+
+    class _FakeDeferred:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        async def defer_async(self, **kwargs):  # noqa: ARG002
+            deferred.append(self.name)
+            return 1
+
+    class _FakeApp:
+        def configure_task(self, name: str):
+            return _FakeDeferred(name)
+
+    from kb.workers import tasks as _tasks_mod
+    monkeypatch.setattr(_tasks_mod, "procrastinate_app", _FakeApp())
+
+    resp = await client.post(
+        f"/files/{file_id}/re-extract?stage=parsing",
+        headers=headers(test_workspace, idempotency_key=str(uuid.uuid4())),
+    )
+    assert resp.status_code == 202
+    assert resp.json()["stage"] == "parsing"
+    assert resp.json()["deferred"] == ["parse_file"]
+    assert deferred == ["parse_file"]
+
+
+async def test_re_extract_rejects_unknown_stage(
+    client, test_workspace,
+):
+    """`stage=garbage` is a 422 from FastAPI's Query pattern match."""
+    fake_id = str(uuid.uuid4())
+    resp = await client.post(
+        f"/files/{fake_id}/re-extract?stage=garbage",
+        headers=headers(test_workspace, idempotency_key=str(uuid.uuid4())),
+    )
+    assert resp.status_code == 422
+
+
 async def test_post_octet_stream_xlsx_detected_via_magic(client, test_workspace):
     """POST xlsx with Content-Type=application/octet-stream → magic-sniff
     routes to the xlsx parser; response mime_type normalized to the xlsx mime

@@ -815,16 +815,6 @@ function InferredRow({
 
             <button
               type="button"
-              title="Wave B — merge with another inferred field"
-              disabled
-              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-zinc-400 cursor-not-allowed"
-            >
-              <GitBranch className="w-3 h-3" />
-              Merge with…
-            </button>
-
-            <button
-              type="button"
               onClick={doDiscard}
               disabled={busy !== null}
               className="ml-auto flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-red-600 hover:bg-red-50 cursor-pointer disabled:opacity-50"

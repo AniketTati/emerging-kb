@@ -633,6 +633,72 @@ async def test_build_graph_from_seeded_relationships(
 
 
 # ===========================================================================
+# PATCH /entities/:id/canonical-name (Explore "Edit canonical" action)
+# ===========================================================================
+
+
+async def test_rename_entity_404_when_missing(client, test_workspace):
+    fake_id = str(uuid.uuid4())
+    resp = await client.patch(
+        f"/entities/{fake_id}/canonical-name",
+        json={"canonical_name": "New Name"},
+        headers=headers(test_workspace),
+    )
+    assert resp.status_code == 404
+
+
+async def test_rename_entity_persists_new_name_and_returns_previous(
+    client, test_workspace, db_url_superuser,
+):
+    eid = await _seed_entity(db_url_superuser, test_workspace, name="Acme")
+    resp = await client.patch(
+        f"/entities/{eid}/canonical-name",
+        json={"canonical_name": "Acme Corp"},
+        headers=headers(test_workspace),
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["id"] == eid
+    assert body["canonical_name"] == "Acme Corp"
+    assert body["previous_canonical_name"] == "Acme"
+    assert body["entity_type"] == "ORG"
+
+    # DB reflects the rename.
+    async with await psycopg.AsyncConnection.connect(db_url_superuser) as conn:
+        cur = await conn.execute(
+            "SELECT canonical_name FROM entities WHERE id = %s", (eid,),
+        )
+        assert (await cur.fetchone())[0] == "Acme Corp"
+
+
+async def test_rename_entity_blank_name_rejected(
+    client, test_workspace, db_url_superuser,
+):
+    eid = await _seed_entity(db_url_superuser, test_workspace, name="Acme")
+    resp = await client.patch(
+        f"/entities/{eid}/canonical-name",
+        json={"canonical_name": "   "},
+        headers=headers(test_workspace),
+    )
+    assert resp.status_code == 422
+
+
+async def test_rename_entity_same_name_is_noop_200(
+    client, test_workspace, db_url_superuser,
+):
+    """Re-submitting the same name is a fast no-op (no UPDATE) — still 200."""
+    eid = await _seed_entity(db_url_superuser, test_workspace, name="Acme")
+    resp = await client.patch(
+        f"/entities/{eid}/canonical-name",
+        json={"canonical_name": "Acme"},
+        headers=headers(test_workspace),
+    )
+    assert resp.status_code == 200
+    assert resp.json()["canonical_name"] == "Acme"
+    assert resp.json()["previous_canonical_name"] == "Acme"
+
+
+# ===========================================================================
 # Integration regression — existing endpoints still respond
 # ===========================================================================
 

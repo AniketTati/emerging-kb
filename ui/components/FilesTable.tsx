@@ -11,7 +11,9 @@ import {
 } from "lucide-react";
 import {
   type FileDetails,
+  blobUrl,
   getFileDetails,
+  reExtractFile,
 } from "@/lib/api";
 import { useUploadStore, type FileRow } from "@/lib/state";
 import { StageBadge } from "./StageBadge";
@@ -502,25 +504,113 @@ function DetailBody({ detail }: { detail: FileDetails }) {
         </div>
       </div>
 
-      {/* Action buttons (Doc Detail page lands later — these are soft 404s
-          for now; clicking through gets a graceful "page not found"). */}
-      <div className="border-t border-zinc-200 pt-3 flex items-center gap-3 text-xs text-zinc-500">
+      {/* Action row — Doc Detail / Preview PDF / Re-extract / (failed
+          only) Re-parse with VLM fallback. Re-extract is workspace +
+          per-file idempotent on the backend; the lifecycle events
+          stream back into this very row via SSE so the user sees the
+          new stage timestamps appear in place. */}
+      <RowActions f={f} lifecycleCount={detail.lifecycle.length} />
+    </div>
+  );
+}
+
+
+function RowActions({
+  f,
+  lifecycleCount,
+}: {
+  f: FileDetails["file"];
+  lifecycleCount: number;
+}) {
+  const [busy, setBusy] = useState<"reextract" | "reparse" | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const failed = f.lifecycle_state === "failed";
+
+  async function trigger(stage: "extraction" | "parsing") {
+    setBusy(stage === "extraction" ? "reextract" : "reparse");
+    setMsg(null);
+    setErr(null);
+    try {
+      const r = await reExtractFile(f.id, stage);
+      setMsg(
+        `${stage === "parsing" ? "Re-parse" : "Re-extraction"} queued · ${r.deferred.length} task${r.deferred.length === 1 ? "" : "s"}`,
+      );
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Failed to enqueue");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  // Preview-PDF is shown for any file MIME the browser can render
+  // inline. We rely on the backend Content-Type + `inline`
+  // Content-Disposition (set in src/kb/api/files.py:get_file_blob).
+  const previewable =
+    f.mime_type === "application/pdf" ||
+    f.mime_type.startsWith("image/") ||
+    f.mime_type.startsWith("text/");
+
+  return (
+    <div className="border-t border-zinc-200 pt-3 flex items-center gap-3 text-xs text-zinc-500 flex-wrap">
+      <a
+        href={`/files/${f.id}`}
+        className="hover:text-zinc-900 inline-flex items-center gap-1.5"
+      >
+        Open Doc Detail →
+      </a>
+      {previewable && (
         <a
-          href={`/files/${f.id}`}
+          href={blobUrl(f.id)}
+          target="_blank"
+          rel="noopener noreferrer"
           className="hover:text-zinc-900 inline-flex items-center gap-1.5"
+          data-testid="file-row-preview"
         >
-          Open Doc Detail →
+          Preview {f.mime_type === "application/pdf" ? "PDF" : "file"} →
         </a>
-        <a
-          href="/explore"
-          className="hover:text-zinc-900 inline-flex items-center gap-1.5"
+      )}
+      <button
+        type="button"
+        onClick={() => trigger("extraction")}
+        disabled={busy !== null}
+        className="hover:text-zinc-900 inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+        data-testid="file-row-reextract"
+      >
+        {busy === "reextract" ? "Queueing…" : "Re-extract"}
+      </button>
+      {failed && (
+        <button
+          type="button"
+          onClick={() => trigger("parsing")}
+          disabled={busy !== null}
+          className="hover:text-amber-900 text-amber-700 inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+          title="Re-run parse + chunk + embed + extract from scratch — useful when the original parse failed (try VLM / OCR fallback)."
+          data-testid="file-row-reparse"
         >
-          Explore →
-        </a>
-        <span className="ml-auto mono text-zinc-400">
-          {detail.lifecycle.length} lifecycle events
-        </span>
-      </div>
+          {busy === "reparse" ? "Queueing…" : "Re-parse from scratch"}
+        </button>
+      )}
+      <a
+        href="/explore"
+        className="hover:text-zinc-900 inline-flex items-center gap-1.5"
+      >
+        Explore →
+      </a>
+      <span className="ml-auto mono text-zinc-400">
+        {msg && (
+          <span className="text-zinc-700 mr-2" data-testid="file-row-action-msg">
+            {msg}
+          </span>
+        )}
+        {err && (
+          <span className="text-red-600 mr-2" data-testid="file-row-action-err">
+            {err}
+          </span>
+        )}
+        {lifecycleCount} lifecycle events
+      </span>
     </div>
   );
 }

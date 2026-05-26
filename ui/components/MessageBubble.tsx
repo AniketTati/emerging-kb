@@ -4,7 +4,15 @@ import type { Turn } from "@/lib/chat-state";
 import type { ChatStreamEvent } from "@/lib/api";
 import { AnswerCard } from "./AnswerCard";
 
-export function MessageBubble({ turn }: { turn: Turn }) {
+export function MessageBubble({
+  turn,
+  onFollowUp,
+}: {
+  turn: Turn;
+  /** Forwarded into AnswerCard so its follow-up pills can submit a
+   *  new query in the same session. Optional — pills hide when absent. */
+  onFollowUp?: (query: string) => void;
+}) {
   if (turn.role === "user") {
     return (
       <div
@@ -53,7 +61,11 @@ export function MessageBubble({ turn }: { turn: Turn }) {
   if (!turn.response) return null;
   return (
     <div className="mb-10">
-      <AnswerCard response={turn.response} events={turn.events ?? []} />
+      <AnswerCard
+        response={turn.response}
+        events={turn.events ?? []}
+        onFollowUp={onFollowUp}
+      />
     </div>
   );
 }
