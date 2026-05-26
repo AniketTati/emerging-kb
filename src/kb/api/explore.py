@@ -94,6 +94,9 @@ class ExploreSearchResponse(BaseModel):
 from dataclasses import dataclass
 
 
+_VALID_SORTS = {"relevance", "name", "recent"}
+
+
 @dataclass(frozen=True)
 class _SearchFilters:
     doc_type: str | None = None
@@ -103,6 +106,11 @@ class _SearchFilters:
     has_anomaly: bool = False
     has_conflicts: bool = False
     has_chain: bool = False
+    # `relevance` is the per-kind default ORDER BY (created_at DESC for
+    # docs, mention_count DESC for entities, n DESC for doc_types).
+    # `name` and `recent` give the user explicit overrides — see
+    # _ORDER_BY_DOCS / _ORDER_BY_ENTITIES below.
+    sort: str = "relevance"
 
     def effective_doc_types(self) -> tuple[str, ...]:
         """`doc_types` (multi) takes precedence over `doc_type` (single)
@@ -300,6 +308,14 @@ async def get_explore_search(
             "(amendment / email thread / drawing revision)."
         ),
     ),
+    sort: str = Query(
+        default="relevance",
+        description=(
+            "Sort order: 'relevance' (per-kind default), 'name' (A→Z by "
+            "title/canonical_name), or 'recent' (most-recently created/"
+            "seen first). Unknown values fall back to relevance."
+        ),
+    ),
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=_DEFAULT_LIMIT, ge=1, le=_MAX_LIMIT),
 ) -> ExploreSearchResponse:
@@ -324,6 +340,7 @@ async def get_explore_search(
     parsed_doc_types: tuple[str, ...] = tuple(
         t.strip() for t in (doc_types or "").split(",") if t.strip()
     )
+    sort_norm = sort if sort in _VALID_SORTS else "relevance"
     filters = _SearchFilters(
         doc_type=doc_type,
         doc_types=parsed_doc_types,
@@ -332,6 +349,7 @@ async def get_explore_search(
         has_anomaly=has_anomaly,
         has_conflicts=has_conflicts,
         has_chain=has_chain,
+        sort=sort_norm,
     )
 
     items: list[ExploreHit] = []
@@ -345,7 +363,7 @@ async def get_explore_search(
         elif tgt == "atomic_unit":
             items_part, n = await _search_atomic_units(conn, like, has_query, offset, limit, filters)
         elif tgt == "entity":
-            items_part, n = await _search_entities(conn, like, has_query, offset, limit)
+            items_part, n = await _search_entities(conn, like, has_query, offset, limit, filters)
         elif tgt == "relationship":
             items_part, n = await _search_relationships(conn, like, has_query, offset, limit)
         elif tgt == "topic":
@@ -738,6 +756,13 @@ async def _search_documents(
             "  WHERE dcm.doc_id = files.id)"
         )
     where = " AND ".join(where_parts)
+    # Sort: `name` = filename A→Z; `recent` / `relevance` = newest first
+    # (the prototype's "browse the corpus" default). `name` uses LOWER()
+    # so casing doesn't push uppercase filenames above lowercase ones.
+    if filters.sort == "name":
+        order_by = "LOWER(name) ASC, created_at DESC"
+    else:
+        order_by = "created_at DESC"
     params: tuple = tuple(where_params) + (limit, offset)
     cur = await conn.execute(
         f"""
@@ -745,7 +770,7 @@ async def _search_documents(
                size_bytes, created_at::text, lifecycle_state
           FROM files
          WHERE {where}
-         ORDER BY created_at DESC
+         ORDER BY {order_by}
          LIMIT %s OFFSET %s
         """,
         params,
@@ -893,6 +918,7 @@ async def _search_atomic_units(
 
 async def _search_entities(
     conn: Connection, like: str, has_query: bool, offset: int, limit: int,
+    filters: _SearchFilters | None = None,
 ) -> tuple[list[ExploreHit], int]:
     """Entity rows + enrichments the prototype's entity card needs:
       - Aliases: top 3 distinct surface forms from extracted_mentions
@@ -904,7 +930,24 @@ async def _search_entities(
     pre-compute these into an `entity_summary` materialized view
     refreshed on extraction.
     """
+    filters = filters or _SearchFilters()
     where_q = "AND e.canonical_name ILIKE %s" if has_query else ""
+    # `name` = canonical_name A→Z; `recent` = last mention first;
+    # `relevance` (default) = most-mentioned first.
+    if filters.sort == "name":
+        order_by = "LOWER(e.canonical_name) ASC, e.mention_count DESC"
+    elif filters.sort == "recent":
+        # Order by most-recent mention date. Use the same subquery the
+        # SELECT exposes as `last_seen`.
+        order_by = (
+            "(SELECT MAX(f.created_at) FROM extracted_mentions em "
+            "  JOIN mention_to_entity me ON me.mention_id = em.id "
+            "  JOIN files f ON f.id = em.file_id "
+            " WHERE me.entity_id = e.id) DESC NULLS LAST, "
+            "e.canonical_name ASC"
+        )
+    else:
+        order_by = "e.mention_count DESC, e.canonical_name ASC"
     params: tuple = ((like,) if has_query else ()) + (limit, offset)
     cur = await conn.execute(
         f"""
@@ -939,7 +982,7 @@ async def _search_entities(
                ) AS n_docs
           FROM entities e
          WHERE 1=1 {where_q}
-         ORDER BY e.mention_count DESC, e.canonical_name ASC
+         ORDER BY {order_by}
          LIMIT %s OFFSET %s
         """,
         params,

@@ -154,6 +154,34 @@ export async function getFileDetails(fileId: string): Promise<FileDetails> {
 }
 
 
+/** POST /files/:id/re-extract — re-runs extraction (or full pipeline)
+ *  on an already-parsed file. New extracted_* rows overwrite the old
+ *  ones via per-file idempotency. Lifecycle events flow through the
+ *  normal /files/:id/status SSE stream, so the table's expanded view
+ *  picks up the new stage timestamps automatically.
+ *
+ *  `stage` selects scope:
+ *    - "extraction" (default): re-runs from extract_fields_file.
+ *    - "parsing": re-runs the whole pipeline including parse/chunk/embed.
+ */
+export async function reExtractFile(
+  fileId: string,
+  stage: "extraction" | "parsing" = "extraction",
+): Promise<{ file_id: string; stage: string; deferred: string[] }> {
+  const resp = await fetch(
+    `${KB_API_URL}/files/${fileId}/re-extract?stage=${stage}`,
+    {
+      method: "POST",
+      headers: {
+        ...workspaceHeaders(),
+        "Idempotency-Key": crypto.randomUUID(),
+      },
+    },
+  );
+  return _handle(resp);
+}
+
+
 // ---------------------------------------------------------------------------
 // Doc-detail surfaces — one fetcher per UI accordion. Each list endpoint
 // is paginated; types mirror the Pydantic shapes from src/kb/api/files.py.
@@ -717,6 +745,9 @@ export async function exploreSearch(opts: {
   hasAnomaly?: boolean;
   hasConflicts?: boolean;
   hasChain?: boolean;
+  /** "relevance" (default) | "name" | "recent". Unknown values fall
+   *  back to relevance server-side. */
+  sort?: "relevance" | "name" | "recent";
   offset?: number;
   limit?: number;
 }): Promise<ExploreSearchResponse> {
@@ -733,6 +764,9 @@ export async function exploreSearch(opts: {
   if (opts.hasAnomaly) params.set("has_anomaly", "true");
   if (opts.hasConflicts) params.set("has_conflicts", "true");
   if (opts.hasChain) params.set("has_chain", "true");
+  if (opts.sort && opts.sort !== "relevance") {
+    params.set("sort", opts.sort);
+  }
   if (opts.offset != null) params.set("offset", String(opts.offset));
   if (opts.limit != null) params.set("limit", String(opts.limit));
   const resp = await fetch(
@@ -777,6 +811,34 @@ export async function getEntityProfile(entityId: string): Promise<EntityProfile>
     { headers: workspaceHeaders() },
   );
   return _handle<EntityProfile>(resp);
+}
+
+
+/** PATCH /entities/:id/canonical-name — rename an entity. Returns the
+ *  previous + new canonical_name so the UI can show a tiny confirmation
+ *  toast ("Renamed Acme → Acme Corp"). Workspace-scoped via RLS; 404 if
+ *  the entity is not in the caller's workspace. */
+export async function renameEntity(
+  entityId: string,
+  canonicalName: string,
+): Promise<{
+  id: string;
+  canonical_name: string;
+  previous_canonical_name: string;
+  entity_type: string;
+}> {
+  const resp = await fetch(
+    `${KB_API_URL}/entities/${entityId}/canonical-name`,
+    {
+      method: "PATCH",
+      headers: {
+        ...workspaceHeaders(),
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ canonical_name: canonicalName }),
+    },
+  );
+  return _handle(resp);
 }
 
 

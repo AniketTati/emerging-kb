@@ -684,3 +684,108 @@ async def delete_file(
     await soft_delete_file(conn, workspace_id, file_id)
     await cache_response(conn, workspace_id, idem_key, body=None, status_code=204)
     return Response(status_code=204)
+
+
+# ---------------------------------------------------------------------------
+# POST /files/:id/re-extract
+#
+# Re-runs the extraction half of the pipeline (fields → atomic units →
+# schema entities → identities → ready) on an already-parsed file. The
+# new extracted_* rows OVERWRITE the old ones via per-file idempotency,
+# so it's safe to invoke this on a file that's already in `ready`.
+#
+# Two flavours via `?stage=`:
+#   - `stage=extraction` (default) — re-runs from extract_fields_file.
+#     Useful when the user notices the doc_type was misclassified or
+#     wants to pick up a new inferred field schema after promotion.
+#   - `stage=parsing` — re-runs from parse_file. Useful when the parser
+#     was upgraded (VLM fallback, OCR re-attempt) and we want the whole
+#     pipeline to re-run including chunking + embedding.
+#
+# Returns 202 with the deferred task IDs so the UI can show "Re-extraction
+# queued — 2 tasks running". Lifecycle events flow through the normal SSE
+# /files/{id}/status stream, so the FilesTable expanded view will see the
+# new stage timestamps appear in place.
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/{file_id}/re-extract",
+    status_code=202,
+    summary="Re-run extraction (or full pipeline) on an already-parsed file.",
+)
+async def post_re_extract(
+    file_id: str,
+    workspace_id: Annotated[str, Depends(current_workspace_id)],
+    idem_key: Annotated[str | None, Depends(idempotency_key_optional)],
+    conn: Annotated[Connection, Depends(kb_app_connection)],
+    stage: Annotated[
+        str,
+        Query(
+            description=(
+                "Which stage to restart from: 'extraction' (default) "
+                "re-runs from field extraction; 'parsing' re-runs the "
+                "whole pipeline including parse + chunk + embed."
+            ),
+            pattern=r"^(extraction|parsing)$",
+        ),
+    ] = "extraction",
+) -> JSONResponse:
+    if idem_key is not None:
+        cached = await get_cached(conn, workspace_id, idem_key)
+        if cached is not None:
+            body, status_code = cached
+            return JSONResponse(
+                content=_json.loads(body) if body else {},
+                status_code=status_code,
+                headers={"X-Idempotent-Replay": "true"},
+            )
+
+    # 404 / 403 surfaces naturally — get_file is workspace-scoped.
+    f = await get_file(conn, file_id)
+
+    deferred: list[str] = []
+    try:
+        from kb.workers.tasks import procrastinate_app
+
+        if stage == "parsing":
+            await procrastinate_app.configure_task(
+                name="parse_file"
+            ).defer_async(file_id=file_id)
+            deferred.append("parse_file")
+        else:
+            # Re-extraction path — kick off fields + atomic_units in
+            # parallel; both are workspace + per-file idempotent and the
+            # downstream chain (schema_entities → identities → ready)
+            # picks up automatically.
+            await procrastinate_app.configure_task(
+                name="extract_fields_file"
+            ).defer_async(file_id=file_id)
+            deferred.append("extract_fields_file")
+            await procrastinate_app.configure_task(
+                name="extract_atomic_units_file"
+            ).defer_async(file_id=file_id)
+            deferred.append("extract_atomic_units_file")
+    except Exception as exc:  # noqa: BLE001
+        # Procrastinate misconfigured / network blip — return 503 rather
+        # than silently swallow so the caller knows to retry.
+        from fastapi.responses import JSONResponse as _JR
+        return _JR(
+            status_code=503,
+            content={
+                "detail": f"failed to enqueue re-extraction: {exc}",
+                "file_id": file_id,
+            },
+        )
+
+    body = {
+        "file_id": file_id,
+        "stage": stage,
+        "deferred": deferred,
+        "lifecycle_state": f.lifecycle_state,
+    }
+    await cache_response(
+        conn, workspace_id, idem_key,
+        body=_json.dumps(body), status_code=202,
+    )
+    return JSONResponse(content=body, status_code=202)

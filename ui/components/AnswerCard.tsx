@@ -18,6 +18,10 @@ type Props = {
    *  inside the "How I answered" inspector so the user can audit which
    *  pipeline stages ran, in what order, and how long each took. */
   events?: ChatStreamEvent[];
+  /** Submit a follow-up query in the same session. Wired by the Chat
+   *  page to its `handleSubmit`. When omitted (e.g. preview surface),
+   *  follow-up pills are hidden. */
+  onFollowUp?: (query: string) => void;
 };
 
 
@@ -42,9 +46,13 @@ function scrollAndFlashCitation(cardId: string): void {
  * Assistant turn: header pill (grounded / refused) + answer with inline
  * citation badges + "How I answered" collapsible inspector.
  */
-export function AnswerCard({ response, events }: Props) {
+export function AnswerCard({ response, events, onFollowUp }: Props) {
   const refused = response.generation.refused;
   const pipelineEvents = events ?? [];
+  const followUps = useMemo(
+    () => deriveFollowUps(response),
+    [response],
+  );
 
   return (
     <div className="mb-2" data-testid="answer-card" data-refused={refused}>
@@ -81,6 +89,31 @@ export function AnswerCard({ response, events }: Props) {
           answer={response.generation.answer}
           citations={response.generation.citations}
         />
+      )}
+
+      {/* Follow-up suggestion pills — context-aware drilldowns derived
+          from the response (entity from top hit, intent-keyed prompts).
+          Hidden on refusal (the refusal body has its own "Try this"
+          guidance) and when no callback is wired. */}
+      {!refused && onFollowUp && followUps.length > 0 && (
+        <div className="mt-5" data-testid="followup-pills">
+          <div className="text-[10px] uppercase tracking-wider text-zinc-400 mb-2">
+            Try also
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {followUps.map((q) => (
+              <button
+                key={q}
+                type="button"
+                onClick={() => onFollowUp(q)}
+                className="text-[12px] text-zinc-700 bg-zinc-50 hover:bg-zinc-100 border border-zinc-200 rounded-full px-3 py-1.5 cursor-pointer transition-colors"
+                data-testid="followup-pill"
+              >
+                {q}
+              </button>
+            ))}
+          </div>
+        </div>
       )}
 
       {/* Inspector */}
@@ -422,6 +455,59 @@ function makeChildrenTransformer(
     }
     return children;
   };
+}
+
+
+/** Derive up to 3 contextual follow-up prompts from the response. Pulls
+ *  the top hit's entity / filename to personalize the suggestions; falls
+ *  back to intent-keyed generic prompts when nothing stands out.
+ *
+ *  Kept fully client-side (no backend "next questions" call) so the pills
+ *  appear instantly when the answer renders and don't add latency. */
+function deriveFollowUps(response: ChatResponse): string[] {
+  const out: string[] = [];
+  const hits = response.hits ?? [];
+
+  // 1. Drill into the strongest source — useful when the user wants to
+  //    audit the evidence behind a particular claim.
+  const topFile = hits.find((h) => {
+    const md = h.metadata as Record<string, unknown>;
+    return typeof md.file_name === "string" && md.file_name.length > 0;
+  });
+  if (topFile) {
+    const name = (topFile.metadata as { file_name: string }).file_name;
+    const stem = name.replace(/\.[^.]+$/, "");
+    out.push(`Summarize ${stem} in more detail`);
+  }
+
+  // 2. Conflict probe — surfaces chained-doc disagreement the
+  //    user might not have noticed yet (always useful for legal/ops).
+  if ((response.conflict_resolutions ?? []).length === 0) {
+    out.push("What other documents contradict this answer?");
+  } else {
+    out.push("Show every superseded value the answer skipped");
+  }
+
+  // 3. Intent-keyed drilldown. Falls back to a generic "what changed"
+  //    prompt when we don't have a richer signal.
+  const intent = response.intent ?? "";
+  if (intent === "summarize") {
+    out.push("Which document is most authoritative on this?");
+  } else if (intent === "find" || intent === "search") {
+    out.push("Group these results by document type");
+  } else if (intent === "compare") {
+    out.push("Highlight the differences in a table");
+  } else if (intent === "explain") {
+    out.push("Trace this back to the primary source");
+  } else if (intent === "list" || intent === "inventory") {
+    out.push("Filter this list to the most recent additions");
+  } else {
+    out.push("What changed most recently on this topic?");
+  }
+
+  // Dedupe while preserving order — defensive against the same prompt
+  // surfacing from two heuristics.
+  return Array.from(new Set(out)).slice(0, 3);
 }
 
 

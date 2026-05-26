@@ -54,7 +54,10 @@ function ChatShell() {
       <Sidebar current="chat" />
 
       <main className="flex-1 flex flex-col min-w-0 bg-white">
-        <ChatTopBar />
+        <ChatTopBar
+          sessionId={state.sessionId}
+          turnCount={state.turns.length}
+        />
 
         <div className="flex-1 flex min-h-0">
           <ChatHistorySidebar />
@@ -70,7 +73,11 @@ function ChatShell() {
                   <EmptyState onPick={handleSubmit} />
                 ) : (
                   state.turns.map((turn) => (
-                    <MessageBubble key={turn.id} turn={turn} />
+                    <MessageBubble
+                      key={turn.id}
+                      turn={turn}
+                      onFollowUp={(q) => handleSubmit(q)}
+                    />
                   ))
                 )}
               </div>
@@ -85,23 +92,55 @@ function ChatShell() {
   );
 }
 
-function ChatTopBar() {
+function ChatTopBar({
+  sessionId,
+  turnCount,
+}: {
+  sessionId: string | null;
+  turnCount: number;
+}) {
+  const { dispatch } = useChat();
   return (
-    <header className="h-12 flex-shrink-0 border-b border-zinc-200 flex items-center px-5 gap-4">
-      <div className="flex items-center gap-2 text-sm">
-        <span className="text-zinc-900">Chat</span>
-        <span className="ml-1 text-[11px] text-zinc-400 mono">
-          ⌘+Enter to send · refusal-safe · cite-or-refuse
-        </span>
+    <header className="h-12 flex-shrink-0 border-b border-zinc-200 flex items-center px-5 gap-3">
+      <div className="flex items-center gap-2 text-sm min-w-0">
+        <span className="text-zinc-900 flex-shrink-0">Chat</span>
+        <span className="text-zinc-300 flex-shrink-0">/</span>
+        {sessionId ? (
+          <>
+            <span
+              className="mono text-[11px] text-zinc-500 truncate"
+              data-testid="chat-topbar-session"
+              title={sessionId}
+            >
+              session {sessionId.slice(0, 8)}…
+            </span>
+            <span className="text-[11px] text-zinc-400 mono flex-shrink-0">
+              · {turnCount} turn{turnCount === 1 ? "" : "s"}
+            </span>
+          </>
+        ) : (
+          <span className="text-[11px] text-zinc-400 mono">
+            new conversation
+          </span>
+        )}
       </div>
-      <div className="ml-auto flex items-center gap-1">
-        <a
-          href="/upload"
-          className="flex items-center gap-1.5 px-2 py-1 rounded text-xs text-zinc-500 hover:bg-zinc-100"
-        >
-          Upload docs →
-        </a>
-      </div>
+      <span className="ml-auto text-[11px] text-zinc-400 mono hidden md:inline">
+        ⌘+Enter to send · refusal-safe · cite-or-refuse
+      </span>
+      <button
+        type="button"
+        onClick={() => dispatch({ type: "new_chat" })}
+        className="flex items-center gap-1.5 px-2 py-1 rounded text-xs text-zinc-500 hover:bg-zinc-100 cursor-pointer"
+        data-testid="chat-new"
+      >
+        New chat
+      </button>
+      <a
+        href="/upload"
+        className="flex items-center gap-1.5 px-2 py-1 rounded text-xs text-zinc-500 hover:bg-zinc-100"
+      >
+        Upload docs →
+      </a>
     </header>
   );
 }

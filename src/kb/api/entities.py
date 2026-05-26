@@ -13,7 +13,7 @@ from __future__ import annotations
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from kb.api.deps import current_workspace_id, kb_app_connection
 from kb.db.pool import Connection
@@ -192,6 +192,82 @@ async def get_entity_graph_neighbors(
         limit=limit,
     )
     return GraphNeighborsResponse(items=[_edge_to_resp(e) for e in edges])
+
+
+class RenameEntityRequest(BaseModel):
+    """Body for PATCH /entities/{id}/canonical-name."""
+    canonical_name: str = Field(min_length=1, max_length=512)
+
+    @field_validator("canonical_name")
+    @classmethod
+    def _strip_and_nonempty(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("canonical_name must not be blank")
+        return v
+
+
+class RenameEntityResponse(BaseModel):
+    id: str
+    canonical_name: str
+    previous_canonical_name: str
+    entity_type: str
+
+
+@router.patch(
+    "/entities/{entity_id}/canonical-name",
+    response_model=RenameEntityResponse,
+    summary=(
+        "Rename an entity's canonical name (Explore 'Edit canonical' "
+        "action). Workspace-scoped via RLS; 404 when the entity doesn't "
+        "exist in the caller's workspace."
+    ),
+)
+async def patch_entity_canonical_name(
+    entity_id: str,
+    body: RenameEntityRequest,
+    workspace_id: Annotated[str, Depends(current_workspace_id)],  # noqa: ARG001
+    conn: Annotated[Connection, Depends(kb_app_connection)],
+) -> RenameEntityResponse:
+    # Read first so we can return the previous value (audit-friendly)
+    # AND surface 404 cleanly instead of "0 rows updated" silent-no-op.
+    cur = await conn.execute(
+        "SELECT canonical_name, entity_type FROM entities WHERE id = %s",
+        (entity_id,),
+    )
+    row = await cur.fetchone()
+    if row is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"entity {entity_id} not found in this workspace",
+        )
+    prev_name, entity_type = row[0], row[1]
+
+    # No-op when the user re-submits the same value — saves a write
+    # and avoids spurious bumps to updated_at downstream.
+    if prev_name == body.canonical_name:
+        return RenameEntityResponse(
+            id=entity_id,
+            canonical_name=body.canonical_name,
+            previous_canonical_name=prev_name,
+            entity_type=entity_type,
+        )
+
+    await conn.execute(
+        "UPDATE entities SET canonical_name = %s, updated_at = NOW() "
+        "WHERE id = %s",
+        (body.canonical_name, entity_id),
+    )
+    # No explicit commit: kb_app_connection wraps the call in a
+    # transaction context (see src/kb/api/deps.py) that commits on
+    # success and rolls back on exception.
+
+    return RenameEntityResponse(
+        id=entity_id,
+        canonical_name=body.canonical_name,
+        previous_canonical_name=prev_name,
+        entity_type=entity_type,
+    )
 
 
 @router.get(

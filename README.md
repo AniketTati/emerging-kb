@@ -4,15 +4,15 @@
 >
 > **An alternative to Glean, NotebookLM, Hebbia** for teams that need to keep their data on their own infrastructure. Built on Postgres + pgvector + ParadeDB. Domain-agnostic. MIT-licensed.
 
-**Status (2026-05-24):** **Wave A ingestion + per-doc & corpus RAPTOR shipped.** Files flow end-to-end (`POST /files` → `parsing → parsed → chunked → contextualized → embedded → raptor_building → ready`), corpus-level RAPTOR builds on demand (`POST /corpus/raptor/rebuild`). 286/286 pytest in ~80s; 12 Docker-stack verify scripts, 205 checks, all GREEN. Branch `phase-3/chunking-raptor` (PR #7). Phase 4 (retrieval — HNSW + BM25 + tree-aware query) is next on its own branch.
+**Status (2026-05-26):** **Wave A end-to-end stack shipped.** Ingestion (parse → chunk → contextualize → embed → RAPTOR → mentions → fields → atomic units → entity resolution → graph) runs through to `ready`. Retrieval ships 6 parallel channels with RRF + rerank + CRAG gate + Astute generation + faithfulness gate. Four UI surfaces live: **`/chat`** (streaming citations + follow-up pills + inspector), **`/upload`** (drop + live stage timeline + re-extract / re-parse recovery + PDF preview), **`/explore`** (faceted search + entity profiles + sort + rename), **`/schema-studio`** (typed + inferred + vocabulary + lineage + versions tabs). Backend: 60+ FastAPI endpoints, 35+ migrations, Procrastinate task queue, MinIO blob store, full RLS.
 
-The architecture / UI / 9 tier-1 gap designs / wiring inventory below describe the **full target system**; check the [`docs/build_tracker.md`](docs/build_tracker.md) §5 "Build phases" table for what's currently shipped vs. roadmap.
+The architecture / 9 tier-1 gap designs / wiring inventory below describe the **full target system**; check the [`docs/build_tracker.md`](docs/build_tracker.md) §5 "Build phases" table for what's currently shipped vs. roadmap.
 
-**Public brief:** [`docs/problem_statement.md`](docs/problem_statement.md) · **Build log:** [`docs/build_tracker.md`](docs/build_tracker.md) · **Contributing:** [`CONTRIBUTING.md`](CONTRIBUTING.md)
+**Public brief:** [`docs/problem_statement.md`](docs/problem_statement.md) · **Build log:** [`docs/build_tracker.md`](docs/build_tracker.md) · **Contributing:** [`CONTRIBUTING.md`](CONTRIBUTING.md) · **Prototypes:** [`prototype/`](prototype/)
 
 ---
 
-## Quick start (what ships today, Wave A)
+## Quick start
 
 ```bash
 # 1. Copy env template + add your Gemini API key
@@ -24,27 +24,52 @@ echo "KB_GEMINI_API_KEY=your-key-here" >> .env
 # 2. Bring up the full stack (Postgres + MinIO + worker + API)
 docker compose up --build -d
 
-# 3. Upload a file — the worker chains parse → chunk → contextualize → embed → RAPTOR
+# 3. Start the UI (Next.js 15, port 3000)
+cd ui && pnpm install && pnpm dev
+# Open http://localhost:3000 — drop a file into /upload, then ask
+# questions on /chat. Every answer cites its sources or refuses.
+
+# --- or drive it from the command line ---
+
+# 4. Upload a file — the worker chains parse → chunk → contextualize →
+#    embed → RAPTOR → mentions → fields → atomic units → entities → ready
 curl -X POST http://localhost:8000/files \
   -H "X-Test-Workspace: 11111111-1111-1111-1111-111111111111" \
   -H "Idempotency-Key: $(uuidgen)" \
   -F "file=@tests/fixtures/tiny.pdf;type=application/pdf"
 
-# 4. Watch the lifecycle progress (each transition appended to history)
-curl http://localhost:8000/files/<id> -H "X-Test-Workspace: 11111111-1111-1111-1111-111111111111"
-
-# 5. Trigger corpus-level RAPTOR rebuild across the workspace
-curl -X POST http://localhost:8000/corpus/raptor/rebuild \
+# 5. Ask a cited question (the 6-channel retrieval + CRAG + Astute
+#    generation + faithfulness gate runs end-to-end)
+curl -X POST http://localhost:8000/chat \
   -H "X-Test-Workspace: 11111111-1111-1111-1111-111111111111" \
-  -H "Content-Type: application/json" -d '{}'
+  -H "Content-Type: application/json" \
+  -d '{"query": "What documents do I have indexed?"}'
 
-# 6. Run the full pytest + verify suite
-uv sync && uv run pytest tests/         # ~85s for the full unit + integration suite
-./scripts/verify_sweep.sh               # all 12 verify scripts against one shared stack
-# Or: ./scripts/verify_phase_3e.sh     # any single phase against its own fresh stack
+# 6. Re-extract on demand (e.g. after promoting a new inferred field)
+curl -X POST http://localhost:8000/files/<id>/re-extract \
+  -H "X-Test-Workspace: 11111111-1111-1111-1111-111111111111" \
+  -H "Idempotency-Key: $(uuidgen)"
+# Use ?stage=parsing to re-run the whole pipeline (VLM / OCR fallback).
+
+# 7. Run the test suite
+uv sync && PATH="$PWD/.venv/bin:$PATH" uv run pytest tests/  # full unit + integration
+./scripts/verify_sweep.sh                                    # 12 docker-stack verify scripts
 ```
 
-**Retrieval is NOT yet implemented** — Phase 4 adds `/query`, HNSW + BM25 indexes, and tree-aware planning. Today you can ingest and inspect the persisted RAPTOR tree directly via SQL on `raptor_nodes` + `raptor_edges`.
+---
+
+## What it looks like
+
+Four UI surfaces are live today. Click through to a desktop screenshot of the prototype the implementation tracks:
+
+| Surface | What it does | Screenshot |
+|---|---|---|
+| **`/chat`** | Streamed, cited answers + verdict badge + collapsible "How I answered" inspector + contextual follow-up pills | [chat-desktop.png](prototype/qa/screens/chat-desktop.png) |
+| **`/upload`** | Drag-drop with live per-stage progress · per-file re-extract / re-parse · inline PDF preview · failed-row recovery | [upload-desktop.png](prototype/qa/screens/upload-desktop.png) |
+| **`/explore`** | Faceted search across 7 buckets · entity profiles with Related accordion · sort + filter + edit-canonical · URL-backed state | [explore-desktop.png](prototype/qa/screens/explore-desktop.png) |
+| **`/schema-studio`** | Six tabs: Typed · Inferred (with auto-promote thresholds) · Vocabulary · Lineage · Versions · Collisions | [schema-studio-desktop.png](prototype/qa/screens/schema-studio-desktop.png) |
+
+The full clickable prototype (all 10 surfaces incl. Wave B / C) lives in [`prototype/`](prototype/). Wiring of every interactive element to a backend endpoint is in [`prototype/wiring_inventory.md`](prototype/wiring_inventory.md).
 
 ---
 
