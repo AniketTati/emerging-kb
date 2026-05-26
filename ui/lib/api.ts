@@ -568,8 +568,17 @@ export type ChatResponse = {
 
 export async function postChat(
   query: string,
-  idempotencyKey: string = crypto.randomUUID(),
+  opts: {
+    idempotencyKey?: string;
+    /** Chat-UX `@ doc filter` — scope retrieval to these file_ids. */
+    fileIds?: string[];
+    /** Override the planner-suggested mode. Defaults to 'H' (hybrid). */
+    mode?: string;
+  } = {},
 ): Promise<ChatResponse> {
+  const idempotencyKey = opts.idempotencyKey ?? crypto.randomUUID();
+  const body: Record<string, unknown> = { query, mode: opts.mode ?? "H" };
+  if (opts.fileIds && opts.fileIds.length > 0) body.file_ids = opts.fileIds;
   const resp = await fetch(`${KB_API_URL}/chat`, {
     method: "POST",
     headers: {
@@ -577,7 +586,7 @@ export async function postChat(
       "Idempotency-Key": idempotencyKey,
       ...workspaceHeaders(),
     },
-    body: JSON.stringify({ query, mode: "H" }),
+    body: JSON.stringify(body),
   });
   return _handle(resp);
 }

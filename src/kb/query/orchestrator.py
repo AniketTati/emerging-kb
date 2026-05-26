@@ -242,6 +242,7 @@ class Orchestrator:
         conn: Any = None,
         requested_mode: str | None = None,
         session_id: str | None = None,
+        file_ids: list[str] | None = None,
     ) -> ChatResult:
         """Run context resolution → intent → planner → search → mode router
         → CRAG-gated generation → HHEM faithfulness gate → persist turn.
@@ -251,6 +252,12 @@ class Orchestrator:
         before intent classification (Design 8 step 0.5). The final turn
         is persisted to chat_turns; the session's carry-forward state
         is rolled.
+
+        When `file_ids` is non-empty, retrieval is scoped to that file
+        set (chat-UX `@ doc filter`). Hits from other files are
+        post-filtered out after the fused/reranked top-K — cheaper than
+        threading filters through every channel's SQL, and the typical
+        scope (1-10 files) means we still have plenty of in-scope hits.
         """
         t0 = time.monotonic()
         query_id = str(uuid.uuid4())
@@ -326,6 +333,18 @@ class Orchestrator:
                 except Exception:
                     pass
             hits = []
+
+        # Chat-UX `@ doc filter` — scope hits to the file_ids the user
+        # explicitly picked. Done before apply_mode so the mode router
+        # (e.g. T-mode PPR) operates over the scoped set. Pre-filter
+        # because the channels themselves don't know about UI scoping —
+        # cheaper than threading filters through every channel SQL.
+        if file_ids:
+            scope = {str(fid) for fid in file_ids if fid}
+            hits = [
+                h for h in hits
+                if (h.metadata or {}).get("file_id") in scope
+            ]
 
         try:
             hits = await apply_mode(

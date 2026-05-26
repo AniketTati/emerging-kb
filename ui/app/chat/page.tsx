@@ -19,12 +19,15 @@ function ChatShell() {
     threadRef.current.scrollTop = threadRef.current.scrollHeight;
   }, [state.turns]);
 
-  async function handleSubmit(query: string) {
+  async function handleSubmit(
+    query: string,
+    opts?: { fileIds?: string[] },
+  ) {
     const userId = crypto.randomUUID();
     const assistantId = crypto.randomUUID();
     dispatch({ type: "user_sent", userId, assistantId, content: query });
     try {
-      const response = await postChat(query);
+      const response = await postChat(query, opts);
       dispatch({ type: "assistant_answered", assistantId, response });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -50,7 +53,7 @@ function ChatShell() {
             >
               <div className="max-w-3xl mx-auto px-8 py-10">
                 {state.turns.length === 0 ? (
-                  <EmptyState />
+                  <EmptyState onPick={handleSubmit} />
                 ) : (
                   state.turns.map((turn) => (
                     <MessageBubble key={turn.id} turn={turn} />
@@ -94,7 +97,7 @@ function ChatTopBar() {
 // doesn't fire if we later choose to share.
 void TopBar;
 
-function EmptyState() {
+function EmptyState({ onPick }: { onPick: (q: string) => void }) {
   return (
     <div className="text-center pt-20" data-testid="chat-empty-state">
       <div className="text-2xl text-zinc-900 font-semibold mb-3">
@@ -112,19 +115,29 @@ function EmptyState() {
           "Summarize the key topics across my uploads.",
           "Find the most recent contract in my knowledge base.",
         ].map((q) => (
-          <SuggestedQuery key={q} text={q} />
+          <SuggestedQuery key={q} text={q} onPick={onPick} />
         ))}
       </div>
     </div>
   );
 }
 
-function SuggestedQuery({ text }: { text: string }) {
-  // Visual only — clicking a suggestion populates the composer in Wave B.
+function SuggestedQuery({
+  text,
+  onPick,
+}: {
+  text: string;
+  onPick: (q: string) => void;
+}) {
   return (
-    <div className="px-4 py-3 rounded-lg border border-zinc-200 bg-zinc-50/40 text-sm text-zinc-700 hover:border-zinc-400 transition-colors cursor-default">
+    <button
+      type="button"
+      onClick={() => onPick(text)}
+      className="px-4 py-3 rounded-lg border border-zinc-200 bg-zinc-50/40 text-sm text-zinc-700 hover:border-zinc-400 hover:bg-zinc-50 transition-colors cursor-pointer text-left"
+      data-testid="chat-suggestion"
+    >
       {text}
-    </div>
+    </button>
   );
 }
 

@@ -1,7 +1,11 @@
 "use client";
 
+import { Fragment, useMemo, type ReactNode } from "react";
 import { ChevronRight } from "lucide-react";
-import { segmentAnswer, type ChatResponse } from "@/lib/api";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import rehypeSanitize from "rehype-sanitize";
+import { type ChatResponse, type Citation } from "@/lib/api";
 
 type Props = { response: ChatResponse };
 
@@ -29,9 +33,6 @@ function scrollAndFlashCitation(cardId: string): void {
  */
 export function AnswerCard({ response }: Props) {
   const refused = response.generation.refused;
-  const segments = refused
-    ? []
-    : segmentAnswer(response.generation.answer, response.generation.citations);
 
   return (
     <div className="mb-2" data-testid="answer-card" data-refused={refused}>
@@ -64,48 +65,10 @@ export function AnswerCard({ response }: Props) {
       {refused ? (
         <RefusalBody response={response} />
       ) : (
-        <div
-          className="text-[15px] leading-[1.75] text-zinc-800"
-          data-testid="answer-text"
-        >
-          {segments.map((seg, i) => {
-            if (seg.kind === "text") {
-              return <span key={i}>{seg.value}</span>;
-            }
-            // Annotate the inline [N] badge with the underlying
-            // citation's status so the user can see at-a-glance which
-            // numbers point at a superseded source.
-            const cit = response.generation.citations[seg.index];
-            const superseded = !!cit?.superseded;
-            const cardId =
-              seg.index >= 0 ? `citation-card-${seg.index}` : null;
-            return (
-              <button
-                type="button"
-                key={i}
-                onClick={() => {
-                  if (!cardId) return;
-                  scrollAndFlashCitation(cardId);
-                }}
-                className={
-                  superseded
-                    ? "cref text-amber-700 hover:text-amber-900 font-medium px-0.5 text-[11px] cursor-pointer line-through decoration-amber-400 align-super"
-                    : "cref text-zinc-500 hover:text-zinc-900 font-medium px-0.5 text-[11px] cursor-pointer align-super"
-                }
-                title={
-                  superseded
-                    ? `Citation ${seg.index + 1} — superseded; click to view source`
-                    : `Citation ${seg.index + 1} — click to view source`
-                }
-                data-superseded={superseded || undefined}
-                data-citation-index={seg.index}
-                aria-label={`Open citation ${seg.index + 1}`}
-              >
-                [{seg.index >= 0 ? seg.index + 1 : "?"}]
-              </button>
-            );
-          })}
-        </div>
+        <MarkdownAnswer
+          answer={response.generation.answer}
+          citations={response.generation.citations}
+        />
       )}
 
       {/* Inspector */}
@@ -298,5 +261,164 @@ function RefusalBody({ response }: { response: ChatResponse }) {
         )}
       </div>
     </div>
+  );
+}
+
+
+// ---------------------------------------------------------------------------
+// MarkdownAnswer — renders the LLM answer as markdown (headings / lists /
+// bold / italics / tables / code) WHILE preserving the inline `[uuid]`
+// citation tokens as clickable chips that scroll the right-rail card
+// into view.
+//
+// Strategy: react-markdown handles the block structure. We override the
+// `p`, `li`, `td`, `th`, `strong`, `em` renderers — anywhere prose lives —
+// to walk their children and replace every string segment's `[uuid]`
+// occurrence with a `<CitationChip>` button. The walker is recursive but
+// shallow (markdown nesting is bounded).
+// ---------------------------------------------------------------------------
+
+function MarkdownAnswer({
+  answer,
+  citations,
+}: {
+  answer: string;
+  citations: Citation[];
+}) {
+  // Build a stable hit_id → array-index map once per render. The chip
+  // looks up the index for its display label + DOM-id target.
+  const indexByShortId = useMemo(() => {
+    const m = new Map<string, number>();
+    citations.forEach((c, i) => m.set(c.hit_id.slice(0, 8), i));
+    return m;
+  }, [citations]);
+
+  const withChips = useMemo(
+    () => makeChildrenTransformer(citations, indexByShortId),
+    [citations, indexByShortId],
+  );
+
+  return (
+    <div
+      className="prose prose-zinc max-w-none text-[15px] leading-[1.75] text-zinc-800
+                 prose-headings:font-semibold prose-headings:text-zinc-900
+                 prose-h1:text-lg prose-h2:text-base prose-h3:text-sm
+                 prose-p:my-3 prose-ul:my-3 prose-ol:my-3 prose-li:my-1
+                 prose-strong:text-zinc-900 prose-strong:font-semibold
+                 prose-code:text-[13px] prose-code:bg-zinc-100 prose-code:px-1
+                 prose-code:py-0.5 prose-code:rounded prose-code:before:content-none
+                 prose-code:after:content-none
+                 prose-table:text-[13px] prose-th:bg-zinc-50
+                 prose-th:px-2 prose-th:py-1.5 prose-td:px-2 prose-td:py-1.5
+                 prose-th:border prose-th:border-zinc-200
+                 prose-td:border prose-td:border-zinc-200"
+      data-testid="answer-text"
+    >
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        rehypePlugins={[rehypeSanitize]}
+        components={{
+          p: ({ children }) => <p>{withChips(children)}</p>,
+          li: ({ children }) => <li>{withChips(children)}</li>,
+          td: ({ children }) => <td>{withChips(children)}</td>,
+          th: ({ children }) => <th>{withChips(children)}</th>,
+          strong: ({ children }) => <strong>{withChips(children)}</strong>,
+          em: ({ children }) => <em>{withChips(children)}</em>,
+          h1: ({ children }) => <h1>{withChips(children)}</h1>,
+          h2: ({ children }) => <h2>{withChips(children)}</h2>,
+          h3: ({ children }) => <h3>{withChips(children)}</h3>,
+        }}
+      >
+        {answer}
+      </ReactMarkdown>
+    </div>
+  );
+}
+
+
+/** Build a `(children: ReactNode) => ReactNode` walker that replaces
+ *  inline `[uuid]` patterns inside string children with `<CitationChip>`
+ *  buttons. Non-string children (already-rendered ReactElements) pass
+ *  through unchanged. */
+function makeChildrenTransformer(
+  citations: Citation[],
+  indexByShortId: Map<string, number>,
+): (children: ReactNode) => ReactNode {
+  const CITE_RE = /\[([0-9a-f]{8}(?:-[0-9a-f]{4}){0,4}(?:-[0-9a-f]{12})?)\]/gi;
+
+  function replaceInString(s: string, keyPrefix: string): ReactNode[] {
+    const out: ReactNode[] = [];
+    let last = 0;
+    let n = 0;
+    for (const m of s.matchAll(CITE_RE)) {
+      if (m.index === undefined) continue;
+      if (m.index > last) {
+        out.push(
+          <Fragment key={`${keyPrefix}-t${n++}`}>{s.slice(last, m.index)}</Fragment>,
+        );
+      }
+      const raw = m[1];
+      const shortId = raw.slice(0, 8);
+      const index = indexByShortId.get(shortId) ?? -1;
+      out.push(
+        <CitationChip
+          key={`${keyPrefix}-c${n++}`}
+          index={index}
+          citation={index >= 0 ? citations[index] : undefined}
+        />,
+      );
+      last = m.index + m[0].length;
+    }
+    if (last < s.length) {
+      out.push(<Fragment key={`${keyPrefix}-t${n++}`}>{s.slice(last)}</Fragment>);
+    }
+    return out;
+  }
+
+  return function walk(children: ReactNode): ReactNode {
+    if (typeof children === "string") return replaceInString(children, "s");
+    if (Array.isArray(children)) {
+      return children.map((c, i) =>
+        typeof c === "string" ? (
+          <Fragment key={i}>{replaceInString(c, `a${i}`)}</Fragment>
+        ) : (
+          <Fragment key={i}>{c}</Fragment>
+        ),
+      );
+    }
+    return children;
+  };
+}
+
+
+function CitationChip({
+  index,
+  citation,
+}: {
+  index: number;
+  citation: Citation | undefined;
+}) {
+  const superseded = !!citation?.superseded;
+  const cardId = index >= 0 ? `citation-card-${index}` : null;
+  return (
+    <button
+      type="button"
+      onClick={() => cardId && scrollAndFlashCitation(cardId)}
+      className={
+        superseded
+          ? "cref text-amber-700 hover:text-amber-900 font-medium px-0.5 text-[11px] cursor-pointer line-through decoration-amber-400 align-super"
+          : "cref text-zinc-500 hover:text-zinc-900 font-medium px-0.5 text-[11px] cursor-pointer align-super"
+      }
+      title={
+        superseded
+          ? `Citation ${index + 1} — superseded; click to view source`
+          : `Citation ${index + 1} — click to view source`
+      }
+      data-superseded={superseded || undefined}
+      data-citation-index={index}
+      aria-label={`Open citation ${index + 1}`}
+    >
+      [{index >= 0 ? index + 1 : "?"}]
+    </button>
   );
 }

@@ -26,16 +26,12 @@ export function MessageBubble({ turn }: { turn: Turn }) {
           </div>
           <span className="text-zinc-500">Thinking…</span>
         </div>
-        <div className="flex items-center gap-1 text-zinc-400 text-sm">
-          <span className="w-1.5 h-1.5 rounded-full bg-zinc-300 animate-pulse" />
-          <span
-            className="w-1.5 h-1.5 rounded-full bg-zinc-300 animate-pulse"
-            style={{ animationDelay: "150ms" }}
-          />
-          <span
-            className="w-1.5 h-1.5 rounded-full bg-zinc-300 animate-pulse"
-            style={{ animationDelay: "300ms" }}
-          />
+        {/* Bouncing-dots indicator — staggered via globals.css to
+            avoid the all-pulse-in-unison illusion of being frozen. */}
+        <div className="flex items-center gap-1.5 text-zinc-400 text-sm pl-1">
+          <span className="kb-thinking-dot w-2 h-2 rounded-full bg-zinc-500" />
+          <span className="kb-thinking-dot w-2 h-2 rounded-full bg-zinc-500" />
+          <span className="kb-thinking-dot w-2 h-2 rounded-full bg-zinc-500" />
         </div>
       </div>
     );
