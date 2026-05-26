@@ -148,6 +148,53 @@ async def fetch_file_metas_for_conflict(
     return out
 
 
+async def _fetch_chain_member_ids(
+    conn: Any, *, chain_ids: Iterable[str],
+) -> set[str]:
+    """Return the file_ids of ALL members of the given chains.
+
+    Lets `resolve_conflicts_for_hits` expand from "files the user's
+    query happened to retrieve" to "every member of every chain those
+    files participate in" — the latter is what the conflict detector
+    actually needs to find disagreements (you need both sides of an
+    MSA / Amendment pair, not just whichever the rerank surfaced).
+
+    SAVEPOINT-wrapped per the same rationale as the other fetchers.
+    """
+    ids = sorted({c for c in chain_ids if c})
+    if not ids:
+        return set()
+
+    try:
+        await conn.execute("SAVEPOINT fetch_chain_members")
+        in_savepoint = True
+    except Exception:
+        in_savepoint = False
+
+    try:
+        cur = await conn.execute(
+            "SELECT doc_id::text FROM doc_chain_members "
+            "WHERE chain_id::text = ANY(%s)",
+            (ids,),
+        )
+        rows = await cur.fetchall()
+        if in_savepoint:
+            try:
+                await conn.execute("RELEASE SAVEPOINT fetch_chain_members")
+            except Exception:
+                pass
+    except Exception:
+        if in_savepoint:
+            try:
+                await conn.execute("ROLLBACK TO SAVEPOINT fetch_chain_members")
+                await conn.execute("RELEASE SAVEPOINT fetch_chain_members")
+            except Exception:
+                pass
+        return set()
+
+    return {str(r[0]) for r in rows}
+
+
 async def fetch_atomic_units_by_file(
     conn: Any, *, file_ids: Iterable[str],
 ) -> list[tuple[str, str, str, dict[str, Any]]]:
@@ -357,17 +404,31 @@ async def resolve_conflicts_for_hits(
     file_metas = await fetch_file_metas_for_conflict(
         conn, file_ids=[f for f in file_ids if f],
     )
-    chained_file_ids = [
-        fid for fid, meta in file_metas.items() if meta.chain_id
-    ]
-    if not chained_file_ids:
+    chain_ids = {meta.chain_id for meta in file_metas.values() if meta.chain_id}
+    if not chain_ids:
         return []
 
-    # Step 3 — pull ALL atomic_units for chained files. The chain
-    # detector is most useful when comparing the full inventory of
-    # extracted clauses/items across versions.
+    # Step 2b — expand to ALL members of those chains, not just the
+    # hit-listed files. The user's query may have surfaced only the
+    # Amendment (or only the MSA) but the conflict detector needs to
+    # see BOTH sides to find disagreements on shared predicates.
+    all_member_ids = await _fetch_chain_member_ids(
+        conn, chain_ids=chain_ids,
+    )
+    if not all_member_ids:
+        return []
+
+    # Refresh metas for any newly-discovered chain members.
+    missing_metas = [fid for fid in all_member_ids if fid not in file_metas]
+    if missing_metas:
+        more_metas = await fetch_file_metas_for_conflict(
+            conn, file_ids=missing_metas,
+        )
+        file_metas.update(more_metas)
+
+    # Step 3 — pull ALL atomic_units for ALL chain members.
     units = await fetch_atomic_units_by_file(
-        conn, file_ids=chained_file_ids,
+        conn, file_ids=list(all_member_ids),
     )
     if not units:
         return []

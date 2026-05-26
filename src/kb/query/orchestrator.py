@@ -268,12 +268,65 @@ class Orchestrator:
         )
 
         rewrites = await self._rewriter.rewrite(effective_query)
-        hits = await self._retrieve_and_rerank(
-            query=effective_query,
-            rewrites=rewrites,
-            workspace_id=workspace_id,
-            conn=conn,
-        )
+        # R3-supporting fix — `_retrieve_and_rerank` runs 6 channels in
+        # parallel via asyncio.gather on a SHARED psycopg connection.
+        # When one channel's SQL errors (paradedb edge case, missing
+        # index, malformed query) the txn corruption cascades and every
+        # downstream conn.execute() raises InFailedSqlTransaction —
+        # citation enrichment can't load file metadata so labels fall
+        # back to "document" instead of real filenames; chat-turn
+        # persistence + query_log audit also fail silently.
+        #
+        # Per-channel SAVEPOINTs don't help because the parallel
+        # coroutines interleave SAVEPOINT / SQL / ROLLBACK on the same
+        # connection unpredictably. The right long-term fix is a real
+        # connection pool per channel; the surgical fix is one outer
+        # SAVEPOINT around the whole retrieval block so a failure
+        # inside it rolls back cleanly to a usable txn state.
+        retrieve_sp_open = False
+        try:
+            await conn.execute("SAVEPOINT orchestrator_retrieve")
+            retrieve_sp_open = True
+        except Exception:
+            pass
+        try:
+            hits = await self._retrieve_and_rerank(
+                query=effective_query,
+                rewrites=rewrites,
+                workspace_id=workspace_id,
+                conn=conn,
+            )
+            if retrieve_sp_open:
+                try:
+                    await conn.execute("RELEASE SAVEPOINT orchestrator_retrieve")
+                except Exception:
+                    # Release might fail if the inner code aborted and
+                    # was caught silently — try ROLLBACK to recover.
+                    try:
+                        await conn.execute(
+                            "ROLLBACK TO SAVEPOINT orchestrator_retrieve"
+                        )
+                        await conn.execute(
+                            "RELEASE SAVEPOINT orchestrator_retrieve"
+                        )
+                    except Exception:
+                        pass
+        except Exception:
+            # Retrieval blew up. Hits = [] so generator refuses with
+            # no_hits. Don't fail the request just because retrieval
+            # had a bad day.
+            if retrieve_sp_open:
+                try:
+                    await conn.execute(
+                        "ROLLBACK TO SAVEPOINT orchestrator_retrieve"
+                    )
+                    await conn.execute(
+                        "RELEASE SAVEPOINT orchestrator_retrieve"
+                    )
+                except Exception:
+                    pass
+            hits = []
+
         try:
             hits = await apply_mode(
                 plan, hits,
@@ -294,38 +347,76 @@ class Orchestrator:
         force_refuse = crag_score < self._crag_threshold
 
         # ---- R1 — Design 2 conflict resolution ----
-        # Skip when we're about to refuse (no point computing conflicts
-        # for an empty answer) or there's no DB connection (test path).
+        # Run REGARDLESS of force_refuse — the detected conflicts are
+        # useful information for the user even when CRAG refuses the
+        # answer (the banner shows "we DID find this conflict but
+        # couldn't synthesize a confident answer"). Only skipped when
+        # there's no DB connection (test path) or no hits to analyze.
+        #
+        # Wrapped in an outer SAVEPOINT so ANY failure inside the block
+        # (a bad UUID, an unexpected schema mismatch, an FK violation
+        # during fact_conflicts INSERT) cleanly rolls back to a usable
+        # txn state. Without this outer wrap, an inner SAVEPOINT that
+        # couldn't even be CREATEd (e.g. txn already aborted from an
+        # upstream channel error) would leave the txn unusable, which
+        # silently breaks `_enrich_citations` downstream — citations
+        # come back with label='document' instead of the real filename
+        # because the meta-fetch query can't run.
         conflict_resolutions = []
         conflict_context = None
-        if not force_refuse and conn is not None and hits:
+        if conn is not None and hits:
+            r1_sp_open = False
             try:
-                conflict_resolutions = await resolve_conflicts_for_hits(
-                    conn, hits,
-                )
-                if conflict_resolutions:
-                    conflict_context = build_conflict_prompt_block(
-                        conflict_resolutions,
-                    ) or None
-                    # Best-effort persistence of `unresolved` for the
-                    # Needs-attention dashboard. Wrapped in SAVEPOINTs
-                    # in persist_unresolved_conflicts so a failure
-                    # doesn't poison the outer transaction.
-                    await persist_unresolved_conflicts(
-                        conn,
-                        workspace_id=workspace_id,
-                        resolutions=conflict_resolutions,
-                    )
+                await conn.execute("SAVEPOINT orchestrator_r1_block")
+                r1_sp_open = True
             except Exception:
-                # Conflict resolution is additive — never let it break
-                # the chat path. Logging is at module-level inside the
-                # helper.
-                import logging
-                logging.getLogger(__name__).warning(
-                    "conflict resolution skipped", exc_info=True,
-                )
-                conflict_resolutions = []
-                conflict_context = None
+                # Can't even open a savepoint — txn is already aborted.
+                # Skip R1 entirely; downstream code paths that DO need
+                # the txn will fail loudly elsewhere.
+                pass
+
+            if r1_sp_open:
+                try:
+                    conflict_resolutions = await resolve_conflicts_for_hits(
+                        conn, hits,
+                    )
+                    if conflict_resolutions:
+                        conflict_context = build_conflict_prompt_block(
+                            conflict_resolutions,
+                        ) or None
+                        await persist_unresolved_conflicts(
+                            conn,
+                            workspace_id=workspace_id,
+                            resolutions=conflict_resolutions,
+                        )
+                    try:
+                        await conn.execute(
+                            "RELEASE SAVEPOINT orchestrator_r1_block"
+                        )
+                    except Exception:
+                        pass
+                except Exception:
+                    import logging
+                    logging.getLogger(__name__).warning(
+                        "conflict resolution skipped", exc_info=True,
+                    )
+                    conflict_resolutions = []
+                    conflict_context = None
+                    # Rollback the SAVEPOINT so the outer txn is usable
+                    # by _enrich_citations / _persist_turn / query_log
+                    # downstream. The two RELEASEs aren't strictly
+                    # required after rollback but stay symmetric with
+                    # the success path; psycopg silently no-ops if the
+                    # savepoint is already gone.
+                    try:
+                        await conn.execute(
+                            "ROLLBACK TO SAVEPOINT orchestrator_r1_block"
+                        )
+                        await conn.execute(
+                            "RELEASE SAVEPOINT orchestrator_r1_block"
+                        )
+                    except Exception:
+                        pass
 
         # ---- Generation + faithfulness retry loop ----
         from kb.query.faithfulness import MAX_REGENERATIONS

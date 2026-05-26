@@ -87,3 +87,35 @@ test("conflict-resolution banner renders for MSA ↔ Amendment payment terms", a
     fullPage: true,
   });
 });
+
+
+test("R3 — citation cards show file label as title (not opaque hit_id)", async ({
+  page,
+}) => {
+  // Plain factual question that should land citations with file labels.
+  await page.goto("/chat", { waitUntil: "networkidle" });
+
+  await page
+    .getByTestId("chat-input")
+    .fill("Who are the parties to the MSA?");
+  await page.getByTestId("chat-send").click();
+
+  await expect(page.getByTestId("answer-card")).toBeVisible({ timeout: 30_000 });
+
+  // At least one citation card visible with a file-name label
+  // (e.g. "vertex-msa.pdf · p. 1" or similar). The pre-R3 UI just
+  // showed "chunk d25c56e9…" which is the regression we're guarding.
+  const firstLabel = page.getByTestId("citation-label").first();
+  await expect(firstLabel).toBeVisible({ timeout: 10_000 });
+  // The label should look like a file name (contains a dot or a recognizable
+  // demo-corpus filename). At minimum it shouldn't be the bare hit_id.
+  const labelText = (await firstLabel.textContent()) || "";
+  // Bare hit_ids in our format are uuid-shaped (8-4-4-4-12 hex). We don't
+  // want the label to BE that pattern.
+  expect(labelText).not.toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}/);
+
+  await page.screenshot({
+    path: "tests/artifacts/chat-citations-with-labels.png",
+    fullPage: true,
+  });
+});

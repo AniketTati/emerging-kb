@@ -189,6 +189,12 @@ function ConflictResolutionBanner({ response }: { response: ChatResponse }) {
 
 function RefusalBody({ response }: { response: ChatResponse }) {
   const reason = response.generation.refusal_reason;
+  const hits = response.hits || [];
+  const hitsByKind = hits.reduce<Record<string, number>>((acc, h) => {
+    acc[h.kind] = (acc[h.kind] ?? 0) + 1;
+    return acc;
+  }, {});
+
   return (
     <div
       className="rounded-lg border border-amber-200 bg-amber-50/40 p-4 text-[14px] leading-relaxed text-zinc-800"
@@ -197,16 +203,72 @@ function RefusalBody({ response }: { response: ChatResponse }) {
       <div className="font-medium text-zinc-900 mb-1">
         I can&apos;t answer that with the evidence I have.
       </div>
-      <div className="text-zinc-600">
+      <div className="text-zinc-600 mb-3">
         Reason: <span className="mono">{reason ?? "unknown"}</span>.{" "}
-        {reason === "no_hits" && "Retrieval returned zero results across all channels. "}
-        {reason === "insufficient_evidence" &&
-          "The CRAG gate scored the top results below the 0.5 threshold. "}
+        {reason === "no_hits" &&
+          "Retrieval returned zero results across all 6 channels. "}
+        {reason === "insufficient_evidence" && (
+          <>
+            The CRAG relevance gate scored the top results at{" "}
+            <span className="mono">{(response.crag_score * 100).toFixed(0)}%</span>
+            , below the 50% threshold. The retrieved snippets exist but they
+            don&apos;t answer your specific question.{" "}
+          </>
+        )}
         {reason === "parse_error" &&
           "The LLM produced output that couldn't be safely parsed. "}
         {reason === "llm_error" &&
           "The LLM call failed; we'd rather refuse than guess. "}
-        Try uploading more relevant documents or rephrasing your question.
+        {reason === "faithfulness_gate_refused" &&
+          "The faithfulness gate flagged the draft answers as not grounded in the snippets; we abstained rather than emit a hallucination. "}
+      </div>
+
+      {/* R3 — surface what the system DID find so the user can iterate.
+          Even on refusal, retrieval ran and returned hits we can show. */}
+      {hits.length > 0 && (
+        <div className="rounded border border-amber-100 bg-white/60 px-3 py-2 mb-3 text-xs">
+          <div className="text-zinc-600 mb-1.5">
+            Retrieval did surface{" "}
+            <span className="mono font-medium text-zinc-900">{hits.length}</span>{" "}
+            hit{hits.length === 1 ? "" : "s"}{" "}
+            <span className="text-zinc-500">
+              ({Object.entries(hitsByKind).map(([k, n]) => `${n} ${k}`).join(" · ")})
+            </span>{" "}
+            but they weren&apos;t a confident match.
+          </div>
+          <details className="text-zinc-500">
+            <summary className="cursor-pointer hover:text-zinc-700 mono">
+              show top hit previews
+            </summary>
+            <div className="mt-2 space-y-1">
+              {hits.slice(0, 3).map((h, i) => (
+                <div key={i} className="text-[11px]">
+                  <span className="mono text-zinc-400">
+                    [{i + 1}] {h.kind} · {(h.score * 100).toFixed(0)}%
+                  </span>
+                  <span className="ml-2 text-zinc-600">
+                    {h.snippet.slice(0, 80)}…
+                  </span>
+                </div>
+              ))}
+            </div>
+          </details>
+        </div>
+      )}
+
+      <div className="text-zinc-600">
+        <span className="font-medium">Try this:</span>{" "}
+        {reason === "no_hits" ? (
+          <>upload documents related to your question, or try different keywords.</>
+        ) : reason === "insufficient_evidence" ? (
+          <>
+            rephrase with more specific terms (entity names, dates, or doc-type
+            keywords like &ldquo;contract&rdquo; or &ldquo;invoice&rdquo;), or
+            check the upload page for files that should match.
+          </>
+        ) : (
+          <>rephrase your question or upload more relevant documents.</>
+        )}
       </div>
     </div>
   );

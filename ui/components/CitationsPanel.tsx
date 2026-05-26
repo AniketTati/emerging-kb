@@ -122,6 +122,11 @@ function CitationCardRow({ c, index }: { c: Citation; index: number }) {
   const ref = (c as Citation & { ref?: CitationRef | null }).ref ?? null;
   const page = ref?.page ?? null;
   const superseded = !!c.superseded;
+  // R3 — show the file name as the card's primary title. The server's
+  // citation enrichment builds a `label` like "vertex-msa.pdf · p. 2"
+  // (or "vertex-pricing-tiers.xlsx · Sheet: Vendors · Row 7" for xlsx).
+  // Falls back to the kind when label is absent (older response shape).
+  const label = c.label || `${c.kind} · ${c.hit_id.slice(0, 8)}`;
 
   return (
     <div
@@ -133,53 +138,75 @@ function CitationCardRow({ c, index }: { c: Citation; index: number }) {
       data-testid="citation-card"
       data-superseded={superseded || undefined}
     >
-      <div className="flex items-center justify-between text-xs">
-        <span className="flex items-center gap-2 text-zinc-600">
-          <span className={superseded ? "mono text-amber-700 line-through decoration-amber-400" : "mono text-zinc-900"}>
+      {/* Header: file label as the primary identifier, badges on the right. */}
+      <div className="flex items-start justify-between gap-2 text-xs">
+        <div className="flex items-start gap-2 min-w-0 flex-1">
+          <span
+            className={
+              superseded
+                ? "mono text-amber-700 line-through decoration-amber-400 flex-shrink-0"
+                : "mono text-zinc-900 flex-shrink-0"
+            }
+          >
             [{index}]
           </span>
-          <FileText className="w-3.5 h-3.5 text-zinc-500" strokeWidth={1.75} />
-          <span className="mono text-[11px]">{c.kind}</span>
-          {page != null && (
-            <span className="mono text-[10px] text-zinc-400">p.{page}</span>
-          )}
-          {exact && (
-            <span
-              className="mono text-[10px] px-1 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200"
-              title="Verbatim slice from PR2 worker-side resolver"
-            >
-              exact
-            </span>
-          )}
-          {superseded && (
-            <span
-              className="mono text-[10px] px-1 py-0.5 rounded bg-amber-100 text-amber-900 border border-amber-200"
-              title={c.conflict_resolution
-                ? `Superseded via ${c.conflict_resolution}`
-                : "Superseded"}
-            >
-              superseded
-            </span>
-          )}
-        </span>
-        <span className="mono text-[11px] text-zinc-500">
+          <FileText className="w-3.5 h-3.5 text-zinc-500 flex-shrink-0 mt-0.5" strokeWidth={1.75} />
+          <a
+            href={c.file_id ? `/files/${c.file_id}` : undefined}
+            className="text-zinc-900 font-medium truncate hover:underline"
+            title={label}
+            data-testid="citation-label"
+          >
+            {label}
+          </a>
+        </div>
+        <span className="mono text-[11px] text-zinc-500 flex-shrink-0">
           {(c.score * 100).toFixed(0)}%
         </span>
+      </div>
+      {/* Sub-row: chips for kind / page / exact / superseded / doc_status. */}
+      <div className="flex flex-wrap items-center gap-1 text-[10px] mono">
+        <span className="px-1 py-0.5 rounded bg-zinc-100 text-zinc-600">
+          {c.kind}
+        </span>
+        {page != null && (
+          <span className="px-1 py-0.5 rounded bg-zinc-100 text-zinc-600">
+            p.{page}
+          </span>
+        )}
+        {exact && (
+          <span
+            className="px-1 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200"
+            title="Verbatim slice from PR2 worker-side resolver"
+          >
+            exact
+          </span>
+        )}
+        {superseded && (
+          <span
+            className="px-1 py-0.5 rounded bg-amber-100 text-amber-900 border border-amber-200"
+            title={c.conflict_resolution
+              ? `Superseded via ${c.conflict_resolution}`
+              : "Superseded"}
+          >
+            superseded
+          </span>
+        )}
+        {c.doc_status && c.doc_status !== "live" && (
+          <span className="px-1 py-0.5 rounded bg-zinc-100 text-zinc-600">
+            {c.doc_status}
+          </span>
+        )}
       </div>
       {(exact || c.snippet_preview) && (
         <div className="text-[12px] leading-relaxed text-zinc-700 line-clamp-4">
           {exact ? (
-            // Render the exact slice as a quoted, italicized verbatim —
-            // makes it visually distinct from the surrounding chunk preview.
             <span className="italic">&ldquo;{exact}&rdquo;</span>
           ) : (
             c.snippet_preview
           )}
         </div>
       )}
-      <div className="text-[10px] mono text-zinc-400 truncate" title={c.hit_id}>
-        hit: {c.hit_id.slice(0, 12)}…
-      </div>
     </div>
   );
 }
