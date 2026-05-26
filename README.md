@@ -4,7 +4,7 @@
 >
 > **An alternative to Glean, NotebookLM, Hebbia** for teams that need to keep their data on their own infrastructure. Built on Postgres + pgvector + ParadeDB. Domain-agnostic. MIT-licensed.
 
-**Status (2026-05-26):** **Wave A end-to-end stack shipped.** Ingestion (parse → chunk → contextualize → embed → RAPTOR → mentions → fields → atomic units → entity resolution → graph) runs through to `ready`. Retrieval ships 6 parallel channels with RRF + rerank + CRAG gate + Astute generation + faithfulness gate. Four UI surfaces live: **`/chat`** (streaming citations + follow-up pills + inspector), **`/upload`** (drop + live stage timeline + re-extract / re-parse recovery + PDF preview), **`/explore`** (faceted search + entity profiles + sort + rename), **`/schema-studio`** (typed + inferred + vocabulary + lineage + versions tabs). Backend: 60+ FastAPI endpoints, 35+ migrations, Procrastinate task queue, MinIO blob store, full RLS.
+**Status (2026-05-26):** **Wave A end-to-end stack shipped.** Ingestion (parse → chunk → contextualize → embed → RAPTOR → mentions → fields → atomic units → entity resolution → graph) runs through to `ready`. Retrieval ships **6 parallel channels** (BM25 chunks · BM25 RAPTOR · dense chunks · dense RAPTOR · mentions-exact · atomic-units-rarity) with RRF + rerank + CRAG gate + Astute generation + faithfulness gate. **9 of 10 UI surfaces live**: `/chat` · `/upload` · `/explore` (+ `/explore/entity/[id]`) · `/schema-studio` · `/dashboard` · `/files/[id]` (Doc Detail) · `/audit` · `/settings` · `/playground`. `/extraction-studio` ships as a Wave-C roadmap page. Backend: 60+ FastAPI endpoints, 36+ migrations, Procrastinate task queue, MinIO blob store, full RLS. 45-question eval runner ships with optional RAGAS + HHEM scoring; runnable from the Playground.
 
 The architecture / 9 tier-1 gap designs / wiring inventory below describe the **full target system**; check the [`docs/build_tracker.md`](docs/build_tracker.md) §5 "Build phases" table for what's currently shipped vs. roadmap.
 
@@ -121,7 +121,7 @@ L3 isn't a "clauses" layer — it's an "atomic typed units" layer. *What* counts
 Adding a new doc type = registering a small plug-in (classifier + extractor + parameter schema + rarity definition). No core changes.
 
 **3. Multi-resolution storage + parallel retrieval.**
-**10 storage layers** (L0 raw → L0.5 doc chains → L1 parse → L1a contextual chunks → L1d RAPTOR summaries → L2 mentions → L2b emergent fields → L3 atomic units → L4 entities → L5 relationships → L6 HippoRAG graph → L7 communities-lazy; plus L1b late-chunk and L1c ColPali sub-layers). **10 parallel retrieval channels** (BM25, dense at every RAPTOR level, atomic-unit filter, anomaly filter, HippoRAG PPR, mention lookup, doc metadata, ColPali for visual). **12 planner modes** including the new `Q` (structured SQL/aggregation) and `K` (doc-chain aware). Naive RAG runs *one* channel; we run all 10 in parallel, fuse with RRF, rerank, and refuse to hallucinate via Astute RAG + faithfulness judges + conflict detection.
+**10 storage layers** (L0 raw → L0.5 doc chains → L1 parse → L1a contextual chunks → L1d RAPTOR summaries → L2 mentions → L2b emergent fields → L3 atomic units → L4 entities → L5 relationships → L6 HippoRAG graph → L7 communities-lazy; plus L1b late-chunk and L1c ColPali sub-layers). **6 first-class parallel retrieval channels today** (BM25 chunks, BM25 RAPTOR, dense chunks, dense RAPTOR, mentions-exact, atomic-units-rarity) — Wave B / C adds HippoRAG PPR as a first-class channel (today routed via the `T` planner mode), ColPali for visual layout, doc-metadata, and anomaly filter as standalone fan-outs. **13 planner modes** (E/F/S/H/T/M/G/D/C/A/Q/K/I — `Q` is structured SQL/aggregation, `K` is doc-chain aware, `I` is inventory listing). Naive RAG runs *one* channel; we run all 6 in parallel, fuse with RRF, rerank, and refuse to hallucinate via Astute RAG + faithfulness judges + conflict detection.
 
 ---
 
@@ -136,13 +136,13 @@ Status column distinguishes what's **shipped today** vs. planned. Single source 
 | LLM — contextualization (RAPTOR + per-chunk prefix) | **Gemini 2.5 Flash** (default) + **Anthropic Claude Opus 4.7** (alt) + Identity fallback. Factory selector `KB_CONTEXTUALIZER`. | ✅ Shipped (Phases 3b + 3b-bis) |
 | LLM — summarization (RAPTOR cluster summaries) | **Gemini 2.5 Flash** (default) + Anthropic + Identity. Factory selector `KB_SUMMARIZER`. | ✅ Shipped (Phase 3d) |
 | Embeddings | **Gemini Embedding 001** (3072-dim halfvec) + DeterministicMockEmbedder (CI). | ✅ Shipped (Phase 3c) |
-| Reranker | **Cohere Rerank 3.5** | ⬜ Planned (Phase 4) — not in `pyproject.toml` yet |
+| Reranker | **Cohere Rerank 3.5** (default) · `mxbai-rerank-base` local fallback · Identity passthrough for CI | ✅ Shipped (Phase 8c) — `src/kb/query/rerank.py` registers all three; Cohere dep is optional (degrades to Identity when absent or no `KB_COHERE_API_KEY`) |
 | Extraction / planning / generation LLM | **Gemini 2.5 Flash + Pro** | ⬜ Planned (Phase 5+) — not yet shipped |
 | Parsers | **Docling** (digital PDF, default) · **Gemini 2.5 Flash VLM** (scanned PDF, auto-routed via pre-flight text-layer sniff or `?parser=gemini`) · **openpyxl** (xlsx) · stdlib `email` (eml) · **Mistral OCR 3** (alt adapter — present + tested, but inert without `KB_MISTRAL_API_KEY`). Strategy selector `KB_PARSER_STRATEGY ∈ {auto, docling_first, gemini_first, gemini_only}`. | ✅ Shipped (Phases 2a + 2b + 2c) |
 | RAPTOR — per-doc tree | AgglomerativeClustering (cosine) → 3-impl Summarizer adapter → embed → recursive. `raptor_building` lifecycle state, `ready` terminal. Stored in `raptor_nodes` (`scope='per_doc'`) + `raptor_edges` (discriminated child FK — points at raptor_nodes for L3+ OR contextual_chunks for L2 leaves). | ✅ Shipped (Phase 3d) |
 | RAPTOR — corpus-level tree | UMAP+GaussianMixture (paper-correct for N=100K scale; AC's O(N²) infeasible). Explicit `POST /corpus/raptor/rebuild`. Reuses 3d's tables (`scope='corpus'`, `file_id NULL` — forward-compat columns landed at 3d's `0012` migration, no separate migration). Heterogeneous doc-root source (per-doc raptor root for multi-leaf files; contextual_chunks for singleton-leaf files). | ✅ Shipped (Phase 3e) |
-| Retrieval (HNSW + BM25 + tree-aware query) | Phase 4 — next branch | ⬜ Planned |
-| Wave A (planned scope) | Core ingest + retrieval + **8-of-10 UI surfaces** + 45-question eval. **Today shipped: ingestion + per-doc & corpus RAPTOR only.** Retrieval, UI, and eval suite are roadmap. | 🟡 Partial — ingestion done; retrieval + UI + eval roadmap |
+| Retrieval (HNSW + BM25 + tree-aware query) | 6 parallel channels · RRF fusion · CRAG gate · 13 planner modes · Astute generation · faithfulness gate | ✅ Shipped (Phases 8a–8h) |
+| Wave A (planned scope) | Core ingest + retrieval + **9-of-10 UI surfaces** + 45-question eval runner | ✅ Shipped — ingestion + retrieval + 9 of 10 UI surfaces + eval runner with optional RAGAS + HHEM scoring. Only `/extraction-studio` (Wave C) ships as a roadmap page. |
 | Wave B (build if time) | NotebookLM-style artifacts + HippoRAG-2 graph + four competitive-audit-driven additions: **B1** batch query mode (Hebbia spreadsheet pattern), **B2** opt-in `deep_research` agentic loop (Search-o1 style, capped at 5 hops + cost ceiling), **B3** DSPy prompt optimization layer, **B4** multi-agent decomposition. See `docs/competitive_audit.md`. | ⬜ Planned |
 | Wave C (cited only) | HalluGraph, ColPali, LazyGraphRAG, audio overview, permissions, temporal validity. | ⬜ Cited only |
 
@@ -271,7 +271,7 @@ Full traces in [`docs/architecture.md` §10](docs/architecture.md) and [`docs/wa
     └── ...                              ← see Reading order below
 ```
 
-**Planned (Phase 4+):** `web/` (Next.js 15 UI), `eval/` (45-question regression suite), `config/` (Hydra layered config — currently env-only).
+**Now shipped:** `ui/` (Next.js 15 — 9 of 10 surfaces live), `src/kb/eval/` (45-question regression runner + RAGAS + HHEM scoring), `config/` (Hydra layered config — Design 9). `extraction-studio` ships as a Wave-C roadmap page.
 
 ---
 
