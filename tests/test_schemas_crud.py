@@ -437,3 +437,56 @@ async def test_inferred_field_action_404_outside_workspace(
         headers=headers(test_workspace),  # not the row's workspace
     )
     assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Pass B — sample-values + export.yaml
+# ---------------------------------------------------------------------------
+
+
+async def test_sample_values_404_for_missing_field(client, test_workspace):
+    """GET /schemas/inferred-fields/{nonexistent}/sample-values → 404."""
+    resp = await client.get(
+        f"/schemas/inferred-fields/{uuid.uuid4()}/sample-values",
+        headers=headers(test_workspace),
+    )
+    assert resp.status_code == 404
+
+
+async def test_sample_values_returns_empty_for_field_without_proposed_rows(
+    client, test_workspace, db_url_superuser,
+):
+    """A field that exists but has no matching proposed_fields rows
+    returns 200 + empty items list (not 500)."""
+    fid = await _seed_inferred_field(
+        db_url_superuser, workspace_id=test_workspace,
+        canonical_name="no_proposed_rows_field",
+    )
+    resp = await client.get(
+        f"/schemas/inferred-fields/{fid}/sample-values",
+        headers=headers(test_workspace),
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["field_id"] == fid
+    assert body["items"] == []
+
+
+async def test_export_yaml_returns_application_x_yaml(client, test_workspace):
+    """GET /schemas/export.yaml returns the right content-type +
+    Content-Disposition (so browsers offer a download)."""
+    # Need at least one active schema for the export to have content;
+    # an empty export is also valid but we want to exercise the entity
+    # + field loops.
+    await create_schema(client, test_workspace, name="ExportProbe")
+    resp = await client.get(
+        "/schemas/export.yaml", headers=headers(test_workspace),
+    )
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("application/x-yaml")
+    assert "attachment" in resp.headers.get("content-disposition", "")
+    body = resp.text
+    assert body.startswith("# Emerging KB — schema export")
+    assert "schemas:" in body
+    # The schema we created shows up under its name.
+    assert "ExportProbe" in body

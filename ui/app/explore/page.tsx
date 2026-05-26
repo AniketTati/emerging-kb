@@ -22,14 +22,35 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Search, LayoutGrid, FileText, Folder, Puzzle, Users, GitMerge,
   Tag, AlertCircle, Loader2, ChevronRight, ExternalLink,
+  Mail, DollarSign, User, Building, AlertOctagon, FileQuestion,
   type LucideIcon,
 } from "lucide-react";
 import {
-  exploreSearch, getExploreCounts,
+  exploreSearch, getExploreCounts, getEntityProfile,
   type ExploreCounts, type ExploreHit, type ExploreKind,
-  type ExploreSearchResponse,
+  type ExploreSearchResponse, type EntityProfile,
+  type EntityProfileBucket,
 } from "@/lib/api";
 import { Sidebar } from "@/components/Sidebar";
+
+
+// Map the API's icon-name strings to lucide React components. The
+// /explore/entity/{id}/profile endpoint returns an `icon` field per
+// bucket; we resolve it here so the page can render the right glyph
+// without a string-to-component switch scattered through JSX.
+const BUCKET_ICONS: Record<string, LucideIcon> = {
+  "file-text":   FileText,
+  "dollar-sign": DollarSign,
+  "mail":        Mail,
+  "user":        User,
+  "users":       Users,
+  "building":    Building,
+  "alert-circle": AlertCircle,
+  "alert-octagon": AlertOctagon,
+  "blueprint":   FileText,
+  "sticky-note": FileText,
+  "file":        FileQuestion,
+};
 
 
 type RailItem = {
@@ -113,9 +134,20 @@ export default function ExplorePage() {
   const runSearch = useCallback(async () => {
     setLoading(true);
     try {
+      // Pass B — push the has-* + doc_type filters server-side.
+      // (Client-side filter pass below also still runs for paranoid
+      // safety + future date filter which is client-only.)
+      const onlyDocType =
+        docTypeFilter.size === 1
+          ? Array.from(docTypeFilter)[0]
+          : undefined;
       const out = await exploreSearch({
         q: debounced || undefined,
         kind: kind === "all" ? null : kind,
+        docType: onlyDocType ?? null,
+        hasAnomaly,
+        hasConflicts,
+        hasChain,
         limit: 60,
       });
       setResults(out);
@@ -125,7 +157,7 @@ export default function ExplorePage() {
     } finally {
       setLoading(false);
     }
-  }, [debounced, kind]);
+  }, [debounced, kind, docTypeFilter, hasAnomaly, hasConflicts, hasChain]);
 
   useEffect(() => { runSearch(); }, [runSearch]);
 
@@ -181,6 +213,33 @@ export default function ExplorePage() {
     setHasAnomaly(false);
     setHasConflicts(false);
     setHasChain(false);
+  }
+
+  // Called when the user clicks "view all →" on an Entity card's
+  // Related accordion bucket. We translate the bucket's deep-link
+  // hints into Explore filters and reset the view.
+  function scopeToBucket(bucket: EntityProfileBucket) {
+    if (bucket.deep_link_kind === "document"
+        || bucket.deep_link_kind === "atomic_unit"
+        || bucket.deep_link_kind === "anomaly"
+        || bucket.deep_link_kind === "entity"
+        || bucket.deep_link_kind === "doc_type"
+        || bucket.deep_link_kind === "relationship"
+        || bucket.deep_link_kind === "topic") {
+      setKind(bucket.deep_link_kind);
+    }
+    if (bucket.deep_link_doc_type) {
+      setDocTypeFilter(new Set([bucket.deep_link_doc_type]));
+    }
+    if (bucket.deep_link_q) {
+      setQ(bucket.deep_link_q);
+    }
+    // Special-case: anomalies bucket flips the has_anomaly toggle
+    // instead (kind=anomaly already filters that bucket, but the
+    // toggle persists across kind changes which is more useful UX).
+    if (bucket.key === "anomalies") {
+      setHasAnomaly(true);
+    }
   }
   const anyFilterActive =
     docTypeFilter.size > 0 || dateRange !== "any"
@@ -337,7 +396,7 @@ export default function ExplorePage() {
                     className="accent-zinc-900 w-3 h-3"
                     data-testid="explore-filter-conflicts"
                   />
-                  conflicts <span className="text-[10px] text-zinc-400">(Pass B)</span>
+                  conflicts
                 </label>
                 <label className="flex items-center gap-2 py-0.5 text-zinc-700 cursor-pointer">
                   <input
@@ -347,7 +406,7 @@ export default function ExplorePage() {
                     className="accent-zinc-900 w-3 h-3"
                     data-testid="explore-filter-chain"
                   />
-                  chain (amendments / thread) <span className="text-[10px] text-zinc-400">(Pass B)</span>
+                  chain (amendments / thread)
                 </label>
               </div>
             </div>
@@ -440,7 +499,11 @@ export default function ExplorePage() {
                         </div>
                         <ul className="space-y-1.5">
                           {items.map((it) => (
-                            <ResultCard key={`${it.kind}-${it.id}`} hit={it} />
+                            <ResultCard
+                              key={`${it.kind}-${it.id}`}
+                              hit={it}
+                              onScopeToBucket={scopeToBucket}
+                            />
                           ))}
                         </ul>
                       </div>
@@ -462,11 +525,16 @@ export default function ExplorePage() {
 // ===========================================================================
 
 
-function ResultCard({ hit }: { hit: ExploreHit }) {
+function ResultCard({
+  hit, onScopeToBucket,
+}: {
+  hit: ExploreHit;
+  onScopeToBucket: (bucket: EntityProfileBucket) => void;
+}) {
   const extra = hit.extra ?? {};
 
   if (hit.kind === "entity") {
-    return <EntityCard hit={hit} />;
+    return <EntityCard hit={hit} onScopeToBucket={onScopeToBucket} />;
   }
 
   return (
@@ -514,51 +582,161 @@ function ResultCard({ hit }: { hit: ExploreHit }) {
 }
 
 
-function EntityCard({ hit }: { hit: ExploreHit }) {
-  const extra = (hit.extra ?? {}) as {
+function EntityCard({
+  hit, onScopeToBucket,
+}: {
+  hit: ExploreHit;
+  onScopeToBucket: (bucket: EntityProfileBucket) => void;
+}) {
+  // Lazy-load the profile rollup on first expand — cheaper than
+  // pre-fetching for every entity in the result list. The first 3
+  // surface forms + first/last mention come from the search payload
+  // already, so the collapsed card has all the prototype info; only
+  // the RELATED accordion needs a network round-trip.
+  const [open, setOpen] = useState(false);
+  const [profile, setProfile] = useState<EntityProfile | null>(null);
+  const [profileLoading, setProfileLoading] = useState(false);
+
+  const searchExtra = (hit.extra ?? {}) as {
     aliases?: string[];
     first_seen?: string;
     last_seen?: string;
     n_docs?: number;
     mention_count?: number;
   };
-  const aliases = extra.aliases ?? [];
-  const firstSeen = extra.first_seen;
-  const lastSeen = extra.last_seen;
-  const nDocs = extra.n_docs ?? 0;
+  // When the profile is loaded, prefer its values (more authoritative);
+  // else fall back to whatever the search results gave us.
+  const aliases = profile?.aliases ?? searchExtra.aliases ?? [];
+  const firstSeen = profile?.first_seen ?? searchExtra.first_seen;
+  const lastSeen = profile?.last_seen ?? searchExtra.last_seen;
+  const nDocs = profile?.n_docs ?? searchExtra.n_docs ?? 0;
+  const mentionCount = profile?.mention_count ?? searchExtra.mention_count ?? 0;
+
+  async function toggle() {
+    if (!open && profile === null) {
+      setProfileLoading(true);
+      try {
+        const p = await getEntityProfile(hit.id);
+        setProfile(p);
+      } catch (err) {
+        console.error("getEntityProfile failed", err);
+      } finally {
+        setProfileLoading(false);
+      }
+    }
+    setOpen(!open);
+  }
 
   return (
     <li
-      className="rounded-lg border border-zinc-200 hover:bg-zinc-50"
+      className="rounded-lg border border-zinc-200 bg-white"
       data-testid="explore-result"
       data-kind="entity"
     >
-      <div className="px-4 py-3">
+      <button
+        type="button"
+        onClick={toggle}
+        className="w-full text-left px-4 py-3 hover:bg-zinc-50 cursor-pointer"
+        data-testid="explore-entity-toggle"
+      >
         <div className="flex items-center gap-2">
+          <ChevronRight
+            className={`w-3.5 h-3.5 text-zinc-400 transition-transform ${open ? "rotate-90" : ""}`}
+          />
           <span className="text-[10px] mono px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-700">
-            {hit.subtitle ?? "ENTITY"}
+            {profile?.entity_type ?? hit.subtitle ?? "ENTITY"}
           </span>
           <span className="text-sm font-medium text-zinc-900">
             {hit.title}
           </span>
           <span className="text-[11px] text-zinc-400 mono ml-auto">
-            {nDocs > 0 ? `${nDocs} docs` : ""}
-            {nDocs > 0 && extra.mention_count ? " · " : ""}
-            {extra.mention_count ? `${extra.mention_count} mentions` : ""}
+            {firstSeen && (
+              <>first seen {firstSeen.slice(0, 7)}</>
+            )}
+            {nDocs > 0 && firstSeen ? " · " : ""}
+            {nDocs > 0 && `${nDocs} docs`}
           </span>
         </div>
 
-        {/* Bottom meta row: aliases + first/last mention */}
-        {(aliases.length > 0 || firstSeen || lastSeen) && (
-          <div className="mt-2 pt-2 border-t border-zinc-100 grid grid-cols-2 gap-x-4 gap-y-1.5 text-[11px]">
+        {profile?.summary && (
+          <div className="mt-2 ml-6 text-xs text-zinc-500 leading-relaxed">
+            {profile.summary}
+          </div>
+        )}
+      </button>
+
+      {open && (
+        <div className="px-4 pb-4 ml-6 border-t border-zinc-100">
+          {/* RELATED accordion */}
+          <div className="rounded-lg border border-zinc-100 bg-zinc-50/40 p-3 mt-2">
+            <div className="text-[10px] uppercase tracking-wider text-zinc-400 mb-2">
+              Related
+            </div>
+            {profileLoading ? (
+              <div className="flex items-center justify-center py-6 text-zinc-400">
+                <Loader2 className="w-4 h-4 animate-spin" />
+              </div>
+            ) : profile === null ? (
+              <div className="text-xs text-zinc-500 py-2">
+                Failed to load entity profile.
+              </div>
+            ) : profile.related.length === 0 ? (
+              <div className="text-xs text-zinc-500 py-2">
+                No related items found.
+              </div>
+            ) : (
+              <ul>
+                {profile.related.map((b) => {
+                  const Icon = BUCKET_ICONS[b.icon] ?? FileText;
+                  return (
+                    <li
+                      key={b.key}
+                      className="border-b border-zinc-200 last:border-0"
+                      data-testid="entity-related-bucket"
+                      data-bucket-key={b.key}
+                    >
+                      <div className="flex items-center gap-2 py-2 text-xs text-zinc-700">
+                        <Icon
+                          className="w-3.5 h-3.5 text-zinc-500"
+                          strokeWidth={1.75}
+                        />
+                        <span className="font-medium">{b.label}</span>
+                        {b.subtitle && (
+                          <span className="text-zinc-500">— {b.subtitle}</span>
+                        )}
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onScopeToBucket(b);
+                          }}
+                          className="ml-auto text-zinc-500 hover:text-zinc-900 mono cursor-pointer"
+                          data-testid="entity-bucket-view-all"
+                        >
+                          view all <span aria-hidden>→</span>
+                        </button>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+
+          {/* 3-column footer block (Canonical / Aliases / First-Last) */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-x-6 gap-y-2 mt-3 text-[11px]">
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-zinc-400 mb-0.5">
+                Canonical name
+              </div>
+              <div className="text-zinc-900">{hit.title}</div>
+            </div>
             {aliases.length > 0 && (
-              <div className="col-span-2 md:col-span-1">
+              <div>
                 <div className="text-[10px] uppercase tracking-wider text-zinc-400 mb-0.5">
                   Aliases
                 </div>
-                <div className="text-zinc-700 truncate">
-                  <span className="mono">{aliases.join(" · ")}</span>
-                </div>
+                <div className="text-zinc-700 mono">{aliases.join(" · ")}</div>
               </div>
             )}
             {(firstSeen || lastSeen) && (
@@ -572,29 +750,32 @@ function EntityCard({ hit }: { hit: ExploreHit }) {
               </div>
             )}
           </div>
-        )}
 
-        {/* Footer actions */}
-        <div className="mt-2 flex items-center gap-3 text-[11px] text-zinc-500">
-          <button
-            type="button"
-            disabled
-            title="Entity profile page lands in Pass B"
-            className="flex items-center gap-1 text-zinc-400 cursor-not-allowed"
-          >
-            <ExternalLink className="w-3 h-3" /> Open profile
-          </button>
-          <button
-            type="button"
-            disabled
-            title="Graph view lands in Pass B (HippoRAG neighbors)"
-            className="flex items-center gap-1 text-zinc-400 cursor-not-allowed"
-          >
-            <GitMerge className="w-3 h-3" /> Show as graph
-          </button>
-          <span className="ml-auto text-[10px] mono text-zinc-400">{hit.id.slice(0, 8)}…</span>
+          {/* Footer actions */}
+          <div className="mt-3 pt-3 border-t border-zinc-100 flex items-center gap-3 text-[11px] text-zinc-500">
+            <button
+              type="button"
+              disabled
+              title="Entity profile page lands in a later pass"
+              className="flex items-center gap-1 text-zinc-400 cursor-not-allowed"
+            >
+              <ExternalLink className="w-3 h-3" /> Open profile
+            </button>
+            <button
+              type="button"
+              disabled
+              title="Graph view (HippoRAG neighbors) coming later"
+              className="flex items-center gap-1 text-zinc-400 cursor-not-allowed"
+            >
+              <GitMerge className="w-3 h-3" /> Show as graph
+            </button>
+            <span className="ml-auto text-[10px] mono text-zinc-400">
+              {mentionCount > 0 ? `${mentionCount} mentions · ` : ""}
+              {hit.id.slice(0, 8)}…
+            </span>
+          </div>
         </div>
-      </div>
+      )}
     </li>
   );
 }
