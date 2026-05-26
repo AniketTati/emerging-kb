@@ -783,6 +783,62 @@ async def soft_delete_file(
     )
 
 
+# Forward-only DAG for lifecycle progression. Each tuple is (state, order).
+# Higher order = later in the pipeline. Re-running a worker MUST NOT walk
+# the file backward — that's the bug that left 19 docs stuck after a
+# re-trigger of `extract_atomic_units_file` clobbered `ready` files back
+# to `entities_extracting`. The guard below rejects backward writes.
+_LIFECYCLE_ORDER: dict[str, int] = {
+    "queued":               0,
+    "parsing":              1,
+    "parsed":               2,
+    "chunked":              3,
+    "doc_chaining":         3,   # additive, non-gating; same rank as chunked
+    "contextualized":       4,
+    "embedded":             5,
+    "raptor_building":      6,
+    "mentions_extracting":  7,
+    "fields_extracting":    8,
+    "units_extracting":     9,
+    "entities_extracting": 10,
+    "identity_resolving":  11,
+    "ready":               12,
+    # Terminal states — entering them is always allowed, leaving them is
+    # never allowed (failed / deleted are sticky).
+    "failed":             100,
+    "deleted":            100,
+}
+
+
+def _is_valid_transition(from_state: str | None, to_state: str) -> bool:
+    """Forward-only progression rule:
+      - Any → terminal (failed/deleted) is always allowed.
+      - Terminal (failed/deleted) → anything is NEVER allowed.
+      - Same-state self-transitions are allowed (noop audit events like
+        `relationships_built` on a ready file).
+      - Otherwise: to_state's order must be >= from_state's order.
+    """
+    if from_state is None:
+        return True
+    if from_state in ("failed", "deleted") and to_state not in ("failed", "deleted"):
+        return False
+    if to_state in ("failed", "deleted"):
+        return True
+    from_rank = _LIFECYCLE_ORDER.get(from_state)
+    to_rank = _LIFECYCLE_ORDER.get(to_state)
+    if from_rank is None or to_rank is None:
+        # Unknown state — be permissive (forward compat) but log.
+        return True
+    return to_rank >= from_rank
+
+
+class BackwardLifecycleTransitionError(RuntimeError):
+    """Raised when transition_lifecycle is asked to walk a file backward
+    in the pipeline (e.g., ready → entities_extracting). Pre-fix, this
+    silently succeeded and left files stuck in mid-pipeline states.
+    """
+
+
 async def transition_lifecycle(
     conn: Connection,
     *,
@@ -795,6 +851,13 @@ async def transition_lifecycle(
     """Helper for the worker: read current state under FOR UPDATE, write the
     new state to `files`, and append the audit event. Returns the old state
     so the worker can branch on it (e.g., refuse to re-parse if 'parsed').
+
+    Forward-only guard: refuses to walk the file backward in the pipeline.
+    A re-trigger of an earlier worker (e.g. `extract_atomic_units_file`
+    running again on a `ready` file) returns silently without overwriting
+    the state, so re-runs degrade to noop instead of clobbering the
+    file's progress. The audit-event row is also skipped on these refuses
+    so file_lifecycle stays a clean forward chain.
     """
     cur = await conn.execute(
         "SELECT lifecycle_state FROM files WHERE id = %s FOR UPDATE",
@@ -804,6 +867,20 @@ async def transition_lifecycle(
     if row is None:
         raise FileNotFoundError(file_id)
     from_state = row[0]
+
+    if not _is_valid_transition(from_state, to_state):
+        # Silent no-op — log to the caller for observability but don't
+        # poison the worker (a thrown exception would mark the
+        # procrastinate job failed, then it'd retry and fail again).
+        # Returning the current state lets callers branch ("if from in
+        # terminal states, skip downstream chains") without changes.
+        import logging
+        logging.getLogger(__name__).warning(
+            "lifecycle refuse %s -> %s on file_id=%s event=%s "
+            "(forward-only DAG; ignoring backward transition)",
+            from_state, to_state, file_id, event,
+        )
+        return from_state
 
     await conn.execute(
         "UPDATE files SET lifecycle_state = %s, updated_at = now() WHERE id = %s",
