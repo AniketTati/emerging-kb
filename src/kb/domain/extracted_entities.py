@@ -28,6 +28,9 @@ async def insert_extracted_entity(
     model_id: str,
     rarity_score: float | None = None,
     unit_type: str | None = None,
+    source_chunk_id: str | None = None,
+    source_char_start: int | None = None,
+    source_char_end: int | None = None,
 ) -> str:
     """INSERT one extracted_entities row (without lineage_path — set later
     via update_lineage). Returns the new row's id.
@@ -36,17 +39,24 @@ async def insert_extracted_entity(
     from a structural L3 plugin (the child-entity-from-atomic_unit path
     introduced by the nested-entities refactor). They're NULL for
     parent doc_root entities written by the LLM extraction path.
+
+    `source_chunk_id` + `source_char_*` carry the verbatim-snippet
+    location the citation envelope renders in the chat right rail.
+    Set by the source resolver after extraction; left None at INSERT
+    time when not yet resolved.
     """
     cur = await conn.execute(
         "INSERT INTO extracted_entities "
         "(schema_entity_id, file_id, workspace_id, fields, citations, "
-        " model_id, rarity_score, unit_type) "
-        "VALUES (%s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s) "
+        " model_id, rarity_score, unit_type, "
+        " source_chunk_id, source_char_start, source_char_end) "
+        "VALUES (%s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s, %s, %s, %s) "
         "RETURNING id::text",
         (
             schema_entity_id, file_id, workspace_id,
             json.dumps(fields), json.dumps(citations), model_id,
             rarity_score, unit_type,
+            source_chunk_id, source_char_start, source_char_end,
         ),
     )
     return (await cur.fetchone())[0]

@@ -91,11 +91,14 @@ async def read_atomic_units_for_file(
     extracted_entity child of the doc-root.
 
     Returns dicts (not tuples) so call-sites can keep using stable
-    field names if the column set evolves.
+    field names if the column set evolves. Includes source-position
+    columns (set by the source-resolver post-extraction) so the
+    citation envelope can render exact-text snippets.
     """
     cur = await conn.execute(
         "SELECT id::text, unit_type, parameters, anchor_chunk_id::text, "
-        "       rarity_score, model_id "
+        "       rarity_score, model_id, "
+        "       source_chunk_id::text, source_char_start, source_char_end "
         "  FROM atomic_units "
         " WHERE file_id = %s "
         " ORDER BY created_at, id",
@@ -110,6 +113,9 @@ async def read_atomic_units_for_file(
             "anchor_chunk_id": r[3],
             "rarity_score": float(r[4]) if r[4] is not None else None,
             "model_id": r[5],
+            "source_chunk_id": r[6],
+            "source_char_start": r[7],
+            "source_char_end": r[8],
         }
         for r in rows
     ]

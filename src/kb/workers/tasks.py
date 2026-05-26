@@ -2041,6 +2041,12 @@ async def extract_schema_entities_file_impl(file_id: str) -> None:
                     model_id=unit.get("model_id") or "l3_plugin",
                     rarity_score=unit.get("rarity_score"),
                     unit_type=unit_type,
+                    # Source positions carry through so the citation
+                    # envelope can render verbatim snippets identically
+                    # to the legacy atomic_units → citation_card path.
+                    source_chunk_id=unit.get("source_chunk_id"),
+                    source_char_start=unit.get("source_char_start"),
+                    source_char_end=unit.get("source_char_end"),
                 )
                 inserted.append((eid, sub_entity_id))
                 total_inserted += 1

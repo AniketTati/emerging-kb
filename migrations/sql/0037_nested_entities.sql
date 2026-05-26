@@ -93,6 +93,20 @@ ALTER TABLE extracted_entities
     ADD COLUMN IF NOT EXISTS unit_type text
         CHECK (unit_type IS NULL OR length(unit_type) BETWEEN 1 AND 50);
 
+-- Source-position columns mirror migration 0032's atomic_units shape
+-- so the citation envelope keeps rendering exact-text snippets after
+-- atomic_units is dropped. Set by the PR2 source-resolver post-
+-- extraction (same task that wrote atomic_units.source_*).
+ALTER TABLE extracted_entities
+    ADD COLUMN IF NOT EXISTS source_chunk_id uuid
+        REFERENCES contextual_chunks(id) ON DELETE SET NULL;
+ALTER TABLE extracted_entities
+    ADD COLUMN IF NOT EXISTS source_char_start integer
+        CHECK (source_char_start IS NULL OR source_char_start >= 0);
+ALTER TABLE extracted_entities
+    ADD COLUMN IF NOT EXISTS source_char_end integer
+        CHECK (source_char_end IS NULL OR source_char_end >= 0);
+
 -- The atomic_units rarity index — recreated against extracted_entities
 -- so the rarity / anomaly retrieval channels can swing over at 0038.
 CREATE INDEX IF NOT EXISTS extracted_entities_rarity_idx
@@ -102,6 +116,10 @@ CREATE INDEX IF NOT EXISTS extracted_entities_rarity_idx
 -- The /files/:id/sub-entities endpoint will filter by file_id + parent_entity_id IS NOT NULL.
 -- Existing extracted_entities_file_idx (workspace_id-less file_id) handles file lookup.
 
--- Grant UPDATE on rarity_score so the centroid-recompute can write it
--- back (mirrors the atomic_units pattern). unit_type is INSERT-only.
-GRANT UPDATE (lineage_path, parent_entity_id, rarity_score) ON extracted_entities TO kb_app;
+-- Grant UPDATE on rarity_score + source-positions so the centroid-
+-- recompute + source-resolver can write them back (mirrors the
+-- atomic_units pattern). unit_type is INSERT-only.
+GRANT UPDATE (
+    lineage_path, parent_entity_id, rarity_score,
+    source_chunk_id, source_char_start, source_char_end
+) ON extracted_entities TO kb_app;

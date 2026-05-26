@@ -220,9 +220,14 @@ async def fetch_atomic_units_by_file(
         in_savepoint = False
 
     try:
+        # Post nested-entities refactor: each atomic_unit now lives as
+        # an extracted_entity sub-row carrying the same unit_type +
+        # `fields` jsonb (renamed from `parameters`). Filter by
+        # unit_type IS NOT NULL to skip parent doc_root rows.
         cur = await conn.execute(
-            "SELECT id::text, file_id::text, unit_type, parameters "
-            "FROM atomic_units WHERE file_id::text = ANY(%s)",
+            "SELECT id::text, file_id::text, unit_type, fields "
+            "FROM extracted_entities WHERE file_id::text = ANY(%s) "
+            "  AND unit_type IS NOT NULL",
             (ids,),
         )
         rows = await cur.fetchall()
