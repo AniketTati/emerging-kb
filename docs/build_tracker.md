@@ -154,9 +154,36 @@ QA gates this at G1.5b — every prototype page is grep'd for the forbidden voca
 
 ## 1. Now / Next / Blocked
 
-**Now:** 🎉 **Wave A FULLY COMPLETE.** Phase 3e ✅ shipped — corpus-level RAPTOR (plan at §5.10.1, **15 decisions**). Phase 3d also ✅ — per-doc RAPTOR (plan at §5.10, **16 decisions** revised post-deliberation; the deliberation flips that earned their keep: (1) discriminated edge FK + L1 stays in contextual_chunks — saves 30 GB at 100K-doc scale; (2) `raptor_building` intermediate lifecycle state — observability for the multi-stage build; (3) `MAX_LEVELS` bumped 4→6 to cover corpus-tree depth `log₈(100K)≈5.5`; (4) forward-compat `raptor_nodes.scope` enum + nullable `file_id` locked at 3d's 0012 migration — Phase 3e needed no separate migration). **286/286 pytest** in 81s. verify_phase_3e.sh 13/13. Cross-phase sweep across **all 12 verify scripts** (0/1a/1b/1c/2a/2b/2c/3a/3b/3c/3d/3e): **205 checks total, 12/12 GREEN on first pass** — no regressions, no forward-compat fixes needed (3e doesn't change any file lifecycle states; corpus tree is workspace-scoped, not file-scoped). Branch `phase-3/chunking-raptor` carries 7 commit-sets (3a/3b/3c/3b-bis/2c/3d/3e) — **PR #7 open against main**. Architecture's "RAPTOR builds the corpus hierarchy" promise (line 41) is now backed by code at 100K-doc scale.
-**Next:** **Phase 10a ✅ FULLY GREEN — Next.js 15 Upload UI shipped.** `ui/` Next.js 15 (App Router) + Tailwind v4 + lucide-react app delivered 2026-05-25 on `phase-10a/upload-ui` (stacked on `phase-9/sse-audit`). `/upload` page: drag-drop zone + live status table with 5-pip stage indicator + SSE per-file subscription consuming Phase 9's `/upload/:id/status`. **Screenshot artifact verified**: sidebar + topbar (with ready/processing/failed counters) + clean dropzone + empty-state row. **10/10 vitest** unit tests for `lib/api.ts` pure helpers (stage projections + terminal detection + label formatting). **2/2 Playwright** E2E tests (page renders + root redirects). Backend 541/541 pytest still GREEN after CORS middleware addition (`KB_CORS_ORIGINS` env, default `http://localhost:3000`). 15 decisions locked at §5.17 including #1 Next.js 15 App Router · #4 NEXT_PUBLIC_KB_API_URL env · #5 single-tenant workspace · #7 native FormData + Idempotency-Key · #8 native EventSource per file · #12 5-pip canonical stage mapping. UI files: `ui/{app,components,lib,tests}/` (~900 LOC TypeScript). **Phase 10b opens next** — Next.js Chat UI consuming `POST /chat` + `/chat/:id/stream` SSE + citation cards.
+> **For the current "where we are" snapshot — what's on `main`, what's in the
+> open PR queue, and what the demo workspace looks like right now — read
+> [`STATUS.md`](STATUS.md).** That doc is refreshed each time meaningful
+> work lands; this section captures the latest gate-level state only.
+
+**Now:** **Wave B step 2 — [PR #32](https://github.com/AniketTati/emerging-kb/pull/32) open against `main`.**
+Carries 8 commits across E4 (doc-chain cross-format) · PR8 (L3 long-tail plugins:
+`email_messages` + `generic_items`) · R1 (Design 2 conflict resolution wired into
+chat) · R2 (char-range citations) · R3 (chat UX polish) · retrieval channel
+lifecycle filter · R4 (noise mention skip — 671→217 entities) · R5 (Docling
+per-element layout + DocDetail mini-map). 37 files, +4083 lines. Two run-once
+backfill scripts ship with it (`cleanup_noise_entities.py` + `backfill_pdf_layout.py`).
+Wave B step 1 (PR #31, merged 2026-05-25) carried E1/E2/E2b/E3 + citations v2 +
+broader corpus + `/upload` pagination.
+
+**Next:** Awaiting PR #32 review + merge. Deferred follow-ups: Wave-C PDF bbox
+overlay (use R5 layout to draw highlight rectangles on rendered PDF when a
+citation is clicked) · cross-type entity defragmentation · `api_contracts.md`
+refresh to cover the 19+ lifecycle events (only 8 are currently documented).
+
 **Blocked on:** nothing.
+
+<details>
+<summary>Historical "Now/Next" snapshots (pre-Wave-B)</summary>
+
+> 🎉 **Wave A FULLY COMPLETE.** Phase 3e ✅ shipped — corpus-level RAPTOR (plan at §5.10.1, **15 decisions**). Phase 3d also ✅ — per-doc RAPTOR (plan at §5.10, **16 decisions** revised post-deliberation; the deliberation flips that earned their keep: (1) discriminated edge FK + L1 stays in contextual_chunks — saves 30 GB at 100K-doc scale; (2) `raptor_building` intermediate lifecycle state — observability for the multi-stage build; (3) `MAX_LEVELS` bumped 4→6 to cover corpus-tree depth `log₈(100K)≈5.5`; (4) forward-compat `raptor_nodes.scope` enum + nullable `file_id` locked at 3d's 0012 migration — Phase 3e needed no separate migration). **286/286 pytest** in 81s.
+>
+> **Phase 10a ✅ FULLY GREEN — Next.js 15 Upload UI shipped.** `ui/` Next.js 15 (App Router) + Tailwind v4 + lucide-react app delivered 2026-05-25 on `phase-10a/upload-ui`. `/upload` page: drag-drop zone + live status table with 5-pip stage indicator + SSE per-file subscription. **10/10 vitest** + **2/2 Playwright** E2E. Backend 541/541 pytest GREEN.
+
+</details>
 
 ---
 

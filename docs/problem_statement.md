@@ -4,6 +4,10 @@ A domain-agnostic enterprise knowledge base. Upload heterogeneous documents (PDF
 
 This document is the public technical brief. The locked architecture lives in [`architecture.md`](architecture.md); the locked UI design lives in [`ui_design.md`](ui_design.md); the build discipline lives in [`build_tracker.md`](build_tracker.md).
 
+> **Coming back to this project?** Read [`STATUS.md`](STATUS.md) first — it's the
+> rolling snapshot of what's on `main`, what's in the PR queue, and what the
+> demo workspace looks like right now.
+
 ---
 
 ## The challenge

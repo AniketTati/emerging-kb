@@ -1,11 +1,37 @@
-# Extraction + citation plan — Wave B step 2
+# Extraction + citation plan — Wave B step 2 _(CLOSED-OUT 2026-05-26)_
 
-Date: 2026-05-25 · branch: `waveB/demo-corpus-and-pages` (post PR #26)
+Date drafted: 2026-05-25 · branch: `waveB/demo-corpus-and-pages` (post PR #26)
+**Closed:** 2026-05-26 — every item below shipped. The plan body is retained as the
+historical record of the audit; for what's on `main` and the open PR queue, read
+[`STATUS.md`](STATUS.md).
 
-PR #26 shipped the doc-detail two-pane UI. The citation system in that
-PR is best-effort text-search; this doc lays out the plan to make
-citations work *properly* and to fix the extraction-quality gaps the
-audit surfaced in the same pass.
+## Closeout summary
+
+| # | Issue | Resolution | Commit |
+|---|---|---|---|
+| **E1** | L2 mentions = 0 on PDF / TXT / EML | Tolerant JSON parser (`json_recovery.parse_tolerant_array_in_object`) + raised output caps. Coverage 31% → 96% on demo corpus. | `5493bde` (PR #29 → #31) |
+| **E2** | `extracted_entities` empty; `schema_entities` empty | `KB_PROMOTION_MIN_DOCS` default 5 → 1 so single-doc demos exercise L4 closed-world; promotion auto-seeds `schema_entities`. | `6ec4e8f` + `46c2fac` (E2b classifier prompt) |
+| **E3** | atomic_units = 0 on legal_contract .txt / .eml / .md | Clauses plugin gates on `inferred_doc_type` rather than mime-type. | `0423176` (PR #27) |
+| **E4** | Doc-chain not detected for MSA.pdf ↔ Amendment.txt | Broader contract-doctype synonym list (`master_services_agreement`, `nda`, `addendum`, `subscription_agreement`, …) + title-comparison window capped at first 200 chars (full-page text was diluting similarity below 0.7). | `155dd30` (PR #32) |
+| **E5** | `parse_artifacts` empty — Docling layout discarded | Docling parser captures per-element `{page, bbox, label, text, charspan}` on `raw_pages.layout_json.elements`. DocDetail renders a coloured SVG mini-map per page. | `1ac104e` (PR #32) |
+
+Adjacent fixes shipped during the same sweep (not in the original E-list but
+caught by post-fix verification):
+
+- **Channel lifecycle filter** — all 6 retrieval channels now JOIN `files` with
+  `lifecycle_state <> 'deleted'`. Pre-fix soft-deleted dupes leaked ghost
+  citations and broke R1's superseded tagging by file_id mismatch. (`42fbbb6`)
+- **R4 noise filter** — identity resolver skips `{CARDINAL, QUANTITY, DATE,
+  MONEY, ORDINAL, PERCENT, TIME}` mention types. 671 → 217 canonical entities
+  on the demo workspace. (`c846dc8`)
+- **L3 long tail (PR8)** — new `email_messages` plugin (regex thread split, no
+  LLM) + `generic_items` plugin (LLM-driven with per-doc-type hints for
+  postmortems / lab reports / press releases / resumes / 12+ more types). 19 of
+  26 demo files went from 0 → meaningful atomic units. (`243f9d0`)
+
+The R1–R3 series (Design 2 conflict resolution wired into chat + char-range
+exact-snippet citations + UX polish) also shipped in this sweep — see
+[`STATUS.md`](STATUS.md) for the consolidated map.
 
 ---
 
