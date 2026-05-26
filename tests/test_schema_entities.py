@@ -62,11 +62,17 @@ async def test_post_creates_entity_with_documented_shape(client, test_workspace)
     )
     assert resp.status_code == 201
     body = resp.json()
+    # Nested-entities refactor: EntityResponse now also carries
+    # `kind` ∈ {'doc_root','sub_entity'} and an optional
+    # `parent_type_id`. Default for a fresh INSERT via the public
+    # POST endpoint is doc_root + parent_type_id=None.
     assert set(body.keys()) == {
         "id", "name", "description", "lifecycle_state",
-        "created_at", "updated_at",
+        "created_at", "updated_at", "kind", "parent_type_id",
     }
     assert body["lifecycle_state"] == "active"
+    assert body["kind"] == "doc_root"
+    assert body["parent_type_id"] is None
     assert "workspace_id" not in body
     assert "schema_id" not in body
 
