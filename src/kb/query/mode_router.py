@@ -515,14 +515,39 @@ async def _route_q_mode(
     polymorphic citation builder pick the 'aggregate' modality, so the
     citation carries `audit_query_id` and `row_count` automatically."""
     if not plan.q_payload:
-        # Planner didn't produce a Q payload — Identity planner emits
-        # mode='Q' from heuristics ("how many") but doesn't know how to
-        # build the SQL. The Gemini planner is required for real Q
-        # queries; this branch trips on Identity + an aggregation query.
-        return [_q_refusal_hit(
-            "no Q payload — the Identity planner cannot emit SQL; "
-            "configure KB_PLANNER=gemini for aggregations"
-        )]
+        # Planner didn't produce a Q payload. Two cases:
+        #
+        #   1. IdentityPlanner — by design can't emit SQL. We tell the
+        #      user honestly: switch to gemini for aggregations.
+        #
+        #   2. GeminiPlanner — the second LLM call (q_payload_gen.py)
+        #      already attempted to build the plan and failed; the
+        #      reason is on plan.notes prefixed `q_payload_gen:`.
+        #      Surface that to the user instead of the generic message
+        #      so they can fix the question or know the catalog can't
+        #      answer it.
+        reason = "could not build a safe SQL plan for this aggregation"
+        if plan.notes and "q_payload_gen:" in plan.notes:
+            # Pull just the last q_payload_gen segment.
+            tail = plan.notes.rsplit("q_payload_gen:", 1)[-1].strip()
+            if tail.startswith("refuse:"):
+                reason = tail[len("refuse:"):].strip()
+            elif tail.startswith("no_llm:"):
+                reason = (
+                    "Q-mode requires KB_GEMINI_API_KEY to translate "
+                    "the question into a SQL plan; the LLM planner is "
+                    "not configured"
+                )
+            else:
+                # parse_error / validation / llm_error — surface verbatim.
+                reason = tail
+        elif plan.model_id and "identity" in plan.model_id.lower():
+            reason = (
+                "Q-mode aggregations need an LLM planner; the Identity "
+                "planner can't generate SQL. Set KB_PLANNER=gemini + "
+                "KB_GEMINI_API_KEY."
+            )
+        return [_q_refusal_hit(reason)]
 
     if conn is None:
         return [_q_refusal_hit("Q-mode requires a database connection")]

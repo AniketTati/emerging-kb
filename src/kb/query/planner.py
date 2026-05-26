@@ -1,8 +1,8 @@
 """B4a / WA-10 — Schema-aware planner.
 
 Architecture §6 step 3: parses an intent + query into a typed `Plan` that
-picks one of the 12 retrieval modes (E/F/S/H/T/M/G/D/C/A/Q/K) and carries
-mode-specific parameters.
+picks one of the 13 retrieval modes (E/F/S/H/T/M/G/D/C/A/Q/K/I) and
+carries mode-specific parameters.
 
 Modes (architecture §6 step 3):
 
@@ -18,12 +18,14 @@ Modes (architecture §6 step 3):
   A — anomaly filter           (rarity_score > threshold)
   Q — STRUCTURED QUERY         (SQL aggregate — Q-mode pipeline ships in B4b)
   K — DOC-CHAIN AWARE          (chain context: current_version / all_versions)
+  I — inventory                (SQL metadata listing; orchestrator short-circuits)
 
-Two impls:
-  IdentityPlanner — deterministic intent→mode mapping
-  GeminiPlanner   — Gemini Flash with constrained JSON
+Two impls (mirrors the Contextualizer / Summarizer pattern):
+  IdentityPlanner — deterministic intent→mode mapping; no LLM.
+  LLMPlanner      — provider-neutral; takes a `JsonLLMClient`. Today's
+                    factory wires Gemini-Flash or Claude based on env.
 
-Factory: KB_PLANNER ∈ {identity, gemini, auto}
+Factory: `KB_PLANNER ∈ {identity, gemini, anthropic, auto}`.
 """
 
 from __future__ import annotations
@@ -35,6 +37,7 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from kb.query.intent import IntentResult
+from kb.query.llm_client import JsonLLMClient, LLMCallError, make_query_llm_client
 
 
 QUERY_MODES: tuple[str, ...] = (
@@ -199,11 +202,16 @@ class IdentityPlanner:
 
 
 # ---------------------------------------------------------------------------
-# Gemini planner
+# LLM planner — provider-neutral (Gemini / Anthropic via JsonLLMClient)
 # ---------------------------------------------------------------------------
 
 
-_GEMINI_SYSTEM_PROMPT = (
+# Routing prompt — fired once per query to pick the mode + carry the
+# mode-specific params. Identical across providers; differences in
+# JSON discipline are handled by each adapter (Gemini uses
+# `response_mime_type=application/json`; Anthropic appends a "JSON
+# only" reminder + we strip stray code fences).
+_ROUTING_SYSTEM_PROMPT = (
     "You are a query planner for a knowledge base. Given the user's query, "
     "the intent label, and the available modes, return STRICTLY a JSON "
     "object: {\"mode\": one of "
@@ -215,6 +223,9 @@ _GEMINI_SYSTEM_PROMPT = (
     "Choose 'T' for multi-hop entity questions. Choose 'G' for "
     "corpus-level summary requests."
 )
+
+# Legacy alias kept until call-sites are renamed.
+_GEMINI_SYSTEM_PROMPT = _ROUTING_SYSTEM_PROMPT
 
 
 def _parse_plan_json(raw: str, intent: IntentResult) -> Plan:
@@ -270,22 +281,26 @@ def _parse_plan_json(raw: str, intent: IntentResult) -> Plan:
     )
 
 
-class GeminiPlanner:
-    """Gemini Flash → constrained JSON plan."""
+class LLMPlanner:
+    """Provider-neutral planner. Two-call shape:
 
-    def __init__(
-        self,
-        *,
-        api_key: str | None = None,
-        client: Any | None = None,
-    ) -> None:
-        if client is None:
-            if not api_key:
-                raise ValueError("GeminiPlanner requires api_key or client")
-            from google.genai import Client
-            client = Client(api_key=api_key)
-        self._client = client
-        self._model = os.environ.get("KB_QUERY_MODEL") or "gemini-2.5-flash"
+      1. Routing call — LLM picks `mode` + carries mode-specific params
+         (unit_types / chain_view / doc_types / notes).
+
+      2. Q-mode second call — when (1) returns `mode='Q'`, we fire a
+         second, narrower call that emits the structured `q_payload`
+         against the catalog + grammar. Skipped for non-Q modes so
+         normal queries pay only one call.
+
+    The underlying provider (Gemini, Anthropic, …) is injected via the
+    `JsonLLMClient` Protocol; this class never imports a vendor SDK
+    directly. Construct via `make_planner()` to get the env-driven
+    factory, or pass a custom client for tests.
+    """
+
+    def __init__(self, llm: JsonLLMClient) -> None:
+        self._llm = llm
+        self._model = llm.model_id
 
     async def plan(
         self,
@@ -296,19 +311,20 @@ class GeminiPlanner:
     ) -> Plan:
         # Honor an explicit valid request override without an LLM call.
         if requested_mode and requested_mode in QUERY_MODES and requested_mode != "H":
-            return Plan(
+            plan_override = Plan(
                 mode=requested_mode,
                 intent=intent.label,
                 intent_confidence=intent.confidence,
                 notes="explicit_mode_override",
                 model_id=self._model,
             )
+            return await self._maybe_augment_q(query, plan_override)
 
-        # Inventory intent → mode I, no LLM call. The Gemini planner's
-        # system prompt doesn't enumerate mode I (we'd have to retrain
-        # it on every new mode); short-circuit here keeps the contract
-        # stable: when the intent classifier says "inventory" the
-        # planner ALWAYS picks I, regardless of LLM weather.
+        # Inventory intent → mode I, no LLM call. The routing prompt
+        # doesn't enumerate mode I (we'd have to retrain it on every
+        # new mode); short-circuit here keeps the contract stable:
+        # when the intent classifier says "inventory" the planner
+        # ALWAYS picks I, regardless of LLM weather.
         if intent.label == "inventory":
             return Plan(
                 mode="I",
@@ -318,24 +334,17 @@ class GeminiPlanner:
                 model_id=self._model,
             )
 
-        from google.genai import types
-        config = types.GenerateContentConfig(
-            system_instruction=_GEMINI_SYSTEM_PROMPT,
-            max_output_tokens=400,
-            response_mime_type="application/json",
-            thinking_config=types.ThinkingConfig(thinking_budget=0),
-        )
+        # ---- Routing call ----
         try:
-            response = await self._client.aio.models.generate_content(
-                model=self._model,
-                contents=(
+            raw_text = await self._llm.generate_json(
+                user=(
                     f"Intent: {intent.label} (conf={intent.confidence:.2f})\n"
                     f"Query: {query}\n\nReturn JSON only."
                 ),
-                config=config,
+                system=_ROUTING_SYSTEM_PROMPT,
+                max_tokens=400,
             )
-        except Exception:
-            # Fail-safe: degrade to identity mapping.
+        except LLMCallError:
             return Plan(
                 mode=default_mode_for_intent(intent.label),
                 intent=intent.label,
@@ -344,26 +353,9 @@ class GeminiPlanner:
                 model_id=self._model,
             )
 
-        candidates = getattr(response, "candidates", None) or []
-        if not candidates:
-            return Plan(
-                mode=default_mode_for_intent(intent.label),
-                intent=intent.label,
-                intent_confidence=intent.confidence,
-                notes="empty_response",
-                model_id=self._model,
-            )
-        raw_text = ""
-        content = getattr(candidates[0], "content", None)
-        parts = getattr(content, "parts", None) or []
-        for part in parts:
-            t = getattr(part, "text", None)
-            if t:
-                raw_text = t
-                break
         plan = _parse_plan_json(raw_text, intent)
-        # Re-attach model id.
-        return Plan(
+        # Re-attach model id on the routing result.
+        plan = Plan(
             mode=plan.mode, intent=plan.intent,
             intent_confidence=plan.intent_confidence,
             seed_entities=plan.seed_entities, file_ids=plan.file_ids,
@@ -372,6 +364,50 @@ class GeminiPlanner:
             q_payload=plan.q_payload, notes=plan.notes,
             model_id=self._model,
         )
+        return await self._maybe_augment_q(query, plan)
+
+    async def _maybe_augment_q(self, query: str, plan: Plan) -> Plan:
+        """Second LLM call to fill `plan.q_payload` when mode='Q'. The
+        same provider client is reused — no extra config.
+
+        When the second call fails (refuse / parse_error / validation /
+        llm_error), we stash the reason on `notes` prefixed with
+        `q_payload_gen:` so `_route_q_mode` can render a coherent
+        refusal message naming the actual failure mode.
+        """
+        if plan.mode != "Q" or plan.q_payload is not None:
+            return plan
+        from kb.query.q_payload_gen import generate_q_payload
+        payload, reason = await generate_q_payload(query, llm=self._llm)
+        if payload is not None:
+            return Plan(
+                mode=plan.mode, intent=plan.intent,
+                intent_confidence=plan.intent_confidence,
+                seed_entities=plan.seed_entities, file_ids=plan.file_ids,
+                doc_types=plan.doc_types, unit_types=plan.unit_types,
+                chain_view=plan.chain_view,
+                field_filters=plan.field_filters,
+                q_payload=payload, notes=plan.notes,
+                model_id=plan.model_id,
+            )
+        new_notes = (
+            f"{plan.notes + ' · ' if plan.notes else ''}q_payload_gen: {reason}"
+        )
+        return Plan(
+            mode=plan.mode, intent=plan.intent,
+            intent_confidence=plan.intent_confidence,
+            seed_entities=plan.seed_entities, file_ids=plan.file_ids,
+            doc_types=plan.doc_types, unit_types=plan.unit_types,
+            chain_view=plan.chain_view, field_filters=plan.field_filters,
+            q_payload=None, notes=new_notes,
+            model_id=plan.model_id,
+        )
+
+
+# Back-compat alias — older tests / imports referenced `GeminiPlanner`
+# directly. Keeping the name as an alias avoids a sweeping rename in
+# this PR; deprecate in a follow-up.
+GeminiPlanner = LLMPlanner
 
 
 # ---------------------------------------------------------------------------
@@ -380,17 +416,16 @@ class GeminiPlanner:
 
 
 def make_planner() -> Planner:
-    selector = (os.environ.get("KB_PLANNER") or "auto").lower()
-    if selector == "auto":
-        selector = "gemini" if os.environ.get("KB_GEMINI_API_KEY") else "identity"
-    if selector == "identity":
+    """Pick a planner based on `KB_PLANNER`.
+
+    Selector ∈ {identity, gemini, anthropic, auto} — mirrors
+    `make_contextualizer()` / `make_summarizer()`. `auto` probes the
+    Gemini key first, then Anthropic, then falls back to Identity.
+
+    The LLM path always uses `LLMPlanner` with a `JsonLLMClient`
+    adapter; the vendor SDK is encapsulated in `kb.query.llm_client`.
+    """
+    llm = make_query_llm_client()
+    if llm is None:
         return IdentityPlanner()
-    if selector == "gemini":
-        api_key = os.environ.get("KB_GEMINI_API_KEY")
-        if not api_key:
-            raise ValueError("KB_PLANNER=gemini requires KB_GEMINI_API_KEY")
-        return GeminiPlanner(api_key=api_key)
-    raise ValueError(
-        f"Unknown KB_PLANNER value: {selector!r} "
-        f"(expected 'identity', 'gemini', or 'auto')"
-    )
+    return LLMPlanner(llm)

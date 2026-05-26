@@ -282,7 +282,10 @@ async def test_chat_planner_can_override_H_default(client, test_workspace):
         if (h.get("metadata") or {}).get("q_refused")
     ]
     assert len(refusal_hits) == 1
-    assert "no Q payload" in refusal_hits[0]["metadata"]["q_refusal_reason"]
+    # IdentityPlanner picked + can't emit SQL → refusal now names the
+    # required env vars so the user knows how to switch.
+    reason = refusal_hits[0]["metadata"]["q_refusal_reason"]
+    assert "Identity planner" in reason and "KB_PLANNER=gemini" in reason
 
 
 async def test_chat_persists_intent_and_plan_to_query_log(
