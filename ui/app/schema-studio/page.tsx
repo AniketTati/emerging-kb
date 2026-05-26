@@ -22,7 +22,9 @@
  * initial render cheap. Vocabulary + Lineage lazy-load on tab activation.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter, useSearchParams, usePathname } from "next/navigation";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   Layers, GitBranch, AlertOctagon, BookOpen, Network, History,
   Loader2, Download, Filter as FilterIcon, Pencil, Trash2,
@@ -81,8 +83,49 @@ function statusOf(f: InferredField): RowStatus {
 }
 
 
+const TAB_KEYS: TabKey[] = [
+  "typed", "inferred", "collisions", "vocabulary", "lineage", "versions",
+];
+
+
+function parseTab(v: string | null): TabKey {
+  return (TAB_KEYS as readonly string[]).includes(v ?? "")
+    ? (v as TabKey)
+    : "inferred";
+}
+
+
 export default function SchemaStudioPage() {
-  const [tab, setTab] = useState<TabKey>("inferred");
+  const router = useRouter();
+  const pathname = usePathname();
+  const sp = useSearchParams();
+
+  // URL-backed state — tab + selected doc-type on the Inferred tab +
+  // selected schema on the Typed/Versions tabs all live on ?.
+  const tab = parseTab(sp.get("tab"));
+  const urlDocType = sp.get("dt");      // null = "auto-pick the busiest"
+  const urlSchemaId = sp.get("sid");    // null = "auto-pick the first"
+
+  function update(patch: { tab?: TabKey; dt?: string | null; sid?: string | null }) {
+    const params = new URLSearchParams(sp.toString());
+    if (patch.tab !== undefined) {
+      if (patch.tab === "inferred") params.delete("tab");
+      else params.set("tab", patch.tab);
+    }
+    if (patch.dt !== undefined) {
+      if (patch.dt) params.set("dt", patch.dt);
+      else params.delete("dt");
+    }
+    if (patch.sid !== undefined) {
+      if (patch.sid) params.set("sid", patch.sid);
+      else params.delete("sid");
+    }
+    const qs = params.toString();
+    router.replace(`${pathname}${qs ? `?${qs}` : ""}`, { scroll: false });
+  }
+
+  function setTab(t: TabKey) { update({ tab: t }); }
+
   // Aggregate counts for the tab strip header. Loaded once.
   const [allInferred, setAllInferred] = useState<InferredField[]>([]);
   const [typedSchemas, setTypedSchemas] = useState<SchemaSummary[]>([]);
@@ -210,18 +253,32 @@ export default function SchemaStudioPage() {
         </div>
 
         <div className="flex-1 overflow-hidden bg-zinc-50/40">
-          {tab === "typed"      && <TypedTab schemas={typedSchemas} />}
+          {tab === "typed"      && (
+            <TypedTab
+              schemas={typedSchemas}
+              activeSchemaId={urlSchemaId}
+              onSelectSchema={(sid) => update({ sid })}
+            />
+          )}
           {tab === "inferred"   && (
             <InferredTabRich
               fields={allInferred}
               subtitle={subtitleStats}
               onMutated={refreshAggregates}
+              selectedDocType={urlDocType}
+              onSelectDocType={(dt) => update({ dt })}
             />
           )}
           {tab === "collisions" && <CollisionsTab />}
           {tab === "vocabulary" && <VocabularyTab />}
           {tab === "lineage"    && <LineageTab />}
-          {tab === "versions"   && <VersionsTab schemas={typedSchemas} />}
+          {tab === "versions"   && (
+            <VersionsTab
+              schemas={typedSchemas}
+              activeSchemaId={urlSchemaId}
+              onSelectSchema={(sid) => update({ sid })}
+            />
+          )}
         </div>
       </main>
     </div>
@@ -234,14 +291,25 @@ export default function SchemaStudioPage() {
 // ===========================================================================
 
 
+// Above this row count the Inferred table switches to virtualization
+// (windowed rendering via @tanstack/react-virtual) so DOM stays sane
+// at 10k+ field clusters. Below this threshold we render flat — the
+// DOM is small and we want every row layout-accurate (the threshold
+// progress bar's per-row Tooltip alignment behaves better without
+// the virtualizer's absolute-positioned wrapper).
+const INFERRED_VIRTUALIZE_THRESHOLD = 80;
+
+
 function InferredTabRich({
-  fields, subtitle, onMutated,
+  fields, subtitle, onMutated, selectedDocType: urlDocType, onSelectDocType,
 }: {
   fields: InferredField[];
   subtitle: { emerging: number; distinctDocTypes: number; ready: number; promotedRecent: number };
   onMutated: () => Promise<void>;
+  /** URL-controlled selected doc_type (null = auto-pick busiest). */
+  selectedDocType: string | null;
+  onSelectDocType: (dt: string | null) => void;
 }) {
-  const [selectedDocType, setSelectedDocType] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<"all" | RowStatus>("all");
   const [sortKey, setSortKey] = useState<"prevalence" | "stability" | "docs" | "name">("prevalence");
 
@@ -274,16 +342,14 @@ function InferredTabRich({
     [byDocType],
   );
 
-  // Auto-select the doc_type with most rows when first loaded.
-  useEffect(() => {
-    if (selectedDocType === null && docTypesSorted.length > 0) {
-      setSelectedDocType(docTypesSorted[0].doc_type);
-    }
-  }, [docTypesSorted, selectedDocType]);
+  // Resolve "the selected doc type" — URL override, else first by row count.
+  const effectiveDocType =
+    urlDocType
+    ?? (docTypesSorted.length > 0 ? docTypesSorted[0].doc_type : null);
 
   // Filtered + sorted rows for the right pane.
   const filteredRows = useMemo(() => {
-    let rows = fields.filter((f) => f.inferred_doc_type === selectedDocType);
+    let rows = fields.filter((f) => f.inferred_doc_type === effectiveDocType);
     if (statusFilter !== "all") {
       rows = rows.filter((f) => statusOf(f) === statusFilter);
     }
@@ -295,7 +361,7 @@ function InferredTabRich({
       return a.canonical_name.localeCompare(b.canonical_name);
     });
     return rows;
-  }, [fields, selectedDocType, statusFilter, sortKey]);
+  }, [fields, effectiveDocType, statusFilter, sortKey]);
 
   return (
     <div className="flex h-full overflow-hidden">
@@ -310,12 +376,12 @@ function InferredTabRich({
           </div>
           <ul className="space-y-px">
             {docTypesSorted.map((d) => {
-              const active = d.doc_type === selectedDocType;
+              const active = d.doc_type === effectiveDocType;
               return (
                 <li key={d.doc_type}>
                   <button
                     type="button"
-                    onClick={() => setSelectedDocType(d.doc_type)}
+                    onClick={() => onSelectDocType(d.doc_type)}
                     className={`w-full flex items-center gap-2 px-2 py-1.5 rounded text-xs cursor-pointer ${
                       active
                         ? "bg-zinc-100 text-zinc-900"
@@ -366,9 +432,9 @@ function InferredTabRich({
         <div className="max-w-4xl mx-auto px-8 py-6">
           <div className="flex items-start justify-between mb-1">
             <h1 className="text-lg font-semibold text-zinc-900">
-              Inferred fields {selectedDocType && (
+              Inferred fields {effectiveDocType && (
                 <>
-                  · <span className="mono">{selectedDocType}</span>
+                  · <span className="mono">{effectiveDocType}</span>
                 </>
               )}
             </h1>
@@ -427,15 +493,83 @@ function InferredTabRich({
             <div className="rounded-lg border border-zinc-200 bg-white p-8 text-center text-sm text-zinc-500">
               No inferred fields match the current filter.
             </div>
-          ) : (
+          ) : filteredRows.length < INFERRED_VIRTUALIZE_THRESHOLD ? (
             <div className="space-y-2">
               {filteredRows.map((f) => (
                 <InferredRow key={f.id} field={f} onMutated={onMutated} />
               ))}
             </div>
+          ) : (
+            <VirtualizedInferredList rows={filteredRows} onMutated={onMutated} />
           )}
         </div>
       </section>
+    </div>
+  );
+}
+
+
+// ---------------------------------------------------------------------------
+// Virtualized list — used when filteredRows >= INFERRED_VIRTUALIZE_THRESHOLD.
+// react-virtual maintains a fixed-height scroll container that only mounts
+// rows in the viewport (+ a small overscan buffer). Estimated row height
+// is the collapsed-row height; expansion is handled by re-measuring after
+// the row's content height changes.
+// ---------------------------------------------------------------------------
+
+
+function VirtualizedInferredList({
+  rows, onMutated,
+}: {
+  rows: InferredField[];
+  onMutated: () => Promise<void>;
+}) {
+  const parentRef = useRef<HTMLDivElement | null>(null);
+  const virtualizer = useVirtualizer({
+    count: rows.length,
+    getScrollElement: () => parentRef.current,
+    // Collapsed-row height ~58px; expanded much larger, so we use
+    // `measureElement` to re-measure after open. The estimate keeps
+    // scrollbar size sane during initial render.
+    estimateSize: () => 58,
+    overscan: 8,
+  });
+
+  return (
+    <div
+      ref={parentRef}
+      className="rounded-lg border border-zinc-200 bg-white"
+      style={{ height: "640px", overflow: "auto" }}
+      data-testid="inferred-virtual-list"
+    >
+      <div
+        style={{
+          height: `${virtualizer.getTotalSize()}px`,
+          width: "100%",
+          position: "relative",
+        }}
+      >
+        {virtualizer.getVirtualItems().map((vi) => {
+          const f = rows[vi.index];
+          return (
+            <div
+              key={f.id}
+              data-index={vi.index}
+              ref={virtualizer.measureElement}
+              style={{
+                position: "absolute",
+                top: 0,
+                left: 0,
+                width: "100%",
+                transform: `translateY(${vi.start}px)`,
+                padding: "0 8px 8px 8px",
+              }}
+            >
+              <InferredRow field={f} onMutated={onMutated} />
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -743,14 +877,18 @@ function ThresholdBar({ value, threshold }: { value: number; threshold: number }
 // ===========================================================================
 
 
-function TypedTab({ schemas }: { schemas: SchemaSummary[] }) {
-  const [activeSchemaId, setActiveSchemaId] = useState<string | null>(null);
+function TypedTab({
+  schemas, activeSchemaId: urlSchemaId, onSelectSchema,
+}: {
+  schemas: SchemaSummary[];
+  activeSchemaId: string | null;
+  onSelectSchema: (sid: string | null) => void;
+}) {
+  // URL `sid` wins; else pick the first schema.
+  const activeSchemaId =
+    urlSchemaId ?? (schemas.length > 0 ? schemas[0].id : null);
   const [entities, setEntities] = useState<SchemaEntity[]>([]);
   const [loading, setLoading] = useState(false);
-
-  useEffect(() => {
-    if (schemas.length > 0 && !activeSchemaId) setActiveSchemaId(schemas[0].id);
-  }, [schemas, activeSchemaId]);
 
   useEffect(() => {
     if (!activeSchemaId) return;
@@ -789,7 +927,7 @@ function TypedTab({ schemas }: { schemas: SchemaSummary[] }) {
             <button
               key={s.id}
               type="button"
-              onClick={() => setActiveSchemaId(s.id)}
+              onClick={() => onSelectSchema(s.id)}
               className={`px-3 py-1.5 rounded-md cursor-pointer mono ${
                 active
                   ? "bg-zinc-900 text-white"
@@ -966,44 +1104,105 @@ function VocabularyTab() {
             ? "Synonym clusters auto-populate as the field-clustering worker runs over your corpus. Manually-added terms also show here."
             : "No vocabulary term matches that search."}
         />
+      ) : filtered.length < 200 ? (
+        <VocabTableFlat rows={filtered} />
       ) : (
-        <div className="rounded-lg border border-zinc-200 bg-white">
-          <table className="w-full text-xs">
-            <thead className="text-zinc-500 bg-zinc-50/40">
-              <tr>
-                <th className="text-left px-4 py-2 font-medium">Term</th>
-                <th className="text-left px-4 py-2 font-medium">Synonyms</th>
-                <th className="text-left px-4 py-2 font-medium">Source</th>
-                <th className="text-left px-4 py-2 font-medium">Confidence</th>
-                <th className="text-left px-4 py-2 font-medium">Docs</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map((e) => (
-                <tr key={e.id} className="border-t border-zinc-200">
-                  <td className="px-4 py-1.5 mono text-zinc-900">{e.canonical_term}</td>
-                  <td className="px-4 py-1.5 text-zinc-700">
-                    {e.synonyms.length === 0 ? (
-                      <span className="text-zinc-400">—</span>
-                    ) : (
-                      <span className="mono text-[11px]">{e.synonyms.join(" · ")}</span>
-                    )}
-                  </td>
-                  <td className="px-4 py-1.5">
-                    <span className="text-[10px] mono px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-700">
-                      {e.source}
-                    </span>
-                  </td>
-                  <td className="px-4 py-1.5 mono text-zinc-600">
-                    {(e.confidence * 100).toFixed(0)}%
-                  </td>
-                  <td className="px-4 py-1.5 text-zinc-600">{e.n_docs_observed}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <VocabTableVirtual rows={filtered} />
       )}
+    </div>
+  );
+}
+
+
+// Vocab table — flat render below 200 rows, virtualized otherwise.
+
+function VocabRow({ e }: { e: VocabEntry }) {
+  return (
+    <div className="grid grid-cols-[1.5fr_2fr_0.8fr_0.8fr_0.6fr] gap-2 px-4 py-1.5 text-xs border-t border-zinc-200">
+      <span className="mono text-zinc-900 truncate">{e.canonical_term}</span>
+      <span className="text-zinc-700 truncate">
+        {e.synonyms.length === 0 ? (
+          <span className="text-zinc-400">—</span>
+        ) : (
+          <span className="mono text-[11px]">{e.synonyms.join(" · ")}</span>
+        )}
+      </span>
+      <span>
+        <span className="text-[10px] mono px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-700">
+          {e.source}
+        </span>
+      </span>
+      <span className="mono text-zinc-600">{(e.confidence * 100).toFixed(0)}%</span>
+      <span className="text-zinc-600">{e.n_docs_observed}</span>
+    </div>
+  );
+}
+
+function VocabHeader() {
+  return (
+    <div className="grid grid-cols-[1.5fr_2fr_0.8fr_0.8fr_0.6fr] gap-2 px-4 py-2 text-xs font-medium text-zinc-500 bg-zinc-50/40">
+      <span>Term</span>
+      <span>Synonyms</span>
+      <span>Source</span>
+      <span>Confidence</span>
+      <span>Docs</span>
+    </div>
+  );
+}
+
+function VocabTableFlat({ rows }: { rows: VocabEntry[] }) {
+  return (
+    <div className="rounded-lg border border-zinc-200 bg-white">
+      <VocabHeader />
+      {rows.map((e) => <VocabRow key={e.id} e={e} />)}
+    </div>
+  );
+}
+
+function VocabTableVirtual({ rows }: { rows: VocabEntry[] }) {
+  const parentRef = useRef<HTMLDivElement | null>(null);
+  const virtualizer = useVirtualizer({
+    count: rows.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => 28,
+    overscan: 12,
+  });
+  return (
+    <div
+      className="rounded-lg border border-zinc-200 bg-white"
+      data-testid="vocab-virtual-list"
+    >
+      <VocabHeader />
+      <div
+        ref={parentRef}
+        style={{ height: "560px", overflow: "auto" }}
+      >
+        <div
+          style={{
+            height: `${virtualizer.getTotalSize()}px`,
+            width: "100%",
+            position: "relative",
+          }}
+        >
+          {virtualizer.getVirtualItems().map((vi) => {
+            const e = rows[vi.index];
+            return (
+              <div
+                key={e.id}
+                style={{
+                  position: "absolute",
+                  top: 0,
+                  left: 0,
+                  width: "100%",
+                  transform: `translateY(${vi.start}px)`,
+                }}
+              >
+                <VocabRow e={e} />
+              </div>
+            );
+          })}
+        </div>
+      </div>
     </div>
   );
 }
@@ -1078,14 +1277,17 @@ function LineageTab() {
 // ===========================================================================
 
 
-function VersionsTab({ schemas }: { schemas: SchemaSummary[] }) {
-  const [activeSchemaId, setActiveSchemaId] = useState<string | null>(null);
+function VersionsTab({
+  schemas, activeSchemaId: urlSchemaId, onSelectSchema,
+}: {
+  schemas: SchemaSummary[];
+  activeSchemaId: string | null;
+  onSelectSchema: (sid: string | null) => void;
+}) {
+  const activeSchemaId =
+    urlSchemaId ?? (schemas.length > 0 ? schemas[0].id : null);
   const [versions, setVersions] = useState<SchemaVersionRow[]>([]);
   const [loading, setLoading] = useState(false);
-
-  useEffect(() => {
-    if (schemas.length > 0 && !activeSchemaId) setActiveSchemaId(schemas[0].id);
-  }, [schemas, activeSchemaId]);
 
   useEffect(() => {
     if (!activeSchemaId) return;
@@ -1117,7 +1319,7 @@ function VersionsTab({ schemas }: { schemas: SchemaSummary[] }) {
             <button
               key={s.id}
               type="button"
-              onClick={() => setActiveSchemaId(s.id)}
+              onClick={() => onSelectSchema(s.id)}
               className={`px-3 py-1.5 rounded-md cursor-pointer mono ${
                 active
                   ? "bg-zinc-900 text-white"

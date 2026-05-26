@@ -5,20 +5,29 @@
  *
  * Two rails + a results column:
  *   - Left rail "View as": all-results / per-category with counts
- *   - Inner panel "Filter by": doc-type checkboxes, date dropdown,
- *     has-anomaly / has-conflicts / has-chain toggles
- *   - Center: search input + result list, grouped by category in
- *     "All results", flat when scoped to one kind. Entity cards show
- *     aliases + first/last mention block.
+ *   - Inner panel "Filter by": doc-type checkboxes (multi-select),
+ *     date dropdown, has-anomaly / has-conflicts / has-chain toggles
+ *   - Center: search input + paginated result list, grouped by
+ *     category in "All results", flat when scoped to one kind.
  *
- * Per-group "view all →" scopes the view to that kind.
+ * URL state — every filter + the active kind lives in the URL search
+ * params, so:
+ *   - browser back/forward navigates filter history
+ *   - bookmarks / shares preserve the view
+ *   - clicking into a file or chat → coming back via browser-back
+ *     restores the exact view the user left
  *
- * Scale: results are server-paginated. At 100k+, pg_trgm GIN indexes
- * on entity / file name columns + count caching make the explore
- * surface stay snappy.
+ * Pagination — "Load more (N remaining)" button at the bottom of the
+ * result list when total_estimate > items_loaded. Server-paginated
+ * via offset+limit so a 100k workspace doesn't paint 100k rows.
+ *
+ * Per-entity Related accordion — caps at 25 items per bucket per the
+ * /explore/entity/{id}/profile contract; for deeper drill-down, click
+ * "view all →" which deep-links into a scoped Explore view.
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import {
   Search, LayoutGrid, FileText, Folder, Puzzle, Users, GitMerge,
   Tag, AlertCircle, Loader2, ChevronRight, ExternalLink,
@@ -28,33 +37,30 @@ import {
 import {
   exploreSearch, getExploreCounts, getEntityProfile,
   type ExploreCounts, type ExploreHit, type ExploreKind,
-  type ExploreSearchResponse, type EntityProfile,
-  type EntityProfileBucket,
+  type EntityProfile, type EntityProfileBucket,
 } from "@/lib/api";
 import { Sidebar } from "@/components/Sidebar";
 
 
-// Map the API's icon-name strings to lucide React components. The
-// /explore/entity/{id}/profile endpoint returns an `icon` field per
-// bucket; we resolve it here so the page can render the right glyph
-// without a string-to-component switch scattered through JSX.
 const BUCKET_ICONS: Record<string, LucideIcon> = {
-  "file-text":   FileText,
-  "dollar-sign": DollarSign,
-  "mail":        Mail,
-  "user":        User,
-  "users":       Users,
-  "building":    Building,
-  "alert-circle": AlertCircle,
+  "file-text":     FileText,
+  "dollar-sign":   DollarSign,
+  "mail":          Mail,
+  "user":          User,
+  "users":         Users,
+  "building":      Building,
+  "alert-circle":  AlertCircle,
   "alert-octagon": AlertOctagon,
-  "blueprint":   FileText,
-  "sticky-note": FileText,
-  "file":        FileQuestion,
+  "blueprint":     FileText,
+  "sticky-note":   FileText,
+  "file":          FileQuestion,
 };
 
 
+type RailKey = "all" | ExploreKind;
+
 type RailItem = {
-  key: "all" | ExploreKind;
+  key: RailKey;
   label: string;
   icon: LucideIcon;
   countKey?: keyof ExploreCounts;
@@ -78,34 +84,105 @@ const KIND_TO_RAIL: Record<ExploreKind, RailItem> = Object.fromEntries(
 
 type DateRange = "any" | "7d" | "30d" | "365d";
 
-
-// Show this many doc types in the Filter-by panel before collapsing
-// the rest behind a "+ N more" expander.
+const PAGE_SIZE = 60;
 const FILTER_DOCTYPE_TOP_N = 6;
 
 
+// ---------------------------------------------------------------------------
+// URL state — every filter lives on `?` so back / forward + bookmarks work.
+// `update(patch)` does a router.replace, which is a no-scroll navigation;
+// useSearchParams below re-renders the page from the new URL.
+// ---------------------------------------------------------------------------
+
+
+type ExploreUrlState = {
+  q: string;
+  kind: RailKey;
+  docTypes: string[];
+  date: DateRange;
+  anomaly: boolean;
+  conflicts: boolean;
+  chain: boolean;
+};
+
+function parseExploreUrl(sp: URLSearchParams): ExploreUrlState {
+  const kind = (sp.get("kind") as RailKey | null) ?? "all";
+  return {
+    q: sp.get("q") ?? "",
+    kind: ([
+      "all", "document", "doc_type", "atomic_unit",
+      "entity", "relationship", "topic", "anomaly",
+    ].includes(kind) ? kind : "all") as RailKey,
+    docTypes: (sp.get("dt") ?? "").split(",").map((s) => s.trim()).filter(Boolean),
+    date: (sp.get("date") as DateRange | null) ?? "any",
+    anomaly: sp.get("anomaly") === "1",
+    conflicts: sp.get("conflicts") === "1",
+    chain: sp.get("chain") === "1",
+  };
+}
+
+function buildExploreSearchString(s: ExploreUrlState): string {
+  const params = new URLSearchParams();
+  if (s.q) params.set("q", s.q);
+  if (s.kind !== "all") params.set("kind", s.kind);
+  if (s.docTypes.length) params.set("dt", s.docTypes.join(","));
+  if (s.date !== "any") params.set("date", s.date);
+  if (s.anomaly) params.set("anomaly", "1");
+  if (s.conflicts) params.set("conflicts", "1");
+  if (s.chain) params.set("chain", "1");
+  const qs = params.toString();
+  return qs ? `?${qs}` : "";
+}
+
+function dateRangeToFromTo(d: DateRange): { from?: string; to?: string } {
+  if (d === "any") return {};
+  const days = d === "7d" ? 7 : d === "30d" ? 30 : 365;
+  const now = new Date();
+  const from = new Date(now.getTime() - days * 86_400_000);
+  const iso = (x: Date) => x.toISOString().slice(0, 10);
+  return { from: iso(from), to: iso(now) };
+}
+
+
 export default function ExplorePage() {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const url = useMemo(
+    () => parseExploreUrl(new URLSearchParams(searchParams.toString())),
+    [searchParams],
+  );
+
+  function update(patch: Partial<ExploreUrlState>) {
+    const next: ExploreUrlState = { ...url, ...patch };
+    const qs = buildExploreSearchString(next);
+    router.replace(`${pathname}${qs}`, { scroll: false });
+  }
+
+  // Search input has its own local state so typing isn't a re-render
+  // storm against the URL bar. We push the debounced value to URL.
+  const [qInput, setQInput] = useState(url.q);
+  useEffect(() => { setQInput(url.q); }, [url.q]);
+  useEffect(() => {
+    const t = setTimeout(() => {
+      if (qInput !== url.q) update({ q: qInput });
+    }, 220);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [qInput]);
+
   const [counts, setCounts] = useState<ExploreCounts | null>(null);
-  const [kind, setKind] = useState<"all" | ExploreKind>("all");
-  const [q, setQ] = useState("");
-  const [debounced, setDebounced] = useState("");
-
-  // Filters
-  const [docTypeFilter, setDocTypeFilter] = useState<Set<string>>(new Set());
-  const [docTypeListExpanded, setDocTypeListExpanded] = useState(false);
-  const [dateRange, setDateRange] = useState<DateRange>("any");
-  const [hasAnomaly, setHasAnomaly] = useState(false);
-  const [hasConflicts, setHasConflicts] = useState(false);
-  const [hasChain, setHasChain] = useState(false);
-
-  // All doc types (for the Filter-by checkboxes), pulled once.
   const [allDocTypes, setAllDocTypes] = useState<{ name: string; count: number }[]>([]);
+  const [docTypeListExpanded, setDocTypeListExpanded] = useState(false);
 
-  // Search results
-  const [results, setResults] = useState<ExploreSearchResponse | null>(null);
+  // Result list state — pagination accumulates pages on Load more.
+  const [items, setItems] = useState<ExploreHit[]>([]);
+  const [totalEstimate, setTotalEstimate] = useState(0);
+  const [offset, setOffset] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
 
-  // Initial counts + doc-type browse (once).
+  // One-shot counts + doc-type browse.
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -125,125 +202,99 @@ export default function ExplorePage() {
     return () => { cancelled = true; };
   }, []);
 
-  // Debounce typing.
-  useEffect(() => {
-    const t = setTimeout(() => setDebounced(q.trim()), 220);
-    return () => clearTimeout(t);
-  }, [q]);
+  // Build the API filter args from current URL state. Doc types use
+  // the comma-separated multi-value endpoint now.
+  function apiArgs(forOffset: number) {
+    const dr = dateRangeToFromTo(url.date);
+    return {
+      q: url.q || undefined,
+      kind: url.kind === "all" ? null : url.kind,
+      docTypes: url.docTypes.length ? url.docTypes : undefined,
+      dateFrom: dr.from,
+      dateTo: dr.to,
+      hasAnomaly: url.anomaly,
+      hasConflicts: url.conflicts,
+      hasChain: url.chain,
+      offset: forOffset,
+      limit: PAGE_SIZE,
+    };
+  }
 
-  const runSearch = useCallback(async () => {
+  // Refetch from offset=0 whenever any filter changes.
+  const refetchFromStart = useCallback(async () => {
     setLoading(true);
+    setOffset(0);
     try {
-      // Pass B — push the has-* + doc_type filters server-side.
-      // (Client-side filter pass below also still runs for paranoid
-      // safety + future date filter which is client-only.)
-      const onlyDocType =
-        docTypeFilter.size === 1
-          ? Array.from(docTypeFilter)[0]
-          : undefined;
-      const out = await exploreSearch({
-        q: debounced || undefined,
-        kind: kind === "all" ? null : kind,
-        docType: onlyDocType ?? null,
-        hasAnomaly,
-        hasConflicts,
-        hasChain,
-        limit: 60,
-      });
-      setResults(out);
+      const out = await exploreSearch(apiArgs(0));
+      setItems(out.items);
+      setTotalEstimate(out.total_estimate);
     } catch (err) {
       console.error(err);
-      setResults(null);
+      setItems([]); setTotalEstimate(0);
     } finally {
       setLoading(false);
     }
-  }, [debounced, kind, docTypeFilter, hasAnomaly, hasConflicts, hasChain]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    url.q, url.kind, JSON.stringify(url.docTypes), url.date,
+    url.anomaly, url.conflicts, url.chain,
+  ]);
 
-  useEffect(() => { runSearch(); }, [runSearch]);
+  useEffect(() => { refetchFromStart(); }, [refetchFromStart]);
 
-  // Client-side filtering on top of the loaded result page (cheap,
-  // and avoids backend complexity for the niche filters). Server-side
-  // filtering lands when explore_search grows query params for these.
-  const filteredItems = useMemo(() => {
-    const items = results?.items ?? [];
-    return items.filter((h) => {
-      if (docTypeFilter.size > 0) {
-        const dt = (h.extra as { inferred_doc_type?: string } | undefined)?.inferred_doc_type;
-        // For document rows we have the doc_type in extra.inferred_doc_type;
-        // for atomic_unit / anomaly rows we filter on h.subtitle (file name)
-        // — keep these passing for now since we don't have the doc_type
-        // joined into those buckets. Doc type filter is most useful on the
-        // Documents bucket and we let other kinds through.
-        if (dt && !docTypeFilter.has(dt)) return false;
-      }
-      if (dateRange !== "any") {
-        const days = dateRange === "7d" ? 7 : dateRange === "30d" ? 30 : 365;
-        const cutoff = Date.now() - days * 86_400_000;
-        const created = (h.extra as { created_at?: string } | undefined)?.created_at;
-        if (created && new Date(created).getTime() < cutoff) return false;
-      }
-      if (hasAnomaly && h.kind !== "anomaly") return false;
-      if (hasConflicts) {
-        // Conflicts are surfaced via the anomaly kind too in Wave A;
-        // Pass B will fold a `has_conflicts` flag onto each row.
-      }
-      if (hasChain) {
-        // Same — needs chain_id surfaced per row. Pass B.
-      }
-      return true;
-    });
-  }, [results, docTypeFilter, dateRange, hasAnomaly, hasConflicts, hasChain]);
+  async function loadMore() {
+    setLoadingMore(true);
+    const newOffset = offset + PAGE_SIZE;
+    try {
+      const out = await exploreSearch(apiArgs(newOffset));
+      setItems((prev) => [...prev, ...out.items]);
+      setTotalEstimate(out.total_estimate);
+      setOffset(newOffset);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoadingMore(false);
+    }
+  }
 
+  // Group items for "all results" view; flat when scoped.
   const grouped = useMemo<Record<ExploreKind, ExploreHit[]>>(() => {
     const acc: Record<string, ExploreHit[]> = {};
-    for (const h of filteredItems) (acc[h.kind] ??= []).push(h);
+    for (const h of items) (acc[h.kind] ??= []).push(h);
     return acc as Record<ExploreKind, ExploreHit[]>;
-  }, [filteredItems]);
+  }, [items]);
 
+  // Doc-type checkbox toggle — multi-select.
   function toggleDocType(name: string) {
-    setDocTypeFilter((prev) => {
-      const next = new Set(prev);
-      if (next.has(name)) next.delete(name); else next.add(name);
-      return next;
-    });
-  }
-  function clearAllFilters() {
-    setDocTypeFilter(new Set());
-    setDateRange("any");
-    setHasAnomaly(false);
-    setHasConflicts(false);
-    setHasChain(false);
+    const set = new Set(url.docTypes);
+    if (set.has(name)) set.delete(name); else set.add(name);
+    update({ docTypes: Array.from(set) });
   }
 
-  // Called when the user clicks "view all →" on an Entity card's
-  // Related accordion bucket. We translate the bucket's deep-link
-  // hints into Explore filters and reset the view.
-  function scopeToBucket(bucket: EntityProfileBucket) {
-    if (bucket.deep_link_kind === "document"
-        || bucket.deep_link_kind === "atomic_unit"
-        || bucket.deep_link_kind === "anomaly"
-        || bucket.deep_link_kind === "entity"
-        || bucket.deep_link_kind === "doc_type"
-        || bucket.deep_link_kind === "relationship"
-        || bucket.deep_link_kind === "topic") {
-      setKind(bucket.deep_link_kind);
-    }
-    if (bucket.deep_link_doc_type) {
-      setDocTypeFilter(new Set([bucket.deep_link_doc_type]));
-    }
-    if (bucket.deep_link_q) {
-      setQ(bucket.deep_link_q);
-    }
-    // Special-case: anomalies bucket flips the has_anomaly toggle
-    // instead (kind=anomaly already filters that bucket, but the
-    // toggle persists across kind changes which is more useful UX).
-    if (bucket.key === "anomalies") {
-      setHasAnomaly(true);
-    }
+  function clearAllFilters() {
+    update({ docTypes: [], date: "any", anomaly: false, conflicts: false, chain: false });
   }
+
   const anyFilterActive =
-    docTypeFilter.size > 0 || dateRange !== "any"
-    || hasAnomaly || hasConflicts || hasChain;
+    url.docTypes.length > 0 || url.date !== "any"
+    || url.anomaly || url.conflicts || url.chain;
+
+  // Bucket "view all →" → scope into this Explore view.
+  function scopeToBucket(bucket: EntityProfileBucket) {
+    const patch: Partial<ExploreUrlState> = {};
+    if (bucket.deep_link_kind && [
+      "document", "atomic_unit", "anomaly", "entity",
+      "doc_type", "relationship", "topic",
+    ].includes(bucket.deep_link_kind)) {
+      patch.kind = bucket.deep_link_kind as ExploreKind;
+    }
+    if (bucket.deep_link_doc_type) patch.docTypes = [bucket.deep_link_doc_type];
+    if (bucket.deep_link_q) patch.q = bucket.deep_link_q;
+    if (bucket.key === "anomalies") patch.anomaly = true;
+    update(patch);
+  }
+
+  const remaining = Math.max(0, totalEstimate - items.length);
 
   return (
     <div className="flex h-full">
@@ -262,7 +313,7 @@ export default function ExplorePage() {
         </header>
 
         <div className="flex-1 flex min-h-0">
-          {/* Left rail: View as + Filter by */}
+          {/* Left rail */}
           <aside
             className="w-[240px] flex-shrink-0 border-r border-zinc-200 overflow-y-auto bg-white"
             data-testid="explore-rail"
@@ -274,20 +325,18 @@ export default function ExplorePage() {
               <div className="space-y-px">
                 {RAIL_ITEMS.map((item) => {
                   const Icon = item.icon;
-                  const active = item.key === kind;
+                  const active = item.key === url.kind;
                   const total =
                     item.key === "all"
-                      ? (results?.total_estimate ?? 0)
+                      ? totalEstimate
                       : (counts?.[item.countKey!] ?? 0);
                   return (
                     <button
                       key={item.key}
                       type="button"
-                      onClick={() => setKind(item.key)}
+                      onClick={() => update({ kind: item.key })}
                       className={`w-full flex items-center justify-between px-2 py-1.5 rounded text-sm cursor-pointer ${
-                        active
-                          ? "bg-zinc-100 text-zinc-900"
-                          : "text-zinc-600 hover:bg-zinc-50"
+                        active ? "bg-zinc-100 text-zinc-900" : "text-zinc-600 hover:bg-zinc-50"
                       }`}
                       data-testid={`explore-rail-${item.key}`}
                     >
@@ -295,9 +344,7 @@ export default function ExplorePage() {
                         <Icon className="w-3.5 h-3.5" strokeWidth={1.75} />
                         {item.label}
                       </span>
-                      <span className="text-[11px] text-zinc-500 mono">
-                        {total}
-                      </span>
+                      <span className="text-[11px] text-zinc-500 mono">{total}</span>
                     </button>
                   );
                 })}
@@ -322,7 +369,6 @@ export default function ExplorePage() {
                 )}
               </div>
 
-              {/* Doc type checkboxes */}
               <div className="mb-3 text-xs">
                 <div className="text-zinc-500 mb-1.5">Doc type</div>
                 <div className="space-y-0.5">
@@ -336,7 +382,7 @@ export default function ExplorePage() {
                     >
                       <input
                         type="checkbox"
-                        checked={docTypeFilter.has(dt.name)}
+                        checked={url.docTypes.includes(dt.name)}
                         onChange={() => toggleDocType(dt.name)}
                         className="accent-zinc-900 w-3 h-3"
                         data-testid="explore-filter-doctype"
@@ -351,20 +397,17 @@ export default function ExplorePage() {
                       onClick={() => setDocTypeListExpanded(!docTypeListExpanded)}
                       className="text-zinc-500 hover:text-zinc-900 mt-1 mono text-[10px] cursor-pointer"
                     >
-                      {docTypeListExpanded
-                        ? "− show fewer"
-                        : `+ ${allDocTypes.length - FILTER_DOCTYPE_TOP_N} more`}
+                      {docTypeListExpanded ? "− show fewer" : `+ ${allDocTypes.length - FILTER_DOCTYPE_TOP_N} more`}
                     </button>
                   )}
                 </div>
               </div>
 
-              {/* Date dropdown */}
               <div className="mb-3 text-xs">
                 <div className="text-zinc-500 mb-1.5">Date</div>
                 <select
-                  value={dateRange}
-                  onChange={(e) => setDateRange(e.target.value as DateRange)}
+                  value={url.date}
+                  onChange={(e) => update({ date: e.target.value as DateRange })}
                   className="w-full text-xs px-2 py-1 rounded border border-zinc-200 bg-white cursor-pointer"
                   data-testid="explore-filter-date"
                 >
@@ -375,14 +418,13 @@ export default function ExplorePage() {
                 </select>
               </div>
 
-              {/* Has toggles */}
               <div className="text-xs">
                 <div className="text-zinc-500 mb-1.5">Has</div>
                 <label className="flex items-center gap-2 py-0.5 text-zinc-700 cursor-pointer">
                   <input
                     type="checkbox"
-                    checked={hasAnomaly}
-                    onChange={(e) => setHasAnomaly(e.target.checked)}
+                    checked={url.anomaly}
+                    onChange={(e) => update({ anomaly: e.target.checked })}
                     className="accent-zinc-900 w-3 h-3"
                     data-testid="explore-filter-anomaly"
                   />
@@ -391,8 +433,8 @@ export default function ExplorePage() {
                 <label className="flex items-center gap-2 py-0.5 text-zinc-700 cursor-pointer">
                   <input
                     type="checkbox"
-                    checked={hasConflicts}
-                    onChange={(e) => setHasConflicts(e.target.checked)}
+                    checked={url.conflicts}
+                    onChange={(e) => update({ conflicts: e.target.checked })}
                     className="accent-zinc-900 w-3 h-3"
                     data-testid="explore-filter-conflicts"
                   />
@@ -401,8 +443,8 @@ export default function ExplorePage() {
                 <label className="flex items-center gap-2 py-0.5 text-zinc-700 cursor-pointer">
                   <input
                     type="checkbox"
-                    checked={hasChain}
-                    onChange={(e) => setHasChain(e.target.checked)}
+                    checked={url.chain}
+                    onChange={(e) => update({ chain: e.target.checked })}
                     className="accent-zinc-900 w-3 h-3"
                     data-testid="explore-filter-chain"
                   />
@@ -419,16 +461,16 @@ export default function ExplorePage() {
                 <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" />
                 <input
                   type="text"
-                  value={q}
-                  onChange={(e) => setQ(e.target.value)}
+                  value={qInput}
+                  onChange={(e) => setQInput(e.target.value)}
                   placeholder="Search files, entities, clauses, topics…"
                   className="w-full pl-9 pr-24 py-2.5 text-sm rounded-lg border border-zinc-200 focus:outline-none focus:border-zinc-400"
                   data-testid="explore-search-input"
                 />
-                {q && (
+                {qInput && (
                   <button
                     type="button"
-                    onClick={() => setQ("")}
+                    onClick={() => setQInput("")}
                     className="absolute right-3 top-1/2 -translate-y-1/2 text-[11px] text-zinc-500 hover:text-zinc-900 mono cursor-pointer"
                     data-testid="explore-search-clear"
                   >
@@ -443,73 +485,95 @@ export default function ExplorePage() {
                     <span className="flex items-center gap-2">
                       <Loader2 className="w-3 h-3 animate-spin" /> searching…
                     </span>
-                  ) : results ? (
+                  ) : (
                     <>
                       <span className="text-zinc-900 font-medium">
-                        {filteredItems.length} of {results.total_estimate}
+                        {items.length} of {totalEstimate}
                       </span>{" "}
-                      {results.q ? (
-                        <>for &ldquo;{results.q}&rdquo; </>
-                      ) : (
-                        <>across the workspace </>
-                      )}
-                      {results.kind && (
-                        <>· kind <span className="mono">{results.kind}</span></>
-                      )}
-                      {anyFilterActive && results.items.length !== filteredItems.length && (
-                        <span className="text-zinc-400"> ({results.items.length - filteredItems.length} filtered out)</span>
+                      {url.q ? <>for &ldquo;{url.q}&rdquo; </> : <>across the workspace </>}
+                      {url.kind !== "all" && (
+                        <>· kind <span className="mono">{url.kind}</span></>
                       )}
                     </>
-                  ) : (
-                    "no results"
                   )}
                 </div>
               </div>
 
-              {results && filteredItems.length === 0 && !loading && (
+              {!loading && items.length === 0 && (
                 <div className="rounded-lg border border-zinc-200 p-8 text-center text-sm text-zinc-500">
                   No results match the current filters.
                 </div>
               )}
 
-              {results && filteredItems.length > 0 && (
-                <div className="space-y-6">
-                  {Object.entries(grouped).map(([k, items]) => {
-                    const rail = KIND_TO_RAIL[k as ExploreKind];
-                    const Icon = rail?.icon ?? LayoutGrid;
-                    const totalForKind = counts?.[rail?.countKey ?? "documents"] ?? items.length;
-                    const isScoped = kind !== "all";
-                    return (
-                      <div key={k}>
-                        <div className="text-[10px] uppercase tracking-wider text-zinc-400 mb-2 flex items-center gap-2">
-                          <Icon className="w-3 h-3" strokeWidth={1.75} />
-                          {rail?.label ?? k}
-                          <span className="mono text-zinc-400">{items.length}</span>
-                          {!isScoped && totalForKind > items.length && (
-                            <button
-                              type="button"
-                              onClick={() => setKind(k as ExploreKind)}
-                              className="ml-auto text-[11px] text-zinc-500 hover:text-zinc-900 mono cursor-pointer flex items-center gap-1"
-                              data-testid="explore-view-all"
-                              data-target={k}
-                            >
-                              view all <span aria-hidden>→</span>
-                            </button>
-                          )}
+              {items.length > 0 && (
+                <>
+                  <div className="space-y-6">
+                    {Object.entries(grouped).map(([k, list]) => {
+                      const rail = KIND_TO_RAIL[k as ExploreKind];
+                      const Icon = rail?.icon ?? LayoutGrid;
+                      const isScoped = url.kind !== "all";
+                      const totalForKind = counts?.[rail?.countKey ?? "documents"] ?? list.length;
+                      return (
+                        <div key={k}>
+                          <div className="text-[10px] uppercase tracking-wider text-zinc-400 mb-2 flex items-center gap-2">
+                            <Icon className="w-3 h-3" strokeWidth={1.75} />
+                            {rail?.label ?? k}
+                            <span className="mono text-zinc-400">{list.length}</span>
+                            {!isScoped && totalForKind > list.length && (
+                              <button
+                                type="button"
+                                onClick={() => update({ kind: k as ExploreKind })}
+                                className="ml-auto text-[11px] text-zinc-500 hover:text-zinc-900 mono cursor-pointer flex items-center gap-1"
+                                data-testid="explore-view-all"
+                                data-target={k}
+                              >
+                                view all <span aria-hidden>→</span>
+                              </button>
+                            )}
+                          </div>
+                          <ul className="space-y-1.5">
+                            {list.map((it) => (
+                              <ResultCard
+                                key={`${it.kind}-${it.id}`}
+                                hit={it}
+                                onScopeToBucket={scopeToBucket}
+                              />
+                            ))}
+                          </ul>
                         </div>
-                        <ul className="space-y-1.5">
-                          {items.map((it) => (
-                            <ResultCard
-                              key={`${it.kind}-${it.id}`}
-                              hit={it}
-                              onScopeToBucket={scopeToBucket}
-                            />
-                          ))}
-                        </ul>
-                      </div>
-                    );
-                  })}
-                </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Pagination footer — server-paginated Load more. */}
+                  {remaining > 0 && url.kind !== "all" && (
+                    <div className="mt-6 flex items-center justify-center">
+                      <button
+                        type="button"
+                        onClick={loadMore}
+                        disabled={loadingMore}
+                        className="flex items-center gap-2 px-4 py-2 text-xs rounded-md border border-zinc-200 bg-white hover:bg-zinc-50 cursor-pointer disabled:opacity-50"
+                        data-testid="explore-load-more"
+                      >
+                        {loadingMore ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        ) : null}
+                        <span>Load more</span>
+                        <span className="text-zinc-400 mono">
+                          ({remaining} remaining)
+                        </span>
+                      </button>
+                    </div>
+                  )}
+                  {/* "All results" view: explicit nudge to scope into a single
+                      kind for pagination — avoids confusing mixed-kind Load
+                      more that fans out multiplicatively across buckets. */}
+                  {remaining > 0 && url.kind === "all" && (
+                    <div className="mt-6 text-center text-[11px] text-zinc-400">
+                      Showing {items.length} of {totalEstimate}. Click a category in the left rail to load more from that bucket.
+                    </div>
+                  )}
+                </>
               )}
             </div>
           </section>
@@ -588,12 +652,14 @@ function EntityCard({
   hit: ExploreHit;
   onScopeToBucket: (bucket: EntityProfileBucket) => void;
 }) {
-  // Lazy-load the profile rollup on first expand — cheaper than
-  // pre-fetching for every entity in the result list. The first 3
-  // surface forms + first/last mention come from the search payload
-  // already, so the collapsed card has all the prototype info; only
-  // the RELATED accordion needs a network round-trip.
-  const [open, setOpen] = useState(false);
+  // Per-entity expand state persists in sessionStorage so navigating
+  // away (file detail, another entity) and coming back via the browser
+  // back button restores the open accordions on the same Explore view.
+  const storageKey = `explore.entity.${hit.id}.open`;
+  const [open, setOpen] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    return sessionStorage.getItem(storageKey) === "1";
+  });
   const [profile, setProfile] = useState<EntityProfile | null>(null);
   const [profileLoading, setProfileLoading] = useState(false);
 
@@ -604,27 +670,33 @@ function EntityCard({
     n_docs?: number;
     mention_count?: number;
   };
-  // When the profile is loaded, prefer its values (more authoritative);
-  // else fall back to whatever the search results gave us.
   const aliases = profile?.aliases ?? searchExtra.aliases ?? [];
   const firstSeen = profile?.first_seen ?? searchExtra.first_seen;
   const lastSeen = profile?.last_seen ?? searchExtra.last_seen;
   const nDocs = profile?.n_docs ?? searchExtra.n_docs ?? 0;
   const mentionCount = profile?.mention_count ?? searchExtra.mention_count ?? 0;
 
-  async function toggle() {
-    if (!open && profile === null) {
+  // If the user revisits with open=true persisted, fetch profile.
+  useEffect(() => {
+    if (open && profile === null && !profileLoading) {
       setProfileLoading(true);
-      try {
-        const p = await getEntityProfile(hit.id);
-        setProfile(p);
-      } catch (err) {
-        console.error("getEntityProfile failed", err);
-      } finally {
-        setProfileLoading(false);
-      }
+      getEntityProfile(hit.id)
+        .then(setProfile)
+        .catch((err) => console.error("getEntityProfile failed", err))
+        .finally(() => setProfileLoading(false));
     }
-    setOpen(!open);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  async function toggle() {
+    const next = !open;
+    setOpen(next);
+    try {
+      if (typeof window !== "undefined") {
+        if (next) sessionStorage.setItem(storageKey, "1");
+        else sessionStorage.removeItem(storageKey);
+      }
+    } catch { /* sessionStorage may be disabled — fail safe */ }
   }
 
   return (
@@ -650,9 +722,7 @@ function EntityCard({
             {hit.title}
           </span>
           <span className="text-[11px] text-zinc-400 mono ml-auto">
-            {firstSeen && (
-              <>first seen {firstSeen.slice(0, 7)}</>
-            )}
+            {firstSeen && <>first seen {firstSeen.slice(0, 7)}</>}
             {nDocs > 0 && firstSeen ? " · " : ""}
             {nDocs > 0 && `${nDocs} docs`}
           </span>
@@ -667,7 +737,6 @@ function EntityCard({
 
       {open && (
         <div className="px-4 pb-4 ml-6 border-t border-zinc-100">
-          {/* RELATED accordion */}
           <div className="rounded-lg border border-zinc-100 bg-zinc-50/40 p-3 mt-2">
             <div className="text-[10px] uppercase tracking-wider text-zinc-400 mb-2">
               Related
@@ -696,20 +765,12 @@ function EntityCard({
                       data-bucket-key={b.key}
                     >
                       <div className="flex items-center gap-2 py-2 text-xs text-zinc-700">
-                        <Icon
-                          className="w-3.5 h-3.5 text-zinc-500"
-                          strokeWidth={1.75}
-                        />
+                        <Icon className="w-3.5 h-3.5 text-zinc-500" strokeWidth={1.75} />
                         <span className="font-medium">{b.label}</span>
-                        {b.subtitle && (
-                          <span className="text-zinc-500">— {b.subtitle}</span>
-                        )}
+                        {b.subtitle && <span className="text-zinc-500">— {b.subtitle}</span>}
                         <button
                           type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onScopeToBucket(b);
-                          }}
+                          onClick={(e) => { e.stopPropagation(); onScopeToBucket(b); }}
                           className="ml-auto text-zinc-500 hover:text-zinc-900 mono cursor-pointer"
                           data-testid="entity-bucket-view-all"
                         >
@@ -723,7 +784,6 @@ function EntityCard({
             )}
           </div>
 
-          {/* 3-column footer block (Canonical / Aliases / First-Last) */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-x-6 gap-y-2 mt-3 text-[11px]">
             <div>
               <div className="text-[10px] uppercase tracking-wider text-zinc-400 mb-0.5">
@@ -751,7 +811,6 @@ function EntityCard({
             )}
           </div>
 
-          {/* Footer actions */}
           <div className="mt-3 pt-3 border-t border-zinc-100 flex items-center gap-3 text-[11px] text-zinc-500">
             <button
               type="button"

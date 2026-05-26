@@ -706,7 +706,14 @@ export async function getExploreCounts(): Promise<ExploreCounts> {
 export async function exploreSearch(opts: {
   q?: string;
   kind?: ExploreKind | null;
+  /** Single-value doc-type filter (back-compat). */
   docType?: string | null;
+  /** Multi-value doc-type filter (preferred). Sent as comma-separated. */
+  docTypes?: string[];
+  /** ISO 'YYYY-MM-DD' inclusive lower bound on file.created_at. */
+  dateFrom?: string;
+  /** ISO 'YYYY-MM-DD' inclusive upper bound on file.created_at. */
+  dateTo?: string;
   hasAnomaly?: boolean;
   hasConflicts?: boolean;
   hasChain?: boolean;
@@ -716,7 +723,13 @@ export async function exploreSearch(opts: {
   const params = new URLSearchParams();
   if (opts.q) params.set("q", opts.q);
   if (opts.kind) params.set("kind", opts.kind);
-  if (opts.docType) params.set("doc_type", opts.docType);
+  if (opts.docTypes && opts.docTypes.length > 0) {
+    params.set("doc_types", opts.docTypes.join(","));
+  } else if (opts.docType) {
+    params.set("doc_type", opts.docType);
+  }
+  if (opts.dateFrom) params.set("date_from", opts.dateFrom);
+  if (opts.dateTo)   params.set("date_to",   opts.dateTo);
   if (opts.hasAnomaly) params.set("has_anomaly", "true");
   if (opts.hasConflicts) params.set("has_conflicts", "true");
   if (opts.hasChain) params.set("has_chain", "true");
