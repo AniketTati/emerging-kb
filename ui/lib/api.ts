@@ -256,12 +256,34 @@ export type Paginated<T> = {
   offset: number;
 };
 
+/** R5 — per-element layout provenance captured by the Docling parser.
+ *  Bbox coordinates are in the PDF's native coord system (bottom-left
+ *  origin per PDF spec; `coord_origin` echoes that for the renderer to
+ *  flip if it draws in top-left). */
+export type LayoutElement = {
+  label: string | null;        // section_header / text / table / picture / ...
+  bbox: {
+    l: number; t: number; r: number; b: number;
+    coord_origin: string | null;
+  };
+  text?: string;               // up to 240 chars preview, when item is text-bearing
+  charspan?: [number, number]; // optional [start, end] within page text
+};
+
 export type RawPage = {
-  id: string;
+  id?: string;
   page_number: number;
   text: string;
-  content_sha: string;
-  created_at: string;
+  content_sha?: string;
+  created_at?: string;
+  /** Free-form jsonb from the parser. For PDFs (post-R5) includes
+   *  `size: {width,height}` + `elements: LayoutElement[]`. For OCR-
+   *  parsed pages may include model_id / token counts instead. */
+  layout_json?: {
+    size?: { width: number | null; height: number | null };
+    elements?: LayoutElement[];
+    [k: string]: unknown;
+  };
 };
 
 async function _getJson<T>(path: string): Promise<T> {

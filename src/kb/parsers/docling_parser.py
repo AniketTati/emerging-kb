@@ -86,6 +86,13 @@ class DoclingParser:
         result = converter.convert(stream)
         doc = result.document
 
+        # R5 — extract per-element provenance up-front so we can attach
+        # bbox + label + text-preview to each page's layout_json. Docling
+        # exposes items via `doc.iterate_items()` with `.prov[].bbox`
+        # (l/t/r/b + coord_origin). We bucket by page_no so a multi-page
+        # PDF surfaces its layout per-page instead of as a flat list.
+        elements_by_page = self._extract_elements_by_page(doc)
+
         pages: list[Page] = []
         # Docling's DoclingDocument exposes pages via doc.pages (dict-like by
         # page number) or via iter_items(). Use export_to_text per page if
@@ -98,6 +105,8 @@ class DoclingParser:
                 # by walking the content; use the simple route.
                 text = self._page_text(doc, page_no)
                 layout = self._page_layout(page_item)
+                # Attach per-element provenance for this page (may be []).
+                layout["elements"] = elements_by_page.get(page_no, [])
                 pages.append(Page(
                     page_number=page_no, text=text, layout_json=layout,
                 ))
@@ -138,3 +147,94 @@ class DoclingParser:
             }
         except Exception:
             return {}
+
+    # R5 — per-element provenance extraction
+    # ------------------------------------------------------------------
+    # Docling's `iterate_items()` yields `(item, level)` for every
+    # text-block / table / picture / heading the layout model detected.
+    # Each item has a `prov` list of ProvenanceItem with page_no + bbox
+    # (l/t/r/b, coord_origin) + charspan. We bucket by page_no and
+    # include label (the Docling DocItemLabel — section_header / text /
+    # table / picture / page_header / etc.) so the UI can colour-code or
+    # filter the overlay.
+    #
+    # Defensive on the API surface: Docling has changed shape across
+    # 2.x — any AttributeError on a per-item walk gets silently swallowed
+    # so a partial layout is still better than none, and a totally
+    # missing API just yields `{}` per page.
+    def _extract_elements_by_page(self, doc) -> dict[int, list[dict[str, Any]]]:
+        out: dict[int, list[dict[str, Any]]] = {}
+        try:
+            iterator = doc.iterate_items()
+        except (AttributeError, TypeError):
+            return out
+
+        for entry in iterator:
+            # iterate_items yields (item, level) in newer docling versions.
+            item = entry[0] if isinstance(entry, tuple) else entry
+            label = self._item_label(item)
+            text = self._item_text_preview(item)
+            for prov in getattr(item, "prov", None) or []:
+                page_no = getattr(prov, "page_no", None)
+                if not isinstance(page_no, int):
+                    continue
+                bbox = self._bbox_to_dict(getattr(prov, "bbox", None))
+                if bbox is None:
+                    continue
+                element = {
+                    "label": label,
+                    "bbox": bbox,
+                }
+                if text:
+                    # Cap at 240 chars — enough to identify the block in
+                    # the UI without bloating the row JSON (a 50-page PDF
+                    # with 30 elements/page would otherwise blow up).
+                    element["text"] = text[:240]
+                charspan = getattr(prov, "charspan", None)
+                if charspan and len(charspan) == 2:
+                    element["charspan"] = [int(charspan[0]), int(charspan[1])]
+                out.setdefault(page_no, []).append(element)
+        return out
+
+    @staticmethod
+    def _item_label(item) -> str | None:
+        label = getattr(item, "label", None)
+        if label is None:
+            return None
+        # DocItemLabel is a StrEnum in newer docling-core — str(label)
+        # gives the readable form ("section_header", "text", "table", …).
+        try:
+            return str(label.value) if hasattr(label, "value") else str(label)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _item_text_preview(item) -> str:
+        # TextItem / SectionHeaderItem / ListItem all expose `.text`.
+        # TableItem doesn't — its content lives in `.data` (DataFrame-
+        # shaped). For Wave A we only surface text-bearing elements;
+        # tables get an empty preview but their bbox still renders.
+        text = getattr(item, "text", None)
+        if isinstance(text, str):
+            return text.strip()
+        return ""
+
+    @staticmethod
+    def _bbox_to_dict(bbox) -> dict[str, Any] | None:
+        if bbox is None:
+            return None
+        try:
+            origin = getattr(bbox, "coord_origin", None)
+            origin_str = (
+                origin.value if origin is not None and hasattr(origin, "value")
+                else str(origin) if origin is not None else None
+            )
+            return {
+                "l": float(bbox.l),
+                "t": float(bbox.t),
+                "r": float(bbox.r),
+                "b": float(bbox.b),
+                "coord_origin": origin_str,
+            }
+        except (AttributeError, TypeError, ValueError):
+            return None
