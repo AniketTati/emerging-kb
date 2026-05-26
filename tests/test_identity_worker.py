@@ -115,7 +115,12 @@ async def test_resolve_identities_skips_non_identity_resolving(client, db_url_su
 async def test_resolve_identities_creates_new_entities_for_unique_mentions(
     client, db_url_superuser,
 ):
-    """3 unique mentions → 3 new entities + 3 mention_to_entity links."""
+    """3 unique non-noise mentions → 3 new entities + 3 mention_to_entity links.
+
+    A 4th mention of type DATE is included to lock in R4's noise-type
+    skip: it should NOT become a canonical entity (DATE is in
+    NOISE_MENTION_TYPES) so the totals stay at 3.
+    """
     from kb.workers.tasks import resolve_identities_file_impl
 
     workspace = str(uuid.uuid4())
@@ -124,7 +129,8 @@ async def test_resolve_identities_creates_new_entities_for_unique_mentions(
         mentions=[
             ("Acme Corp", "ORG"),
             ("John Smith", "PERSON"),
-            ("2024-01-15", "DATE"),
+            ("Vertex Industries", "ORG"),
+            ("2024-01-15", "DATE"),   # noise — should be skipped by R4
         ],
     )
 
@@ -144,12 +150,23 @@ async def test_resolve_identities_creates_new_entities_for_unique_mentions(
         cur = await conn.execute(
             "SELECT count(*) FROM entities WHERE workspace_id = %s", (workspace,),
         )
+        # Three signal mentions → 3 entities. The DATE mention is skipped.
         assert (await cur.fetchone())[0] == 3
 
         cur = await conn.execute(
             "SELECT count(*) FROM mention_to_entity WHERE workspace_id = %s", (workspace,),
         )
+        # Likewise — 3 links. The DATE mention has no entity link.
         assert (await cur.fetchone())[0] == 3
+
+        # The noise mention type must not appear in `entities.entity_type`.
+        cur = await conn.execute(
+            "SELECT DISTINCT entity_type FROM entities WHERE workspace_id = %s "
+            "ORDER BY entity_type", (workspace,),
+        )
+        types = [r[0] for r in await cur.fetchall()]
+        assert "DATE" not in types
+        assert set(types) == {"ORG", "PERSON"}
 
 
 async def test_resolve_identities_deterministic_match_reuses_entity(

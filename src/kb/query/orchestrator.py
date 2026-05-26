@@ -37,6 +37,11 @@ from kb.query.citations import (
     fetch_file_metas,
     build_citation,
 )
+from kb.query.conflict_resolution import (
+    build_conflict_prompt_block,
+    persist_unresolved_conflicts,
+    resolve_conflicts_for_hits,
+)
 from kb.query.crag import CRAG_THRESHOLD, CragGate, make_crag_gate
 from kb.query.faithfulness import (
     FaithfulnessGate,
@@ -115,6 +120,12 @@ class ChatResult(BaseModel):
     resolved_query: str | None = None
     context_resolution: dict[str, Any] | None = None
     turn_index: int | None = None
+    # R1 — Design 2 conflict resolutions surfaced for the UI. Each entry
+    # describes one detected (entity, predicate) conflict and which rule
+    # picked the winner. Empty list when no chained-doc disagreements were
+    # found. Citations are independently tagged with `superseded=true` on
+    # the loser side so the UI can render in-line annotations.
+    conflict_resolutions: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class Orchestrator:
@@ -257,12 +268,65 @@ class Orchestrator:
         )
 
         rewrites = await self._rewriter.rewrite(effective_query)
-        hits = await self._retrieve_and_rerank(
-            query=effective_query,
-            rewrites=rewrites,
-            workspace_id=workspace_id,
-            conn=conn,
-        )
+        # R3-supporting fix — `_retrieve_and_rerank` runs 6 channels in
+        # parallel via asyncio.gather on a SHARED psycopg connection.
+        # When one channel's SQL errors (paradedb edge case, missing
+        # index, malformed query) the txn corruption cascades and every
+        # downstream conn.execute() raises InFailedSqlTransaction —
+        # citation enrichment can't load file metadata so labels fall
+        # back to "document" instead of real filenames; chat-turn
+        # persistence + query_log audit also fail silently.
+        #
+        # Per-channel SAVEPOINTs don't help because the parallel
+        # coroutines interleave SAVEPOINT / SQL / ROLLBACK on the same
+        # connection unpredictably. The right long-term fix is a real
+        # connection pool per channel; the surgical fix is one outer
+        # SAVEPOINT around the whole retrieval block so a failure
+        # inside it rolls back cleanly to a usable txn state.
+        retrieve_sp_open = False
+        try:
+            await conn.execute("SAVEPOINT orchestrator_retrieve")
+            retrieve_sp_open = True
+        except Exception:
+            pass
+        try:
+            hits = await self._retrieve_and_rerank(
+                query=effective_query,
+                rewrites=rewrites,
+                workspace_id=workspace_id,
+                conn=conn,
+            )
+            if retrieve_sp_open:
+                try:
+                    await conn.execute("RELEASE SAVEPOINT orchestrator_retrieve")
+                except Exception:
+                    # Release might fail if the inner code aborted and
+                    # was caught silently — try ROLLBACK to recover.
+                    try:
+                        await conn.execute(
+                            "ROLLBACK TO SAVEPOINT orchestrator_retrieve"
+                        )
+                        await conn.execute(
+                            "RELEASE SAVEPOINT orchestrator_retrieve"
+                        )
+                    except Exception:
+                        pass
+        except Exception:
+            # Retrieval blew up. Hits = [] so generator refuses with
+            # no_hits. Don't fail the request just because retrieval
+            # had a bad day.
+            if retrieve_sp_open:
+                try:
+                    await conn.execute(
+                        "ROLLBACK TO SAVEPOINT orchestrator_retrieve"
+                    )
+                    await conn.execute(
+                        "RELEASE SAVEPOINT orchestrator_retrieve"
+                    )
+                except Exception:
+                    pass
+            hits = []
+
         try:
             hits = await apply_mode(
                 plan, hits,
@@ -282,12 +346,85 @@ class Orchestrator:
 
         force_refuse = crag_score < self._crag_threshold
 
+        # ---- R1 — Design 2 conflict resolution ----
+        # Run REGARDLESS of force_refuse — the detected conflicts are
+        # useful information for the user even when CRAG refuses the
+        # answer (the banner shows "we DID find this conflict but
+        # couldn't synthesize a confident answer"). Only skipped when
+        # there's no DB connection (test path) or no hits to analyze.
+        #
+        # Wrapped in an outer SAVEPOINT so ANY failure inside the block
+        # (a bad UUID, an unexpected schema mismatch, an FK violation
+        # during fact_conflicts INSERT) cleanly rolls back to a usable
+        # txn state. Without this outer wrap, an inner SAVEPOINT that
+        # couldn't even be CREATEd (e.g. txn already aborted from an
+        # upstream channel error) would leave the txn unusable, which
+        # silently breaks `_enrich_citations` downstream — citations
+        # come back with label='document' instead of the real filename
+        # because the meta-fetch query can't run.
+        conflict_resolutions = []
+        conflict_context = None
+        if conn is not None and hits:
+            r1_sp_open = False
+            try:
+                await conn.execute("SAVEPOINT orchestrator_r1_block")
+                r1_sp_open = True
+            except Exception:
+                # Can't even open a savepoint — txn is already aborted.
+                # Skip R1 entirely; downstream code paths that DO need
+                # the txn will fail loudly elsewhere.
+                pass
+
+            if r1_sp_open:
+                try:
+                    conflict_resolutions = await resolve_conflicts_for_hits(
+                        conn, hits,
+                    )
+                    if conflict_resolutions:
+                        conflict_context = build_conflict_prompt_block(
+                            conflict_resolutions,
+                        ) or None
+                        await persist_unresolved_conflicts(
+                            conn,
+                            workspace_id=workspace_id,
+                            resolutions=conflict_resolutions,
+                        )
+                    try:
+                        await conn.execute(
+                            "RELEASE SAVEPOINT orchestrator_r1_block"
+                        )
+                    except Exception:
+                        pass
+                except Exception:
+                    import logging
+                    logging.getLogger(__name__).warning(
+                        "conflict resolution skipped", exc_info=True,
+                    )
+                    conflict_resolutions = []
+                    conflict_context = None
+                    # Rollback the SAVEPOINT so the outer txn is usable
+                    # by _enrich_citations / _persist_turn / query_log
+                    # downstream. The two RELEASEs aren't strictly
+                    # required after rollback but stay symmetric with
+                    # the success path; psycopg silently no-ops if the
+                    # savepoint is already gone.
+                    try:
+                        await conn.execute(
+                            "ROLLBACK TO SAVEPOINT orchestrator_r1_block"
+                        )
+                        await conn.execute(
+                            "RELEASE SAVEPOINT orchestrator_r1_block"
+                        )
+                    except Exception:
+                        pass
+
         # ---- Generation + faithfulness retry loop ----
         from kb.query.faithfulness import MAX_REGENERATIONS
 
         regenerations = 0
         generation = await self._generator.generate(
-            effective_query, hits, force_refuse=force_refuse
+            effective_query, hits, force_refuse=force_refuse,
+            conflict_context=conflict_context,
         )
         faithfulness = await self._assess_faithfulness(generation, hits, conn)
         while (
@@ -296,7 +433,8 @@ class Orchestrator:
         ):
             regenerations += 1
             generation = await self._generator.generate(
-                effective_query, hits, force_refuse=force_refuse
+                effective_query, hits, force_refuse=force_refuse,
+                conflict_context=conflict_context,
             )
             faithfulness = await self._assess_faithfulness(generation, hits, conn)
 
@@ -309,6 +447,16 @@ class Orchestrator:
 
         # ---- Citation enrichment (Design 5) ----
         await self._enrich_citations(generation, hits, conn)
+
+        # R1 — tag citations whose source doc lost a conflict so the UI
+        # can render a `superseded` ribbon. Runs AFTER citation
+        # enrichment so the file_id mapping the generator returns is
+        # already canonicalised.
+        if conflict_resolutions and generation.citations:
+            self._tag_superseded_citations(
+                generation.citations, conflict_resolutions,
+            )
+
         modalities = distinct_modalities(
             self._iter_rich_citations(generation.citations)
         )
@@ -346,6 +494,21 @@ class Orchestrator:
                 ctx_resolution.to_dict() if ctx_resolution else None
             ),
             turn_index=turn_index,
+            conflict_resolutions=[
+                {
+                    "entity_id": r.entity_id,
+                    "predicate": r.predicate,
+                    "resolution": r.resolution,
+                    "picked_value": r.picked_value,
+                    "picked_doc_id": (
+                        r.picked_candidate.doc_id if r.picked_candidate else None
+                    ),
+                    "loser_doc_ids": [c.doc_id for c in r.losers],
+                    "loser_values": [c.value for c in r.losers],
+                    "notes": r.notes,
+                }
+                for r in conflict_resolutions
+            ],
         )
 
     def _q_mode_refusal_envelope(
@@ -434,14 +597,24 @@ class Orchestrator:
             conn, file_ids=[f for f in file_ids if f]
         )
         for c in generation.citations:
-            if c.modality:
-                # LLM (or upstream Identity stub) already supplied a
-                # modality — respect it.
-                continue
             hit = hit_by_id.get(c.hit_id)
             if hit is None:
                 continue
-            file_id = (hit.metadata or {}).get("file_id") or c.file_id
+            # Always backfill file_id from the hit metadata — the LLM
+            # routinely emits citations with file_id=null even though
+            # the hit metadata has it. Without this, R1's superseded
+            # tagging can't find a match and the citations.py modality
+            # routing falls back to the generic "chunk" envelope.
+            hit_file_id = (hit.metadata or {}).get("file_id")
+            if hit_file_id and not c.file_id:
+                c.file_id = hit_file_id
+
+            if c.modality:
+                # LLM (or upstream Identity stub) already supplied a
+                # modality — respect it but make sure file_id is set
+                # (which we just did above).
+                continue
+            file_id = c.file_id
             meta = metas.get(file_id) if file_id else None
             rich = build_citation(hit, meta)
             c.modality = rich.modality
@@ -459,6 +632,54 @@ class Orchestrator:
         for c in citations:
             if c.modality:
                 yield c
+
+    @staticmethod
+    def _tag_superseded_citations(
+        citations: list[Citation],
+        resolutions: list[Any],
+    ) -> None:
+        """Mark citations whose source doc was a loser in a conflict.
+
+        For each ResolvedConflict where a rule fired (chain / status /
+        authority / recency), any citation whose `file_id` matches one
+        of the loser candidates' `doc_id` gets:
+          - superseded=True
+          - superseded_by_doc_id=<picked doc_id>
+          - conflict_resolution=<rule name>
+
+        For `unresolved` cases we DON'T tag — neither side won, and the
+        prompt instructed the model to surface both. UI can read the
+        absence-of-supersession as "both shown side-by-side".
+        """
+        if not citations or not resolutions:
+            return
+
+        # Build a map: loser_doc_id → (winner_doc_id, rule). Last write
+        # wins if the same doc appears in multiple resolutions (rare;
+        # would mean the file lost on multiple predicates — taking the
+        # most recently iterated rule is fine for Wave A).
+        loser_to_winner: dict[str, tuple[str, str]] = {}
+        for r in resolutions:
+            if r.resolution in ("consensus", "unresolved"):
+                continue
+            picked = r.picked_candidate
+            if picked is None:
+                continue
+            for c in r.losers:
+                loser_to_winner[c.doc_id] = (picked.doc_id, r.resolution)
+
+        if not loser_to_winner:
+            return
+
+        for citation in citations:
+            if not citation.file_id:
+                continue
+            winner = loser_to_winner.get(citation.file_id)
+            if winner is None:
+                continue
+            citation.superseded = True
+            citation.superseded_by_doc_id = winner[0]
+            citation.conflict_resolution = winner[1]
 
     async def _resolve_context(
         self,

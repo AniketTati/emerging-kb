@@ -38,6 +38,62 @@ TOP_K_PER_CHANNEL = 20
 _SNIPPET_MAX = 500
 
 
+# R3-supporting fix — channel queries are SAVEPOINT-isolated so a single
+# channel SQL failure (paradedb syntax error on a weird query, a missing
+# index, an HNSW probe edge case, an empty pg_search lexer result) doesn't
+# poison the request-level transaction the orchestrator uses downstream
+# for citation enrichment + chat_turn persistence + query_log audit.
+#
+# Pre-fix bug: each channel had its own `try/except: return []`. That
+# caught the Python exception but PostgreSQL still marked the txn
+# aborted; every subsequent operation on the same connection raised
+# InFailedSqlTransaction. The visible symptom was citation labels
+# showing "document" instead of real filenames (because the file-meta
+# fetch ran in the broken txn and silently returned {}).
+#
+# Same pattern as `kb.query.citations.fetch_file_metas`. Centralised
+# here so all six channels share it.
+async def _run_channel_query(
+    conn: Any,
+    savepoint_name: str,
+    sql: str,
+    params: tuple,
+) -> list[tuple] | None:
+    """Run a channel SELECT inside a SAVEPOINT. Returns the rows on
+    success, `None` on any failure (the caller maps that to []).
+
+    The savepoint name must be unique per call site (PostgreSQL allows
+    duplicate names but rolling back to an older one with the same
+    name nukes anything stacked above — we keep names per-channel
+    and avoid that hazard entirely)."""
+    sp_open = False
+    try:
+        await conn.execute(f"SAVEPOINT {savepoint_name}")
+        sp_open = True
+    except Exception:
+        # Can't even open the savepoint — txn already aborted upstream.
+        # Bail out — the unprotected SELECT would just fail the same way.
+        return None
+
+    try:
+        cur = await conn.execute(sql, params)
+        rows = await cur.fetchall()
+        try:
+            await conn.execute(f"RELEASE SAVEPOINT {savepoint_name}")
+        except Exception:
+            pass
+        return rows
+    except Exception:
+        # On failure, ROLLBACK so the outer txn stays usable.
+        if sp_open:
+            try:
+                await conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint_name}")
+                await conn.execute(f"RELEASE SAVEPOINT {savepoint_name}")
+            except Exception:
+                pass
+        return None
+
+
 # ---------------------------------------------------------------------------
 # BM25 channels
 # ---------------------------------------------------------------------------
@@ -53,18 +109,22 @@ async def bm25_chunks_channel(
     """BM25 over contextual_chunks via pg_search `@@@` operator."""
     if not query.strip():
         return []
-    try:
-        cur = await conn.execute(
-            "SELECT cc.id::text, cc.contextual_text, "
-            "  paradedb.score(cc.id) AS sc, c.file_id::text "
-            "FROM contextual_chunks cc "
-            "JOIN chunks c ON c.id = cc.chunk_id "
-            "WHERE cc.workspace_id = %s AND cc.contextual_text @@@ %s "
-            "ORDER BY sc DESC LIMIT %s",
-            (workspace_id, query, limit),
-        )
-        rows = await cur.fetchall()
-    except Exception:
+    # Filter out chunks belonging to soft-deleted files. Otherwise re-
+    # uploads (which dedupe by content_sha and soft-delete the loser)
+    # leak ghost chunks into retrieval — citations point at deleted
+    # rows + R1's superseded-tagging can't match by file_id.
+    rows = await _run_channel_query(
+        conn, "ch_bm25_chunks",
+        "SELECT cc.id::text, cc.contextual_text, "
+        "  paradedb.score(cc.id) AS sc, c.file_id::text "
+        "FROM contextual_chunks cc "
+        "JOIN chunks c ON c.id = cc.chunk_id "
+        "JOIN files f ON f.id = c.file_id AND f.lifecycle_state <> 'deleted' "
+        "WHERE cc.workspace_id = %s AND cc.contextual_text @@@ %s "
+        "ORDER BY sc DESC LIMIT %s",
+        (workspace_id, query, limit),
+    )
+    if rows is None:
         return []
     return [
         Hit(
@@ -92,17 +152,22 @@ async def bm25_raptor_channel(
     """BM25 over raptor_nodes.text — covers per_doc + corpus summaries."""
     if not query.strip():
         return []
-    try:
-        cur = await conn.execute(
-            "SELECT id::text, text, paradedb.score(id) AS sc, "
-            "  level, scope, file_id::text "
-            "FROM raptor_nodes "
-            "WHERE workspace_id = %s AND text @@@ %s "
-            "ORDER BY sc DESC LIMIT %s",
-            (workspace_id, query, limit),
-        )
-        rows = await cur.fetchall()
-    except Exception:
+    # Live-files-only filter. raptor_nodes.file_id is nullable for
+    # corpus-level summary rows (no per-file scope) — keep those by
+    # using NOT EXISTS so a null file_id passes through.
+    rows = await _run_channel_query(
+        conn, "ch_bm25_raptor",
+        "SELECT id::text, text, paradedb.score(id) AS sc, "
+        "  level, scope, file_id::text "
+        "FROM raptor_nodes rn "
+        "WHERE workspace_id = %s AND text @@@ %s "
+        "  AND (rn.file_id IS NULL OR NOT EXISTS ("
+        "    SELECT 1 FROM files f "
+        "     WHERE f.id = rn.file_id AND f.lifecycle_state = 'deleted')) "
+        "ORDER BY sc DESC LIMIT %s",
+        (workspace_id, query, limit),
+    )
+    if rows is None:
         return []
     return [
         Hit(
@@ -143,19 +208,19 @@ async def dense_chunks_channel(
     if not query_vec:
         return []
     vec = _vec_literal(query_vec)
-    try:
-        cur = await conn.execute(
-            "SELECT cc.id::text, cc.contextual_text, "
-            "  (1.0 - (ce.embedding <=> %s::halfvec))::float AS sim, "
-            "  cc.file_id::text "
-            "FROM chunk_embeddings ce "
-            "JOIN contextual_chunks cc ON cc.id = ce.contextual_chunk_id "
-            "WHERE ce.workspace_id = %s "
-            "ORDER BY ce.embedding <=> %s::halfvec LIMIT %s",
-            (vec, workspace_id, vec, limit),
-        )
-        rows = await cur.fetchall()
-    except Exception:
+    rows = await _run_channel_query(
+        conn, "ch_dense_chunks",
+        "SELECT cc.id::text, cc.contextual_text, "
+        "  (1.0 - (ce.embedding <=> %s::halfvec))::float AS sim, "
+        "  cc.file_id::text "
+        "FROM chunk_embeddings ce "
+        "JOIN contextual_chunks cc ON cc.id = ce.contextual_chunk_id "
+        "JOIN files f ON f.id = cc.file_id AND f.lifecycle_state <> 'deleted' "
+        "WHERE ce.workspace_id = %s "
+        "ORDER BY ce.embedding <=> %s::halfvec LIMIT %s",
+        (vec, workspace_id, vec, limit),
+    )
+    if rows is None:
         return []
     return [
         Hit(
@@ -184,18 +249,20 @@ async def dense_raptor_channel(
     if not query_vec:
         return []
     vec = _vec_literal(query_vec)
-    try:
-        cur = await conn.execute(
-            "SELECT id::text, text, "
-            "  (1.0 - (embedding <=> %s::halfvec))::float AS sim, "
-            "  level, scope, file_id::text "
-            "FROM raptor_nodes "
-            "WHERE workspace_id = %s "
-            "ORDER BY embedding <=> %s::halfvec LIMIT %s",
-            (vec, workspace_id, vec, limit),
-        )
-        rows = await cur.fetchall()
-    except Exception:
+    rows = await _run_channel_query(
+        conn, "ch_dense_raptor",
+        "SELECT id::text, text, "
+        "  (1.0 - (embedding <=> %s::halfvec))::float AS sim, "
+        "  level, scope, file_id::text "
+        "FROM raptor_nodes rn "
+        "WHERE workspace_id = %s "
+        "  AND (rn.file_id IS NULL OR NOT EXISTS ("
+        "    SELECT 1 FROM files f "
+        "     WHERE f.id = rn.file_id AND f.lifecycle_state = 'deleted')) "
+        "ORDER BY embedding <=> %s::halfvec LIMIT %s",
+        (vec, workspace_id, vec, limit),
+    )
+    if rows is None:
         return []
     return [
         Hit(
@@ -235,19 +302,25 @@ async def mentions_exact_channel(
     """
     if not query.strip():
         return []
-    try:
-        cur = await conn.execute(
-            "SELECT em.contextual_chunk_id::text, em.mention_text, em.mention_type, "
-            "  em.file_id::text, cc.contextual_text "
-            "FROM extracted_mentions em "
-            "JOIN contextual_chunks cc ON cc.id = em.contextual_chunk_id "
-            "WHERE em.workspace_id = %s "
-            "AND lower(em.mention_text) LIKE lower(%s) "
-            "LIMIT %s",
-            (workspace_id, f"%{query}%", limit),
-        )
-        rows = await cur.fetchall()
-    except Exception:
+    # R2 — same source-position columns as the atomic-unit channel so
+    # the citation envelope can highlight the exact mention span
+    # inside the chunk. extracted_mentions.source_chunk_id is the
+    # raw chunks.id (not contextual_chunks.id); UI consumes the same
+    # /chunks/:id endpoint either way.
+    rows = await _run_channel_query(
+        conn, "ch_mentions_exact",
+        "SELECT em.contextual_chunk_id::text, em.mention_text, em.mention_type, "
+        "  em.file_id::text, cc.contextual_text, "
+        "  em.source_chunk_id::text, em.source_char_start, em.source_char_end "
+        "FROM extracted_mentions em "
+        "JOIN contextual_chunks cc ON cc.id = em.contextual_chunk_id "
+        "JOIN files f ON f.id = em.file_id AND f.lifecycle_state <> 'deleted' "
+        "WHERE em.workspace_id = %s "
+        "AND lower(em.mention_text) LIKE lower(%s) "
+        "LIMIT %s",
+        (workspace_id, f"%{query}%", limit),
+    )
+    if rows is None:
         return []
     return [
         Hit(
@@ -261,6 +334,12 @@ async def mentions_exact_channel(
                 "channel": "mentions_exact",
                 "matched_mention": r[1],
                 "matched_type": r[2],
+                # R2 — char-range location of the matched mention in
+                # the source chunk. Present when the PR2 resolver
+                # found it at index time.
+                "source_chunk_id": r[5] if r[5] else None,
+                "source_char_start": r[6] if r[6] is not None else None,
+                "source_char_end": r[7] if r[7] is not None else None,
             },
         )
         for r in rows
@@ -292,17 +371,23 @@ async def atomic_units_rarity_channel(
         unit_filter = "AND unit_type = 'transaction'"
     elif "row" in q_low:
         unit_filter = "AND unit_type = 'row'"
-    try:
-        cur = await conn.execute(
-            f"SELECT id::text, parameters::text, file_id::text, unit_type, "
-            f"  COALESCE(rarity_score, 0) AS rscore "
-            f"FROM atomic_units "
-            f"WHERE workspace_id = %s {unit_filter} "
-            f"ORDER BY rscore DESC NULLS LAST LIMIT %s",
-            (workspace_id, limit),
-        )
-        rows = await cur.fetchall()
-    except Exception:
+    # R2 — pull source_chunk_id + char-range columns (migration 0032)
+    # so the citation envelope can render an exact verbatim snippet
+    # in the chat right rail (the same way DocDetail does in the
+    # upload flow). Cast to text once at SQL level so we don't have
+    # to UUID-coerce in Python.
+    rows = await _run_channel_query(
+        conn, "ch_atomic_units_rarity",
+        f"SELECT au.id::text, au.parameters::text, au.file_id::text, au.unit_type, "
+        f"  COALESCE(au.rarity_score, 0) AS rscore, "
+        f"  au.source_chunk_id::text, au.source_char_start, au.source_char_end "
+        f"FROM atomic_units au "
+        f"JOIN files f ON f.id = au.file_id AND f.lifecycle_state <> 'deleted' "
+        f"WHERE au.workspace_id = %s {unit_filter} "
+        f"ORDER BY rscore DESC NULLS LAST LIMIT %s",
+        (workspace_id, limit),
+    )
+    if rows is None:
         return []
     return [
         Hit(
@@ -314,6 +399,12 @@ async def atomic_units_rarity_channel(
                 "file_id": str(r[2]),
                 "unit_type": r[3],
                 "channel": "atomic_units_rarity",
+                # R2 — present when the PR2 source-resolver located the
+                # extracted text in the source chunk at index time. UI
+                # uses these to slice exact verbatim snippets.
+                "source_chunk_id": r[5] if r[5] else None,
+                "source_char_start": r[6] if r[6] is not None else None,
+                "source_char_end": r[7] if r[7] is not None else None,
             },
         )
         for r in rows

@@ -393,7 +393,7 @@ async def test_orchestrator_retries_then_abstains_when_gate_refuses():
     gen_calls = {"n": 0}
 
     class StubGenerator:
-        async def generate(self, query, hits, *, force_refuse=False):
+        async def generate(self, query, hits, *, force_refuse=False, conflict_context=None):
             gen_calls["n"] += 1
             return GenerationResult(
                 answer="unsupported claim",
@@ -458,7 +458,7 @@ async def test_orchestrator_does_not_retry_when_generator_already_refused():
     gen_calls = {"n": 0}
 
     class StubGenerator:
-        async def generate(self, query, hits, *, force_refuse=False):
+        async def generate(self, query, hits, *, force_refuse=False, conflict_context=None):
             gen_calls["n"] += 1
             return GenerationResult(
                 answer="", citations=[], refused=True,

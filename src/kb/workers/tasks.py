@@ -1958,6 +1958,7 @@ async def resolve_identities_file_impl(file_id: str) -> None:
     from kb.identity.resolve import (
         EMBEDDING_HIGH_THRESHOLD,
         EMBEDDING_LOW_THRESHOLD,
+        is_noise_mention_type,
     )
 
     settings = get_settings()
@@ -2014,6 +2015,7 @@ async def resolve_identities_file_impl(file_id: str) -> None:
 
             method_counts: dict[str, int] = {
                 "deterministic": 0, "embedding": 0, "llm_judge": 0, "new": 0,
+                "skipped_noise": 0,
             }
 
             for mention_id, mention_text, mention_type in mentions:
@@ -2021,6 +2023,19 @@ async def resolve_identities_file_impl(file_id: str) -> None:
                 resolution_method: str = "deterministic"
                 confidence: float = 1.0
                 mention_emb = mention_embeddings.get(mention_id)
+
+                # Stage 0 — skip noise mention types (CARDINAL / QUANTITY /
+                # DATE / MONEY / ORDINAL / PERCENT / TIME). NER routinely
+                # flags numeric / temporal spans as entities, but they have
+                # no canonical identity ("30 days" in doc A is not the
+                # same entity as "30 days" in doc B). Leaving them out of
+                # `entities` and `mention_to_entity` cleans up the doc-
+                # detail entity accordion + reduces resolver noise. The
+                # mention itself stays in `extracted_mentions` so the
+                # LLM still sees it inside cited snippets.
+                if is_noise_mention_type(mention_type):
+                    method_counts["skipped_noise"] += 1
+                    continue
 
                 # Stage 1: deterministic
                 resolved_entity_id = await find_entity_deterministic(

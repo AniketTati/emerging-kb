@@ -33,6 +33,14 @@ _BANK_DOC_TYPES = {
     "credit_card_statement", "transaction_log",
 }
 
+# Word-set fallback (per the same pattern as clauses.py): require
+# the doc_type to contain a FULL word indicating a financial
+# statement, not just the substring "statement" (which would
+# false-positive on `statement_of_work`, `mission_statement`,
+# `personal_statement`, etc.). Both words must co-occur in the
+# multi-word case ("bank_statement" → {bank, statement} ∋ "bank").
+_BANK_WORDS = frozenset({"bank", "card", "transaction", "transactions", "ledger"})
+
 _SYSTEM_PROMPT = (
     "You extract individual transactions from bank-statement / account-statement "
     "documents. Each transaction has a date, description, signed amount (positive "
@@ -95,7 +103,17 @@ class TransactionsPlugin:
         dt = file_meta.inferred_doc_type.lower()
         if dt in _BANK_DOC_TYPES:
             return True
-        return any(k in dt for k in ("bank_statement", "statement", "transaction"))
+        # Word-set match — avoids false-positives like statement_of_work
+        # containing the substring "statement". Requires that the doc_type
+        # contain a financial-statement word AND (when "statement" is the
+        # tell) that "statement" actually appear as its own underscore-
+        # separated word, not just as a substring.
+        words = set(dt.split("_"))
+        if "statement" in words and (words & _BANK_WORDS or "account" in words):
+            return True
+        if words & _BANK_WORDS:
+            return True
+        return False
 
     async def extract(
         self,

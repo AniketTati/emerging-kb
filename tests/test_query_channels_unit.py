@@ -282,6 +282,100 @@ async def test_atomic_units_rarity_channel_no_keyword_returns_all_types(
     assert types == {"clause", "transaction"}
 
 
+async def test_channels_filter_out_soft_deleted_files(client, db_url_superuser):
+    """Soft-deleted files (lifecycle_state='deleted') must not surface in
+    retrieval.
+
+    Regression: when a content_sha dedup landed (duplicate upload), the
+    losing file got soft-deleted but its derived rows (chunks /
+    contextual_chunks / embeddings / mentions / atomic_units) stayed in
+    place. Pre-fix every channel returned hits for those ghost rows,
+    which broke citation labels (file_id pointed at a gone file) AND
+    silently undermined R1's superseded-tagging (the loser the
+    detector wanted to mark wasn't the file_id the retriever returned).
+    """
+    from kb.query.channels import (
+        bm25_chunks_channel,
+        dense_chunks_channel,
+    )
+
+    workspace = str(uuid.uuid4())
+    one_hot = [0.0] * 3072
+    one_hot[0] = 1.0
+
+    async with await psycopg.AsyncConnection.connect(db_url_superuser) as conn:
+        # Seed two files with identical-marker chunks. Then soft-delete
+        # one. BM25 + dense should only return the live one.
+        file_live, _, _ = await _seed_file_chain(
+            conn, workspace, label="live",
+            contextual_text="ghost-marker-zxqvbnm appears in both files",
+        )
+        file_dead, _, cc_dead = await _seed_file_chain(
+            conn, workspace, label="dead",
+            contextual_text="ghost-marker-zxqvbnm appears in both files",
+        )
+        # Embed both contextual_chunks at the same one-hot vector so
+        # dense channel can find both pre-filter.
+        for cc_id in (
+            await _fetch_cc_id_for_file(conn, file_live),
+            cc_dead,
+        ):
+            await _insert_chunk_embedding(conn, workspace, cc_id, one_hot)
+        # Soft-delete the dead file.
+        await conn.execute(
+            "UPDATE files SET lifecycle_state = 'deleted' WHERE id = %s",
+            (file_dead,),
+        )
+        await conn.commit()
+
+    async with await psycopg.AsyncConnection.connect(db_url_superuser) as conn:
+        await conn.execute(
+            "SELECT set_config('app.workspace_id', %s, true)", (workspace,),
+        )
+        bm25_hits = await bm25_chunks_channel(
+            conn, workspace_id=workspace, query="ghost-marker-zxqvbnm", limit=10,
+        )
+        dense_hits = await dense_chunks_channel(
+            conn, workspace_id=workspace, query_vec=one_hot, limit=10,
+        )
+
+    bm25_files = {h.metadata.get("file_id") for h in bm25_hits}
+    dense_files = {h.metadata.get("file_id") for h in dense_hits}
+    assert file_dead not in bm25_files, "bm25 leaked deleted file"
+    assert file_dead not in dense_files, "dense leaked deleted file"
+    # The live file must still be returned by both.
+    assert file_live in bm25_files
+    assert file_live in dense_files
+
+
+async def _fetch_cc_id_for_file(conn, file_id: str) -> str:
+    cur = await conn.execute(
+        "SELECT id::text FROM contextual_chunks WHERE file_id = %s LIMIT 1",
+        (file_id,),
+    )
+    row = await cur.fetchone()
+    assert row is not None
+    return row[0]
+
+
+async def _insert_chunk_embedding(
+    conn, workspace_id: str, cc_id: str, vec: list[float],
+) -> None:
+    """chunk_embeddings.file_id is NOT NULL (per migration 0014)."""
+    cur = await conn.execute(
+        "SELECT file_id::text FROM contextual_chunks WHERE id = %s",
+        (cc_id,),
+    )
+    file_id = (await cur.fetchone())[0]
+    vec_lit = "[" + ",".join(repr(float(v)) for v in vec) + "]"
+    await conn.execute(
+        "INSERT INTO chunk_embeddings "
+        "  (id, contextual_chunk_id, file_id, workspace_id, model_id, embedding) "
+        "VALUES (%s, %s, %s, %s, 'identity', %s::halfvec)",
+        (str(uuid.uuid4()), cc_id, file_id, workspace_id, vec_lit),
+    )
+
+
 async def test_channels_respect_workspace_isolation(client, db_url_superuser):
     """Decision #10: every channel filters by workspace_id."""
     from kb.query.channels import bm25_chunks_channel

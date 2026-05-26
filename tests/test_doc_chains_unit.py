@@ -13,6 +13,7 @@ from kb.extraction.doc_chains import (
     _detect_drawing_revision,
     _detect_email_thread,
     _has_amendment_language,
+    _is_contract_like_doc_type,
     _jaccard_similarity,
     _normalize_contract_title,
     _normalize_subject,
@@ -285,6 +286,112 @@ def test_contract_chain_skipped_for_non_contract_doc_types():
         title_text="something",
         siblings=(),
     )) is None
+
+
+# E4 fix — cross-format detection. The narrow "contract substring" gate
+# in the old detector falsely rejected master_services_agreement (MSA.pdf)
+# paired with legal_contract (Amendment.txt). The broader synonym list
+# below catches the demo-corpus case while still excluding invoices etc.
+
+
+@pytest.mark.parametrize("doc_type,expected", [
+    (None, True),                          # permissive on missing classification
+    ("", True),                            # empty string treated as None
+    ("contract", True),
+    ("legal_contract", True),
+    ("master_services_agreement", True),   # MSA — the bug
+    ("subscription_agreement", True),      # SaaS contracts
+    ("mutual_nda", True),
+    ("statement_of_work", True),           # "sow"
+    ("employment_offer_letter", True),
+    ("addendum", True),
+    ("amendment", True),
+    ("invoice", False),
+    ("receipt", False),
+    ("bank_statement", False),
+    ("lab_report", False),
+    ("email_thread", False),
+    ("case_study", False),
+])
+def test_is_contract_like_doc_type_synonyms(doc_type, expected):
+    assert _is_contract_like_doc_type(doc_type) is expected
+
+
+def test_contract_chain_links_msa_pdf_to_amendment_txt_cross_format():
+    """E4 regression — the demo-corpus case that motivated the fix.
+    MSA.pdf classified as 'master_services_agreement' was being rejected
+    because the literal substring 'contract' wasn't in the doc_type;
+    Amendment.txt classified as 'legal_contract' would then never find
+    the MSA sibling. Both bugs are gone with the synonym predicate."""
+    msa = SiblingFile(
+        file_id="f-msa",
+        name="vertex-msa.pdf",
+        mime_type="application/pdf",
+        inferred_doc_type="master_services_agreement",  # the bug
+        title_text="MASTER SERVICES AGREEMENT between NorthWind Robotics "
+                   "and Vertex Logistics dated January 15, 2026",
+    )
+    result = _detect_contract_chain(DetectionInput(
+        file_id="f-amend",
+        name="vertex-amendment.txt",
+        mime_type="text/plain",                           # cross-format
+        inferred_doc_type="legal_contract",
+        title_text="Amendment No. 1 to the Master Services Agreement "
+                   "between NorthWind Robotics and Vertex Logistics. "
+                   "This Amendment amends the Master Services Agreement.",
+        siblings=(msa,),
+    ))
+    assert result is not None
+    assert result.chain_type == "contract_chain"
+    assert result.role == "amendment"
+    assert result.sibling_member_ids == ("f-msa",)
+    assert result.confidence >= 0.7
+
+
+def test_contract_chain_links_nda_to_addendum():
+    """NDA classified as 'mutual_nda' + addendum classified as 'addendum'
+    — neither contains the literal 'contract' substring."""
+    nda = SiblingFile(
+        file_id="f-nda",
+        name="mutual-nda.pdf",
+        mime_type="application/pdf",
+        inferred_doc_type="mutual_nda",
+        title_text="Mutual Non-Disclosure Agreement between Acme Corp and Vertex",
+    )
+    result = _detect_contract_chain(DetectionInput(
+        file_id="f-add",
+        name="mutual-nda-addendum.pdf",
+        mime_type="application/pdf",
+        inferred_doc_type="addendum",
+        title_text="Addendum to the Mutual Non-Disclosure Agreement "
+                   "between Acme Corp and Vertex",
+        siblings=(nda,),
+    ))
+    assert result is not None
+    assert result.role == "amendment"  # addendum maps to amendment role
+    assert result.sibling_member_ids == ("f-nda",)
+
+
+def test_contract_chain_does_not_match_two_invoices():
+    """Sanity-check the precision side: even with near-identical invoice
+    titles, the contract detector must NOT fire. The synonym predicate
+    rejects 'invoice' doc_type → returns None before similarity runs."""
+    inv1 = SiblingFile(
+        file_id="f-inv1",
+        name="invoice-jan.pdf",
+        mime_type="application/pdf",
+        inferred_doc_type="invoice",
+        title_text="Invoice for services rendered January 2026",
+    )
+    result = _detect_contract_chain(DetectionInput(
+        file_id="f-inv2",
+        name="invoice-feb.pdf",
+        mime_type="application/pdf",
+        inferred_doc_type="invoice",
+        title_text="Invoice for services rendered February 2026",
+        siblings=(inv1,),
+    ))
+    assert result is None
 
 
 # ---------------------------------------------------------------------------

@@ -36,6 +36,12 @@ export function AnswerCard({ response }: Props) {
         )}
       </div>
 
+      {/* R1 — Design 2 conflict-resolution banner. Renders only when
+          the orchestrator detected disagreement between chained docs
+          (typical case: MSA vs Amendment on payment_terms). Honest
+          about what we resolved vs. what we couldn't. */}
+      <ConflictResolutionBanner response={response} />
+
       {/* Body */}
       {refused ? (
         <RefusalBody response={response} />
@@ -44,19 +50,34 @@ export function AnswerCard({ response }: Props) {
           className="text-[15px] leading-[1.75] text-zinc-800"
           data-testid="answer-text"
         >
-          {segments.map((seg, i) =>
-            seg.kind === "text" ? (
-              <span key={i}>{seg.value}</span>
-            ) : (
+          {segments.map((seg, i) => {
+            if (seg.kind === "text") {
+              return <span key={i}>{seg.value}</span>;
+            }
+            // Annotate the inline [N] badge with the underlying
+            // citation's status so the user can see at-a-glance which
+            // numbers point at a superseded source.
+            const cit = response.generation.citations[seg.index];
+            const superseded = !!cit?.superseded;
+            return (
               <sup
                 key={i}
-                className="cref text-zinc-500 hover:text-zinc-900 font-medium px-0.5 text-[11px] cursor-pointer"
-                title={`hit ${seg.hitId}`}
+                className={
+                  superseded
+                    ? "cref text-amber-700 hover:text-amber-900 font-medium px-0.5 text-[11px] cursor-pointer line-through decoration-amber-400"
+                    : "cref text-zinc-500 hover:text-zinc-900 font-medium px-0.5 text-[11px] cursor-pointer"
+                }
+                title={
+                  superseded
+                    ? `hit ${seg.hitId} — superseded; newer version cited above`
+                    : `hit ${seg.hitId}`
+                }
+                data-superseded={superseded || undefined}
               >
                 [{seg.index >= 0 ? seg.index + 1 : "?"}]
               </sup>
-            ),
-          )}
+            );
+          })}
         </div>
       )}
 
@@ -102,8 +123,78 @@ export function AnswerCard({ response }: Props) {
   );
 }
 
+/** R1 — banner above the answer body listing every resolved conflict.
+ *  Hidden when the orchestrator detected none. One row per (entity,
+ *  predicate); the rule that fired is shown as a small chip on the
+ *  right ("chain", "status", "authority", "recency", "unresolved").
+ *
+ *  Goal: make the supersession reasoning legible. A user reading the
+ *  answer should be able to see "we picked net-45 from the Amendment
+ *  because it supersedes the MSA's net-30 via the chain rule" without
+ *  having to dig through the inspector. */
+function ConflictResolutionBanner({ response }: { response: ChatResponse }) {
+  const conflicts = response.conflict_resolutions ?? [];
+  if (conflicts.length === 0) return null;
+
+  return (
+    <div
+      className="mb-4 rounded-lg border border-amber-200 bg-amber-50/40 px-4 py-3"
+      data-testid="conflict-resolutions"
+    >
+      <div className="text-xs font-medium text-amber-900 mb-2 flex items-center gap-2">
+        <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+        Resolved {conflicts.length === 1 ? "1 conflict" : `${conflicts.length} conflicts`} across doc-chain versions
+      </div>
+      <div className="space-y-1.5">
+        {conflicts.map((c, i) => (
+          <div
+            key={`${c.entity_id}-${c.predicate}-${i}`}
+            className="grid grid-cols-[1fr_auto] gap-3 items-center text-[12px]"
+            data-testid="conflict-row"
+          >
+            <div className="text-zinc-800">
+              <span className="mono text-zinc-600">{c.predicate}</span>
+              {c.resolution === "unresolved" ? (
+                <>
+                  {" "}
+                  <span className="text-zinc-500">— ambiguous, showing both:</span>{" "}
+                  <span className="mono">{c.loser_values.join(" / ")}</span>
+                </>
+              ) : (
+                <>
+                  {" picked "}
+                  <span className="mono font-medium text-zinc-900">
+                    {c.picked_value ?? "—"}
+                  </span>
+                  {c.loser_values.length > 0 && (
+                    <>
+                      {" over "}
+                      <span className="mono text-zinc-500 line-through decoration-amber-400">
+                        {c.loser_values.join(" / ")}
+                      </span>
+                    </>
+                  )}
+                </>
+              )}
+            </div>
+            <span className="mono text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 border border-amber-200">
+              via {c.resolution}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function RefusalBody({ response }: { response: ChatResponse }) {
   const reason = response.generation.refusal_reason;
+  const hits = response.hits || [];
+  const hitsByKind = hits.reduce<Record<string, number>>((acc, h) => {
+    acc[h.kind] = (acc[h.kind] ?? 0) + 1;
+    return acc;
+  }, {});
+
   return (
     <div
       className="rounded-lg border border-amber-200 bg-amber-50/40 p-4 text-[14px] leading-relaxed text-zinc-800"
@@ -112,16 +203,72 @@ function RefusalBody({ response }: { response: ChatResponse }) {
       <div className="font-medium text-zinc-900 mb-1">
         I can&apos;t answer that with the evidence I have.
       </div>
-      <div className="text-zinc-600">
+      <div className="text-zinc-600 mb-3">
         Reason: <span className="mono">{reason ?? "unknown"}</span>.{" "}
-        {reason === "no_hits" && "Retrieval returned zero results across all channels. "}
-        {reason === "insufficient_evidence" &&
-          "The CRAG gate scored the top results below the 0.5 threshold. "}
+        {reason === "no_hits" &&
+          "Retrieval returned zero results across all 6 channels. "}
+        {reason === "insufficient_evidence" && (
+          <>
+            The CRAG relevance gate scored the top results at{" "}
+            <span className="mono">{(response.crag_score * 100).toFixed(0)}%</span>
+            , below the 50% threshold. The retrieved snippets exist but they
+            don&apos;t answer your specific question.{" "}
+          </>
+        )}
         {reason === "parse_error" &&
           "The LLM produced output that couldn't be safely parsed. "}
         {reason === "llm_error" &&
           "The LLM call failed; we'd rather refuse than guess. "}
-        Try uploading more relevant documents or rephrasing your question.
+        {reason === "faithfulness_gate_refused" &&
+          "The faithfulness gate flagged the draft answers as not grounded in the snippets; we abstained rather than emit a hallucination. "}
+      </div>
+
+      {/* R3 — surface what the system DID find so the user can iterate.
+          Even on refusal, retrieval ran and returned hits we can show. */}
+      {hits.length > 0 && (
+        <div className="rounded border border-amber-100 bg-white/60 px-3 py-2 mb-3 text-xs">
+          <div className="text-zinc-600 mb-1.5">
+            Retrieval did surface{" "}
+            <span className="mono font-medium text-zinc-900">{hits.length}</span>{" "}
+            hit{hits.length === 1 ? "" : "s"}{" "}
+            <span className="text-zinc-500">
+              ({Object.entries(hitsByKind).map(([k, n]) => `${n} ${k}`).join(" · ")})
+            </span>{" "}
+            but they weren&apos;t a confident match.
+          </div>
+          <details className="text-zinc-500">
+            <summary className="cursor-pointer hover:text-zinc-700 mono">
+              show top hit previews
+            </summary>
+            <div className="mt-2 space-y-1">
+              {hits.slice(0, 3).map((h, i) => (
+                <div key={i} className="text-[11px]">
+                  <span className="mono text-zinc-400">
+                    [{i + 1}] {h.kind} · {(h.score * 100).toFixed(0)}%
+                  </span>
+                  <span className="ml-2 text-zinc-600">
+                    {h.snippet.slice(0, 80)}…
+                  </span>
+                </div>
+              ))}
+            </div>
+          </details>
+        </div>
+      )}
+
+      <div className="text-zinc-600">
+        <span className="font-medium">Try this:</span>{" "}
+        {reason === "no_hits" ? (
+          <>upload documents related to your question, or try different keywords.</>
+        ) : reason === "insufficient_evidence" ? (
+          <>
+            rephrase with more specific terms (entity names, dates, or doc-type
+            keywords like &ldquo;contract&rdquo; or &ldquo;invoice&rdquo;), or
+            check the upload page for files that should match.
+          </>
+        ) : (
+          <>rephrase your question or upload more relevant documents.</>
+        )}
       </div>
     </div>
   );

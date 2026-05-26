@@ -256,12 +256,34 @@ export type Paginated<T> = {
   offset: number;
 };
 
+/** R5 — per-element layout provenance captured by the Docling parser.
+ *  Bbox coordinates are in the PDF's native coord system (bottom-left
+ *  origin per PDF spec; `coord_origin` echoes that for the renderer to
+ *  flip if it draws in top-left). */
+export type LayoutElement = {
+  label: string | null;        // section_header / text / table / picture / ...
+  bbox: {
+    l: number; t: number; r: number; b: number;
+    coord_origin: string | null;
+  };
+  text?: string;               // up to 240 chars preview, when item is text-bearing
+  charspan?: [number, number]; // optional [start, end] within page text
+};
+
 export type RawPage = {
-  id: string;
+  id?: string;
   page_number: number;
   text: string;
-  content_sha: string;
-  created_at: string;
+  content_sha?: string;
+  created_at?: string;
+  /** Free-form jsonb from the parser. For PDFs (post-R5) includes
+   *  `size: {width,height}` + `elements: LayoutElement[]`. For OCR-
+   *  parsed pages may include model_id / token counts instead. */
+  layout_json?: {
+    size?: { width: number | null; height: number | null };
+    elements?: LayoutElement[];
+    [k: string]: unknown;
+  };
 };
 
 async function _getJson<T>(path: string): Promise<T> {
@@ -481,6 +503,38 @@ export type Citation = {
   file_id: string | null;
   snippet_preview: string;
   score: number;
+  // R1 — Design 2 conflict-resolution markers populated by the
+  // orchestrator. `superseded=true` means another doc in the same
+  // chain currently holds the authoritative value for a fact this
+  // citation's source disagrees on. The UI grays it out + shows
+  // a "newer version available" hint.
+  superseded?: boolean;
+  superseded_by_doc_id?: string | null;
+  conflict_resolution?:
+    | "chain"
+    | "status"
+    | "authority"
+    | "recency"
+    | null;
+  // Other polymorphic-envelope fields populated by build_citation /
+  // citations.py enrichment. Optional everywhere — Wave A clients
+  // may ignore.
+  chain_id?: string | null;
+  authority?: number | null;
+  doc_status?: string | null;
+  modality?: string | null;
+  label?: string | null;
+};
+
+export type ConflictResolution = {
+  entity_id: string;
+  predicate: string;
+  resolution: "chain" | "status" | "authority" | "recency" | "unresolved";
+  picked_value: string | null;
+  picked_doc_id: string | null;
+  loser_doc_ids: string[];
+  loser_values: string[];
+  notes: string | null;
 };
 
 export type GenerationResult = {
@@ -507,6 +561,9 @@ export type ChatResponse = {
   hits: Hit[];
   crag_score: number;
   latency_ms: number;
+  // R1 — surfaced conflict resolutions for the chat UI banner. Empty
+  // when no chained-doc disagreements were detected for this query.
+  conflict_resolutions?: ConflictResolution[];
 };
 
 export async function postChat(

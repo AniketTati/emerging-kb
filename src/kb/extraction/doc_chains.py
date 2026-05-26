@@ -105,6 +105,49 @@ _AMENDMENT_PHRASES = (
     "amendment no", "amendment number", "addendum", "this addendum",
 )
 
+
+# Doc-type tokens that signal "this is contract-flavored" beyond the
+# literal word "contract". The old detector short-circuited when neither
+# side's `inferred_doc_type` contained "contract" — which falsely rejected
+# the demo-corpus case `master_services_agreement` (MSA.pdf) paired with
+# `legal_contract` (Amendment.txt). We keep a permissive substring match
+# but expand it to common contract synonyms so cross-format chains
+# (PDF MSA + TXT amendment, .docx SOW + .pdf addendum, etc.) are caught.
+#
+# Kept narrow enough to still reject invoice/receipt/report-style docs:
+# the high-precision gate is the 0.7 title-similarity threshold below.
+_CONTRACT_LIKE_DOC_TYPE_TOKENS = (
+    "contract",
+    "agreement",
+    "msa",                  # master services agreement
+    "nda",                  # non-disclosure agreement
+    "sow",                  # acronym
+    "statement_of_work",    # spelled-out form
+    "amendment",
+    "addendum",
+    "side_letter",
+    "offer_letter",         # employment_offer_letter, job_offer_letter
+    "engagement_letter",
+    "lease",
+    "license",              # licensing_agreement
+    "licens",               # licensure (UK spelling)
+    "subscription",         # subscription_agreement (SaaS)
+)
+
+
+def _is_contract_like_doc_type(doc_type: str | None) -> bool:
+    """True when `doc_type` looks like a contract-family classification.
+
+    Permissive on `None` — Wave A allows the contract detector to run
+    even when classification hasn't completed yet (e.g. parse-time
+    detection before L3 classify ran). The high-precision check is
+    still title-similarity ≥ 0.7 downstream.
+    """
+    if not doc_type:
+        return True
+    dt = doc_type.lower()
+    return any(tok in dt for tok in _CONTRACT_LIKE_DOC_TYPE_TOKENS)
+
 _REVISION_FILENAME_RE = re.compile(
     # base is non-greedy, MUST end at a separator before the rev marker
     r"^(?P<base>.+?)"
@@ -146,12 +189,30 @@ _STOP_WORDS = frozenset({
 })
 
 
+# Worker passes the entire first-page text as `title_text` (it has no
+# parse-time notion of a "real" title region). For contracts this means
+# 2-3 KB of body — title + lead paragraph + first numbered clause. The
+# whole-body token set dilutes the discriminative title tokens (MSA's
+# "Master Services Agreement") with body tokens (effective dates,
+# Delaware-LLC boilerplate, party addresses) that don't repeat in the
+# amendment. Result: the demo MSA + Amendment pair scored 0.53 — below
+# the 0.7 threshold.
+#
+# Capping the comparison window at the first ~200 chars captures the
+# title line + a sliver of the opening clause (enough to keep amendment-
+# language detection working), which is exactly where the high-signal
+# matching tokens live. Short title_text passes (unit tests) are
+# unaffected.
+_TITLE_WINDOW_CHARS = 200
+
+
 def _normalize_contract_title(title: str | None) -> str:
     """Normalize for similarity matching — drop amendment markers + dates
-    + version suffixes + stop-words."""
+    + version suffixes + stop-words. Only considers the leading
+    `_TITLE_WINDOW_CHARS` characters; see the comment above."""
     if not title:
         return ""
-    s = title.lower()
+    s = title[:_TITLE_WINDOW_CHARS].lower()
     s = re.sub(r"\bamendment\b[^\s]*", "", s)
     s = re.sub(r"\bside\s+letter\b[^\s]*", "", s)
     s = re.sub(r"\bv\d+\b", "", s)
@@ -327,7 +388,7 @@ def _detect_contract_chain(input_: DetectionInput) -> ChainCandidate | None:
        - Opening-clauses regex on amendment language
        - role = amendment / side_letter / original
     """
-    if input_.inferred_doc_type and "contract" not in input_.inferred_doc_type.lower():
+    if not _is_contract_like_doc_type(input_.inferred_doc_type):
         return None
 
     norm_self = _normalize_contract_title(input_.title_text or input_.name)
@@ -339,7 +400,7 @@ def _detect_contract_chain(input_: DetectionInput) -> ChainCandidate | None:
     best_sim = 0.0
 
     for sib in input_.siblings:
-        if sib.inferred_doc_type and "contract" not in (sib.inferred_doc_type or "").lower():
+        if not _is_contract_like_doc_type(sib.inferred_doc_type):
             continue
         if sib.file_id == input_.file_id:
             continue

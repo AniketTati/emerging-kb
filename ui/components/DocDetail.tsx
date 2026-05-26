@@ -444,6 +444,7 @@ function SourcePager({
   if (pageErr) return <ErrorRow message={pageErr} />;
   if (!pageData) return <LoadingRow />;
   const p = pageData;
+  const elements = p.layout_json?.elements ?? [];
 
   return (
     <div className="space-y-2">
@@ -468,11 +469,154 @@ function SourcePager({
           ▶
         </button>
       </div>
+      {elements.length > 0 && <LayoutStrip elements={elements} pageSize={p.layout_json?.size ?? null} />}
       <pre className="text-[12px] text-zinc-700 whitespace-pre-wrap bg-zinc-50 rounded p-3 max-h-[400px] overflow-y-auto font-sans leading-relaxed">
         {p.text || <span className="text-zinc-400">(empty page text)</span>}
       </pre>
     </div>
   );
+}
+
+
+/** R5 — per-page layout summary surfaced from the Docling parser.
+ *
+ *  Shows a count breakdown by element label (section_header / text /
+ *  table / picture / list_item / ...) plus a miniature SVG sketch of
+ *  the page with each element drawn as a coloured rectangle. PDF
+ *  coordinates have a bottom-left origin so we flip Y when drawing.
+ *
+ *  Pre-R5 PDFs (parsed before the parser captured per-element
+ *  provenance) will simply not have `elements` set, and this whole
+ *  block is omitted. */
+function LayoutStrip({
+  elements,
+  pageSize,
+}: {
+  elements: NonNullable<RawPage["layout_json"]>["elements"];
+  pageSize: { width: number | null; height: number | null } | null;
+}) {
+  const list = elements ?? [];
+  if (list.length === 0) return null;
+
+  const counts = new Map<string, number>();
+  for (const e of list) {
+    const k = e.label ?? "other";
+    counts.set(k, (counts.get(k) ?? 0) + 1);
+  }
+  const sortedCounts = Array.from(counts.entries()).sort((a, b) => b[1] - a[1]);
+
+  return (
+    <div
+      className="text-[11px] mono text-zinc-600 bg-amber-50/60 border border-amber-100 rounded px-2 py-2 space-y-2"
+      data-testid="layout-strip"
+    >
+      <div className="flex items-center flex-wrap gap-2">
+        <span className="text-zinc-500">layout:</span>
+        <span className="font-medium text-zinc-700">
+          {list.length} element{list.length === 1 ? "" : "s"}
+        </span>
+        {sortedCounts.map(([label, n]) => (
+          <span
+            key={label}
+            className="px-1.5 py-0.5 rounded bg-white border border-zinc-200"
+            title={`${n} ${label} element(s)`}
+          >
+            {label} {n}
+          </span>
+        ))}
+      </div>
+      {pageSize?.width && pageSize?.height && (
+        <LayoutMiniMap
+          elements={list}
+          pageWidth={pageSize.width}
+          pageHeight={pageSize.height}
+        />
+      )}
+    </div>
+  );
+}
+
+
+function LayoutMiniMap({
+  elements,
+  pageWidth,
+  pageHeight,
+}: {
+  elements: NonNullable<RawPage["layout_json"]>["elements"];
+  pageWidth: number;
+  pageHeight: number;
+}) {
+  const list = elements ?? [];
+  // Width-cap the mini-map so a letter-page (612x792) renders ~160px wide.
+  const renderW = 160;
+  const renderH = (pageHeight / pageWidth) * renderW;
+  const sx = renderW / pageWidth;
+  const sy = renderH / pageHeight;
+
+  return (
+    <svg
+      viewBox={`0 0 ${renderW} ${renderH}`}
+      width={renderW}
+      height={renderH}
+      className="bg-white border border-zinc-200 rounded"
+      role="img"
+      aria-label={`Layout sketch — ${list.length} elements`}
+    >
+      <rect x={0} y={0} width={renderW} height={renderH} fill="#fff" />
+      {list.map((e, i) => {
+        const { l, t, r, b, coord_origin } = e.bbox;
+        // PDF native origin is bottom-left; flip Y for SVG which is
+        // top-left. If the parser passed TOPLEFT we use directly.
+        const flipY = (coord_origin ?? "").toUpperCase().includes("BOTTOM");
+        const x = l * sx;
+        const w = Math.max(1, (r - l) * sx);
+        const yTop = flipY ? (pageHeight - t) : t;
+        const yBot = flipY ? (pageHeight - b) : b;
+        const y = Math.min(yTop, yBot) * sy;
+        const h = Math.max(1, Math.abs(yBot - yTop) * sy);
+        const color = colorForLabel(e.label);
+        return (
+          <rect
+            key={i}
+            x={x}
+            y={y}
+            width={w}
+            height={h}
+            fill={color}
+            fillOpacity={0.25}
+            stroke={color}
+            strokeWidth={0.5}
+          >
+            <title>{`${e.label ?? "element"}${e.text ? ` — ${e.text.slice(0, 80)}` : ""}`}</title>
+          </rect>
+        );
+      })}
+    </svg>
+  );
+}
+
+
+function colorForLabel(label: string | null | undefined): string {
+  switch ((label ?? "").toLowerCase()) {
+    case "section_header":
+    case "title":
+      return "#3b82f6"; // blue
+    case "text":
+    case "paragraph":
+      return "#10b981"; // emerald
+    case "table":
+      return "#f59e0b"; // amber
+    case "picture":
+    case "figure":
+      return "#a855f7"; // purple
+    case "list_item":
+      return "#0ea5e9"; // sky
+    case "page_header":
+    case "page_footer":
+      return "#9ca3af"; // zinc
+    default:
+      return "#64748b"; // slate
+  }
 }
 
 function ProposedFieldsSection({ fileId }: { fileId: string }) {
