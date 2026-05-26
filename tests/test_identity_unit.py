@@ -17,7 +17,9 @@ from kb.identity.judge import (
 from kb.identity.resolve import (
     EMBEDDING_HIGH_THRESHOLD,
     EMBEDDING_LOW_THRESHOLD,
+    NOISE_MENTION_TYPES,
     ResolutionResult,
+    is_noise_mention_type,
 )
 
 
@@ -201,3 +203,46 @@ async def test_gemini_judge_returns_false_on_api_error():
         text_a="A", type_a="ORG", text_b="B", type_b="ORG",
     )
     assert result is False
+
+
+# ---------------------------------------------------------------------------
+# R4 — noise mention-type predicate
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("mention_type", [
+    "CARDINAL", "QUANTITY", "DATE", "MONEY",
+    "ORDINAL", "PERCENT", "TIME",
+])
+def test_is_noise_mention_type_known_types(mention_type):
+    assert is_noise_mention_type(mention_type) is True
+
+
+@pytest.mark.parametrize("mention_type", [
+    "ORG", "PERSON", "PRODUCT", "GPE",
+    "WORK_OF_ART", "LAW", "LOC", "EVENT", "NORP", "LANGUAGE",
+])
+def test_is_noise_mention_type_signal_types(mention_type):
+    assert is_noise_mention_type(mention_type) is False
+
+
+def test_is_noise_mention_type_case_tolerant():
+    assert is_noise_mention_type("cardinal") is True
+    assert is_noise_mention_type("Quantity") is True
+    assert is_noise_mention_type("  MONEY  ") is True
+
+
+def test_is_noise_mention_type_handles_none_and_empty():
+    assert is_noise_mention_type(None) is False
+    assert is_noise_mention_type("") is False
+
+
+def test_noise_mention_types_covers_full_spacy_numeric_set():
+    """Sanity-check the constant — spaCy's English NER ships seven
+    numeric/temporal labels. All seven must be in the noise set so
+    none silently leak past the resolver's Stage-0 skip."""
+    spacy_numeric_labels = {
+        "CARDINAL", "QUANTITY", "DATE", "MONEY",
+        "ORDINAL", "PERCENT", "TIME",
+    }
+    assert spacy_numeric_labels <= NOISE_MENTION_TYPES
