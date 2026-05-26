@@ -75,15 +75,23 @@ def _hit(*, id="h1", kind="chunk", score=0.5, snippet="", **md) -> Hit:
 # ===========================================================================
 
 
-def test_intent_labels_include_inventory():
+def test_intent_labels_include_inventory_and_mode_specific():
     # `inventory` was added 2026-05-26 to route metadata listing queries
-    # ("what types of docs do I have", "list my files") through a
-    # deterministic SQL handler. Other labels are stable from B4a.
-    assert len(INTENT_LABELS) == 11
+    # through a deterministic SQL handler. The 7 mode-specific labels
+    # (entity_lookup / field_filter / scoped_summarize / doc_metadata /
+    # mention_search / unit_filter / anomaly) followed: each maps to its
+    # eponymous planner mode in mode_router.py.
+    assert len(INTENT_LABELS) == 18
     assert "factoid" in INTENT_LABELS
     assert "aggregation" in INTENT_LABELS
     assert "chain_aware" in INTENT_LABELS
     assert "inventory" in INTENT_LABELS
+    # New mode-specific labels:
+    for lbl in (
+        "entity_lookup", "field_filter", "scoped_summarize",
+        "doc_metadata", "mention_search", "unit_filter", "anomaly",
+    ):
+        assert lbl in INTENT_LABELS, f"missing intent label: {lbl}"
 
 
 # ===========================================================================
@@ -106,7 +114,25 @@ def test_intent_labels_include_inventory():
     ("intersect: vendors in both Q1 and Q2", "set_operation"),
     ("doesn't mention indemnification", "negative"),
     ("Alpha and Beta related to via Charlie", "multi-hop"),
-    ("tell me about contracts", "vague"),
+    # 'tell me about ...' previously routed to vague; now it routes to
+    # entity_lookup so mode E can surface the right entity profile.
+    # The planner / E-mode handler degrades to H when no entity resolves,
+    # so the worst case is identical to the old behavior.
+    ("tell me about contracts", "entity_lookup"),
+    ("tell me about Acme Corp", "entity_lookup"),
+    ("who is Jane Doe?", "entity_lookup"),
+    # New mode-specific routing.
+    ("what's unusual in the bank statement?", "anomaly"),
+    ("show me anomalies in transactions", "anomaly"),
+    ("where is Acme mentioned in the contracts?", "mention_search"),
+    ("all references to Vertex Industries", "mention_search"),
+    ("summarize this contract", "scoped_summarize"),
+    ("summarize this document", "scoped_summarize"),
+    ("find clauses about non-compete", "unit_filter"),
+    ("show transactions over 1000", "unit_filter"),
+    ("PDFs from 2024", "doc_metadata"),
+    ("files uploaded last week", "doc_metadata"),
+    ("find docs with effective_date > 2024", "field_filter"),
     ("", "vague"),
 ])
 def test_heuristic_label_dispatch(query, expected):
@@ -555,3 +581,226 @@ def test_candidate_mentions_empty_query():
 
 def test_candidate_mentions_no_capitalized():
     assert _candidate_mentions_from_query("how many vendors") == []
+
+
+# ===========================================================================
+# Mode router — E / F / S / D / M / C / A handlers with a fake conn
+# ===========================================================================
+
+
+class _FakeCursor:
+    """Fake psycopg async cursor — pre-loaded with row sets keyed by a
+    substring of the SQL string. Each test sets up the rows it expects."""
+
+    def __init__(self, rows_by_keyword: dict[str, list[tuple]]):
+        self._rows_by_keyword = rows_by_keyword
+        self._last_rows: list[tuple] = []
+
+    async def fetchall(self):
+        return self._last_rows
+
+
+class _FakeConn:
+    """Fake psycopg async connection — `execute()` picks the row set
+    whose keyword first appears in the SQL string. Lets tests stay
+    independent of exact SQL formatting."""
+
+    def __init__(self, rows_by_keyword: dict[str, list[tuple]]):
+        self._rows_by_keyword = rows_by_keyword
+        self._cursor = _FakeCursor(rows_by_keyword)
+
+    async def execute(self, sql, params=()):
+        for kw, rows in self._rows_by_keyword.items():
+            if kw in sql:
+                self._cursor._last_rows = rows
+                return self._cursor
+        self._cursor._last_rows = []
+        return self._cursor
+
+
+# ----- E-mode -----
+
+async def test_route_e_mode_no_seeds_tags_and_returns_unboosted():
+    """E with empty seeds + None conn → just tags every hit."""
+    plan = Plan(mode="E", intent="entity_lookup")
+    hits = [_hit(id="h1", file_id="f1")]
+    out = await apply_mode(plan, hits, workspace_id="ws", query="q", conn=None)
+    assert out[0].metadata["mode_applied"] == "E"
+    assert out[0].score == 0.5
+
+
+async def test_route_e_mode_boosts_files_that_mention_seed():
+    """E with a resolved seed entity boosts hits in files that mention it."""
+    plan = Plan(
+        mode="E", intent="entity_lookup",
+        seed_entities=("00000000-0000-0000-0000-000000000001",),
+    )
+    hits = [_hit(id="h1", file_id="f1"), _hit(id="h2", file_id="f2")]
+    conn = _FakeConn({
+        "FROM entities": [],  # _resolve_entity_ids_from_seeds skipped (UUID)
+        "FROM extracted_mentions": [("f1",)],  # only f1 mentions the seed
+    })
+    out = await apply_mode(plan, hits, workspace_id="ws", query="x", conn=conn)
+    assert out[0].metadata["mode_applied"] == "E"
+    # f1 hit boosted (1.5x — sorted to top), f2 not.
+    by_id = {h.id: h for h in out}
+    assert by_id["h1"].score > by_id["h2"].score
+    assert by_id["h1"].metadata.get("entity_match") is True
+
+
+# ----- A-mode -----
+
+async def test_route_a_mode_surfaces_anomalies_above_threshold():
+    """A returns extracted_entities Hits with rarity >= 1.0."""
+    plan = Plan(mode="A", intent="anomaly", unit_types=("transaction",))
+    chunk_hits = [_hit(id="h1", file_id="f1")]
+    conn = _FakeConn({
+        "FROM extracted_entities": [
+            ("e1", "f1", "transaction",
+             {"amount": 99999, "description": "weird wire"}, 2.5),
+            ("e2", "f1", "transaction",
+             {"amount": 50, "description": "normal"}, 1.2),
+        ],
+    })
+    out = await apply_mode(plan, chunk_hits, workspace_id="ws", query="anomalies", conn=conn)
+    # Two anomaly hits plus the chunk tail (≤_G_MODE_CHUNK_TAIL).
+    anom = [h for h in out if h.metadata.get("anomaly")]
+    assert len(anom) == 2
+    assert anom[0].score >= anom[1].score
+    assert "[anomaly" in anom[0].snippet
+
+
+async def test_route_a_mode_no_anomalies_falls_back_to_tag():
+    """No rows with rarity ≥ 1.0 → just tag hits A."""
+    plan = Plan(mode="A", intent="anomaly")
+    conn = _FakeConn({"FROM extracted_entities": []})
+    out = await apply_mode(
+        plan, [_hit(id="h1")], workspace_id="ws", query="x", conn=conn,
+    )
+    assert out[0].metadata["mode_applied"] == "A"
+    assert not any(h.metadata.get("anomaly") for h in out)
+
+
+# ----- M-mode -----
+
+async def test_route_m_mode_boosts_files_with_more_mentions():
+    """M boosts a file's score by log(1+mention_count)."""
+    plan = Plan(
+        mode="M", intent="mention_search",
+        seed_entities=("Acme",),
+    )
+    hits = [
+        _hit(id="h1", file_id="f1", score=0.5),
+        _hit(id="h2", file_id="f2", score=0.5),
+    ]
+    conn = _FakeConn({
+        "FROM extracted_mentions": [("f1", 25), ("f2", 1)],
+    })
+    out = await apply_mode(plan, hits, workspace_id="ws", query="where is Acme", conn=conn)
+    by_id = {h.id: h for h in out}
+    assert by_id["h1"].score > by_id["h2"].score
+    assert by_id["h1"].metadata.get("mention_count") == 25
+
+
+# ----- C-mode -----
+
+async def test_route_c_mode_surfaces_unit_rows_with_rarity():
+    """C returns extracted_entities of the requested unit_types as Hits."""
+    plan = Plan(
+        mode="C", intent="unit_filter",
+        unit_types=("transaction",),
+    )
+    hits = [_hit(id="h1", file_id="f1")]
+    conn = _FakeConn({
+        "FROM extracted_entities": [
+            ("e1", "f1", "transaction",
+             {"date": "2026-03-01", "debit": 100}, 0.8),
+            ("e2", "f1", "transaction",
+             {"date": "2026-03-02", "debit": 200}, 0.5),
+        ],
+    })
+    out = await apply_mode(plan, hits, workspace_id="ws", query="transactions", conn=conn)
+    unit_hits = [h for h in out if h.kind == "extracted_entity"]
+    assert len(unit_hits) == 2
+    assert unit_hits[0].metadata["unit_type"] == "transaction"
+    # Sorted by rarity DESC (the query handles that, fake just returns order)
+    assert "[transaction]" in unit_hits[0].snippet
+
+
+# ----- D-mode -----
+
+async def test_route_d_mode_filters_by_doc_type():
+    """D keeps only hits whose file matches one of the requested doc_types."""
+    plan = Plan(
+        mode="D", intent="doc_metadata",
+        doc_types=("bank_statement",),
+    )
+    hits = [
+        _hit(id="h1", file_id="f1"),
+        _hit(id="h2", file_id="f2"),
+    ]
+    conn = _FakeConn({
+        # files table query returns only f1
+        "FROM files": [("f1",)],
+    })
+    out = await apply_mode(plan, hits, workspace_id="ws", query="bank statements", conn=conn)
+    assert len(out) == 1
+    assert out[0].id == "h1"
+    assert out[0].metadata["mode_applied"] == "D"
+
+
+async def test_route_d_mode_no_match_falls_back_to_tag():
+    """If filter excludes everything, degrade to tag-all."""
+    plan = Plan(
+        mode="D", intent="doc_metadata",
+        doc_types=("nonexistent_type",),
+    )
+    hits = [_hit(id="h1", file_id="f1")]
+    conn = _FakeConn({"FROM files": []})
+    out = await apply_mode(plan, hits, workspace_id="ws", query="x", conn=conn)
+    assert len(out) == 1
+    assert out[0].metadata["mode_applied"] == "D"
+
+
+# ----- F-mode -----
+
+async def test_route_f_mode_applies_field_predicate():
+    """F keeps only hits whose file has an entity matching the predicate."""
+    plan = Plan(
+        mode="F", intent="field_filter",
+        field_filters=({"field": "amount", "op": "gt", "value": 1000},),
+    )
+    hits = [
+        _hit(id="h1", file_id="f1"),
+        _hit(id="h2", file_id="f2"),
+    ]
+    conn = _FakeConn({
+        # f1 has a $5000 amount; f2 has $50
+        "FROM extracted_entities": [
+            ("f1", {"amount": 5000}),
+            ("f2", {"amount": 50}),
+        ],
+    })
+    out = await apply_mode(plan, hits, workspace_id="ws", query="x", conn=conn)
+    assert len(out) == 1
+    assert out[0].id == "h1"
+    assert out[0].metadata["mode_applied"] == "F"
+
+
+# ----- S-mode -----
+
+async def test_route_s_mode_prepends_per_doc_raptor_summaries():
+    """S surfaces per_doc raptor_nodes for the candidate files."""
+    plan = Plan(mode="S", intent="scoped_summarize")
+    hits = [_hit(id="h1", file_id="f1")]
+    conn = _FakeConn({
+        "FROM raptor_nodes": [
+            ("rn1", "doc summary text", 2, "f1"),
+        ],
+    })
+    out = await apply_mode(plan, hits, workspace_id="ws", query="summarize this doc", conn=conn)
+    # raptor_nodes lead, then chunk tail
+    raptor_hits = [h for h in out if h.kind == "raptor_node"]
+    assert len(raptor_hits) >= 1
+    assert raptor_hits[0].metadata["scope"] == "per_doc"
+    assert raptor_hits[0].metadata["mode_applied"] == "S"

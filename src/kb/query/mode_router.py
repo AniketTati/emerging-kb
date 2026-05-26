@@ -17,9 +17,33 @@ adjust the candidate hit list according to the chosen mode:
                 PPR via kb.query.ppr; surface neighbor entities + the
                 files that mention them (intersected with existing hits).
 
-  E / F / S / D / M / G / C / A → pass-through with a `mode_applied` tag.
-                These modes mostly tune *upstream* retrieval; in Wave A
-                we surface the mode for observability but don't re-rank.
+  E (entity lookup)    → resolve query → seed entity_ids; filter/boost
+                          hits whose file mentions that entity. Degrades
+                          to H if no seed resolves.
+
+  F (field filter)     → apply field_filters as post-retrieval predicate
+                          on hits whose schema_field values match.
+                          Degrades to H if no filters or zero matches.
+
+  S (scoped summarize) → boost RAPTOR per-doc summary nodes for the
+                          file(s) named in the query. Pure summary nodes
+                          lead; chunk tail kept short for grounding.
+
+  D (doc metadata)     → filter hits by files.* predicates
+                          (inferred_doc_type, mime_type, date range).
+                          Degrades to H if filter wipes everything.
+
+  M (mention search)   → boost hits whose extracted_mentions list
+                          contains the user's target term. Re-ranks
+                          by mention count + score.
+
+  C (atomic-unit filter) → filter hits to extracted_entities rows of a
+                          specific unit_type (e.g. only transactions,
+                          only clauses). Boosts unit hits over chunks.
+
+  A (anomaly)          → boost extracted_entities rows with high
+                          rarity_score (top of the workspace's outlier
+                          list for the unit_type the query is about).
 
   Q → B4b structured-query handler. Compiles plan.q_payload via the
                 kb.q_planner pipeline, executes, and emits ONE synthesized
@@ -92,7 +116,28 @@ async def apply_mode(
     if mode == "G":
         return await _route_g_mode(plan, hits, conn, workspace_id=workspace_id)
 
-    # E / F / S / D / M / C / A — pass-through with mode tag.
+    if mode == "E":
+        return await _route_e_mode(plan, hits, conn, workspace_id=workspace_id, query=query)
+
+    if mode == "F":
+        return await _route_f_mode(plan, hits, conn, workspace_id=workspace_id)
+
+    if mode == "S":
+        return await _route_s_mode(plan, hits, conn, workspace_id=workspace_id, query=query)
+
+    if mode == "D":
+        return await _route_d_mode(plan, hits, conn, workspace_id=workspace_id)
+
+    if mode == "M":
+        return await _route_m_mode(plan, hits, conn, workspace_id=workspace_id, query=query)
+
+    if mode == "C":
+        return await _route_c_mode(plan, hits, conn, workspace_id=workspace_id)
+
+    if mode == "A":
+        return await _route_a_mode(plan, hits, conn, workspace_id=workspace_id)
+
+    # Unknown mode (defensive) — pass-through with tag.
     return _tag_mode(hits, mode)
 
 
@@ -681,3 +726,630 @@ def _format_aggregate_snippet(
     if len(rows) > max_rows:
         lines.append(f"  ... ({len(rows) - max_rows} more rows in CSV artifact)")
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# E-mode — entity lookup
+# ---------------------------------------------------------------------------
+
+
+async def _route_e_mode(
+    plan: Plan,
+    hits: list[Hit],
+    conn: Any,
+    *,
+    workspace_id: str,
+    query: str,
+) -> list[Hit]:
+    """Resolve query → seed entity_ids, then BOOST hits whose file mentions
+    any of them. Falls back to H-mode pass-through when no entity resolves.
+
+    The boost is intentionally gentler than T (1.3x vs 1.5x) — E is a
+    single-entity ask, so the file-level mention is informative but not
+    as strong a signal as a PPR-derived multi-hop neighborhood.
+    """
+    seeds = list(plan.seed_entities) or await _resolve_seed_entities(
+        conn, workspace_id=workspace_id, query=query,
+    )
+    if not seeds or conn is None:
+        return _tag_mode(hits, "E")
+
+    # Resolve any name surface forms to actual entity ids (the planner
+    # may have stashed bare strings rather than DB ids).
+    resolved_ids = await _resolve_entity_ids_from_seeds(
+        conn, workspace_id=workspace_id, seeds=seeds,
+    )
+    if not resolved_ids:
+        return _tag_mode(hits, "E")
+
+    # Pull file_ids that mention any seed entity.
+    mention_files: set[str] = set()
+    try:
+        cur = await conn.execute(
+            "SELECT DISTINCT em.file_id::text "
+            "FROM extracted_mentions em "
+            "JOIN mention_to_entity me ON me.mention_id = em.id "
+            "WHERE me.workspace_id = %s AND me.entity_id::text = ANY(%s)",
+            (workspace_id, sorted(resolved_ids)),
+        )
+        mention_files = {str(r[0]) for r in await cur.fetchall()}
+    except Exception:
+        mention_files = set()
+
+    out: list[Hit] = []
+    boosted_any = False
+    for h in hits:
+        fid = (h.metadata or {}).get("file_id")
+        new_meta = dict(h.metadata or {})
+        new_meta["mode_applied"] = "E"
+        new_meta["entity_seeds"] = list(resolved_ids)
+        if fid and fid in mention_files:
+            new_meta["entity_match"] = True
+            boosted_score = h.score * 1.3
+            boosted_any = True
+        else:
+            boosted_score = h.score
+        out.append(Hit(
+            id=h.id, kind=h.kind, score=boosted_score,
+            snippet=h.snippet, metadata=new_meta,
+        ))
+    if not boosted_any:
+        # Seed resolved but no candidate hit mentioned it — degrade to H
+        # so the user still sees something. Tag preserved for audit.
+        return out
+    out.sort(key=lambda x: x.score, reverse=True)
+    return out
+
+
+async def _resolve_entity_ids_from_seeds(
+    conn: Any, *, workspace_id: str, seeds: list[str],
+) -> list[str]:
+    """Translate a list of seeds (which may be entity names OR ids) into
+    canonical entity_ids. Names are matched case-insensitively against
+    `entities.canonical_name`."""
+    if not seeds or conn is None:
+        return []
+    # Heuristic: if a seed looks like a UUID, treat it as an id; otherwise
+    # treat as a name and resolve.
+    uuid_re = re.compile(
+        r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+        r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+    )
+    ids: set[str] = set()
+    names: list[str] = []
+    for s in seeds:
+        if uuid_re.match(s):
+            ids.add(s)
+        else:
+            names.append(s.lower())
+    if names:
+        try:
+            cur = await conn.execute(
+                "SELECT id::text FROM entities "
+                "WHERE workspace_id = %s "
+                "AND lower(canonical_name) = ANY(%s) LIMIT 20",
+                (workspace_id, names),
+            )
+            for r in await cur.fetchall():
+                ids.add(str(r[0]))
+        except Exception:
+            pass
+    return sorted(ids)
+
+
+# ---------------------------------------------------------------------------
+# F-mode — schema field filter
+# ---------------------------------------------------------------------------
+
+
+async def _route_f_mode(
+    plan: Plan,
+    hits: list[Hit],
+    conn: Any,
+    *,
+    workspace_id: str,
+) -> list[Hit]:
+    """Apply plan.field_filters as a post-retrieval predicate on each
+    hit's extracted_entities row. When no filters are set or the filter
+    drops every hit, degrade to H-style pass-through.
+
+    Each filter is a dict with `{field, op, value}` keys — same shape as
+    Q-mode filters but applied in-process against the file's
+    extracted_entities.fields jsonb.
+    """
+    filters = list(plan.field_filters or ())
+    if not filters or conn is None:
+        return _tag_mode(hits, "F")
+
+    file_ids = sorted({
+        (h.metadata or {}).get("file_id")
+        for h in hits if (h.metadata or {}).get("file_id")
+    })
+    file_ids = [f for f in file_ids if f]
+    if not file_ids:
+        return _tag_mode(hits, "F")
+
+    # Pull extracted_entities.fields jsonb for the candidate files.
+    matching_files: set[str] = set()
+    try:
+        cur = await conn.execute(
+            "SELECT file_id::text, fields FROM extracted_entities "
+            "WHERE workspace_id = %s AND file_id::text = ANY(%s)",
+            (workspace_id, file_ids),
+        )
+        rows = await cur.fetchall()
+    except Exception:
+        return _tag_mode(hits, "F")
+
+    for fid, fields in rows:
+        if not isinstance(fields, dict):
+            continue
+        if all(_field_predicate_holds(fields, f) for f in filters):
+            matching_files.add(str(fid))
+
+    if not matching_files:
+        # F filter wiped everything — degrade rather than refuse.
+        return _tag_mode(hits, "F")
+
+    out: list[Hit] = []
+    for h in hits:
+        fid = (h.metadata or {}).get("file_id")
+        if fid in matching_files:
+            new_meta = dict(h.metadata or {})
+            new_meta["mode_applied"] = "F"
+            new_meta["field_filters"] = list(filters)
+            out.append(Hit(
+                id=h.id, kind=h.kind, score=h.score,
+                snippet=h.snippet, metadata=new_meta,
+            ))
+    if not out:
+        return _tag_mode(hits, "F")
+    return out
+
+
+def _field_predicate_holds(fields: dict, f: dict) -> bool:
+    """Evaluate one field predicate against an extracted_entity.fields
+    dict. Recognised ops: eq, ne, lt, le, gt, ge, like, in. Unknown ops
+    fail-open (return True) so we don't accidentally drop hits."""
+    name = f.get("field")
+    op = (f.get("op") or "eq").lower()
+    val = f.get("value")
+    if name is None or name not in fields:
+        return False
+    actual = fields[name]
+    try:
+        if op == "eq":
+            return actual == val
+        if op == "ne":
+            return actual != val
+        if op == "lt":
+            return float(actual) < float(val)
+        if op == "le":
+            return float(actual) <= float(val)
+        if op == "gt":
+            return float(actual) > float(val)
+        if op == "ge":
+            return float(actual) >= float(val)
+        if op == "like":
+            return isinstance(actual, str) and str(val).lower() in actual.lower()
+        if op == "in":
+            return actual in (val if isinstance(val, (list, tuple)) else [val])
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
+# ---------------------------------------------------------------------------
+# S-mode — scoped summarize
+# ---------------------------------------------------------------------------
+
+
+async def _route_s_mode(
+    plan: Plan,
+    hits: list[Hit],
+    conn: Any,
+    *,
+    workspace_id: str,
+    query: str,
+) -> list[Hit]:
+    """Scoped summary — pull RAPTOR `scope='per_doc'` summary nodes for
+    the candidate file(s) and prepend them to the hit list. The result
+    is similar in shape to G-mode but scoped to specific docs.
+
+    Candidate file resolution order:
+      1. plan.file_ids if the planner pinned them
+      2. Top file_ids appearing in the existing hit list (top-3)
+    """
+    target_file_ids: list[str] = list(plan.file_ids)
+    if not target_file_ids:
+        # Take the top-3 distinct file_ids from the hit list.
+        seen: list[str] = []
+        for h in hits:
+            fid = (h.metadata or {}).get("file_id")
+            if fid and fid not in seen:
+                seen.append(fid)
+            if len(seen) >= 3:
+                break
+        target_file_ids = seen
+    if not target_file_ids or conn is None:
+        return _tag_mode(hits, "S")
+
+    raptor_hits = await _fetch_per_doc_raptor_hits(
+        conn, workspace_id=workspace_id, file_ids=target_file_ids,
+    )
+    if not raptor_hits:
+        return _tag_mode(hits, "S")
+
+    chunk_tail = _tag_mode(hits[:_G_MODE_CHUNK_TAIL], "S")
+    raptor_tagged = _tag_mode(raptor_hits, "S")
+    return raptor_tagged + chunk_tail
+
+
+async def _fetch_per_doc_raptor_hits(
+    conn: Any, *, workspace_id: str, file_ids: list[str],
+) -> list[Hit]:
+    """Read scope='per_doc' raptor_nodes for the requested files."""
+    if conn is None or not file_ids:
+        return []
+    try:
+        cur = await conn.execute(
+            """
+            SELECT id::text, text, level, file_id::text
+              FROM raptor_nodes
+             WHERE workspace_id = %s
+               AND scope = 'per_doc'
+               AND file_id::text = ANY(%s)
+             ORDER BY level DESC, id ASC
+            """,
+            (workspace_id, file_ids),
+        )
+        rows = await cur.fetchall()
+    except Exception:
+        return []
+    out: list[Hit] = []
+    for row in rows:
+        node_id, text, level, file_id = row
+        out.append(Hit(
+            id=str(node_id),
+            kind="raptor_node",
+            score=1.0 + (level or 0) / 10.0,
+            snippet=text or "",
+            metadata={
+                "level": level,
+                "scope": "per_doc",
+                "file_id": file_id,
+                "channel": "s_mode_boost",
+            },
+        ))
+    return out
+
+
+# ---------------------------------------------------------------------------
+# D-mode — doc metadata filter
+# ---------------------------------------------------------------------------
+
+
+async def _route_d_mode(
+    plan: Plan,
+    hits: list[Hit],
+    conn: Any,
+    *,
+    workspace_id: str,
+) -> list[Hit]:
+    """Filter hits by file-level predicates (inferred_doc_type, etc.).
+
+    Wave-A scope: only `doc_types` is applied as a filter — the planner
+    surfaces these from the query (or LLM-supplied). Future passes add
+    mime_type / created_at / source_authority filters.
+
+    Degrades to H-style pass-through if the filter wipes everything or
+    if no doc_types are specified.
+    """
+    doc_types = list(plan.doc_types or ())
+    if not doc_types or conn is None:
+        return _tag_mode(hits, "D")
+
+    file_ids = sorted({
+        (h.metadata or {}).get("file_id")
+        for h in hits if (h.metadata or {}).get("file_id")
+    })
+    file_ids = [f for f in file_ids if f]
+    if not file_ids:
+        return _tag_mode(hits, "D")
+
+    matching: set[str] = set()
+    try:
+        cur = await conn.execute(
+            "SELECT id::text FROM files "
+            "WHERE workspace_id = %s "
+            "AND id::text = ANY(%s) "
+            "AND inferred_doc_type = ANY(%s)",
+            (workspace_id, file_ids, doc_types),
+        )
+        matching = {str(r[0]) for r in await cur.fetchall()}
+    except Exception:
+        return _tag_mode(hits, "D")
+
+    if not matching:
+        return _tag_mode(hits, "D")
+
+    out: list[Hit] = []
+    for h in hits:
+        fid = (h.metadata or {}).get("file_id")
+        if fid in matching:
+            new_meta = dict(h.metadata or {})
+            new_meta["mode_applied"] = "D"
+            new_meta["doc_types"] = list(doc_types)
+            out.append(Hit(
+                id=h.id, kind=h.kind, score=h.score,
+                snippet=h.snippet, metadata=new_meta,
+            ))
+    if not out:
+        return _tag_mode(hits, "D")
+    return out
+
+
+# ---------------------------------------------------------------------------
+# M-mode — mention search
+# ---------------------------------------------------------------------------
+
+
+async def _route_m_mode(
+    plan: Plan,
+    hits: list[Hit],
+    conn: Any,
+    *,
+    workspace_id: str,
+    query: str,
+) -> list[Hit]:
+    """Find hits whose underlying chunk contains an extracted_mention
+    matching one of the seed entity names from the query.
+
+    Seeds come from either:
+      - plan.seed_entities (preferred — planner-resolved entity ids/names)
+      - capitalized tokens extracted from the query
+    """
+    seeds = list(plan.seed_entities) or _candidate_mentions_from_query(query)
+    if not seeds or conn is None:
+        return _tag_mode(hits, "M")
+
+    # Build a substring filter against extracted_mentions.mention_text.
+    file_ids = sorted({
+        (h.metadata or {}).get("file_id")
+        for h in hits if (h.metadata or {}).get("file_id")
+    })
+    file_ids = [f for f in file_ids if f]
+    if not file_ids:
+        return _tag_mode(hits, "M")
+
+    # Pull (file_id, mention_count) for each file whose mentions contain
+    # any of the seed terms (case-insensitive).
+    counts: dict[str, int] = {}
+    try:
+        cur = await conn.execute(
+            "SELECT em.file_id::text, count(*) "
+            "FROM extracted_mentions em "
+            "WHERE em.workspace_id = %s "
+            "AND em.file_id::text = ANY(%s) "
+            "AND lower(em.mention_text) = ANY(%s) "
+            "GROUP BY em.file_id",
+            (workspace_id, file_ids, [s.lower() for s in seeds]),
+        )
+        for fid, n in await cur.fetchall():
+            counts[str(fid)] = int(n)
+    except Exception:
+        return _tag_mode(hits, "M")
+
+    if not counts:
+        return _tag_mode(hits, "M")
+
+    out: list[Hit] = []
+    for h in hits:
+        fid = (h.metadata or {}).get("file_id")
+        n = counts.get(fid, 0) if fid else 0
+        new_meta = dict(h.metadata or {})
+        new_meta["mode_applied"] = "M"
+        new_meta["mention_seeds"] = list(seeds)
+        if n > 0:
+            new_meta["mention_count"] = n
+            # Boost by mention density — log scale keeps a 100-mention
+            # doc from completely dominating a 5-mention doc.
+            import math
+            boost = 1.0 + math.log(1 + n) / 4.0
+            boosted_score = h.score * boost
+        else:
+            boosted_score = h.score
+        out.append(Hit(
+            id=h.id, kind=h.kind, score=boosted_score,
+            snippet=h.snippet, metadata=new_meta,
+        ))
+    out.sort(key=lambda x: x.score, reverse=True)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# C-mode — atomic-unit filter (typed sub-entity rows)
+# ---------------------------------------------------------------------------
+
+
+async def _route_c_mode(
+    plan: Plan,
+    hits: list[Hit],
+    conn: Any,
+    *,
+    workspace_id: str,
+) -> list[Hit]:
+    """Surface extracted_entities rows of a specific unit_type
+    (transaction, clause, line_item, …) as first-class Hits, prepended
+    to the existing chunk hits. Filters by plan.unit_types when set.
+
+    Each surfaced entity becomes a `kind='extracted_entity'` Hit whose
+    snippet is a one-line summary of its fields. The citation builder
+    handles the entity modality via Design 5.
+    """
+    unit_types = list(plan.unit_types or ())
+    if not unit_types or conn is None:
+        return _tag_mode(hits, "C")
+
+    file_ids = sorted({
+        (h.metadata or {}).get("file_id")
+        for h in hits if (h.metadata or {}).get("file_id")
+    })
+    file_ids = [f for f in file_ids if f]
+    # Pull matching entities. If hits gave us no file scope, query the
+    # whole workspace (capped).
+    try:
+        if file_ids:
+            cur = await conn.execute(
+                """
+                SELECT id::text, file_id::text, unit_type, fields,
+                       rarity_score
+                  FROM extracted_entities
+                 WHERE workspace_id = %s
+                   AND unit_type = ANY(%s)
+                   AND file_id::text = ANY(%s)
+                 ORDER BY rarity_score DESC NULLS LAST
+                 LIMIT 30
+                """,
+                (workspace_id, unit_types, file_ids),
+            )
+        else:
+            cur = await conn.execute(
+                """
+                SELECT id::text, file_id::text, unit_type, fields,
+                       rarity_score
+                  FROM extracted_entities
+                 WHERE workspace_id = %s
+                   AND unit_type = ANY(%s)
+                 ORDER BY rarity_score DESC NULLS LAST
+                 LIMIT 30
+                """,
+                (workspace_id, unit_types),
+            )
+        rows = await cur.fetchall()
+    except Exception:
+        return _tag_mode(hits, "C")
+
+    if not rows:
+        return _tag_mode(hits, "C")
+
+    unit_hits = [
+        Hit(
+            id=str(eid),
+            kind="extracted_entity",
+            # Synthetic score above typical BM25 — rarity_score is the
+            # secondary sort signal so rare units lead.
+            score=1.0 + (float(rarity or 0) / 10.0),
+            snippet=_format_unit_snippet(unit_type, fields),
+            metadata={
+                "mode_applied": "C",
+                "file_id": file_id,
+                "unit_type": unit_type,
+                "rarity_score": float(rarity) if rarity is not None else None,
+                "channel": "c_mode_boost",
+            },
+        )
+        for eid, file_id, unit_type, fields, rarity in rows
+    ]
+    chunk_tail = _tag_mode(hits[:_G_MODE_CHUNK_TAIL], "C")
+    return unit_hits + chunk_tail
+
+
+def _format_unit_snippet(unit_type: str, fields: Any) -> str:
+    """One-line rendering of a typed sub-entity for the answer prompt."""
+    if not isinstance(fields, dict):
+        return f"[{unit_type}] (no fields)"
+    pairs = []
+    for k, v in fields.items():
+        if v is None:
+            continue
+        pairs.append(f"{k}={v}")
+        if len(pairs) >= 6:
+            break
+    if not pairs:
+        return f"[{unit_type}] (empty)"
+    return f"[{unit_type}] " + " · ".join(pairs)
+
+
+# ---------------------------------------------------------------------------
+# A-mode — anomaly
+# ---------------------------------------------------------------------------
+
+
+async def _route_a_mode(
+    plan: Plan,
+    hits: list[Hit],
+    conn: Any,
+    *,
+    workspace_id: str,
+) -> list[Hit]:
+    """Surface high-rarity extracted_entities rows as Hits. Optionally
+    constrained to specific unit_types from plan.unit_types.
+
+    Threshold: rarity_score >= 1.0 (units more than 1σ from the cohort
+    centroid). Returns up to 25 rows sorted by rarity_score descending.
+    """
+    if conn is None:
+        return _tag_mode(hits, "A")
+
+    unit_types = list(plan.unit_types or ())
+
+    try:
+        if unit_types:
+            cur = await conn.execute(
+                """
+                SELECT id::text, file_id::text, unit_type, fields,
+                       rarity_score
+                  FROM extracted_entities
+                 WHERE workspace_id = %s
+                   AND unit_type = ANY(%s)
+                   AND rarity_score >= 1.0
+                 ORDER BY rarity_score DESC NULLS LAST
+                 LIMIT 25
+                """,
+                (workspace_id, unit_types),
+            )
+        else:
+            cur = await conn.execute(
+                """
+                SELECT id::text, file_id::text, unit_type, fields,
+                       rarity_score
+                  FROM extracted_entities
+                 WHERE workspace_id = %s
+                   AND rarity_score >= 1.0
+                 ORDER BY rarity_score DESC NULLS LAST
+                 LIMIT 25
+                """,
+                (workspace_id,),
+            )
+        rows = await cur.fetchall()
+    except Exception:
+        return _tag_mode(hits, "A")
+
+    if not rows:
+        # No anomalies above threshold — degrade to the original hits
+        # tagged A so the user gets context rather than an empty refusal.
+        return _tag_mode(hits, "A")
+
+    anomaly_hits = [
+        Hit(
+            id=str(eid),
+            kind="extracted_entity",
+            score=2.0 + (float(rarity or 0) / 5.0),
+            snippet=(
+                f"[anomaly · rarity={float(rarity or 0):.2f}] "
+                + _format_unit_snippet(unit_type, fields)
+            ),
+            metadata={
+                "mode_applied": "A",
+                "file_id": file_id,
+                "unit_type": unit_type,
+                "rarity_score": float(rarity) if rarity is not None else None,
+                "anomaly": True,
+                "channel": "a_mode_boost",
+            },
+        )
+        for eid, file_id, unit_type, fields, rarity in rows
+    ]
+    chunk_tail = _tag_mode(hits[:_G_MODE_CHUNK_TAIL], "A")
+    return anomaly_hits + chunk_tail
