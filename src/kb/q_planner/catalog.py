@@ -119,6 +119,26 @@ COMPARABLE_TYPES: frozenset[str] = (
 )
 
 
+# (table, jsonb_col) tuples where Q-mode is allowed to do key-based
+# aggregation via `<col>.<key>::<cast>` syntax. Locked down to the
+# specific jsonb columns that carry KV+Tables row data — adding a new
+# entry here is an audited decision.
+#
+# For extracted_entities.fields specifically: this is where every typed
+# row's column values live after the KV+Tables collapse (transactions,
+# line_items, clauses, etc.). Filtering by `unit_type` first scopes the
+# aggregation to a specific table; then `fields.<col>::<cast>` extracts
+# the column the row needs to sum/avg/min/max.
+JSONB_AGG_ALLOWED: frozenset[tuple[str, str]] = frozenset({
+    ("extracted_entities", "fields"),
+})
+
+
+def is_jsonb_agg_allowed(table: str, jsonb_col: str) -> bool:
+    """Whether Q-mode may aggregate over a jsonb key on this column."""
+    return (table, jsonb_col) in JSONB_AGG_ALLOWED
+
+
 def column_type(table: str, column: str) -> str | None:
     """Return the type for (table, column) or None if not allowed."""
     return ALLOWED_COLUMNS.get((table, column))
