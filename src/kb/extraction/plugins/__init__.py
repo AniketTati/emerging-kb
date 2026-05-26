@@ -62,30 +62,41 @@ class AtomicUnitPlugin(Protocol):
 def dispatch(file_meta: FileMeta) -> AtomicUnitPlugin | None:
     """Return the first matching plugin or None.
 
-    Order matters — most specific structural plugin first, generic
-    LLM-driven plugin last:
+    Order matters — **most specific SEMANTIC plugin first**, generic
+    STRUCTURAL fallback last. Previous order picked structural plugins
+    first (rows by MIME) which silently pre-empted semantic plugins
+    for documents like bank_statement.xlsx: RowsPlugin would grab the
+    file because it's xlsx, and TransactionsPlugin would never run.
+    The result was 21 generic `row` atomic units with raw `cells[]`
+    arrays instead of typed `transaction` units with
+    {date, debit, credit, balance} parameters.
 
-      1. rows           — xlsx mime / spreadsheet doc_type (no LLM)
-      2. email_messages — .eml mime / email_thread doc_type (no LLM)
-      3. transactions   — narrow doc_type list (LLM, bank statements)
-      4. clauses        — contract-like doc_types (LLM, prose)
-      5. generic_items  — fallback for prose doc_types that none of the
-                          specific plugins claimed (LLM, doc-type-aware)
+    Today's order, top-to-bottom:
 
-    `generic_items` is LAST so it doesn't pre-empt the specific plugins
-    (which produce richer, structured `parameters` shapes). Its
-    `matches` predicate also early-rejects xlsx + .eml mimes as a
-    second line of defense.
+      1. transactions   — bank_statement / statement / account_statement
+                          doc_types (LLM-driven; produces typed
+                          transaction units regardless of MIME).
+      2. clauses        — contract-like doc_types (LLM, prose).
+      3. email_messages — .eml mime / email_thread doc_type.
+      4. rows           — generic xlsx fallback when no semantic plugin
+                          claimed it. Still match-by-MIME, but only
+                          runs as the LAST structural pass.
+      5. generic_items  — final LLM fallback for prose doc_types none of
+                          the specific plugins claimed.
+
+    The key invariant: a doc with a semantic plugin match (transactions,
+    clauses, email_messages) always uses it. Rows / generic_items are
+    "we don't know what this is, do something reasonable" fallbacks.
     """
     from kb.extraction.plugins import (
         clauses, email_messages, generic_items, rows, transactions,
     )
 
     for plugin in (
-        rows.PLUGIN,
-        email_messages.PLUGIN,
         transactions.PLUGIN,
         clauses.PLUGIN,
+        email_messages.PLUGIN,
+        rows.PLUGIN,
         generic_items.PLUGIN,
     ):
         if plugin.matches(file_meta):

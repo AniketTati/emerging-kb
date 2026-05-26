@@ -48,14 +48,29 @@ from kb.q_planner.grammar import QPlanParseError
 # ===========================================================================
 
 
-def test_catalog_has_seven_tables():
+def test_catalog_exposes_typed_entity_surface():
+    """Post-nested-entities refactor, atomic_units is dropped from the
+    catalog — all typed rows (transactions, clauses, line_items, ...)
+    live in extracted_entities with unit_type + rarity_score columns."""
     assert "files" in ALLOWED_TABLES
     assert "extracted_entities" in ALLOWED_TABLES
-    assert "atomic_units" in ALLOWED_TABLES
     assert "doc_chains" in ALLOWED_TABLES
+    # atomic_units removed by the nested-entities refactor.
+    assert "atomic_units" not in ALLOWED_TABLES
     # Tables we do NOT want exposed (workspace settings, raw blobs, etc.)
     assert "users" not in ALLOWED_TABLES
     assert "kb_app" not in ALLOWED_TABLES
+
+
+def test_extracted_entities_has_unit_type_and_rarity_columns():
+    """The nested-entities refactor migrated unit_type + rarity_score
+    from atomic_units onto extracted_entities — the catalog must
+    expose them so the LLM can write `SUM(rarity_score) WHERE
+    unit_type='transaction'` against typed children."""
+    from kb.q_planner.catalog import ALLOWED_COLUMNS
+    assert ("extracted_entities", "unit_type") in ALLOWED_COLUMNS
+    assert ("extracted_entities", "rarity_score") in ALLOWED_COLUMNS
+    assert ("extracted_entities", "parent_entity_id") in ALLOWED_COLUMNS
 
 
 def test_column_type_lookup():
@@ -595,3 +610,157 @@ def test_rows_to_csv_bytes_handles_none():
 def test_build_artifact_key_deterministic():
     k = build_artifact_key("ws-1", "aq-2")
     assert k == "q_mode_artifacts/ws-1/aq-2.csv"
+
+
+# ===========================================================================
+# JSONB-path aggregations (KV+Tables collapse — sum over fields.<key>::<cast>)
+# ===========================================================================
+
+
+_BASE_JSONB_PLAN = {
+    "from": "extracted_entities",
+    "filters": [{"field": "unit_type", "op": "eq", "value": "transaction"}],
+    "aggregations": [{
+        "op": "SUM",
+        "field": "fields.debit::numeric",
+        "alias": "total_debits",
+    }],
+}
+
+
+def test_jsonb_agg_parses_path_into_components():
+    plan = parse_plan(_BASE_JSONB_PLAN)
+    agg = plan.aggregations[0]
+    assert agg.field == "fields.debit::numeric"
+    assert agg.jsonb_path == ("fields", "debit", "numeric")
+
+
+def test_jsonb_agg_validates_against_catalog():
+    plan = parse_plan(_BASE_JSONB_PLAN)
+    vp = validate(plan)
+    # Catalog records the (table, jsonb_col) for accounting.
+    assert ("extracted_entities", "fields") in vp.column_types
+
+
+def test_jsonb_agg_compiles_to_jsonb_extract_sql():
+    plan = parse_plan(_BASE_JSONB_PLAN)
+    vp = validate(plan)
+    sql, _params = compile_plan(vp, workspace_id="ws-1", row_cap=100)
+    # `(t."fields"->>'debit')::numeric` should appear in the SELECT.
+    assert (
+        '("extracted_entities"."fields"->>\'debit\')::numeric'
+        in sql
+    )
+    # The alias is emitted as a quoted identifier.
+    assert '"total_debits"' in sql
+
+
+def test_jsonb_agg_with_count_distinct_compiles():
+    plan = parse_plan({
+        "from": "extracted_entities",
+        "filters": [{"field": "unit_type", "op": "eq", "value": "transaction"}],
+        "aggregations": [{
+            "op": "COUNT_DISTINCT",
+            "field": "fields.counterparty::text",
+            "alias": "unique_counterparties",
+        }],
+    })
+    vp = validate(plan)
+    sql, _params = compile_plan(vp, workspace_id="ws-1", row_cap=100)
+    assert "COUNT(DISTINCT" in sql
+    assert (
+        '("extracted_entities"."fields"->>\'counterparty\')::text'
+        in sql
+    )
+
+
+def test_jsonb_agg_rejects_unknown_cast_type():
+    with pytest.raises(QPlanParseError, match="jsonb cast"):
+        parse_plan({
+            "from": "extracted_entities",
+            "aggregations": [{
+                "op": "SUM", "field": "fields.amount::bigfloat",
+                "alias": "total",
+            }],
+        })
+
+
+def test_jsonb_agg_rejects_non_jsonb_column():
+    """If someone tries `unit_type.something::text` (where unit_type is
+    text, not jsonb), the validator should reject it."""
+    plan = parse_plan({
+        "from": "extracted_entities",
+        "filters": [{"field": "unit_type", "op": "eq", "value": "transaction"}],
+        "aggregations": [{
+            "op": "SUM", "field": "unit_type.something::numeric",
+            "alias": "x",
+        }],
+    })
+    with pytest.raises(QPlanValidationError, match="not a jsonb column"):
+        validate(plan)
+
+
+def test_jsonb_agg_rejects_table_not_in_jsonb_allowlist():
+    """Even on a jsonb column, if (table, col) isn't whitelisted in
+    JSONB_AGG_ALLOWED, refuse."""
+    # files has no jsonb column today, so synthesize the case by trying
+    # a jsonb path against a non-allowlisted (table, col) pair via the
+    # catalog directly.
+    from kb.q_planner.catalog import is_jsonb_agg_allowed
+    assert is_jsonb_agg_allowed("extracted_entities", "fields") is True
+    assert is_jsonb_agg_allowed("files", "name") is False
+
+
+def test_jsonb_agg_sum_requires_numeric_cast():
+    plan = parse_plan({
+        "from": "extracted_entities",
+        "aggregations": [{
+            "op": "SUM", "field": "fields.label::text",
+            "alias": "x",
+        }],
+    })
+    with pytest.raises(QPlanValidationError, match="numeric cast"):
+        validate(plan)
+
+
+def test_jsonb_agg_min_accepts_date_cast():
+    plan = parse_plan({
+        "from": "extracted_entities",
+        "filters": [{"field": "unit_type", "op": "eq", "value": "transaction"}],
+        "aggregations": [{
+            "op": "MIN", "field": "fields.date::date",
+            "alias": "earliest_txn",
+        }],
+    })
+    vp = validate(plan)
+    sql, _ = compile_plan(vp, workspace_id="ws-1", row_cap=100)
+    assert '(\"extracted_entities\".\"fields\"->>\'date\')::date' in sql
+
+
+def test_jsonb_agg_rejects_malformed_path():
+    """Field that looks like a jsonb path but is malformed (no cast,
+    extra dot, etc.) should raise a clear parse error — not silently
+    fall through as an identifier."""
+    with pytest.raises(QPlanParseError, match="jsonb path"):
+        parse_plan({
+            "from": "extracted_entities",
+            "aggregations": [{
+                "op": "SUM", "field": "fields.debit",  # missing ::cast
+                "alias": "x",
+            }],
+        })
+
+
+def test_jsonb_agg_path_does_not_allow_sql_injection_in_key():
+    """The jsonb-path regex pins keys to identifier syntax, so quotes /
+    semicolons / spaces in the key can't escape the single-quote
+    literal in the emitted SQL."""
+    with pytest.raises(QPlanParseError):
+        parse_plan({
+            "from": "extracted_entities",
+            "aggregations": [{
+                "op": "SUM",
+                "field": "fields.debit'; DROP TABLE files; --::numeric",
+                "alias": "pwn",
+            }],
+        })

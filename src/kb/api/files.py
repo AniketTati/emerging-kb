@@ -744,28 +744,49 @@ async def post_re_extract(
     # 404 / 403 surfaces naturally — get_file is workspace-scoped.
     f = await get_file(conn, file_id)
 
+    # The worker tasks bail when lifecycle_state is already terminal
+    # (ready/failed/deleted). To force a true re-run we need to roll
+    # the state back to the entry-point of the requested stage. Both
+    # branches start their work AFTER an explicit transition; the
+    # transition is idempotent (rolling 'ready' → 'fields_extracting'
+    # is safe and gets undone by the chain on the way back up).
+    from kb.domain.files import transition_lifecycle
     deferred: list[str] = []
     try:
         from kb.workers.tasks import procrastinate_app
 
         if stage == "parsing":
+            # Full re-parse — roll all the way back to 'queued' so the
+            # parse + chunk + contextualize + embed + RAPTOR + extract
+            # chain re-runs from scratch.
+            await transition_lifecycle(
+                conn, workspace_id=workspace_id, file_id=file_id,
+                to_state="queued", event="re_extract_requested",
+                payload={"stage": "parsing"},
+                allow_backward=True,
+            )
             await procrastinate_app.configure_task(
                 name="parse_file"
             ).defer_async(file_id=file_id)
             deferred.append("parse_file")
         else:
-            # Re-extraction path — kick off fields + atomic_units in
-            # parallel; both are workspace + per-file idempotent and the
-            # downstream chain (schema_entities → identities → ready)
-            # picks up automatically.
+            # Re-extraction path — roll back to 'fields_extracting' so
+            # the extract_kv_tables_file task re-runs (it short-circuits
+            # on terminal states). The collapsed chain
+            # (kv_tables → schema_entities → identities → ready) picks
+            # up automatically; the legacy extract_fields_file /
+            # extract_atomic_units_file tasks remain available for
+            # rollback but are no longer in the live chain.
+            await transition_lifecycle(
+                conn, workspace_id=workspace_id, file_id=file_id,
+                to_state="fields_extracting", event="re_extract_requested",
+                payload={"stage": "extraction"},
+                allow_backward=True,
+            )
             await procrastinate_app.configure_task(
-                name="extract_fields_file"
+                name="extract_kv_tables_file"
             ).defer_async(file_id=file_id)
-            deferred.append("extract_fields_file")
-            await procrastinate_app.configure_task(
-                name="extract_atomic_units_file"
-            ).defer_async(file_id=file_id)
-            deferred.append("extract_atomic_units_file")
+            deferred.append("extract_kv_tables_file")
     except Exception as exc:  # noqa: BLE001
         # Procrastinate misconfigured / network blip — return 503 rather
         # than silently swallow so the caller knows to retry.

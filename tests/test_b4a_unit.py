@@ -459,15 +459,52 @@ async def test_apply_mode_H_pass_through():
 
 
 async def test_apply_mode_Q_returns_refusal_hit_without_payload():
-    """B4b — Q-mode without a Q payload (Identity planner can't emit SQL)
-    returns a synthetic refusal Hit instead of raising. The legacy
-    QModeNotImplementedError is preserved for back-compat but no longer
-    fires from apply_mode."""
+    """Q-mode without a q_payload returns a synthetic refusal Hit
+    instead of raising. The refusal message is context-aware:
+
+    - Plain `Plan(mode='Q')` with no model_id → generic "could not
+      build a safe SQL plan" message (the most defensible default).
+    - When the LLMPlanner attempted but failed, the reason lands on
+      `plan.notes` prefixed `q_payload_gen:` and surfaces verbatim.
+      That branch is covered in test_q_payload_gen.py.
+    """
     plan = Plan(mode="Q", intent="aggregation")
     out = await apply_mode(plan, [], workspace_id="ws", query="q", conn=None)
     assert len(out) == 1
     assert out[0].metadata["q_refused"] is True
-    assert "no Q payload" in out[0].metadata["q_refusal_reason"]
+    reason = out[0].metadata["q_refusal_reason"]
+    assert "could not build a safe SQL plan" in reason
+
+
+async def test_apply_mode_Q_identity_planner_message_names_the_fix():
+    """When the planner is explicitly Identity (model_id contains
+    'identity'), the refusal explains how to switch — KB_PLANNER=gemini
+    or anthropic."""
+    plan = Plan(
+        mode="Q", intent="aggregation",
+        model_id="identity-planner-v1",
+    )
+    out = await apply_mode(plan, [], workspace_id="ws", query="q", conn=None)
+    assert len(out) == 1
+    reason = out[0].metadata["q_refusal_reason"]
+    assert "Identity planner can't generate SQL" in reason
+    assert "KB_PLANNER=gemini" in reason
+
+
+async def test_apply_mode_Q_surfaces_q_payload_gen_reason_from_notes():
+    """When LLMPlanner attempted the second call and got a parse/
+    validation/refuse, the reason lands on plan.notes prefixed
+    `q_payload_gen:` and the refusal hit shows it verbatim."""
+    plan = Plan(
+        mode="Q", intent="aggregation",
+        notes="q_payload_gen: refuse: catalog has no payments table",
+        model_id="gemini-2.5-flash",
+    )
+    out = await apply_mode(plan, [], workspace_id="ws", query="q", conn=None)
+    reason = out[0].metadata["q_refusal_reason"]
+    # The "refuse:" prefix is stripped; just the human reason shows.
+    assert "catalog has no payments table" in reason
+    assert "refuse:" not in reason
 
 
 async def test_apply_mode_K_no_conn_falls_through_with_annotation():

@@ -355,7 +355,9 @@ async def mentions_exact_channel(
 
 
 # ---------------------------------------------------------------------------
-# Atomic-units rarity channel (decision #8)
+# Atomic-units rarity channel (decision #8) — now reads from
+# extracted_entities since the nested-entities refactor promoted each
+# atomic_unit row into a typed sub_entity row.
 # ---------------------------------------------------------------------------
 
 
@@ -366,32 +368,37 @@ async def atomic_units_rarity_channel(
     query: str,
     limit: int = TOP_K_PER_CHANNEL,
 ) -> list[Hit]:
-    """High-rarity atomic_units for needle-finding scenarios.
+    """High-rarity sub_entity rows for needle-finding scenarios.
 
-    Decision #8: if query mentions a unit_type keyword (clause / transaction
-    / row), filter to that type. Else: return top across all types by rarity.
+    Decision #8: if query mentions a unit_type keyword (clause /
+    transaction / row), filter to that type. Else: return top across
+    all types by rarity.
+
+    Post-refactor: sub_entity rows live in `extracted_entities` with
+    `unit_type` + `rarity_score` columns (migration 0037). The
+    `fields` jsonb replaces the old `parameters` jsonb; source
+    positions (chunk_id + char range) live on the same row now that
+    they're columns on extracted_entities too.
     """
     q_low = (query or "").lower()
     unit_filter = ""
     if "clause" in q_low:
-        unit_filter = "AND unit_type = 'clause'"
+        unit_filter = "AND ee.unit_type = 'clause'"
     elif "transaction" in q_low:
-        unit_filter = "AND unit_type = 'transaction'"
+        unit_filter = "AND ee.unit_type = 'transaction'"
     elif "row" in q_low:
-        unit_filter = "AND unit_type = 'row'"
-    # R2 — pull source_chunk_id + char-range columns (migration 0032)
-    # so the citation envelope can render an exact verbatim snippet
-    # in the chat right rail (the same way DocDetail does in the
-    # upload flow). Cast to text once at SQL level so we don't have
-    # to UUID-coerce in Python.
+        unit_filter = "AND ee.unit_type = 'row'"
     rows = await _run_channel_query(
         conn, "ch_atomic_units_rarity",
-        f"SELECT au.id::text, au.parameters::text, au.file_id::text, au.unit_type, "
-        f"  COALESCE(au.rarity_score, 0) AS rscore, "
-        f"  au.source_chunk_id::text, au.source_char_start, au.source_char_end "
-        f"FROM atomic_units au "
-        f"JOIN files f ON f.id = au.file_id AND f.lifecycle_state <> 'deleted' "
-        f"WHERE au.workspace_id = %s {unit_filter} "
+        f"SELECT ee.id::text, ee.fields::text, ee.file_id::text, "
+        f"  ee.unit_type, COALESCE(ee.rarity_score, 0) AS rscore, "
+        f"  ee.source_chunk_id::text, ee.source_char_start, "
+        f"  ee.source_char_end "
+        f"FROM extracted_entities ee "
+        f"JOIN files f ON f.id = ee.file_id AND f.lifecycle_state <> 'deleted' "
+        f"WHERE ee.workspace_id = %s "
+        f"  AND ee.unit_type IS NOT NULL "  # sub_entity rows only
+        f"  {unit_filter} "
         f"ORDER BY rscore DESC NULLS LAST LIMIT %s",
         (workspace_id, limit),
     )
@@ -400,16 +407,18 @@ async def atomic_units_rarity_channel(
     return [
         Hit(
             id=str(r[0]),
-            kind="atomic_unit",
+            kind="atomic_unit",  # kind label preserved for back-compat
+                                  # with downstream renderers; underlying
+                                  # row is now an extracted_entity.
             score=float(r[4]),
             snippet=(r[1] or "")[:_SNIPPET_MAX],
             metadata={
                 "file_id": str(r[2]),
                 "unit_type": r[3],
                 "channel": "atomic_units_rarity",
-                # R2 — present when the PR2 source-resolver located the
-                # extracted text in the source chunk at index time. UI
-                # uses these to slice exact verbatim snippets.
+                # Source positions present when the source-resolver
+                # located the verbatim text in the source chunk at
+                # index time. UI uses these to slice exact snippets.
                 "source_chunk_id": r[5] if r[5] else None,
                 "source_char_start": r[6] if r[6] is not None else None,
                 "source_char_end": r[7] if r[7] is not None else None,

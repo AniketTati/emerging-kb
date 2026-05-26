@@ -335,7 +335,8 @@ async def get_file_details(
           COALESCE((SELECT COUNT(*)::int FROM chunks             WHERE file_id = %s), 0) AS n_chunks,
           COALESCE((SELECT COUNT(*)::int FROM contextual_chunks  WHERE file_id = %s), 0) AS n_ctx,
           COALESCE((SELECT COUNT(*)::int FROM extracted_mentions WHERE file_id = %s), 0) AS n_mentions,
-          COALESCE((SELECT COUNT(*)::int FROM atomic_units       WHERE file_id = %s), 0) AS n_au,
+          COALESCE((SELECT COUNT(*)::int FROM extracted_entities
+                     WHERE file_id = %s AND unit_type IS NOT NULL), 0) AS n_au,
           COALESCE((SELECT COUNT(DISTINCT me.entity_id)::int
                       FROM mention_to_entity me
                       JOIN extracted_mentions em ON em.id = me.mention_id
@@ -555,40 +556,57 @@ async def list_extracted_entities(
 async def list_atomic_units(
     conn: Connection, file_id: str, *, limit: int = 50, offset: int = 0,
 ) -> tuple[list[AtomicUnit], int]:
+    """Return sub_entity rows (transactions / clauses / line_items / ...)
+    for a file, sorted by rarity DESC. Post nested-entities refactor,
+    these live in `extracted_entities` with `unit_type IS NOT NULL`;
+    the `parameters` jsonb is now `fields` jsonb (semantic rename, same
+    payload). The function name + return shape stay stable for API +
+    UI back-compat. Anchor_chunk_id is sourced from
+    extracted_entities.citations['_anchor'] which Phase 3.5 of the
+    extraction worker populates.
+    """
     cur = await conn.execute(
-        "SELECT COUNT(*) FROM atomic_units WHERE file_id = %s",
+        "SELECT COUNT(*) FROM extracted_entities "
+        "WHERE file_id = %s AND unit_type IS NOT NULL",
         (file_id,),
     )
     total = int((await cur.fetchone())[0])
     cur = await conn.execute(
         """
-        SELECT au.id::text, au.unit_type, au.parameters,
-               au.anchor_chunk_id::text, au.rarity_score, au.model_id,
-               au.source_chunk_id::text, au.source_char_start, au.source_char_end,
+        SELECT ee.id::text, ee.unit_type, ee.fields,
+               ee.citations,
+               ee.rarity_score, ee.model_id,
+               ee.source_chunk_id::text,
+               ee.source_char_start, ee.source_char_end,
                c.source_page_numbers
-          FROM atomic_units au
-          LEFT JOIN chunks c ON c.id = au.source_chunk_id
-         WHERE au.file_id = %s
-         ORDER BY au.rarity_score DESC NULLS LAST, au.created_at ASC
+          FROM extracted_entities ee
+          LEFT JOIN chunks c ON c.id = ee.source_chunk_id
+         WHERE ee.file_id = %s AND ee.unit_type IS NOT NULL
+         ORDER BY ee.rarity_score DESC NULLS LAST, ee.created_at ASC
          LIMIT %s OFFSET %s
         """,
         (file_id, limit, offset),
     )
     rows = await cur.fetchall()
-    items = [
-        AtomicUnit(
+    items: list[AtomicUnit] = []
+    for r in rows:
+        params = (r[2] if isinstance(r[2], dict) else (json.loads(r[2]) if r[2] else {}))
+        # Pull anchor_chunk_id from the citations jsonb under the
+        # reserved `_anchor` key (Phase 3.5 of the extraction worker
+        # writes it there).
+        citations = (r[3] if isinstance(r[3], dict) else (json.loads(r[3]) if r[3] else {}))
+        anchor_chunk_id = citations.get("_anchor") if isinstance(citations, dict) else None
+        items.append(AtomicUnit(
             id=r[0], unit_type=r[1],
-            parameters=(r[2] if isinstance(r[2], dict) else (json.loads(r[2]) if r[2] else {})),
-            anchor_chunk_id=r[3],
+            parameters=params,
+            anchor_chunk_id=anchor_chunk_id,
             rarity_score=(float(r[4]) if r[4] is not None else None),
             model_id=r[5],
             source_chunk_id=r[6],
             source_char_start=(int(r[7]) if r[7] is not None else None),
             source_char_end=(int(r[8]) if r[8] is not None else None),
             source_page_numbers=(list(r[9]) if r[9] else None),
-        )
-        for r in rows
-    ]
+        ))
     return items, total
 
 
@@ -847,6 +865,7 @@ async def transition_lifecycle(
     to_state: str,
     event: str,
     payload: dict[str, Any] | None = None,
+    allow_backward: bool = False,
 ) -> str:
     """Helper for the worker: read current state under FOR UPDATE, write the
     new state to `files`, and append the audit event. Returns the old state
@@ -858,6 +877,11 @@ async def transition_lifecycle(
     the state, so re-runs degrade to noop instead of clobbering the
     file's progress. The audit-event row is also skipped on these refuses
     so file_lifecycle stays a clean forward chain.
+
+    `allow_backward=True` is an explicit escape hatch for operator-
+    initiated re-extract: POST /files/:id/re-extract walks the state
+    back so the worker chain actually re-runs. Set sparingly — abusing
+    this can corrupt the audit history of a file's pipeline progress.
     """
     cur = await conn.execute(
         "SELECT lifecycle_state FROM files WHERE id = %s FOR UPDATE",
@@ -868,7 +892,7 @@ async def transition_lifecycle(
         raise FileNotFoundError(file_id)
     from_state = row[0]
 
-    if not _is_valid_transition(from_state, to_state):
+    if not allow_backward and not _is_valid_transition(from_state, to_state):
         # Silent no-op — log to the caller for observability but don't
         # poison the worker (a thrown exception would mark the
         # procrastinate job failed, then it'd retry and fail again).

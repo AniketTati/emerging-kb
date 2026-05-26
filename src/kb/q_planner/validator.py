@@ -67,6 +67,37 @@ def _check_column(table: str, column: str) -> str:
 def _validate_filter(table: str, f: Filter) -> tuple[str, str]:
     """Returns (table, column) for accounting in `column_types`. Raises
     on type mismatch."""
+    # JSONB-path branch — same allowlist + cast-vs-op rules as
+    # aggregations.
+    if f.jsonb_path is not None:
+        from kb.q_planner.catalog import is_jsonb_agg_allowed
+        jsonb_col, jsonb_key, cast_type = f.jsonb_path
+        col_type = column_type(table, jsonb_col)
+        if col_type != "jsonb":
+            raise QPlanValidationError(
+                f"filter field {f.field!r}: {jsonb_col!r} on {table!r} "
+                f"is not a jsonb column"
+            )
+        if not is_jsonb_agg_allowed(table, jsonb_col):
+            raise QPlanValidationError(
+                f"jsonb filter on ({table!r}, {jsonb_col!r}) "
+                f"is not in the Q-mode allowlist"
+            )
+        op = f.op
+        if op in ("lt", "le", "gt", "ge", "between"):
+            if cast_type not in _COMPARABLE_CASTS:
+                raise QPlanValidationError(
+                    f"operator {op!r} on jsonb path {f.field!r} requires "
+                    f"a comparable cast (got ::{cast_type})"
+                )
+        if op == "like" and cast_type != "text":
+            raise QPlanValidationError(
+                f"operator 'like' on jsonb path {f.field!r} requires "
+                f"a text cast (got ::{cast_type})"
+            )
+        return (table, jsonb_col)
+
+    # Plain column reference — existing behavior.
     col_type = _check_column(table, f.field)
 
     # Type-vs-operator compatibility.
@@ -86,9 +117,18 @@ def _validate_filter(table: str, f: Filter) -> tuple[str, str]:
     return (table, f.field)
 
 
+_NUMERIC_CASTS: frozenset[str] = frozenset({
+    "numeric", "integer", "bigint", "real",
+})
+_COMPARABLE_CASTS: frozenset[str] = _NUMERIC_CASTS | frozenset({
+    "text", "date", "timestamptz",
+})
+
+
 def _validate_aggregation(table: str, a: Aggregation) -> tuple[str, str] | None:
     """Returns the (table, column) referenced by the agg, or None for
-    COUNT(*). Raises on type mismatch."""
+    COUNT(*) and for jsonb-path aggregations (which the catalog accounts
+    for differently). Raises on type mismatch."""
     if a.field == "*":
         if a.op != "COUNT":
             raise QPlanValidationError(
@@ -96,6 +136,37 @@ def _validate_aggregation(table: str, a: Aggregation) -> tuple[str, str] | None:
             )
         return None
 
+    # JSONB-path branch: validate (table, jsonb_col) is whitelisted +
+    # cast type matches the aggregation op.
+    if a.jsonb_path is not None:
+        from kb.q_planner.catalog import is_jsonb_agg_allowed
+        jsonb_col, jsonb_key, cast_type = a.jsonb_path
+        col_type = column_type(table, jsonb_col)
+        if col_type != "jsonb":
+            raise QPlanValidationError(
+                f"aggregation field {a.field!r}: {jsonb_col!r} on {table!r} "
+                f"is not a jsonb column"
+            )
+        if not is_jsonb_agg_allowed(table, jsonb_col):
+            raise QPlanValidationError(
+                f"jsonb aggregation on ({table!r}, {jsonb_col!r}) "
+                f"is not in the Q-mode allowlist"
+            )
+        if a.op in ("SUM", "AVG") and cast_type not in _NUMERIC_CASTS:
+            raise QPlanValidationError(
+                f"aggregation {a.op!r} on jsonb path {a.field!r} requires "
+                f"a numeric cast (got ::{cast_type})"
+            )
+        if a.op in ("MIN", "MAX") and cast_type not in _COMPARABLE_CASTS:
+            raise QPlanValidationError(
+                f"aggregation {a.op!r} on jsonb path {a.field!r} requires "
+                f"a comparable cast (got ::{cast_type})"
+            )
+        # The (table, jsonb_col) tuple still goes into column_types for
+        # bookkeeping; the compiler doesn't need a per-key entry.
+        return (table, jsonb_col)
+
+    # Plain column reference — existing behavior.
     col_type = _check_column(table, a.field)
 
     if a.op in ("SUM", "AVG"):

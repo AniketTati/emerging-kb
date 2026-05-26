@@ -52,6 +52,11 @@ class EntityResponse(BaseModel):
     lifecycle_state: str
     created_at: str
     updated_at: str
+    # Nested-entities refactor: every schema_entity declares whether
+    # it's a doc-level parent (`doc_root`) or a row-level child
+    # (`sub_entity`). UI uses this to render the tree.
+    kind: str = "doc_root"
+    parent_type_id: str | None = None
 
 
 class EntityListResponse(BaseModel):
@@ -175,7 +180,10 @@ def _iso(ts: datetime) -> str:
 # ---------------------------------------------------------------------------
 
 
-_ENTITY_COLS = "id, name, description, lifecycle_state, created_at, updated_at"
+_ENTITY_COLS = (
+    "id, name, description, lifecycle_state, created_at, updated_at, "
+    "kind, parent_type_id"
+)
 
 
 def _entity_row_to_response(row: tuple) -> EntityResponse:
@@ -186,6 +194,8 @@ def _entity_row_to_response(row: tuple) -> EntityResponse:
         lifecycle_state=row[3],
         created_at=_iso(row[4]),
         updated_at=_iso(row[5]),
+        kind=str(row[6]) if row[6] else "doc_root",
+        parent_type_id=str(row[7]) if row[7] else None,
     )
 
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
+from typing import Any
 
 import psycopg
 import pytest
@@ -221,6 +222,67 @@ async def test_mentions_exact_channel_returns_chunk_kind_hit(client, db_url_supe
     assert "Aakash Constructions" in hits[0].metadata.get("matched_mention", "")
 
 
+async def _seed_sub_entity(
+    conn: Any,
+    *,
+    file_id: str,
+    workspace_id: str,
+    unit_type: str,
+    rarity_score: float,
+    fields: dict | None = None,
+) -> str:
+    """Insert a sub_entity extracted_entities row for channel-test seeds.
+
+    Replaces direct atomic_units INSERTs after the nested-entities
+    refactor (atomic_units stays as transient staging; the channel
+    now reads from extracted_entities filtered by `unit_type IS NOT
+    NULL`). Creates a minimal sub_entity schema_entity on demand.
+    """
+    cur = await conn.execute(
+        "INSERT INTO schemas (workspace_id, name, lifecycle_state) "
+        "VALUES (%s, %s, 'active') "
+        "ON CONFLICT DO NOTHING "
+        "RETURNING id",
+        (workspace_id, f"auto:test:{unit_type}"),
+    )
+    row = await cur.fetchone()
+    if row is None:
+        cur = await conn.execute(
+            "SELECT id FROM schemas WHERE workspace_id = %s AND name = %s",
+            (workspace_id, f"auto:test:{unit_type}"),
+        )
+        row = await cur.fetchone()
+    schema_id = row[0]
+    # Create a doc_root + sub_entity pair so the CHECK constraint
+    # passes (`kind='sub_entity'` requires parent_type_id IS NOT NULL).
+    cur = await conn.execute(
+        "INSERT INTO schema_entities "
+        "  (schema_id, workspace_id, name, lifecycle_state, kind) "
+        "VALUES (%s, %s, %s, 'active', 'doc_root') "
+        "RETURNING id",
+        (schema_id, workspace_id, f"Doc_{unit_type}"),
+    )
+    doc_root_id = (await cur.fetchone())[0]
+    cur = await conn.execute(
+        "INSERT INTO schema_entities "
+        "  (schema_id, workspace_id, name, lifecycle_state, kind, parent_type_id) "
+        "VALUES (%s, %s, %s, 'active', 'sub_entity', %s) "
+        "RETURNING id",
+        (schema_id, workspace_id, unit_type.capitalize(), doc_root_id),
+    )
+    se_id = (await cur.fetchone())[0]
+    cur = await conn.execute(
+        "INSERT INTO extracted_entities "
+        "  (schema_entity_id, file_id, workspace_id, fields, citations, "
+        "   model_id, rarity_score, unit_type) "
+        "VALUES (%s, %s, %s, %s::jsonb, '{}'::jsonb, 'mock', %s, %s) "
+        "RETURNING id",
+        (se_id, file_id, workspace_id, json.dumps(fields or {}),
+         rarity_score, unit_type),
+    )
+    return (await cur.fetchone())[0]
+
+
 async def test_atomic_units_rarity_channel_filters_by_unit_type_keyword(
     client, db_url_superuser,
 ):
@@ -229,16 +291,17 @@ async def test_atomic_units_rarity_channel_filters_by_unit_type_keyword(
     workspace = str(uuid.uuid4())
     async with await psycopg.AsyncConnection.connect(db_url_superuser) as conn:
         file_id, _, _ = await _seed_file_chain(conn, workspace, label="au")
-        # Insert 1 clause + 1 transaction with high rarity
-        await conn.execute(
-            "INSERT INTO atomic_units (file_id, workspace_id, unit_type, parameters, rarity_score, model_id) "
-            "VALUES (%s, %s, 'clause', %s::jsonb, 0.9, 'mock')",
-            (file_id, workspace, json.dumps({"clause_type": "indemnification"})),
+        # Sub_entity seeds in extracted_entities — channel reads from
+        # there after the nested-entities refactor.
+        await _seed_sub_entity(
+            conn, file_id=file_id, workspace_id=workspace,
+            unit_type="clause", rarity_score=0.9,
+            fields={"clause_type": "indemnification"},
         )
-        await conn.execute(
-            "INSERT INTO atomic_units (file_id, workspace_id, unit_type, parameters, rarity_score, model_id) "
-            "VALUES (%s, %s, 'transaction', %s::jsonb, 0.95, 'mock')",
-            (file_id, workspace, json.dumps({"amount": 1250})),
+        await _seed_sub_entity(
+            conn, file_id=file_id, workspace_id=workspace,
+            unit_type="transaction", rarity_score=0.95,
+            fields={"amount": 1250},
         )
         await conn.commit()
 
@@ -261,15 +324,13 @@ async def test_atomic_units_rarity_channel_no_keyword_returns_all_types(
     workspace = str(uuid.uuid4())
     async with await psycopg.AsyncConnection.connect(db_url_superuser) as conn:
         file_id, _, _ = await _seed_file_chain(conn, workspace, label="au2")
-        await conn.execute(
-            "INSERT INTO atomic_units (file_id, workspace_id, unit_type, parameters, rarity_score, model_id) "
-            "VALUES (%s, %s, 'clause', '{}'::jsonb, 0.9, 'mock')",
-            (file_id, workspace),
+        await _seed_sub_entity(
+            conn, file_id=file_id, workspace_id=workspace,
+            unit_type="clause", rarity_score=0.9,
         )
-        await conn.execute(
-            "INSERT INTO atomic_units (file_id, workspace_id, unit_type, parameters, rarity_score, model_id) "
-            "VALUES (%s, %s, 'transaction', '{}'::jsonb, 0.95, 'mock')",
-            (file_id, workspace),
+        await _seed_sub_entity(
+            conn, file_id=file_id, workspace_id=workspace,
+            unit_type="transaction", rarity_score=0.95,
         )
         await conn.commit()
 

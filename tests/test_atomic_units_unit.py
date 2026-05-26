@@ -50,6 +50,46 @@ def test_dispatch_bank_statement_routes_to_transactions():
     assert plugin.UNIT_TYPE == "transaction"
 
 
+def test_dispatch_bank_statement_xlsx_routes_to_transactions_not_rows():
+    """Regression for the order-priority bug: previously the dispatcher
+    ran RowsPlugin first (matched on xlsx MIME), so a bank statement
+    UPLOADED AS XLSX always got the structural row plugin instead of
+    TransactionsPlugin. Result: 21 generic `row` units with raw
+    cells[] arrays instead of semantic `transaction` units with
+    {date, debit, credit, balance} parameters — and Q-mode queries
+    like 'sum the transactions' couldn't compile against the data.
+
+    Fix: semantic plugins (transactions / clauses / email_messages)
+    now run BEFORE structural rows. Verified here against the exact
+    shape that hit the bug in production.
+    """
+    fm = FileMeta(
+        file_id="x", workspace_id="w",
+        mime_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        inferred_doc_type="bank_statement", name="bank-statement.xlsx",
+    )
+    plugin = dispatch(fm)
+    assert plugin is not None
+    assert plugin.UNIT_TYPE == "transaction", (
+        f"Expected transaction (semantic), got {plugin.UNIT_TYPE!r} "
+        "— RowsPlugin is still pre-empting TransactionsPlugin"
+    )
+
+
+def test_dispatch_unknown_doctype_xlsx_falls_back_to_rows():
+    """The other side of the order fix: a generic xlsx (e.g. employee
+    roster, custom report) with no semantic doc_type still routes to
+    RowsPlugin. Order semantic-first does NOT mean structural-never."""
+    fm = FileMeta(
+        file_id="x", workspace_id="w",
+        mime_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        inferred_doc_type=None, name="vendors.xlsx",
+    )
+    plugin = dispatch(fm)
+    assert plugin is not None
+    assert plugin.UNIT_TYPE == "row"
+
+
 def test_dispatch_unknown_doctype_returns_none():
     fm = FileMeta(
         file_id="x", workspace_id="w", mime_type="application/pdf",

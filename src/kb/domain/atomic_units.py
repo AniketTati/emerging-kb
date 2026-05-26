@@ -81,3 +81,41 @@ async def count_atomic_units_for_file(
         (file_id,),
     )
     return (await cur.fetchone())[0]
+
+
+async def read_atomic_units_for_file(
+    conn: Connection, *, file_id: str,
+) -> list[dict[str, Any]]:
+    """Read every atomic_unit row for `file_id` with the full payload
+    needed by the L4 extraction step to promote each unit into an
+    extracted_entity child of the doc-root.
+
+    Returns dicts (not tuples) so call-sites can keep using stable
+    field names if the column set evolves. Includes source-position
+    columns (set by the source-resolver post-extraction) so the
+    citation envelope can render exact-text snippets.
+    """
+    cur = await conn.execute(
+        "SELECT id::text, unit_type, parameters, anchor_chunk_id::text, "
+        "       rarity_score, model_id, "
+        "       source_chunk_id::text, source_char_start, source_char_end "
+        "  FROM atomic_units "
+        " WHERE file_id = %s "
+        " ORDER BY created_at, id",
+        (file_id,),
+    )
+    rows = await cur.fetchall()
+    return [
+        {
+            "id": r[0],
+            "unit_type": r[1],
+            "parameters": r[2] or {},
+            "anchor_chunk_id": r[3],
+            "rarity_score": float(r[4]) if r[4] is not None else None,
+            "model_id": r[5],
+            "source_chunk_id": r[6],
+            "source_char_start": r[7],
+            "source_char_end": r[8],
+        }
+        for r in rows
+    ]

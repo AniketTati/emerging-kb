@@ -452,51 +452,38 @@ References:
 12. Mention extraction (Gemini 2.5 Flash, universal-type-list open extraction)
        → mentions table — generic types for cross-doc entity navigation
        ↓
-12b. EMERGENT FIELD extraction (Gemini Flash, open-vocabulary prompt)
-       → per-doc: (doc_type_proposal, fields[]) with values + descriptions
-       → emergent_fields table (with name + description + value embeddings,
-          plus is_pii BOOLEAN flag — extraction prompt instructs Gemini to
-          flag fields whose values match PII patterns: SSN, Aadhaar, PAN,
-          credit card, DOB, phone, email, medical record number, etc.)
-       → at render time, fields with is_pii=true display as
-          "[PII: <type>]" placeholder unless workspace policy explicitly
-          allows full display. Audit log captures the placeholder, not the
-          raw value. Full encryption + permissions-gated decryption is
-          Wave C; flagging at ingest is Wave A — once flagged, never
-          accidentally surfaced in chat/citations.
-       ↓
-12c. Cross-doc field clustering (per `doc_type_proposal`):
-       — name + description embedding blocking
-       — LLM-judge on borderline pairs
-       — union-find clusters into canonical field names
-       — value-type induction (enum / date / number / text)
-       → inferred_schema_fields with prevalence + value distribution
-       ↓
-12d. Schema induction + auto-promotion:
-       — when prevalence ≥ 80% AND stability ≥ 0.9 AND
-         value-type conf ≥ 0.9 AND n_docs_of_type ≥ min_doc_count
-         (production default 20; demo 5; configurable per Design 9):
-         AUTO-PROMOTE field to typed schema, audit-log
-         the threshold values, badge in `/schema` for 7 days
-       — below threshold: list in `/schema` as "inferred,
-         not yet promoted", remain queryable via L2b
-       — naming collisions with existing typed schema:
-         surface as "resolve", never silent overwrite
-       ↓
-12e. Vocabulary discovery (Design 6):
-       — when L2b clusters emergent fields with semantically similar
-         names ("non_compete" + "non_competition_clause" + "restrictive_covenant")
-         at name-embedding similarity ≥ 0.85 across ≥ 5 docs of same type:
-         emit candidate vocabulary entry → domain_vocabulary table
-         (source='discovered', confidence set, surfaced for user review)
-       — auto-accept above threshold; surface for review below
+12b-c-d-14. KV+TABLES extraction (Gemini Flash, ONE structured-output call)
+       This single call collapses what used to be four separate LLM phases
+       (classify, field-propose, atomic-units plugin, schema-driven extract).
+       The response shape:
+           {
+             doc_type: "<snake_case>",
+             scalars: [{name, description, value, value_type, is_pii,
+                        source_chunk, ...}],
+             tables:  [{name, description, cardinality, columns,
+                        rows: [{values, source_chunk, source_char_*}]}]
+           }
+       Worker fans this out in one transaction:
+         — doc_type   → files.inferred_doc_type
+         — scalars[]  → proposed_fields (doc-level structured fields, with
+                        PII flags for SSN/Aadhaar/PAN/DOB/phone/email/etc.)
+         — tables[].rows[] → atomic_units (one row per typed unit:
+                        transaction / clause / line_item / message / row)
+       Then deterministic post-processing (no LLM):
+         — Cross-doc clustering of proposed_fields → inferred_schema_fields
+           (name+description embedding blocking, value-type induction).
+         — Auto-promotion when prevalence ≥ 80% ∧ stability ≥ 0.9 ∧
+           value-type conf ≥ 0.9 ∧ n_docs ≥ min_doc_count → schema_fields
+           with `auto_promoted=true`.
+         — Vocabulary discovery (Design 6) emits candidate synonym entries
+           into `domain_vocabulary` when sibling clusters land at
+           name-embedding similarity ≥ 0.85 across ≥ 5 docs.
+         — Anomaly/rarity scoring on atomic_units (per-unit_type cohort).
+       At render time, fields with is_pii=true display as "[PII: <type>]"
+       placeholder unless workspace policy explicitly allows full display
+       (full encryption + permissions-gated decryption is Wave C).
        ↓
 13. Open triple extraction (light OpenIE) → temp_triples
-       ↓
-14. L3 atomic-unit extraction (doc-type-specific plug-in):
-       — clauses for contracts, transactions for bank statements,
-         components for drawings, rows for xlsx, …
-       — each unit gets parameters (jsonb) + corpus-relative rarity_score
        ↓
 15. Identity resolution
        (deterministic keys → embedding blocking → LLM-judge → union-find clusters)
@@ -509,19 +496,28 @@ References:
 17. HippoRAG-2 graph build:
        entity + relation graph with PPR-ready edge weights
        ↓
-18. Schema-driven extraction (per active schema version)
-       — Gemini 2.5 Flash with JSON-schema constrained outputs
-       — runs ONLY on docs whose classified type matches schema entity types
-       — produces extracted_entities with fields + per-field citations
-       ↓
-18.5 Lineage path assignment (Design 7):
-       — for each extracted entity, look up its parent via the
-         schema_relationships.kind='contains' edges
-       — compute lineage_path = parent.lineage_path || entity.id (ltree)
-       — set extracted_entities.parent_entity_id
-       — populates the full ancestor chain (e.g.,
-           workspace.project.client.case.contract.clause)
-       — citations record lineage_path_at_cite_time (snapshot)
+18. Schema-driven entity instantiation + nested-entity promotion (Design 7)
+       — Phase 1.5 BOOTSTRAP: for each (doc_type) seen, ensure a doc_root
+         schema_entity (e.g. BankStatement) exists, plus a sub_entity type
+         per distinct atomic_units.unit_type for the file (Transaction,
+         Clause, LineItem, …) with parent_type_id set + a
+         schema_relationships(kind='contains') edge linking root → child.
+       — PASS 1: for every active doc_root schema_entity matching the
+         file's inferred_doc_type, run a Gemini structured-output extract
+         per entity using its promoted schema_fields. Produces parent
+         extracted_entities (rows where parent_entity_id IS NULL) with
+         per-field citations to contextual_chunks.
+       — PASS 1.5: promote every atomic_units row for the file to a
+         child extracted_entity under the matching sub_entity type.
+         `parameters` jsonb becomes `fields`; rarity_score + unit_type +
+         source positions copy over (chunks.id → contextual_chunks.id
+         translation handles the differing FK targets).
+       — PASS 2/3: topologically sort by depth, then assign each
+         entity its `lineage_path` (ltree) and `parent_entity_id` by
+         walking schema_relationships(kind='contains'). The full ancestor
+         chain populates (e.g.
+           workspace.project.client.case.contract.clause).
+       — Citations record lineage_path_at_cite_time (snapshot).
        ↓
 19. NotebookLM-style artifact generation (async, per workspace):
        - briefing doc        (Gemini multi-stage: outline → critique → revise)
@@ -599,9 +595,16 @@ User question
                                        the mode works on every atomic-unit
                                        type, not just clauses)
          A — anomaly filter           (rarity_score > threshold)
-         Q — STRUCTURED QUERY          (SQL plan over extracted_entities ⨝ L3
-                                       ⨝ L5; supports aggregation, group_by,
-                                       set ops; validated + budgeted execution.
+         Q — STRUCTURED QUERY          (SQL plan over extracted_entities;
+                                       supports aggregation (SUM/AVG/MIN/MAX/
+                                       COUNT/COUNT_DISTINCT), group_by, set
+                                       ops; jsonb-keyed aggregations + filters
+                                       via `<col>.<key>::<cast>` syntax on
+                                       audited (table, jsonb_col) pairs —
+                                       e.g. SUM(fields.debit::numeric) where
+                                       unit_type='transaction' AND
+                                       fields.date::date BETWEEN x AND y.
+                                       Validated + budgeted execution.
                                        Design: gaps_design.md §Design 1.)
          K — DOC-CHAIN AWARE           (returns chain context: current_version,
                                        all_versions, or history_only.

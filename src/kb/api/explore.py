@@ -201,7 +201,14 @@ async def get_explore_counts(
     )
     out.doc_types = int((await cur.fetchone())[0])
 
-    cur = await conn.execute("SELECT count(*)::int FROM atomic_units")
+    # Sub-entity rows (transactions / clauses / line_items / …) live
+    # in extracted_entities with `unit_type IS NOT NULL` after the
+    # nested-entities refactor. Count surface name stays `atomic_units`
+    # so the UI counter stays stable across the migration.
+    cur = await conn.execute(
+        "SELECT count(*)::int FROM extracted_entities "
+        "WHERE unit_type IS NOT NULL"
+    )
     out.atomic_units = int((await cur.fetchone())[0])
 
     cur = await conn.execute("SELECT count(*)::int FROM entities")
@@ -219,8 +226,9 @@ async def get_explore_counts(
     out.topics = int((await cur.fetchone())[0])
 
     cur = await conn.execute(
-        "SELECT count(*)::int FROM atomic_units "
-        "WHERE rarity_score IS NOT NULL AND rarity_score > 0.7"
+        "SELECT count(*)::int FROM extracted_entities "
+        "WHERE unit_type IS NOT NULL "
+        "  AND rarity_score IS NOT NULL AND rarity_score > 0.7"
     )
     out.anomalies = int((await cur.fetchone())[0])
 
@@ -638,23 +646,27 @@ async def get_entity_profile(
             deep_link_q=canonical_name,
         ))
 
-    # ---- Anomalies: high-rarity atomic_units in files mentioning the entity ----
+    # ---- Anomalies: high-rarity sub_entity rows in files mentioning the entity ----
+    # Post nested-entities refactor: sub_entities live in
+    # extracted_entities (`unit_type IS NOT NULL`); `fields` replaces
+    # the legacy `parameters` jsonb.
     cur = await conn.execute(
         """
-        SELECT au.id::text, au.unit_type, au.rarity_score, f.name,
-               substring(au.parameters::text from 1 for 200) AS preview
-          FROM atomic_units au
-          JOIN files f ON f.id = au.file_id
-         WHERE au.rarity_score IS NOT NULL
-           AND au.rarity_score > 0.7
+        SELECT ee.id::text, ee.unit_type, ee.rarity_score, f.name,
+               substring(ee.fields::text from 1 for 200) AS preview
+          FROM extracted_entities ee
+          JOIN files f ON f.id = ee.file_id
+         WHERE ee.unit_type IS NOT NULL
+           AND ee.rarity_score IS NOT NULL
+           AND ee.rarity_score > 0.7
            AND f.lifecycle_state NOT IN ('deleted','failed')
            AND EXISTS (
              SELECT 1 FROM extracted_mentions em
               JOIN mention_to_entity me ON me.mention_id = em.id
-              WHERE em.file_id = au.file_id
+              WHERE em.file_id = ee.file_id
                 AND me.entity_id = %s
            )
-         ORDER BY au.rarity_score DESC
+         ORDER BY ee.rarity_score DESC
          LIMIT 25
         """,
         (entity_id,),
@@ -738,10 +750,11 @@ async def _search_documents(
         where_params.append(filters.date_to)
     if filters.has_anomaly:
         where_parts.append(
-            "EXISTS (SELECT 1 FROM atomic_units au "
-            "  WHERE au.file_id = files.id "
-            "    AND au.rarity_score IS NOT NULL "
-            "    AND au.rarity_score > 0.7)"
+            "EXISTS (SELECT 1 FROM extracted_entities ee "
+            "  WHERE ee.file_id = files.id "
+            "    AND ee.unit_type IS NOT NULL "
+            "    AND ee.rarity_score IS NOT NULL "
+            "    AND ee.rarity_score > 0.7)"
         )
     if filters.has_conflicts:
         # Files whose chain_id appears in fact_conflicts.chain_id.
@@ -850,10 +863,15 @@ async def _search_atomic_units(
     conn: Connection, like: str, has_query: bool, offset: int, limit: int,
     filters: _SearchFilters | None = None,
 ) -> tuple[list[ExploreHit], int]:
-    # atomic_units has unit_type + parameters + rarity_score, plus
-    # file_id linking back to the doc.
+    # Post nested-entities refactor: sub_entity rows (transactions /
+    # clauses / line_items / …) live in `extracted_entities` with
+    # `unit_type IS NOT NULL`. `fields` jsonb replaces `parameters`.
+    # We keep the alias `au` for readability — same payload, new home.
     filters = filters or _SearchFilters()
-    where_parts = ["f.lifecycle_state NOT IN ('deleted','failed')"]
+    where_parts = [
+        "f.lifecycle_state NOT IN ('deleted','failed')",
+        "au.unit_type IS NOT NULL",
+    ]
     where_params: list[Any] = []
     if has_query:
         where_parts.append("au.unit_type ILIKE %s")
@@ -879,9 +897,9 @@ async def _search_atomic_units(
     params: tuple = tuple(where_params) + (limit, offset)
     cur = await conn.execute(
         f"""
-        SELECT au.id::text, au.unit_type, au.parameters::text,
+        SELECT au.id::text, au.unit_type, au.fields::text,
                au.rarity_score, au.file_id::text, f.name
-          FROM atomic_units au
+          FROM extracted_entities au
           JOIN files f ON f.id = au.file_id
          WHERE {where}
          ORDER BY COALESCE(au.rarity_score, 0) DESC, au.id
@@ -893,7 +911,7 @@ async def _search_atomic_units(
 
     cur = await conn.execute(
         f"""
-        SELECT count(*)::int FROM atomic_units au
+        SELECT count(*)::int FROM extracted_entities au
           JOIN files f ON f.id = au.file_id
          WHERE {where}
         """,
@@ -1116,7 +1134,11 @@ async def _search_anomalies(
     filters: _SearchFilters | None = None,
 ) -> tuple[list[ExploreHit], int]:
     filters = filters or _SearchFilters()
+    # Anomalies = high-rarity sub_entity rows. After the
+    # nested-entities refactor these live in extracted_entities with
+    # `unit_type IS NOT NULL`; we keep the alias `au` for readability.
     where_parts = [
+        "au.unit_type IS NOT NULL",
         "au.rarity_score IS NOT NULL",
         "au.rarity_score > 0.7",
         "f.lifecycle_state NOT IN ('deleted','failed')",
@@ -1140,8 +1162,8 @@ async def _search_anomalies(
     cur = await conn.execute(
         f"""
         SELECT au.id::text, au.unit_type, au.rarity_score,
-               au.file_id::text, f.name, au.parameters::text
-          FROM atomic_units au
+               au.file_id::text, f.name, au.fields::text
+          FROM extracted_entities au
           JOIN files f ON f.id = au.file_id
          WHERE {where}
          ORDER BY au.rarity_score DESC
@@ -1153,7 +1175,7 @@ async def _search_anomalies(
 
     cur = await conn.execute(
         f"""
-        SELECT count(*)::int FROM atomic_units au
+        SELECT count(*)::int FROM extracted_entities au
           JOIN files f ON f.id = au.file_id
          WHERE {where}
         """,

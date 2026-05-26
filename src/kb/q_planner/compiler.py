@@ -49,7 +49,11 @@ def _quote_ident(s: str) -> str:
 
 def _filter_clause(table: str, f: Filter) -> tuple[str, list]:
     """Return (sql_fragment, params) for a single filter."""
-    col_sql = f"{_quote_ident(table)}.{_quote_ident(f.field)}"
+    if f.jsonb_path is not None:
+        jsonb_col, jsonb_key, cast = f.jsonb_path
+        col_sql = _jsonb_extract_sql(table, jsonb_col, jsonb_key, cast)
+    else:
+        col_sql = f"{_quote_ident(table)}.{_quote_ident(f.field)}"
 
     if f.op in ("is_null", "is_not_null"):
         return (_OP_TEMPLATES[f.op].format(col=col_sql), [])
@@ -78,6 +82,29 @@ def _filter_clause(table: str, f: Filter) -> tuple[str, list]:
     return (template.format(col=col_sql), [f.value])
 
 
+# JSONB cast types we emit verbatim into the compiled SQL. Validator
+# already enforces this set — defense in depth in the compiler keeps
+# the SQL string-build site safe even if the validator gets bypassed.
+_SAFE_JSONB_CASTS: frozenset[str] = frozenset({
+    "numeric", "integer", "bigint", "real",
+    "text", "date", "timestamptz",
+})
+
+
+def _jsonb_extract_sql(table: str, col: str, key: str, cast: str) -> str:
+    """Emit `(<table>."<col>"->>'<key>')::<cast>` with all parts safely
+    quoted / cast-whitelisted. The key is single-quoted with internal
+    single quotes doubled — defensive, even though the grammar's
+    identifier regex already rejects quotes."""
+    if cast not in _SAFE_JSONB_CASTS:
+        raise ValueError(f"jsonb cast {cast!r} not whitelisted")
+    safe_key = key.replace("'", "''")
+    return (
+        f"({_quote_ident(table)}.{_quote_ident(col)}->>"
+        f"'{safe_key}')::{cast}"
+    )
+
+
 def _agg_projection(table: str, a: Aggregation) -> str:
     """SQL fragment for one aggregation in the SELECT list."""
     op_to_sql = {
@@ -96,7 +123,13 @@ def _agg_projection(table: str, a: Aggregation) -> str:
         # COUNT(*) only.
         return f"COUNT(*) AS {_quote_ident(a.alias)}"
 
-    col_sql = f"{_quote_ident(table)}.{_quote_ident(a.field)}"
+    # JSONB path: project `(t."fields"->>'debit')::numeric`.
+    if a.jsonb_path is not None:
+        jsonb_col, jsonb_key, cast = a.jsonb_path
+        col_sql = _jsonb_extract_sql(table, jsonb_col, jsonb_key, cast)
+    else:
+        col_sql = f"{_quote_ident(table)}.{_quote_ident(a.field)}"
+
     if a.op == "COUNT_DISTINCT":
         body = f"COUNT(DISTINCT {col_sql})"
     else:

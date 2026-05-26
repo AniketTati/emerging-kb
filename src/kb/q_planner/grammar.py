@@ -35,9 +35,42 @@ ALLOWED_SET_OPS: frozenset[str] = frozenset({"intersect", "union", "except"})
 # attack surface tight: no commas, no quotes, no SQL keywords.
 _IDENT_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]{0,62}$")
 
+# JSONB path guard — accepts `<col>.<key>::<cast>` where col, key are
+# identifiers and cast is one of the allowed scalar casts. The compiler
+# emits `(<table>."<col>"->>'<key>')::<cast>` for these. Locked down
+# tight: only flat one-level key access, only safe cast types.
+_JSONB_PATH_RE = re.compile(
+    r"^([a-zA-Z_][a-zA-Z0-9_]{0,62})\.([a-zA-Z_][a-zA-Z0-9_]{0,62})"
+    r"::([a-z]+)$"
+)
+ALLOWED_JSONB_CASTS: frozenset[str] = frozenset({
+    "numeric", "integer", "bigint", "real", "text", "date", "timestamptz",
+})
+
 
 def _is_valid_ident(s: str) -> bool:
     return bool(s) and bool(_IDENT_RE.match(s))
+
+
+def _parse_jsonb_path(s: str) -> tuple[str, str, str] | None:
+    """Parse `<col>.<key>::<cast>` → (col, key, cast). Returns None when
+    the string isn't in jsonb-path form. Raises on partial / unsafe forms
+    so the user gets a clear error instead of a fallthrough."""
+    if "." not in s and "::" not in s:
+        return None  # plain identifier — caller handles
+    m = _JSONB_PATH_RE.match(s)
+    if m is None:
+        raise QPlanParseError(
+            f"field={s!r} is not a plain identifier or a valid jsonb path; "
+            f"expected '<col>.<key>::<cast>' (e.g. 'fields.debit::numeric')"
+        )
+    col, key, cast = m.group(1), m.group(2), m.group(3)
+    if cast not in ALLOWED_JSONB_CASTS:
+        raise QPlanParseError(
+            f"jsonb cast={cast!r} not allowed; expected one of "
+            f"{sorted(ALLOWED_JSONB_CASTS)}"
+        )
+    return col, key, cast
 
 
 # ---------------------------------------------------------------------------
@@ -47,16 +80,24 @@ def _is_valid_ident(s: str) -> bool:
 
 @dataclass(frozen=True)
 class Filter:
-    field: str          # column name (catalog validates table+col)
+    field: str          # column name OR jsonb path (e.g. 'fields.date::date')
     op: str             # one of ALLOWED_OPERATORS
     value: Any = None   # primitive or list (for in/not_in/between)
+    # When `field` uses jsonb-path syntax, the parsed (col, key, cast)
+    # tuple. None for plain identifier filters.
+    jsonb_path: tuple[str, str, str] | None = None
 
 
 @dataclass(frozen=True)
 class Aggregation:
     op: str              # one of ALLOWED_AGGREGATIONS
-    field: str           # column name OR "*" for COUNT
+    field: str           # column name OR "*" for COUNT OR jsonb path
+                         # (e.g. 'fields.debit::numeric')
     alias: str           # safe identifier for the result column
+    # When `field` uses the jsonb-path form, the parsed (col, key, cast)
+    # tuple. When `field` is a plain identifier or '*', this is None.
+    # Set by the grammar parser so the validator/compiler don't re-parse.
+    jsonb_path: tuple[str, str, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -94,11 +135,16 @@ def _expect_str(d: dict, key: str, *, max_len: int = 64) -> str:
 def _parse_filter(raw: Any, *, idx: int) -> Filter:
     if not isinstance(raw, dict):
         raise QPlanParseError(f"filters[{idx}] must be an object")
-    field_name = _expect_str(raw, "field")
+    # Same field syntax as aggregations: plain identifier OR jsonb path.
+    field_name = _expect_str(raw, "field", max_len=160)
+    jsonb_path: tuple[str, str, str] | None = None
     if not _is_valid_ident(field_name):
-        raise QPlanParseError(
-            f"filters[{idx}].field={field_name!r} is not a valid identifier"
-        )
+        jsonb_path = _parse_jsonb_path(field_name)
+        if jsonb_path is None:
+            raise QPlanParseError(
+                f"filters[{idx}].field={field_name!r} is not a valid "
+                f"identifier or jsonb path"
+            )
     op = _expect_str(raw, "op", max_len=16)
     if op not in ALLOWED_OPERATORS:
         raise QPlanParseError(
@@ -137,7 +183,7 @@ def _parse_filter(raw: Any, *, idx: int) -> Filter:
                 f"filters[{idx}].value must be a primitive for op={op!r} "
                 f"(no nested dicts / objects)"
             )
-    return Filter(field=field_name, op=op, value=value)
+    return Filter(field=field_name, op=op, value=value, jsonb_path=jsonb_path)
 
 
 def _is_primitive(v: Any) -> bool:
@@ -153,23 +199,40 @@ def _parse_aggregation(raw: Any, *, idx: int) -> Aggregation:
             f"aggregations[{idx}].op={op!r} not allowed; "
             f"expected one of {sorted(ALLOWED_AGGREGATIONS)}"
         )
-    field_name = _expect_str(raw, "field")
-    if field_name != "*" and not _is_valid_ident(field_name):
-        raise QPlanParseError(
-            f"aggregations[{idx}].field={field_name!r} is not a valid "
-            f"identifier (or '*' for COUNT)"
-        )
-    if op != "COUNT" and field_name == "*":
-        raise QPlanParseError(
-            f"aggregations[{idx}].field='*' is only allowed with COUNT, "
-            f"not {op!r}"
-        )
+    # max_len bumped because `fields.<key>::<cast>` can be up to
+    # 62+1+62+2+11 = 138 chars in the worst case.
+    field_name = _expect_str(raw, "field", max_len=160)
+
+    # Two valid field shapes:
+    #   1. '*' (COUNT only)
+    #   2. plain identifier — e.g. 'rarity_score'
+    #   3. jsonb path — e.g. 'fields.debit::numeric'
+    jsonb_path: tuple[str, str, str] | None = None
+    if field_name == "*":
+        if op != "COUNT":
+            raise QPlanParseError(
+                f"aggregations[{idx}].field='*' is only allowed with COUNT, "
+                f"not {op!r}"
+            )
+    elif _is_valid_ident(field_name):
+        pass  # plain column reference — existing behavior
+    else:
+        # Try jsonb-path form. Raises with a clear error if malformed.
+        jsonb_path = _parse_jsonb_path(field_name)
+        if jsonb_path is None:
+            raise QPlanParseError(
+                f"aggregations[{idx}].field={field_name!r} is not a valid "
+                f"identifier, '*', or jsonb path (e.g. 'fields.debit::numeric')"
+            )
+
     alias = _expect_str(raw, "alias")
     if not _is_valid_ident(alias):
         raise QPlanParseError(
             f"aggregations[{idx}].alias={alias!r} is not a valid identifier"
         )
-    return Aggregation(op=op, field=field_name, alias=alias)
+    return Aggregation(
+        op=op, field=field_name, alias=alias, jsonb_path=jsonb_path,
+    )
 
 
 def _parse_order_by(raw: Any) -> tuple[tuple[str, str], ...]:

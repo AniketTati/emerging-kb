@@ -24,10 +24,16 @@ from typing import Literal
 # Wave A scope — single-table queries only. Joins + set ops are spec'd
 # but deferred to keep B4b's attack surface auditable. The compiler
 # refuses any plan with joins / set ops.
+#
+# `atomic_units` was removed by the nested-entities refactor — every
+# structural row (transaction, line_item, clause, …) now lives in
+# `extracted_entities` as a typed sub_entity with `unit_type` +
+# `rarity_score` + `parent_entity_id` populated. The Q-mode LLM is
+# instructed to filter `extracted_entities.unit_type` instead of
+# pivoting through a separate table.
 ALLOWED_TABLES: frozenset[str] = frozenset({
     "files",
     "extracted_entities",
-    "atomic_units",
     "relationships",
     "fact_conflicts",
     "doc_chains",
@@ -59,20 +65,19 @@ ALLOWED_COLUMNS: dict[tuple[str, str], ColumnType] = {
     ("files", "created_at"):               "timestamptz",
     ("files", "updated_at"):               "timestamptz",
     # ----- extracted_entities -----
+    # Every typed instance lives here — both parent (doc_root) and
+    # children (sub_entity). Filter by `unit_type` to scope to a
+    # specific child collection (e.g. transaction / line_item / clause)
+    # or by `parent_entity_id IS NULL` to get the parent only.
     ("extracted_entities", "id"):                "uuid",
     ("extracted_entities", "workspace_id"):      "uuid",
     ("extracted_entities", "schema_entity_id"):  "uuid",
     ("extracted_entities", "file_id"):           "uuid",
+    ("extracted_entities", "parent_entity_id"):  "uuid",
     ("extracted_entities", "fields"):            "jsonb",
+    ("extracted_entities", "rarity_score"):      "real",
+    ("extracted_entities", "unit_type"):         "text",
     ("extracted_entities", "created_at"):        "timestamptz",
-    # ----- atomic_units -----
-    ("atomic_units", "id"):                 "uuid",
-    ("atomic_units", "workspace_id"):       "uuid",
-    ("atomic_units", "file_id"):            "uuid",
-    ("atomic_units", "unit_type"):          "text",
-    ("atomic_units", "parameters"):         "jsonb",
-    ("atomic_units", "rarity_score"):       "numeric",
-    ("atomic_units", "created_at"):         "timestamptz",
     # ----- relationships -----
     ("relationships", "id"):                  "uuid",
     ("relationships", "workspace_id"):        "uuid",
@@ -112,6 +117,26 @@ NUMERIC_TYPES: frozenset[str] = frozenset({"integer", "bigint", "numeric", "real
 COMPARABLE_TYPES: frozenset[str] = (
     NUMERIC_TYPES | frozenset({"timestamptz", "date", "text"})
 )
+
+
+# (table, jsonb_col) tuples where Q-mode is allowed to do key-based
+# aggregation via `<col>.<key>::<cast>` syntax. Locked down to the
+# specific jsonb columns that carry KV+Tables row data — adding a new
+# entry here is an audited decision.
+#
+# For extracted_entities.fields specifically: this is where every typed
+# row's column values live after the KV+Tables collapse (transactions,
+# line_items, clauses, etc.). Filtering by `unit_type` first scopes the
+# aggregation to a specific table; then `fields.<col>::<cast>` extracts
+# the column the row needs to sum/avg/min/max.
+JSONB_AGG_ALLOWED: frozenset[tuple[str, str]] = frozenset({
+    ("extracted_entities", "fields"),
+})
+
+
+def is_jsonb_agg_allowed(table: str, jsonb_col: str) -> bool:
+    """Whether Q-mode may aggregate over a jsonb key on this column."""
+    return (table, jsonb_col) in JSONB_AGG_ALLOWED
 
 
 def column_type(table: str, column: str) -> str | None:
