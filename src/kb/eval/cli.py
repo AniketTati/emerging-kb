@@ -57,6 +57,20 @@ def _build_parser() -> argparse.ArgumentParser:
     run.add_argument("--summary-json", default=None,
                      help="Optional path for a machine-readable summary JSON")
     run.add_argument("--concurrency", type=int, default=2)
+    run.add_argument(
+        "--ragas", action="store_true",
+        help=(
+            "Compute RAGAS faithfulness + answer_relevancy + context_relevance. "
+            "Requires `pip install -e .[eval]` and a Gemini LLM key."
+        ),
+    )
+    run.add_argument(
+        "--hhem", action="store_true",
+        help=(
+            "Compute HHEM-2.1 pass rate over answers vs retrieved contexts. "
+            "Pulls a ~600MB model on first run (transformers + torch required)."
+        ),
+    )
     return p
 
 
@@ -89,8 +103,12 @@ async def _run_cmd(args) -> int:
             workspace_id=args.workspace,
             concurrency=args.concurrency,
         )
+    report = score_results(
+        results, enable_ragas=args.ragas, enable_hhem=args.hhem,
+    )
+    # CSV is written after scoring so the optional RAGAS/HHEM columns
+    # land in the file (the writer reads from module-level sidecars).
     out_path = write_results_csv(results, args.out)
-    report = score_results(results)
     print(render_summary(report))
     print(f"\nCSV written to {out_path}")
     if args.summary_json:

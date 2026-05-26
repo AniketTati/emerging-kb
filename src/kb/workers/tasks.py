@@ -3221,3 +3221,144 @@ async def raptor_build_corpus(workspace_id: str) -> None:
     via POST /corpus/raptor/rebuild (not chained from any file event).
     """
     await raptor_build_corpus_impl(workspace_id=workspace_id)
+
+
+# ---------------------------------------------------------------------------
+# Wave-A close-out — eval suite runner
+#
+# Drives the 45-question regression set against the live /chat endpoint
+# (via loopback HTTP — keeps the runner unchanged, exercises the same
+# API surface as the CLI). Transitions `eval_runs.status`:
+#   queued → running → succeeded | failed
+# and persists the per-question payload into `eval_run_results`.
+# ---------------------------------------------------------------------------
+
+
+async def run_eval_suite_impl(
+    *,
+    run_id: str,
+    workspace_id: str,
+    ragas: bool = False,
+    hhem: bool = False,
+    concurrency: int = 2,
+    questions_path: str | None = None,
+) -> None:
+    """Testable impl. Mutates eval_runs / eval_run_results via the
+    superuser connection (RLS is workspace-scoped + we don't have a
+    request context here)."""
+    import json as _json
+    import os
+    import traceback
+
+    import httpx
+    import psycopg
+
+    from kb.config import get_settings
+    from kb.eval.runner import load_golden_questions, run_eval
+    from kb.eval.scorer import (
+        reset_sidecars, score_results,
+    )
+
+    settings = get_settings()
+
+    async def _set_status(
+        status: str,
+        *,
+        summary: dict | None = None,
+        error: str | None = None,
+        finished: bool = False,
+    ) -> None:
+        async with await psycopg.AsyncConnection.connect(
+            settings.database_url_superuser
+        ) as conn:
+            await conn.execute(
+                "SELECT set_config('app.workspace_id', %s, true)",
+                (workspace_id,),
+            )
+            await conn.execute(
+                "UPDATE eval_runs SET status = %s, "
+                "  summary = COALESCE(%s::jsonb, summary), "
+                "  error = COALESCE(%s, error), "
+                "  finished_at = CASE WHEN %s THEN NOW() ELSE finished_at END "
+                "WHERE id = %s",
+                (
+                    status,
+                    _json.dumps(summary) if summary is not None else None,
+                    error,
+                    finished,
+                    run_id,
+                ),
+            )
+            await conn.commit()
+
+    try:
+        await _set_status("running")
+
+        questions = load_golden_questions(questions_path)
+        # Worker container talks to the API over docker-compose internal
+        # DNS; localhost wouldn't resolve. Falls back to localhost for
+        # dev-machine `python -m kb.workers.run` invocations.
+        base_url = os.environ.get("KB_API_BASE_URL", "http://localhost:8000")
+        async with httpx.AsyncClient(
+            base_url=base_url, timeout=httpx.Timeout(120.0),
+        ) as client:
+            results = await run_eval(
+                client, questions,
+                workspace_id=workspace_id,
+                concurrency=concurrency,
+            )
+
+        # Sidecar dicts are module-level; clear before scoring so this
+        # run doesn't pick up another worker's leftovers.
+        reset_sidecars()
+        report = score_results(
+            results, enable_ragas=ragas, enable_hhem=hhem,
+        )
+
+        # Persist per-question payloads + flip status → succeeded with
+        # the aggregate summary blob in one transaction.
+        async with await psycopg.AsyncConnection.connect(
+            settings.database_url_superuser
+        ) as conn:
+            await conn.execute(
+                "SELECT set_config('app.workspace_id', %s, true)",
+                (workspace_id,),
+            )
+            for r in results:
+                await conn.execute(
+                    "INSERT INTO eval_run_results "
+                    "  (run_id, workspace_id, question_id, payload) "
+                    "VALUES (%s, %s, %s, %s::jsonb)",
+                    (run_id, workspace_id, r.question.id,
+                     _json.dumps(r.to_dict())),
+                )
+            await conn.commit()
+
+        await _set_status(
+            "succeeded", summary=report.to_dict(), finished=True,
+        )
+    except Exception as exc:  # noqa: BLE001
+        # Truncate the traceback so the eval_runs.error column stays
+        # bounded; full trace lives in worker logs.
+        tail = traceback.format_exc()[-2000:]
+        await _set_status(
+            "failed", error=f"{exc}\n\n{tail}", finished=True,
+        )
+
+
+@procrastinate_app.task(name="run_eval_suite", queue="kb", pass_context=False)
+async def run_eval_suite(
+    *,
+    run_id: str,
+    workspace_id: str,
+    ragas: bool = False,
+    hhem: bool = False,
+    concurrency: int = 2,
+    questions_path: str | None = None,
+) -> None:
+    """Wire-level Procrastinate task. Delegates to the testable impl."""
+    await run_eval_suite_impl(
+        run_id=run_id, workspace_id=workspace_id,
+        ragas=ragas, hhem=hhem, concurrency=concurrency,
+        questions_path=questions_path,
+    )

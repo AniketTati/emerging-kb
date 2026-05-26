@@ -1601,3 +1601,122 @@ export async function revokeOverride(body: {
   );
   return _handle(resp);
 }
+
+
+// ---------------------------------------------------------------------------
+// Eval suite — Playground Eval tab + audit-quality regression runs
+// ---------------------------------------------------------------------------
+
+export type EvalRunSummary = {
+  total: number;
+  overall_lexical_avg: number;
+  overall_refusal_accuracy: number;
+  overall_citation_accuracy: number;
+  overall_faithfulness_avg: number;
+  overall_avg_latency_ms: number;
+  total_errors: number;
+  /** Present only when the run was started with ragas=true. */
+  ragas_faithfulness_avg: number | null;
+  ragas_answer_relevancy_avg: number | null;
+  ragas_context_relevance_avg: number | null;
+  /** Present only when the run was started with hhem=true. */
+  hhem_pass_rate: number | null;
+  /** Human-readable "ragas skipped: …" / "hhem skipped: …" notes. */
+  notes: string[];
+  by_stratum: Array<{
+    stratum: string;
+    count: number;
+    lexical_overlap_avg: number;
+    refusal_accuracy: number;
+    citation_accuracy: number;
+    faithfulness_pass_rate: number;
+    avg_latency_ms: number;
+    errors: number;
+  }>;
+};
+
+
+export type EvalRun = {
+  id: string;
+  workspace_id: string;
+  status: "queued" | "running" | "succeeded" | "failed";
+  enable_ragas: boolean;
+  enable_hhem: boolean;
+  concurrency: number;
+  questions_path: string | null;
+  started_at: string;
+  finished_at: string | null;
+  /** Present once status='succeeded'. */
+  summary: EvalRunSummary | null;
+  error: string | null;
+};
+
+
+/** POST /eval/run — kick off an async run; returns 202 + the new row.
+ *  Use the returned `id` to poll `getEvalRun(id)` for completion. */
+export async function postEvalRun(opts: {
+  ragas?: boolean;
+  hhem?: boolean;
+  concurrency?: number;
+  questionsPath?: string;
+  /** Caller-supplied idempotency key — repeating a request with the
+   *  same key returns the existing run rather than starting a new one. */
+  idempotencyKey?: string;
+}): Promise<EvalRun> {
+  const idempotencyKey = opts.idempotencyKey ?? crypto.randomUUID();
+  const resp = await fetch(`${KB_API_URL}/eval/run`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Idempotency-Key": idempotencyKey,
+      ...workspaceHeaders(),
+    },
+    body: JSON.stringify({
+      ragas: !!opts.ragas,
+      hhem: !!opts.hhem,
+      concurrency: opts.concurrency ?? 2,
+      questions_path: opts.questionsPath ?? null,
+    }),
+  });
+  return _handle<EvalRun>(resp);
+}
+
+
+export async function listEvalRuns(limit = 50): Promise<EvalRun[]> {
+  const resp = await fetch(
+    `${KB_API_URL}/eval/runs?limit=${limit}`,
+    { headers: workspaceHeaders() },
+  );
+  const body = await _handle<{ items: EvalRun[] }>(resp);
+  return body.items ?? [];
+}
+
+
+export async function getEvalRun(runId: string): Promise<EvalRun> {
+  const resp = await fetch(
+    `${KB_API_URL}/eval/runs/${runId}`,
+    { headers: workspaceHeaders() },
+  );
+  return _handle<EvalRun>(resp);
+}
+
+
+export type EvalRunResult = {
+  question_id: string;
+  payload: Record<string, unknown>;
+  created_at: string;
+};
+
+
+export async function getEvalRunResults(
+  runId: string, opts?: { limit?: number; offset?: number },
+): Promise<{ items: EvalRunResult[]; total: number }> {
+  const params = new URLSearchParams();
+  if (opts?.limit != null) params.set("limit", String(opts.limit));
+  if (opts?.offset != null) params.set("offset", String(opts.offset));
+  const resp = await fetch(
+    `${KB_API_URL}/eval/runs/${runId}/results?${params.toString()}`,
+    { headers: workspaceHeaders() },
+  );
+  return _handle(resp);
+}

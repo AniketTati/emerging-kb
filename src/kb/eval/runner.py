@@ -78,6 +78,10 @@ class EvalResult:
     faithfulness_score: float | None
     latency_ms: int
     error: str | None = None
+    # Retrieved chunk snippets, populated from ChatResponse.hits[].snippet
+    # so RAGAS / HHEM can score answer↔context grounding. Optional with
+    # a safe default so older callers stay green.
+    contexts: tuple[str, ...] = field(default_factory=tuple)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -215,6 +219,16 @@ async def _ask_one(
     gen = payload.get("generation") or {}
     citations = gen.get("citations") or []
     modalities = payload.get("citation_modalities") or []
+    # Retrieved-chunk snippets — needed by RAGAS faithfulness /
+    # context-relevance and HHEM grounding. We pull the top ~20 to keep
+    # the per-row payload bounded; RAGAS/HHEM degrade gracefully when
+    # the list is shorter than the answer's claim count.
+    hits = payload.get("hits") or []
+    contexts = tuple(
+        str(h.get("snippet") or "")
+        for h in hits[:20]
+        if isinstance(h, dict) and h.get("snippet")
+    )
 
     return EvalResult(
         question=question,
@@ -233,6 +247,7 @@ async def _ask_one(
         faithfulness_score=payload.get("faithfulness_score"),
         latency_ms=int(payload.get("latency_ms") or 0),
         error=None,
+        contexts=contexts,
     )
 
 
