@@ -2409,6 +2409,21 @@ async def extract_schema_entities_file_impl(file_id: str) -> None:
             # migrated to read from extracted_entities in subsequent
             # commits. Migration 0038 drops the table once all readers
             # have moved over.
+            # Pre-fetch chunks.id → contextual_chunks.id translation so
+            # we can translate atomic_units.source_chunk_id (FK → chunks)
+            # into the contextual_chunks.id that extracted_entities.
+            # source_chunk_id (FK → contextual_chunks) expects.
+            cur = await conn.execute(
+                "SELECT cc.chunk_id::text, cc.id::text "
+                "FROM contextual_chunks cc "
+                "JOIN chunks c ON c.id = cc.chunk_id "
+                "WHERE c.file_id = %s",
+                (file_id,),
+            )
+            chunk_to_cc: dict[str, str] = {
+                r[0]: r[1] for r in await cur.fetchall()
+            }
+
             for unit in atomic_units_for_file:
                 unit_type = unit["unit_type"]
                 sub_entity_id = sub_entity_type_by_unit.get(unit_type)
@@ -2422,6 +2437,13 @@ async def extract_schema_entities_file_impl(file_id: str) -> None:
                 citations_for_unit: dict[str, str] = {}
                 if unit.get("anchor_chunk_id"):
                     citations_for_unit["_anchor"] = unit["anchor_chunk_id"]
+                # FK translation: atomic_units.source_chunk_id → chunks(id);
+                # extracted_entities.source_chunk_id → contextual_chunks(id).
+                # Look up the cc.id wrapping each chunk; fall back to NULL if
+                # no contextual_chunk exists for that chunks row (rare).
+                raw_src = unit.get("source_chunk_id")
+                ee_src_chunk_id = chunk_to_cc.get(raw_src) if raw_src else None
+
                 eid = await insert_extracted_entity(
                     conn,
                     schema_entity_id=sub_entity_id,
@@ -2435,7 +2457,7 @@ async def extract_schema_entities_file_impl(file_id: str) -> None:
                     # Source positions carry through so the citation
                     # envelope can render verbatim snippets identically
                     # to the legacy atomic_units → citation_card path.
-                    source_chunk_id=unit.get("source_chunk_id"),
+                    source_chunk_id=ee_src_chunk_id,
                     source_char_start=unit.get("source_char_start"),
                     source_char_end=unit.get("source_char_end"),
                 )

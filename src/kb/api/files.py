@@ -771,10 +771,12 @@ async def post_re_extract(
             deferred.append("parse_file")
         else:
             # Re-extraction path — roll back to 'fields_extracting' so
-            # the extract_fields_file task re-runs (it short-circuits
-            # on terminal states). The chain (fields → atomic_units →
-            # schema_entities → identities → ready) picks up
-            # automatically.
+            # the extract_kv_tables_file task re-runs (it short-circuits
+            # on terminal states). The collapsed chain
+            # (kv_tables → schema_entities → identities → ready) picks
+            # up automatically; the legacy extract_fields_file /
+            # extract_atomic_units_file tasks remain available for
+            # rollback but are no longer in the live chain.
             await transition_lifecycle(
                 conn, workspace_id=workspace_id, file_id=file_id,
                 to_state="fields_extracting", event="re_extract_requested",
@@ -782,9 +784,9 @@ async def post_re_extract(
                 allow_backward=True,
             )
             await procrastinate_app.configure_task(
-                name="extract_fields_file"
+                name="extract_kv_tables_file"
             ).defer_async(file_id=file_id)
-            deferred.append("extract_fields_file")
+            deferred.append("extract_kv_tables_file")
     except Exception as exc:  # noqa: BLE001
         # Procrastinate misconfigured / network blip — return 503 rather
         # than silently swallow so the caller knows to retry.
