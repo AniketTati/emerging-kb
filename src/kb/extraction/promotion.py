@@ -157,18 +157,56 @@ def map_value_type_to_schema_type(value_type: str) -> str:
     return _VALUE_TYPE_TO_SCHEMA_TYPE.get(value_type, "string")
 
 
+def _snake_to_pascal(s: str) -> str:
+    """`bank_statement` → `BankStatement`. Used to derive the doc_root
+    entity-type name from the inferred doc_type. Empty/`unknown` →
+    `Doc` so we never end up with a nameless type."""
+    s = (s or "").strip()
+    if not s or s.lower() == "unknown":
+        return "Doc"
+    parts = re.split(r"[_\s-]+", s)
+    return "".join(p[:1].upper() + p[1:].lower() for p in parts if p) or "Doc"
+
+
+def doc_root_name_for(doc_type: str) -> str:
+    """Public alias — call this anywhere the worker / API needs to
+    know the doc_root entity-type name for a given doc_type. Single
+    source of truth for the convention."""
+    return _snake_to_pascal(doc_type)
+
+
+def sub_entity_name_for(unit_type: str) -> str:
+    """`transaction` → `Transaction`. Used for sub_entity type names
+    derived from L3 plugin unit_type."""
+    return _snake_to_pascal(unit_type)
+
+
 async def ensure_auto_schema_entity(
     conn: Connection,
     *,
     workspace_id: str,
     doc_type: str,
 ) -> tuple[str, str]:
-    """Ensure `schemas(name='auto:<doc_type>', active)` + matching schema_entity
-    exist for the doc_type. Returns (schema_id, schema_entity_id).
+    """Ensure `schemas(name='auto:<doc_type>', active)` + a doc_root
+    schema_entity exist for the doc_type. Returns
+    `(schema_id, doc_root_entity_id)`.
 
-    Idempotent: if already exists, returns the existing IDs.
+    Idempotent: returns existing IDs when the rows are already there.
+
+    Nested-entities refactor (P1.5):
+      - doc_root entity name is now the PascalCase of doc_type
+        (`bank_statement` → `BankStatement`). Previously a single
+        placeholder "Doc" was used for every doc-type; this caused the
+        schema layer to lose all type information.
+      - Backfill is handled in this same function: any pre-existing
+        schema_entity named "Doc" for the schema is RENAMED to the
+        doc_root name + tagged `kind='doc_root'`. This keeps existing
+        rows + their schema_fields stable across the migration without
+        a destructive drop. New schema_entity rows are created with the
+        proper name from the start.
     """
     schema_name = f"auto:{doc_type}"
+    doc_root_name = doc_root_name_for(doc_type)
 
     # Find existing active schema
     cur = await conn.execute(
@@ -209,27 +247,106 @@ async def ensure_auto_schema_entity(
             (schema_id, schema_id),
         )
 
-    # Find or create one schema_entity per doc_type (single "Doc" entity).
-    entity_name = "Doc"
+    # Find existing doc_root entity. Three cases handled in order:
+    #   1. A row named with the proper PascalCase already exists (new path).
+    #   2. A legacy row named "Doc" exists (created by the pre-P1.5 code) —
+    #      rename it in place + tag kind='doc_root'.
+    #   3. No matching row — create it fresh with kind='doc_root'.
     cur = await conn.execute(
-        "SELECT id::text FROM schema_entities "
-        "WHERE schema_id = %s AND name = %s AND lifecycle_state = 'active' "
+        "SELECT id::text, name FROM schema_entities "
+        "WHERE schema_id = %s AND lifecycle_state = 'active' "
+        "  AND parent_type_id IS NULL "
+        "  AND name IN (%s, 'Doc') "
+        "ORDER BY (name = %s) DESC "  # prefer the canonical name when both exist
         "LIMIT 1",
-        (schema_id, entity_name),
+        (schema_id, doc_root_name, doc_root_name),
     )
     row = await cur.fetchone()
     if row:
-        entity_id = row[0]
+        entity_id, existing_name = row[0], row[1]
+        if existing_name != doc_root_name:
+            # Legacy "Doc" → rename to PascalCase doc_root.
+            await conn.execute(
+                "UPDATE schema_entities SET name = %s, kind = 'doc_root', "
+                "  description = COALESCE(NULLIF(description, ''), %s), "
+                "  updated_at = NOW() "
+                "WHERE id = %s",
+                (doc_root_name, f"Auto-created doc-root entity for '{doc_type}'", entity_id),
+            )
+        else:
+            # Already correctly named; ensure kind tagged.
+            await conn.execute(
+                "UPDATE schema_entities SET kind = 'doc_root' "
+                "WHERE id = %s AND kind <> 'doc_root'",
+                (entity_id,),
+            )
     else:
         cur = await conn.execute(
-            "INSERT INTO schema_entities (schema_id, workspace_id, name, description, lifecycle_state) "
-            "VALUES (%s, %s, %s, %s, 'active') "
+            "INSERT INTO schema_entities "
+            "  (schema_id, workspace_id, name, description, "
+            "   lifecycle_state, kind) "
+            "VALUES (%s, %s, %s, %s, 'active', 'doc_root') "
             "RETURNING id::text",
-            (schema_id, workspace_id, entity_name, f"Auto-created entity for '{doc_type}'"),
+            (schema_id, workspace_id, doc_root_name,
+             f"Auto-created doc-root entity for '{doc_type}'"),
         )
         entity_id = (await cur.fetchone())[0]
 
     return schema_id, entity_id
+
+
+async def ensure_sub_entity_type(
+    conn: Connection,
+    *,
+    workspace_id: str,
+    schema_id: str,
+    parent_type_id: str,
+    unit_type: str,
+    description: str = "",
+) -> str:
+    """Ensure a `sub_entity` schema_entity exists for the given
+    structural `unit_type` (e.g. 'transaction', 'clause',
+    'line_item') under the given doc_root parent type.
+
+    The sub_entity name is `sub_entity_name_for(unit_type)` (PascalCase).
+    Returns the sub_entity's id. Idempotent.
+
+    Usage during extraction:
+      1. ensure_auto_schema_entity → doc_root id (parent)
+      2. for each unit_type observed in this doc's atomic_units:
+           ensure_sub_entity_type → sub_entity id (child)
+      3. for each atomic_unit row, create an extracted_entity with
+         schema_entity_id = sub_entity id, parent_entity_id pointing
+         at the doc's parent extracted_entity.
+    """
+    sub_name = sub_entity_name_for(unit_type)
+    # Match by (schema_id, name, parent_type_id). Three guards in one:
+    # right schema, right name, right parent. Avoids cross-schema or
+    # cross-parent collisions in workspaces that share unit_type names.
+    cur = await conn.execute(
+        "SELECT id::text FROM schema_entities "
+        "WHERE schema_id = %s AND name = %s AND parent_type_id = %s "
+        "  AND lifecycle_state = 'active' "
+        "LIMIT 1",
+        (schema_id, sub_name, parent_type_id),
+    )
+    row = await cur.fetchone()
+    if row:
+        return row[0]
+
+    cur = await conn.execute(
+        "INSERT INTO schema_entities "
+        "  (schema_id, workspace_id, name, description, "
+        "   lifecycle_state, kind, parent_type_id) "
+        "VALUES (%s, %s, %s, %s, 'active', 'sub_entity', %s) "
+        "RETURNING id::text",
+        (
+            schema_id, workspace_id, sub_name,
+            description or f"Auto-created sub-entity type from unit_type='{unit_type}'",
+            parent_type_id,
+        ),
+    )
+    return (await cur.fetchone())[0]
 
 
 async def promote_field(

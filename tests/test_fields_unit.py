@@ -232,3 +232,27 @@ def test_promotion_thresholds_from_env():
         t = PromotionThresholds.from_env()
         assert t.min_docs == 1  # default lowered to 1 in PR5 so single-doc
                                 # demo corpus exercises L4 closed-world path
+
+
+def test_doc_root_name_for_pascalcase_conversion():
+    from kb.extraction.promotion import doc_root_name_for, sub_entity_name_for
+
+    # snake_case → PascalCase
+    assert doc_root_name_for("bank_statement") == "BankStatement"
+    assert doc_root_name_for("master_services_agreement") == "MasterServicesAgreement"
+    assert doc_root_name_for("email_thread") == "EmailThread"
+
+    # Hyphen + space variants normalize through the same path.
+    assert doc_root_name_for("bank-statement") == "BankStatement"
+    assert doc_root_name_for("Bank Statement") == "BankStatement"
+
+    # Unknown / empty / None-ish all fall back to "Doc" so no
+    # nameless types ever land in the schema.
+    assert doc_root_name_for("unknown") == "Doc"
+    assert doc_root_name_for("UNKNOWN") == "Doc"
+    assert doc_root_name_for("") == "Doc"
+
+    # Sub-entity uses the same convention.
+    assert sub_entity_name_for("transaction") == "Transaction"
+    assert sub_entity_name_for("line_item") == "LineItem"
+    assert sub_entity_name_for("row") == "Row"
