@@ -5,6 +5,24 @@ import { segmentAnswer, type ChatResponse } from "@/lib/api";
 
 type Props = { response: ChatResponse };
 
+
+/** Scroll the right-rail citation card matching `cardId` into view and
+ *  briefly flash it so the user sees where their click landed. The DOM
+ *  id is set by `CitationsPanel.CitationCardRow` (`citation-card-N`).
+ *
+ *  Falls back silently when the card isn't mounted (e.g. citation refers
+ *  to a hit that wasn't included in the final cards list). */
+function scrollAndFlashCitation(cardId: string): void {
+  const el = document.getElementById(cardId);
+  if (!el) return;
+  el.scrollIntoView({ behavior: "smooth", block: "center" });
+  // CSS animation lives in globals.css under `[data-citation-flash]`.
+  el.setAttribute("data-citation-flash", "true");
+  window.setTimeout(() => {
+    el.removeAttribute("data-citation-flash");
+  }, 1500);
+}
+
 /**
  * Assistant turn: header pill (grounded / refused) + answer with inline
  * citation badges + "How I answered" collapsible inspector.
@@ -59,23 +77,32 @@ export function AnswerCard({ response }: Props) {
             // numbers point at a superseded source.
             const cit = response.generation.citations[seg.index];
             const superseded = !!cit?.superseded;
+            const cardId =
+              seg.index >= 0 ? `citation-card-${seg.index}` : null;
             return (
-              <sup
+              <button
+                type="button"
                 key={i}
+                onClick={() => {
+                  if (!cardId) return;
+                  scrollAndFlashCitation(cardId);
+                }}
                 className={
                   superseded
-                    ? "cref text-amber-700 hover:text-amber-900 font-medium px-0.5 text-[11px] cursor-pointer line-through decoration-amber-400"
-                    : "cref text-zinc-500 hover:text-zinc-900 font-medium px-0.5 text-[11px] cursor-pointer"
+                    ? "cref text-amber-700 hover:text-amber-900 font-medium px-0.5 text-[11px] cursor-pointer line-through decoration-amber-400 align-super"
+                    : "cref text-zinc-500 hover:text-zinc-900 font-medium px-0.5 text-[11px] cursor-pointer align-super"
                 }
                 title={
                   superseded
-                    ? `hit ${seg.hitId} — superseded; newer version cited above`
-                    : `hit ${seg.hitId}`
+                    ? `Citation ${seg.index + 1} — superseded; click to view source`
+                    : `Citation ${seg.index + 1} — click to view source`
                 }
                 data-superseded={superseded || undefined}
+                data-citation-index={seg.index}
+                aria-label={`Open citation ${seg.index + 1}`}
               >
                 [{seg.index >= 0 ? seg.index + 1 : "?"}]
-              </sup>
+              </button>
             );
           })}
         </div>

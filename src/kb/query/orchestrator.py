@@ -344,7 +344,42 @@ class Orchestrator:
 
         crag_score = await self._crag.assess(effective_query, hits)
 
-        force_refuse = crag_score < self._crag_threshold
+        # CRAG asks "do these snippets answer the query?" — a question
+        # that only makes sense for FACT-style asks ("what's the payment
+        # cap"). For corpus-scope asks ("summarize the corpus", "what
+        # documents do I have", "give me an overview") no individual
+        # chunk snippet IS the answer — the answer is a synthesis ACROSS
+        # snippets. CRAG correctly scores those snippets as low-relevance
+        # to the literal question, but its refusal is the wrong move:
+        # the downstream faithfulness gate will still catch generation
+        # hallucinations, and these users would rather see a synthesized
+        # overview than a "I can't answer that" refusal.
+        #
+        # Bypass everything EXCEPT H (hybrid). CRAG's "do these snippets
+        # answer the query?" check assumes a fact-style ask where some
+        # chunk should literally contain the answer text. That assumption
+        # holds for H (default factoid retrieval) but breaks for the
+        # planner's structured modes:
+        #   G — global/thematic summary
+        #   D — doc-metadata filter
+        #   F — schema field predicates
+        #   S — scoped chunk (within a parent doc/contract/project)
+        #   T — graph traversal (multi-hop)
+        #   M — mention search
+        #   E — entity-centric
+        #   C — atomic-unit filter
+        #   A — anomaly filter
+        #   K — doc-chain aware (current_version / all_versions)
+        #   Q — structured SQL aggregate
+        # In all the above, retrieval is filtered or restructured before
+        # synthesis; the chunks returned may be 100% relevant to the
+        # answer without containing the literal query string. The
+        # downstream faithfulness gate still catches hallucinations.
+        # The LLM also self-refuses cleanly when snippets really don't
+        # answer the question (Q16-style out-of-corpus asks).
+        force_refuse = (
+            crag_score < self._crag_threshold and plan.mode == "H"
+        )
 
         # ---- R1 — Design 2 conflict resolution ----
         # Run REGARDLESS of force_refuse — the detected conflicts are
