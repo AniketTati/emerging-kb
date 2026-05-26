@@ -877,6 +877,41 @@ export async function listSchemaVersions(
   return body.items ?? [];
 }
 
+export async function promoteInferredField(fieldId: string): Promise<{
+  inferred_field_id: string;
+  schema_field_id: string;
+  schema_entity_id: string;
+}> {
+  const resp = await fetch(
+    `${KB_API_URL}/schemas/inferred-fields/${fieldId}/promote`,
+    { method: "POST", headers: workspaceHeaders() },
+  );
+  return _handle(resp);
+}
+
+export async function renameInferredField(
+  fieldId: string, canonicalName: string,
+): Promise<InferredField> {
+  const resp = await fetch(
+    `${KB_API_URL}/schemas/inferred-fields/${fieldId}`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", ...workspaceHeaders() },
+      body: JSON.stringify({ canonical_name: canonicalName }),
+    },
+  );
+  return _handle(resp);
+}
+
+export async function discardInferredField(fieldId: string): Promise<number> {
+  const resp = await fetch(
+    `${KB_API_URL}/schemas/inferred-fields/${fieldId}`,
+    { method: "DELETE", headers: workspaceHeaders() },
+  );
+  const body = await _handle<{ deleted: number }>(resp);
+  return body.deleted ?? 0;
+}
+
 export async function postChat(
   query: string,
   opts: {

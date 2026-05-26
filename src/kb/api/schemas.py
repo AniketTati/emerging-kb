@@ -58,6 +58,20 @@ class InferredFieldsListResponse(BaseModel):
     items: list[InferredFieldOut] = Field(default_factory=list)
 
 
+class InferredFieldRenameRequest(BaseModel):
+    canonical_name: str = Field(min_length=1, max_length=128)
+
+
+class InferredFieldPromotedResponse(BaseModel):
+    inferred_field_id: str
+    schema_field_id: str
+    schema_entity_id: str
+
+
+class InferredFieldDeleteResponse(BaseModel):
+    deleted: int
+
+
 @router.get(
     "/inferred-fields",
     response_model=InferredFieldsListResponse,
@@ -119,6 +133,168 @@ async def get_inferred_fields(
         for r in rows
     ]
     return InferredFieldsListResponse(items=items)
+
+
+# ---------------------------------------------------------------------------
+# Inferred-field actions (Schema Studio row buttons)
+# ---------------------------------------------------------------------------
+#
+# Three thin endpoints sit on top of the worker's existing
+# `promote_field` / `mark_inferred_field_promoted` / `ensure_auto_schema_entity`
+# helpers — Promote / Rename / Discard are the row buttons the
+# Schema Studio prototype shows on every Inferred-tab row. Without these
+# the buttons are decoration; with them the curator can keep moving
+# fields through to the typed schema without touching SQL or the worker
+# CLI.
+
+
+@router.post(
+    "/inferred-fields/{field_id}/promote",
+    response_model=InferredFieldPromotedResponse,
+    summary="Force-promote an inferred field to the typed schema",
+)
+async def promote_inferred_field(
+    field_id: str,
+    workspace_id: Annotated[str, Depends(current_workspace_id)],
+    conn: Annotated[Connection, Depends(kb_app_connection)],
+) -> InferredFieldPromotedResponse:
+    """Idempotent — running twice returns the same schema_field_id.
+
+    Pulls the inferred row, ensures the auto-schema entity exists for
+    its doc_type, inserts the schema_field, marks the inferred row
+    promoted. All four operations run in one transaction so a mid-
+    flow failure leaves nothing partially promoted.
+    """
+    from kb.extraction.promotion import ensure_auto_schema_entity, promote_field
+    from kb.domain.fields import mark_inferred_field_promoted
+
+    cur = await conn.execute(
+        "SELECT inferred_doc_type, canonical_name, description, value_type, "
+        "       is_promoted, promoted_schema_field_id::text "
+        "  FROM inferred_schema_fields "
+        " WHERE id = %s AND workspace_id = %s",
+        (field_id, workspace_id),
+    )
+    row = await cur.fetchone()
+    if row is None:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="inferred field not found")
+    doc_type, canonical_name, description, value_type, was_promoted, sfid = row
+
+    if was_promoted and sfid:
+        # Already done — idempotent return.
+        cur2 = await conn.execute(
+            "SELECT entity_id::text FROM schema_fields WHERE id = %s",
+            (sfid,),
+        )
+        eid_row = await cur2.fetchone()
+        return InferredFieldPromotedResponse(
+            inferred_field_id=field_id,
+            schema_field_id=str(sfid),
+            schema_entity_id=str(eid_row[0]) if eid_row else "",
+        )
+
+    _, schema_entity_id = await ensure_auto_schema_entity(
+        conn,
+        workspace_id=workspace_id,
+        doc_type=doc_type or "unknown",
+    )
+    schema_field_id = await promote_field(
+        conn,
+        workspace_id=workspace_id,
+        schema_entity_id=schema_entity_id,
+        canonical_name=canonical_name,
+        description=description or "",
+        value_type=value_type or "text",
+    )
+    await mark_inferred_field_promoted(
+        conn,
+        inferred_field_id=field_id,
+        promoted_schema_field_id=schema_field_id,
+    )
+    return InferredFieldPromotedResponse(
+        inferred_field_id=field_id,
+        schema_field_id=schema_field_id,
+        schema_entity_id=schema_entity_id,
+    )
+
+
+@router.patch(
+    "/inferred-fields/{field_id}",
+    response_model=InferredFieldOut,
+    summary="Rename the canonical_name on an inferred field (curator override)",
+)
+async def rename_inferred_field(
+    field_id: str,
+    body: InferredFieldRenameRequest,
+    workspace_id: Annotated[str, Depends(current_workspace_id)],
+    conn: Annotated[Connection, Depends(kb_app_connection)],
+) -> InferredFieldOut:
+    """Updates the cluster's canonical_name. Useful when L2b picked
+    `non_compete` but the curator wants `non_competition_clause`.
+    Returns the updated row."""
+    new_name = body.canonical_name.strip()
+    cur = await conn.execute(
+        "UPDATE inferred_schema_fields "
+        "   SET canonical_name = %s "
+        " WHERE id = %s AND workspace_id = %s "
+        "RETURNING id::text, workspace_id::text, inferred_doc_type, "
+        "          canonical_name, description, value_type, "
+        "          n_docs_observed, prevalence, stability, "
+        "          value_type_confidence, is_promoted, "
+        "          promoted_schema_field_id::text, created_at",
+        (new_name, field_id, workspace_id),
+    )
+    r = await cur.fetchone()
+    if r is None:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="inferred field not found")
+    return InferredFieldOut(
+        id=str(r[0]),
+        workspace_id=str(r[1]),
+        inferred_doc_type=str(r[2]),
+        canonical_name=str(r[3]),
+        description=r[4],
+        value_type=r[5],
+        n_docs_observed=int(r[6] or 0),
+        prevalence=float(r[7] or 0.0),
+        stability=float(r[8] or 0.0),
+        value_type_confidence=float(r[9] or 0.0),
+        is_promoted=bool(r[10]),
+        promoted_schema_field_id=str(r[11]) if r[11] else None,
+        created_at=(
+            r[12].isoformat() if hasattr(r[12], "isoformat") else
+            (str(r[12]) if r[12] else None)
+        ),
+    )
+
+
+@router.delete(
+    "/inferred-fields/{field_id}",
+    response_model=InferredFieldDeleteResponse,
+    summary="Discard an inferred field (curator hides it from the Inferred tab)",
+)
+async def discard_inferred_field(
+    field_id: str,
+    workspace_id: Annotated[str, Depends(current_workspace_id)],
+    conn: Annotated[Connection, Depends(kb_app_connection)],
+) -> InferredFieldDeleteResponse:
+    """Hard-delete the row. The L2b clusterer may re-emit it later
+    if the doc-set still supports it; that's intentional — discard
+    is a UI signal, not a permanent block. (For permanent
+    blocklisting we'd add a separate `schema_field_overrides`
+    rule; Wave B.)
+    """
+    cur = await conn.execute(
+        "DELETE FROM inferred_schema_fields "
+        " WHERE id = %s AND workspace_id = %s",
+        (field_id, workspace_id),
+    )
+    n = getattr(cur, "rowcount", 0) or 0
+    if n == 0:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="inferred field not found")
+    return InferredFieldDeleteResponse(deleted=n)
 
 
 # ---------------------------------------------------------------------------
