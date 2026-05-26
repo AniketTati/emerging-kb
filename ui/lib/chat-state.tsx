@@ -7,7 +7,7 @@ import {
   type Dispatch,
   type ReactNode,
 } from "react";
-import type { ChatResponse } from "./api";
+import type { ChatResponse, ChatStreamEvent } from "./api";
 
 export type Turn = {
   id: string;
@@ -16,12 +16,18 @@ export type Turn = {
   response?: ChatResponse;       // only assistant turns
   pending?: boolean;             // assistant placeholder while POST in flight
   error?: string;
+  /** Live pipeline events received during the request — populated by
+   *  the SSE stream handler. Empty until the first event arrives;
+   *  retained after `pending` flips to false so the "How I answered"
+   *  inspector can show the full trace. */
+  events?: ChatStreamEvent[];
 };
 
 export type State = { turns: Turn[] };
 
 type Action =
   | { type: "user_sent"; userId: string; assistantId: string; content: string }
+  | { type: "assistant_event"; assistantId: string; event: ChatStreamEvent }
   | { type: "assistant_answered"; assistantId: string; response: ChatResponse }
   | { type: "assistant_errored"; assistantId: string; error: string };
 
@@ -41,6 +47,15 @@ export function reducer(state: State, action: Action): State {
             pending: true,
           },
         ],
+      };
+    }
+    case "assistant_event": {
+      return {
+        turns: state.turns.map((t) =>
+          t.id === action.assistantId
+            ? { ...t, events: [...(t.events ?? []), action.event] }
+            : t,
+        ),
       };
     }
     case "assistant_answered": {

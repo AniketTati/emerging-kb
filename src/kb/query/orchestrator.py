@@ -25,9 +25,33 @@ from __future__ import annotations
 
 import time
 import uuid
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from pydantic import BaseModel, Field
+
+
+# Live pipeline-event callback. The orchestrator invokes it (when set)
+# at the boundary of every meaningful stage so the API layer can push
+# the events to an SSE stream. Signature is async because some sinks
+# (asyncio.Queue.put) are coroutines; sinks that don't need awaiting
+# just `async def` and return immediately.
+EventSink = Callable[[str, dict[str, Any]], Awaitable[None]]
+
+
+async def _noop_sink(_event_type: str, _payload: dict[str, Any]) -> None:
+    """Default sink — silently drops events when no listener is wired."""
+    return
+
+
+def _count_by(items: Any, key_fn: Callable[[Any], str]) -> dict[str, int]:
+    """Small helper for the emit() payloads. Returns a {category: count}
+    dict — used to summarise hits-by-kind, conflicts-by-rule, etc.
+    without dragging the whole list into the SSE payload."""
+    out: dict[str, int] = {}
+    for it in items:
+        k = key_fn(it)
+        out[k] = out.get(k, 0) + 1
+    return out
 
 from kb.embeddings import Embedder, make_embedder
 from kb.query.channels import run_all_channels
@@ -243,6 +267,7 @@ class Orchestrator:
         requested_mode: str | None = None,
         session_id: str | None = None,
         file_ids: list[str] | None = None,
+        event_sink: EventSink | None = None,
     ) -> ChatResult:
         """Run context resolution → intent → planner → search → mode router
         → CRAG-gated generation → HHEM faithfulness gate → persist turn.
@@ -258,9 +283,30 @@ class Orchestrator:
         post-filtered out after the fused/reranked top-K — cheaper than
         threading filters through every channel's SQL, and the typical
         scope (1-10 files) means we still have plenty of in-scope hits.
+
+        When `event_sink` is provided, the orchestrator invokes it at
+        each pipeline stage so an SSE caller can stream progress to the
+        chat UI. Sink failures are silently swallowed — the pipeline
+        keeps running even if the listener goes away mid-stream.
         """
+        sink = event_sink or _noop_sink
+
+        async def emit(event_type: str, payload: dict[str, Any]) -> None:
+            try:
+                # Always include `t_ms` so the UI can render a timeline
+                # without having to track its own start clock.
+                await sink(event_type, {
+                    **payload,
+                    "t_ms": int((time.monotonic() - t0) * 1000),
+                })
+            except Exception:
+                # A failed sink (closed SSE connection, etc.) must NOT
+                # crash the pipeline. Best-effort observability only.
+                pass
         t0 = time.monotonic()
         query_id = str(uuid.uuid4())
+
+        await emit("started", {"query": query, "session_id": session_id})
 
         # B6a — context resolution. Skips quietly when no session_id /
         # no prior context.
@@ -268,13 +314,24 @@ class Orchestrator:
             query, session_id=session_id, conn=conn,
         )
         effective_query = resolved_query or query
+        if resolved_query and resolved_query != query:
+            await emit("context_resolved", {
+                "original": query, "resolved": resolved_query,
+            })
 
         intent = await self._intent_classifier.classify(effective_query)
+        await emit("intent_classified", {
+            "label": intent.label, "confidence": intent.confidence,
+        })
         plan = await self._planner.plan(
             effective_query, intent, requested_mode=requested_mode,
         )
+        await emit("planned", {"mode": plan.mode, "intent": intent.label})
 
         rewrites = await self._rewriter.rewrite(effective_query)
+        await emit("query_rewritten", {
+            "n_variants": len(self._rewrites_to_dict(rewrites)),
+        })
         # R3-supporting fix — `_retrieve_and_rerank` runs 6 channels in
         # parallel via asyncio.gather on a SHARED psycopg connection.
         # When one channel's SQL errors (paradedb edge case, missing
@@ -296,6 +353,7 @@ class Orchestrator:
             retrieve_sp_open = True
         except Exception:
             pass
+        await emit("retrieving", {})
         try:
             hits = await self._retrieve_and_rerank(
                 query=effective_query,
@@ -333,6 +391,10 @@ class Orchestrator:
                 except Exception:
                     pass
             hits = []
+        await emit("retrieved", {
+            "n_hits": len(hits),
+            "by_kind": _count_by(hits, lambda h: h.kind),
+        })
 
         # Chat-UX `@ doc filter` — scope hits to the file_ids the user
         # explicitly picked. Done before apply_mode so the mode router
@@ -341,16 +403,22 @@ class Orchestrator:
         # cheaper than threading filters through every channel SQL.
         if file_ids:
             scope = {str(fid) for fid in file_ids if fid}
+            before = len(hits)
             hits = [
                 h for h in hits
                 if (h.metadata or {}).get("file_id") in scope
             ]
+            await emit("doc_filter_applied", {
+                "scope_size": len(scope),
+                "kept": len(hits), "dropped": before - len(hits),
+            })
 
         try:
             hits = await apply_mode(
                 plan, hits,
                 workspace_id=workspace_id, query=effective_query, conn=conn,
             )
+            await emit("mode_routed", {"mode": plan.mode, "kept": len(hits)})
         except QModeNotImplementedError as exc:
             # Q-mode pipeline ships in B4b; return a refusal envelope so
             # the API stays stable.
@@ -362,6 +430,11 @@ class Orchestrator:
             )
 
         crag_score = await self._crag.assess(effective_query, hits)
+        await emit("crag_assessed", {
+            "score": round(crag_score, 3),
+            "threshold": self._crag_threshold,
+            "bypassed": plan.mode != "H",
+        })
 
         # CRAG asks "do these snippets answer the query?" — a question
         # that only makes sense for FACT-style asks ("what's the payment
@@ -435,6 +508,12 @@ class Orchestrator:
                         conn, hits,
                     )
                     if conflict_resolutions:
+                        await emit("conflicts_resolved", {
+                            "n_conflicts": len(conflict_resolutions),
+                            "by_rule": _count_by(
+                                conflict_resolutions, lambda r: r.resolution,
+                            ),
+                        })
                         conflict_context = build_conflict_prompt_block(
                             conflict_resolutions,
                         ) or None
@@ -476,21 +555,38 @@ class Orchestrator:
         from kb.query.faithfulness import MAX_REGENERATIONS
 
         regenerations = 0
+        await emit("generating", {
+            "force_refuse": force_refuse, "n_hits_seen": len(hits),
+        })
         generation = await self._generator.generate(
             effective_query, hits, force_refuse=force_refuse,
             conflict_context=conflict_context,
         )
+        await emit("generated", {
+            "refused": generation.refused,
+            "refusal_reason": generation.refusal_reason,
+            "n_citations": len(generation.citations),
+        })
         faithfulness = await self._assess_faithfulness(generation, hits, conn)
+        await emit("faithfulness_checked", {
+            "verdict": faithfulness.verdict, "score": faithfulness.score,
+            "regenerations": regenerations,
+        })
         while (
             should_regenerate(faithfulness.verdict, regenerations)
             and not generation.refused
         ):
             regenerations += 1
+            await emit("regenerating", {"attempt": regenerations})
             generation = await self._generator.generate(
                 effective_query, hits, force_refuse=force_refuse,
                 conflict_context=conflict_context,
             )
             faithfulness = await self._assess_faithfulness(generation, hits, conn)
+            await emit("faithfulness_checked", {
+                "verdict": faithfulness.verdict, "score": faithfulness.score,
+                "regenerations": regenerations,
+            })
 
         if faithfulness.verdict == "refused" and not generation.refused:
             # Out of retries — abstain (architecture §6 step 9 final branch).
@@ -501,6 +597,9 @@ class Orchestrator:
 
         # ---- Citation enrichment (Design 5) ----
         await self._enrich_citations(generation, hits, conn)
+        await emit("citations_enriched", {
+            "n_citations": len(generation.citations),
+        })
 
         # R1 — tag citations whose source doc lost a conflict so the UI
         # can render a `superseded` ribbon. Runs AFTER citation

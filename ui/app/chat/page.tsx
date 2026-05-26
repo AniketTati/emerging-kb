@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { postChat } from "@/lib/api";
+import { postChatStream } from "@/lib/api";
 import { ChatProvider, useChat } from "@/lib/chat-state";
 import { Sidebar } from "@/components/Sidebar";
 import { TopBar } from "@/components/TopBar";
@@ -27,7 +27,10 @@ function ChatShell() {
     const assistantId = crypto.randomUUID();
     dispatch({ type: "user_sent", userId, assistantId, content: query });
     try {
-      const response = await postChat(query, opts);
+      const response = await postChatStream(query, opts ?? {}, {
+        onEvent: (event) =>
+          dispatch({ type: "assistant_event", assistantId, event }),
+      });
       dispatch({ type: "assistant_answered", assistantId, response });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

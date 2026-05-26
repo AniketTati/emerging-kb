@@ -5,9 +5,20 @@ import { ChevronRight } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeSanitize from "rehype-sanitize";
-import { type ChatResponse, type Citation } from "@/lib/api";
+import {
+  type ChatResponse,
+  type ChatStreamEvent,
+  type Citation,
+} from "@/lib/api";
+import { PipelineTimeline } from "./MessageBubble";
 
-type Props = { response: ChatResponse };
+type Props = {
+  response: ChatResponse;
+  /** Live pipeline events captured during the request (SSE). Shown
+   *  inside the "How I answered" inspector so the user can audit which
+   *  pipeline stages ran, in what order, and how long each took. */
+  events?: ChatStreamEvent[];
+};
 
 
 /** Scroll the right-rail citation card matching `cardId` into view and
@@ -31,8 +42,9 @@ function scrollAndFlashCitation(cardId: string): void {
  * Assistant turn: header pill (grounded / refused) + answer with inline
  * citation badges + "How I answered" collapsible inspector.
  */
-export function AnswerCard({ response }: Props) {
+export function AnswerCard({ response, events }: Props) {
   const refused = response.generation.refused;
+  const pipelineEvents = events ?? [];
 
   return (
     <div className="mb-2" data-testid="answer-card" data-refused={refused}>
@@ -81,30 +93,52 @@ export function AnswerCard({ response }: Props) {
             {response.hits.length} hits
           </span>
         </summary>
-        <div className="px-4 pb-4 pt-3 text-xs border-t border-zinc-200">
-          <div className="grid grid-cols-[110px_1fr] gap-x-3 gap-y-2 mono">
-            <div className="text-zinc-400">Mode</div>
-            <div className="text-zinc-700">H (hybrid)</div>
-            <div className="text-zinc-400">Rewrites</div>
-            <div className="text-zinc-700">
-              original · step_back · hyde · query2doc (4 variants)
+        <div className="px-4 pb-4 pt-3 text-xs border-t border-zinc-200 space-y-4">
+          {pipelineEvents.length > 0 && (
+            <div>
+              <div className="text-zinc-500 mb-2 mono">Pipeline trace</div>
+              <PipelineTimeline events={pipelineEvents} />
             </div>
-            <div className="text-zinc-400">Channels</div>
-            <div className="text-zinc-700">
-              bm25_chunks · bm25_raptor · dense_chunks · dense_raptor ·
-              mentions_exact · atomic_units_rarity (6)
-            </div>
-            <div className="text-zinc-400">CRAG</div>
-            <div className="text-zinc-700">
-              {response.crag_score >= 0.5
-                ? `confident (${response.crag_score.toFixed(2)} ≥ 0.5)`
-                : `low confidence (${response.crag_score.toFixed(2)} < 0.5) → refused`}
-            </div>
-            <div className="text-zinc-400">Model</div>
-            <div className="text-zinc-700">{response.generation.model_id}</div>
-            <div className="text-zinc-400">Citations</div>
-            <div className="text-zinc-700">
-              {response.generation.citations.length} returned
+          )}
+          <div>
+            <div className="text-zinc-500 mb-2 mono">Summary</div>
+            <div className="grid grid-cols-[110px_1fr] gap-x-3 gap-y-2 mono">
+              <div className="text-zinc-400">Mode</div>
+              <div className="text-zinc-700">{response.mode ?? "H"}</div>
+              <div className="text-zinc-400">Intent</div>
+              <div className="text-zinc-700">
+                {response.intent ?? "?"}
+                {response.intent_confidence != null && (
+                  <> · {Math.round(response.intent_confidence * 100)}%</>
+                )}
+              </div>
+              <div className="text-zinc-400">Channels</div>
+              <div className="text-zinc-700">
+                bm25_chunks · bm25_raptor · dense_chunks · dense_raptor ·
+                mentions_exact · atomic_units_rarity (6)
+              </div>
+              <div className="text-zinc-400">CRAG</div>
+              <div className="text-zinc-700">
+                {response.crag_score.toFixed(2)}
+                {response.mode && response.mode !== "H"
+                  ? ` (bypassed — mode ${response.mode})`
+                  : response.crag_score >= 0.5
+                    ? " (pass)"
+                    : " (refused)"}
+              </div>
+              <div className="text-zinc-400">Faithfulness</div>
+              <div className="text-zinc-700">
+                {response.faithfulness_verdict ?? "?"}
+                {response.faithfulness_regenerations
+                  ? ` · ${response.faithfulness_regenerations} retries`
+                  : ""}
+              </div>
+              <div className="text-zinc-400">Model</div>
+              <div className="text-zinc-700">{response.generation.model_id}</div>
+              <div className="text-zinc-400">Citations</div>
+              <div className="text-zinc-700">
+                {response.generation.citations.length} returned
+              </div>
             </div>
           </div>
         </div>
