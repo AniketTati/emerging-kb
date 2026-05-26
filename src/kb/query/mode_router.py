@@ -89,7 +89,10 @@ async def apply_mode(
     if mode == "T":
         return await _route_t_mode(plan, hits, conn, workspace_id=workspace_id, query=query)
 
-    # E / F / S / D / M / G / C / A — pass-through with mode tag.
+    if mode == "G":
+        return await _route_g_mode(plan, hits, conn, workspace_id=workspace_id)
+
+    # E / F / S / D / M / C / A — pass-through with mode tag.
     return _tag_mode(hits, mode)
 
 
@@ -339,6 +342,110 @@ def _tag_mode(hits: list[Hit], mode: str) -> list[Hit]:
         out.append(Hit(
             id=h.id, kind=h.kind, score=h.score,
             snippet=h.snippet, metadata=new_meta,
+        ))
+    return out
+
+
+# ---------------------------------------------------------------------------
+# G-mode — global/thematic summary
+# ---------------------------------------------------------------------------
+
+# How many chunk-level hits to keep below the RAPTOR summary nodes.
+# Smaller than the default top-10 because summary nodes are very token-
+# dense (each LLM-generated summary is 200-500 tokens). Keeping the cap
+# tight prevents the generator's input from blowing past max_input_tokens.
+_G_MODE_CHUNK_TAIL = 5
+
+
+async def _route_g_mode(
+    plan: Plan,
+    hits: list[Hit],
+    conn: Any,
+    *,
+    workspace_id: str,
+) -> list[Hit]:
+    """For global/thematic queries (\"summarize the workspace\", \"give me an
+    overview\"), boost corpus-level RAPTOR nodes to the top of the hit list.
+
+    The 6 retrieval channels return chunk-level matches whose scoring is
+    keyword-driven — for a meta-query, that surfaces a tightly-clustered
+    set of docs sharing common terms rather than a workspace-representative
+    sample. RAPTOR's L3 corpus root and L2 cluster summaries ARE workspace
+    summaries by construction (LLM-generated synthesis of clusters), so
+    they're the right input for the generator.
+
+    Strategy:
+      1. Pull every RAPTOR node with scope='corpus' for the workspace
+      2. Sort descending by level (L3 root first, then L2 clusters)
+      3. Prepend them to the hit list as `kind='raptor_node'` hits
+      4. Truncate the chunk-level tail to `_G_MODE_CHUNK_TAIL` to keep
+         the generator's input bounded
+      5. Tag everything with `mode_applied='G'` for observability
+
+    Fail-safe: when there are NO corpus RAPTOR nodes (e.g. corpus build
+    never triggered, or only 1 file), fall through to the pass-through
+    tag so the generator sees the same chunk hits as mode H.
+    """
+    raptor_hits = await _fetch_corpus_raptor_hits(conn, workspace_id=workspace_id)
+    if not raptor_hits:
+        return _tag_mode(hits, "G")
+
+    # Keep a short tail of chunk-level hits for grounding / per-claim
+    # citation. The summary nodes lead; chunks support specific facts.
+    chunk_tail = _tag_mode(hits[:_G_MODE_CHUNK_TAIL], "G")
+    raptor_tagged = _tag_mode(raptor_hits, "G")
+    return raptor_tagged + chunk_tail
+
+
+async def _fetch_corpus_raptor_hits(
+    conn: Any, *, workspace_id: str,
+) -> list[Hit]:
+    """Read all `scope='corpus'` raptor_nodes for the workspace and
+    materialise them as Hit objects ready for the generator's prompt.
+
+    Ordering: L3 (root) first, then L2 cluster summaries. The L3 node
+    is a true workspace synthesis — single most informative chunk for a
+    \"summarize everything\" ask. The L2 nodes cluster the workspace by
+    natural topic groupings (medical, financial, legal, …) so the
+    generator can structure its answer per cluster.
+
+    Returns [] when no corpus tree exists yet (corpus RAPTOR is built
+    via the explicit POST /corpus/raptor/rebuild endpoint).
+    """
+    if conn is None:
+        return []
+    try:
+        cur = await conn.execute(
+            """
+            SELECT id::text, text, level, file_id::text
+              FROM raptor_nodes
+             WHERE workspace_id = %s AND scope = 'corpus'
+             ORDER BY level DESC, id ASC
+            """,
+            (workspace_id,),
+        )
+        rows = await cur.fetchall()
+    except Exception:
+        return []
+
+    out: list[Hit] = []
+    for row in rows:
+        node_id, text, level, file_id = row
+        out.append(Hit(
+            # Score is purely synthetic — give the L3 root the highest
+            # score, then L2 nodes, so RRF/rerank downstream don't
+            # accidentally drop them. 1.0 + level/10 keeps them above
+            # every BM25/dense score we see in practice.
+            id=str(node_id),
+            kind="raptor_node",
+            score=1.0 + (level or 0) / 10.0,
+            snippet=text or "",
+            metadata={
+                "level": level,
+                "scope": "corpus",
+                "file_id": file_id,
+                "channel": "g_mode_boost",
+            },
         ))
     return out
 

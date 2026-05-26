@@ -148,6 +148,11 @@ async def read_doc_roots_for_workspace(
     Returns rows in a stable order (by file_id then by root_id) so corpus
     clustering is deterministic across rebuilds.
     """
+    # Soft-deleted files leave their derived rows (chunks /
+    # contextual_chunks / raptor_nodes) in place — same pattern the
+    # retrieval channels hit. Exclude them from the doc-root set so a
+    # content-sha dedup loser doesn't pull a phantom doc into the
+    # corpus cluster. Mirrors the JOIN added in kb.query.channels.
     # Multi-leaf files: their highest-level per-doc raptor_nodes row.
     cur = await conn.execute(
         """
@@ -158,10 +163,12 @@ async def read_doc_roots_for_workspace(
             'node' AS root_kind
         FROM raptor_nodes rn
         INNER JOIN (
-            SELECT file_id, max(level) AS max_level
-            FROM raptor_nodes
-            WHERE scope = 'per_doc' AND workspace_id = %s
-            GROUP BY file_id
+            SELECT rn2.file_id, max(rn2.level) AS max_level
+            FROM raptor_nodes rn2
+            JOIN files f ON f.id = rn2.file_id
+              AND f.lifecycle_state <> 'deleted'
+            WHERE rn2.scope = 'per_doc' AND rn2.workspace_id = %s
+            GROUP BY rn2.file_id
         ) max_per_file
             ON rn.file_id = max_per_file.file_id
            AND rn.level = max_per_file.max_level
@@ -183,6 +190,8 @@ async def read_doc_roots_for_workspace(
             'chunk' AS root_kind
         FROM contextual_chunks cc
         INNER JOIN chunk_embeddings ce ON ce.contextual_chunk_id = cc.id
+        INNER JOIN files f ON f.id = cc.file_id
+          AND f.lifecycle_state <> 'deleted'
         WHERE cc.workspace_id = %s
           AND cc.file_id NOT IN (
               SELECT DISTINCT file_id FROM raptor_nodes
