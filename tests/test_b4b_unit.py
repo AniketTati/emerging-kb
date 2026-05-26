@@ -48,14 +48,29 @@ from kb.q_planner.grammar import QPlanParseError
 # ===========================================================================
 
 
-def test_catalog_has_seven_tables():
+def test_catalog_exposes_typed_entity_surface():
+    """Post-nested-entities refactor, atomic_units is dropped from the
+    catalog — all typed rows (transactions, clauses, line_items, ...)
+    live in extracted_entities with unit_type + rarity_score columns."""
     assert "files" in ALLOWED_TABLES
     assert "extracted_entities" in ALLOWED_TABLES
-    assert "atomic_units" in ALLOWED_TABLES
     assert "doc_chains" in ALLOWED_TABLES
+    # atomic_units removed by the nested-entities refactor.
+    assert "atomic_units" not in ALLOWED_TABLES
     # Tables we do NOT want exposed (workspace settings, raw blobs, etc.)
     assert "users" not in ALLOWED_TABLES
     assert "kb_app" not in ALLOWED_TABLES
+
+
+def test_extracted_entities_has_unit_type_and_rarity_columns():
+    """The nested-entities refactor migrated unit_type + rarity_score
+    from atomic_units onto extracted_entities — the catalog must
+    expose them so the LLM can write `SUM(rarity_score) WHERE
+    unit_type='transaction'` against typed children."""
+    from kb.q_planner.catalog import ALLOWED_COLUMNS
+    assert ("extracted_entities", "unit_type") in ALLOWED_COLUMNS
+    assert ("extracted_entities", "rarity_score") in ALLOWED_COLUMNS
+    assert ("extracted_entities", "parent_entity_id") in ALLOWED_COLUMNS
 
 
 def test_column_type_lookup():
