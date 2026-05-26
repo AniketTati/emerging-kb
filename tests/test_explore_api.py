@@ -117,6 +117,97 @@ async def test_explore_search_has_chain_filter_drops_unchained_files(
     assert standalone_file not in chained_only_ids
 
 
+async def test_explore_search_doc_types_multi_value_filter(
+    client, test_workspace, db_url_superuser,
+):
+    """`doc_types=A,B,C` returns only files whose inferred_doc_type is
+    in the list. Single-value `doc_type=` still works for back-compat."""
+    contracts_file = str(uuid.uuid4())
+    invoices_file = str(uuid.uuid4())
+    other_file = str(uuid.uuid4())
+
+    async with await psycopg.AsyncConnection.connect(db_url_superuser) as conn:
+        await conn.execute(
+            "SELECT set_config('app.workspace_id', %s, true)", (test_workspace,),
+        )
+        seeds = [
+            (contracts_file, "ctr.pdf", "master_services_agreement"),
+            (invoices_file,  "inv.pdf", "invoice"),
+            (other_file,     "oth.pdf", "case_study"),
+        ]
+        for i, (fid, name, dt) in enumerate(seeds):
+            await conn.execute(
+                "INSERT INTO files (id, workspace_id, name, mime_type, "
+                "size_bytes, content_sha, object_key, lifecycle_state, "
+                "inferred_doc_type) "
+                "VALUES (%s, %s, %s, 'application/pdf', 0, %s, %s, "
+                "        'ready', %s)",
+                (fid, test_workspace, name, "a" * 63 + str(i), f"k/{fid}", dt),
+            )
+        await conn.commit()
+
+    # Both contracts + invoices come back when both are requested.
+    resp = await client.get(
+        "/explore/search?kind=document&doc_types=master_services_agreement,invoice&limit=20",
+        headers=headers(test_workspace),
+    )
+    assert resp.status_code == 200
+    ids = {h["id"] for h in resp.json()["items"]}
+    assert contracts_file in ids
+    assert invoices_file in ids
+    assert other_file not in ids
+
+    # Single-value doc_type still works.
+    resp = await client.get(
+        "/explore/search?kind=document&doc_type=invoice&limit=20",
+        headers=headers(test_workspace),
+    )
+    ids = {h["id"] for h in resp.json()["items"]}
+    assert ids == {invoices_file}
+
+
+async def test_explore_search_date_range_filter(
+    client, test_workspace, db_url_superuser,
+):
+    """`date_from` + `date_to` filter by file.created_at inclusively."""
+    old_file = str(uuid.uuid4())
+    new_file = str(uuid.uuid4())
+
+    async with await psycopg.AsyncConnection.connect(db_url_superuser) as conn:
+        await conn.execute(
+            "SELECT set_config('app.workspace_id', %s, true)", (test_workspace,),
+        )
+        for fid, name, age_days in [
+            (old_file, "old.pdf", 400),
+            (new_file, "new.pdf", 2),
+        ]:
+            await conn.execute(
+                "INSERT INTO files (id, workspace_id, name, mime_type, "
+                "size_bytes, content_sha, object_key, lifecycle_state, "
+                "created_at, updated_at) "
+                "VALUES (%s, %s, %s, 'application/pdf', 0, %s, %s, 'ready', "
+                "        NOW() - %s::interval, NOW() - %s::interval)",
+                (
+                    fid, test_workspace, name, "a" * 63 + name[0], f"k/{fid}",
+                    f"{age_days} days", f"{age_days} days",
+                ),
+            )
+        await conn.commit()
+
+    # Last 7 days → only the new file.
+    import datetime
+    today = datetime.date.today().isoformat()
+    seven_days_ago = (datetime.date.today() - datetime.timedelta(days=7)).isoformat()
+    resp = await client.get(
+        f"/explore/search?kind=document&date_from={seven_days_ago}&date_to={today}&limit=20",
+        headers=headers(test_workspace),
+    )
+    assert resp.status_code == 200
+    ids = {h["id"] for h in resp.json()["items"]}
+    assert new_file in ids
+    assert old_file not in ids
+
+
 async def test_explore_entity_profile_404_for_missing_id(
     client, test_workspace,
 ):

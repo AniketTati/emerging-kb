@@ -97,14 +97,28 @@ from dataclasses import dataclass
 @dataclass(frozen=True)
 class _SearchFilters:
     doc_type: str | None = None
+    doc_types: tuple[str, ...] = ()
+    date_from: str | None = None         # ISO 'YYYY-MM-DD'
+    date_to: str | None = None
     has_anomaly: bool = False
     has_conflicts: bool = False
     has_chain: bool = False
 
+    def effective_doc_types(self) -> tuple[str, ...]:
+        """`doc_types` (multi) takes precedence over `doc_type` (single)
+        for back-compat. Callers should branch on len(): 0 = no filter,
+        1 = single, >1 = ANY-of."""
+        if self.doc_types:
+            return self.doc_types
+        if self.doc_type:
+            return (self.doc_type,)
+        return ()
+
     def applies_to_files(self) -> bool:
         return bool(
-            self.doc_type or self.has_anomaly
+            self.effective_doc_types() or self.has_anomaly
             or self.has_conflicts or self.has_chain
+            or self.date_from or self.date_to
         )
 
 
@@ -237,7 +251,33 @@ async def get_explore_search(
     ),
     doc_type: str | None = Query(
         default=None,
-        description="Filter document/atomic_unit/anomaly buckets to one doc_type.",
+        description=(
+            "Filter document/atomic_unit/anomaly buckets to one doc_type. "
+            "DEPRECATED — use `doc_types=X,Y,Z` for multi-select; this "
+            "single-value form is kept for back-compat."
+        ),
+    ),
+    doc_types: str | None = Query(
+        default=None,
+        description=(
+            "Comma-separated list of inferred_doc_type values. When set "
+            "(takes precedence over `doc_type`), only files whose "
+            "inferred_doc_type is in the list are returned."
+        ),
+    ),
+    date_from: str | None = Query(
+        default=None,
+        description=(
+            "ISO date (YYYY-MM-DD). Restrict file/atomic_unit/anomaly "
+            "results to rows whose `files.created_at >= date_from`."
+        ),
+    ),
+    date_to: str | None = Query(
+        default=None,
+        description=(
+            "ISO date (YYYY-MM-DD). Restrict to `files.created_at <= "
+            "date_to`. Inclusive on both ends."
+        ),
     ),
     has_anomaly: bool = Query(
         default=False,
@@ -280,9 +320,18 @@ async def get_explore_search(
         kind = None
 
     targets = [kind] if kind else list(_VALID_KINDS)
+    # Parse comma-separated doc_types. Skip empties / strip whitespace.
+    parsed_doc_types: tuple[str, ...] = tuple(
+        t.strip() for t in (doc_types or "").split(",") if t.strip()
+    )
     filters = _SearchFilters(
-        doc_type=doc_type, has_anomaly=has_anomaly,
-        has_conflicts=has_conflicts, has_chain=has_chain,
+        doc_type=doc_type,
+        doc_types=parsed_doc_types,
+        date_from=date_from,
+        date_to=date_to,
+        has_anomaly=has_anomaly,
+        has_conflicts=has_conflicts,
+        has_chain=has_chain,
     )
 
     items: list[ExploreHit] = []
@@ -657,9 +706,18 @@ async def _search_documents(
     if has_query:
         where_parts.append("name ILIKE %s")
         where_params.append(like)
-    if filters.doc_type:
-        where_parts.append("inferred_doc_type = %s")
-        where_params.append(filters.doc_type)
+    eff_doc_types = filters.effective_doc_types()
+    if eff_doc_types:
+        where_parts.append("inferred_doc_type = ANY(%s)")
+        where_params.append(list(eff_doc_types))
+    if filters.date_from:
+        where_parts.append("created_at >= %s::date")
+        where_params.append(filters.date_from)
+    if filters.date_to:
+        # `<= date + 1 day` to make the upper bound inclusive on the
+        # whole day instead of requiring callers to pass timestamps.
+        where_parts.append("created_at < (%s::date + INTERVAL '1 day')")
+        where_params.append(filters.date_to)
     if filters.has_anomaly:
         where_parts.append(
             "EXISTS (SELECT 1 FROM atomic_units au "
@@ -775,9 +833,16 @@ async def _search_atomic_units(
     if has_query:
         where_parts.append("au.unit_type ILIKE %s")
         where_params.append(like)
-    if filters.doc_type:
-        where_parts.append("f.inferred_doc_type = %s")
-        where_params.append(filters.doc_type)
+    eff_doc_types = filters.effective_doc_types()
+    if eff_doc_types:
+        where_parts.append("f.inferred_doc_type = ANY(%s)")
+        where_params.append(list(eff_doc_types))
+    if filters.date_from:
+        where_parts.append("f.created_at >= %s::date")
+        where_params.append(filters.date_from)
+    if filters.date_to:
+        where_parts.append("f.created_at < (%s::date + INTERVAL '1 day')")
+        where_params.append(filters.date_to)
     if filters.has_anomaly:
         where_parts.append("au.rarity_score > 0.7")
     if filters.has_chain:
@@ -1017,9 +1082,16 @@ async def _search_anomalies(
     if has_query:
         where_parts.append("au.unit_type ILIKE %s")
         where_params.append(like)
-    if filters.doc_type:
-        where_parts.append("f.inferred_doc_type = %s")
-        where_params.append(filters.doc_type)
+    eff_doc_types = filters.effective_doc_types()
+    if eff_doc_types:
+        where_parts.append("f.inferred_doc_type = ANY(%s)")
+        where_params.append(list(eff_doc_types))
+    if filters.date_from:
+        where_parts.append("f.created_at >= %s::date")
+        where_params.append(filters.date_from)
+    if filters.date_to:
+        where_parts.append("f.created_at < (%s::date + INTERVAL '1 day')")
+        where_params.append(filters.date_to)
     where = " AND ".join(where_parts)
     params: tuple = tuple(where_params) + (limit, offset)
     cur = await conn.execute(
