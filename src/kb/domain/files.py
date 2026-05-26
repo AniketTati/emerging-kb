@@ -865,6 +865,7 @@ async def transition_lifecycle(
     to_state: str,
     event: str,
     payload: dict[str, Any] | None = None,
+    allow_backward: bool = False,
 ) -> str:
     """Helper for the worker: read current state under FOR UPDATE, write the
     new state to `files`, and append the audit event. Returns the old state
@@ -876,6 +877,11 @@ async def transition_lifecycle(
     the state, so re-runs degrade to noop instead of clobbering the
     file's progress. The audit-event row is also skipped on these refuses
     so file_lifecycle stays a clean forward chain.
+
+    `allow_backward=True` is an explicit escape hatch for operator-
+    initiated re-extract: POST /files/:id/re-extract walks the state
+    back so the worker chain actually re-runs. Set sparingly — abusing
+    this can corrupt the audit history of a file's pipeline progress.
     """
     cur = await conn.execute(
         "SELECT lifecycle_state FROM files WHERE id = %s FOR UPDATE",
@@ -886,7 +892,7 @@ async def transition_lifecycle(
         raise FileNotFoundError(file_id)
     from_state = row[0]
 
-    if not _is_valid_transition(from_state, to_state):
+    if not allow_backward and not _is_valid_transition(from_state, to_state):
         # Silent no-op — log to the caller for observability but don't
         # poison the worker (a thrown exception would mark the
         # procrastinate job failed, then it'd retry and fail again).
