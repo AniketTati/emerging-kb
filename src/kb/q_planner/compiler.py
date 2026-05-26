@@ -49,7 +49,11 @@ def _quote_ident(s: str) -> str:
 
 def _filter_clause(table: str, f: Filter) -> tuple[str, list]:
     """Return (sql_fragment, params) for a single filter."""
-    col_sql = f"{_quote_ident(table)}.{_quote_ident(f.field)}"
+    if f.jsonb_path is not None:
+        jsonb_col, jsonb_key, cast = f.jsonb_path
+        col_sql = _jsonb_extract_sql(table, jsonb_col, jsonb_key, cast)
+    else:
+        col_sql = f"{_quote_ident(table)}.{_quote_ident(f.field)}"
 
     if f.op in ("is_null", "is_not_null"):
         return (_OP_TEMPLATES[f.op].format(col=col_sql), [])

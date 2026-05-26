@@ -67,6 +67,37 @@ def _check_column(table: str, column: str) -> str:
 def _validate_filter(table: str, f: Filter) -> tuple[str, str]:
     """Returns (table, column) for accounting in `column_types`. Raises
     on type mismatch."""
+    # JSONB-path branch — same allowlist + cast-vs-op rules as
+    # aggregations.
+    if f.jsonb_path is not None:
+        from kb.q_planner.catalog import is_jsonb_agg_allowed
+        jsonb_col, jsonb_key, cast_type = f.jsonb_path
+        col_type = column_type(table, jsonb_col)
+        if col_type != "jsonb":
+            raise QPlanValidationError(
+                f"filter field {f.field!r}: {jsonb_col!r} on {table!r} "
+                f"is not a jsonb column"
+            )
+        if not is_jsonb_agg_allowed(table, jsonb_col):
+            raise QPlanValidationError(
+                f"jsonb filter on ({table!r}, {jsonb_col!r}) "
+                f"is not in the Q-mode allowlist"
+            )
+        op = f.op
+        if op in ("lt", "le", "gt", "ge", "between"):
+            if cast_type not in _COMPARABLE_CASTS:
+                raise QPlanValidationError(
+                    f"operator {op!r} on jsonb path {f.field!r} requires "
+                    f"a comparable cast (got ::{cast_type})"
+                )
+        if op == "like" and cast_type != "text":
+            raise QPlanValidationError(
+                f"operator 'like' on jsonb path {f.field!r} requires "
+                f"a text cast (got ::{cast_type})"
+            )
+        return (table, jsonb_col)
+
+    # Plain column reference — existing behavior.
     col_type = _check_column(table, f.field)
 
     # Type-vs-operator compatibility.

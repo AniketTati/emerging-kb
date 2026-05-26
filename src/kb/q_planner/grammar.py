@@ -80,9 +80,12 @@ def _parse_jsonb_path(s: str) -> tuple[str, str, str] | None:
 
 @dataclass(frozen=True)
 class Filter:
-    field: str          # column name (catalog validates table+col)
+    field: str          # column name OR jsonb path (e.g. 'fields.date::date')
     op: str             # one of ALLOWED_OPERATORS
     value: Any = None   # primitive or list (for in/not_in/between)
+    # When `field` uses jsonb-path syntax, the parsed (col, key, cast)
+    # tuple. None for plain identifier filters.
+    jsonb_path: tuple[str, str, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -132,11 +135,16 @@ def _expect_str(d: dict, key: str, *, max_len: int = 64) -> str:
 def _parse_filter(raw: Any, *, idx: int) -> Filter:
     if not isinstance(raw, dict):
         raise QPlanParseError(f"filters[{idx}] must be an object")
-    field_name = _expect_str(raw, "field")
+    # Same field syntax as aggregations: plain identifier OR jsonb path.
+    field_name = _expect_str(raw, "field", max_len=160)
+    jsonb_path: tuple[str, str, str] | None = None
     if not _is_valid_ident(field_name):
-        raise QPlanParseError(
-            f"filters[{idx}].field={field_name!r} is not a valid identifier"
-        )
+        jsonb_path = _parse_jsonb_path(field_name)
+        if jsonb_path is None:
+            raise QPlanParseError(
+                f"filters[{idx}].field={field_name!r} is not a valid "
+                f"identifier or jsonb path"
+            )
     op = _expect_str(raw, "op", max_len=16)
     if op not in ALLOWED_OPERATORS:
         raise QPlanParseError(
@@ -175,7 +183,7 @@ def _parse_filter(raw: Any, *, idx: int) -> Filter:
                 f"filters[{idx}].value must be a primitive for op={op!r} "
                 f"(no nested dicts / objects)"
             )
-    return Filter(field=field_name, op=op, value=value)
+    return Filter(field=field_name, op=op, value=value, jsonb_path=jsonb_path)
 
 
 def _is_primitive(v: Any) -> bool:
