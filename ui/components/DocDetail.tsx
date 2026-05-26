@@ -716,7 +716,7 @@ function AtomicUnitsSection({ fileId, total }: { fileId: string; total: number }
   return (
     <Accordion
       icon={FileText}
-      title="Atomic units (clauses · rows · facts)"
+      title="Sub-entities (transactions · clauses · line items · …)"
       count={total}
       testId="doc-detail-units"
     >
@@ -731,36 +731,67 @@ function renderUnits(items: AtomicUnit[]) {
 
 function UnitList({ items }: { items: AtomicUnit[] }) {
   const { cite, citation } = useCitation();
+
+  // Nested-entities refactor: group by unit_type so the user sees
+  // "Transaction (21)", "Clause (12)" instead of one mixed list.
+  // Preserves rarity ordering inside each group (server already
+  // returned items sorted by rarity DESC).
+  const grouped: Record<string, AtomicUnit[]> = {};
+  for (const u of items) {
+    const key = u.unit_type || "(other)";
+    (grouped[key] = grouped[key] || []).push(u);
+  }
+  // Sort groups by their highest-rarity item (so the most-anomalous
+  // category surfaces first).
+  const groupKeys = Object.keys(grouped).sort((a, b) => {
+    const ra = grouped[a][0]?.rarity_score ?? 0;
+    const rb = grouped[b][0]?.rarity_score ?? 0;
+    return rb - ra;
+  });
+
   return (
-    <div className="space-y-2">
-      {items.map((u) => {
-        const c = citationForUnit(u);
-        const active =
-          c && citation && JSON.stringify(c) === JSON.stringify(citation);
+    <div className="space-y-4">
+      {groupKeys.map((groupKey) => {
+        const groupItems = grouped[groupKey];
         return (
-          <button
-            key={u.id}
-            type="button"
-            onClick={() => cite(c)}
-            className={`w-full text-left rounded border p-2.5 transition-colors ${
-              active
-                ? "border-amber-300 bg-amber-50"
-                : "border-zinc-200 hover:bg-zinc-50"
-            }`}
-            title={c ? "Click to highlight in source" : undefined}
-          >
-            <div className="flex items-center gap-2 text-[10px] mono text-zinc-500 mb-1">
-              <span className="px-1 py-0.5 rounded bg-zinc-100 uppercase">
-                {u.unit_type}
-              </span>
-              <span className="ml-auto">
-                rarity {u.rarity_score?.toFixed(2) ?? "—"}
-              </span>
+          <div key={groupKey}>
+            <div className="text-[10px] uppercase tracking-wider text-zinc-400 mb-1.5 flex items-center gap-1.5">
+              <span>{groupKey}</span>
+              <span className="mono text-zinc-400">{groupItems.length}</span>
             </div>
-            <pre className="text-[12px] text-zinc-800 whitespace-pre-wrap font-sans leading-snug">
-              {prettyParameters(u.parameters)}
-            </pre>
-          </button>
+            <div className="space-y-2">
+              {groupItems.map((u) => {
+                const c = citationForUnit(u);
+                const active =
+                  c && citation && JSON.stringify(c) === JSON.stringify(citation);
+                return (
+                  <button
+                    key={u.id}
+                    type="button"
+                    onClick={() => cite(c)}
+                    className={`w-full text-left rounded border p-2.5 transition-colors ${
+                      active
+                        ? "border-amber-300 bg-amber-50"
+                        : "border-zinc-200 hover:bg-zinc-50"
+                    }`}
+                    title={c ? "Click to highlight in source" : undefined}
+                  >
+                    <div className="flex items-center gap-2 text-[10px] mono text-zinc-500 mb-1">
+                      <span className="px-1 py-0.5 rounded bg-zinc-100 uppercase">
+                        {u.unit_type}
+                      </span>
+                      <span className="ml-auto">
+                        rarity {u.rarity_score?.toFixed(2) ?? "—"}
+                      </span>
+                    </div>
+                    <pre className="text-[12px] text-zinc-800 whitespace-pre-wrap font-sans leading-snug">
+                      {prettyParameters(u.parameters)}
+                    </pre>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
         );
       })}
     </div>
