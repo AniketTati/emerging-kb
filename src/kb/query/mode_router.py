@@ -131,13 +131,33 @@ async def _fetch_chain_membership(
     }
 
 
+_VALID_CHAIN_VIEWS = ("current_version", "all_versions", "history_only")
+
+
 async def _route_k_mode(
     plan: Plan, hits: list[Hit], conn: Any, *, workspace_id: str,
 ) -> list[Hit]:
     """Filter hits by doc-chain membership per plan.chain_view.
 
-    chain_view defaults to 'current_version' when unset."""
-    chain_view = (plan.chain_view or "current_version").lower()
+    chain_view defaults to 'current_version' when unset.
+
+    Resilience contracts:
+      * The Gemini planner occasionally fills `chain_view` with the
+        doc_type (e.g. "postmortem", "invoice") instead of one of the
+        three view enums. Without normalisation we'd silently drop
+        every standalone hit (none match the synthetic view), then
+        return zero hits, then refuse. Coerce unrecognised values back
+        to 'current_version'.
+      * Even with a valid chain_view, if K-mode filtering wipes out
+        every hit (e.g. the targeted doc is genuinely chain-less but
+        the planner picked K because of a temporal hint like "recent"),
+        fall back to the unfiltered hit list so the generator still
+        has something to answer with. Refusing in that case is
+        strictly worse than pretending K was H.
+    """
+    chain_view_raw = (plan.chain_view or "").lower().strip()
+    chain_view = chain_view_raw if chain_view_raw in _VALID_CHAIN_VIEWS else "current_version"
+
     if conn is None:
         # Test path / no DB → just annotate, no filtering.
         return _annotate_chain(hits, {})
@@ -187,6 +207,13 @@ async def _route_k_mode(
         else:  # all_versions
             out.append(new_h)
 
+    # Fall-back: K filtered everything out but the unfiltered list was
+    # non-empty — the planner over-triggered K (likely because of a
+    # temporal/sequence hint in the query). Degrade to H rather than
+    # refuse: tag the original hits with mode_applied=K so observability
+    # still surfaces the planner's choice, but keep the candidate set.
+    if not out and hits:
+        return _annotate_chain(hits, {})
     return out
 
 

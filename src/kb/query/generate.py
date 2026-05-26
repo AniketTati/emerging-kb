@@ -171,9 +171,31 @@ def _build_user_prompt(
     pre-computed resolution decisions when phrasing the answer."""
     blocks: list[str] = []
     for h in hits[:_TOP_N_HITS]:
-        snippet = (h.snippet or "")[:500]
+        # Per-snippet ceiling — matched to the channel-layer _SNIPPET_MAX
+        # in channels.py (currently 2500). Keep the two in sync: chunks
+        # arrive from BM25/dense already truncated to that ceiling, so
+        # any smaller value here would re-truncate. Kept as a defensive
+        # second cap in case a channel ever forgets to truncate.
+        snippet = (h.snippet or "")[:2500]
+        # Surface file_name / doc_type when the orchestrator stashed
+        # them on hit.metadata. Without filenames in the prompt the LLM
+        # is forced to refer to documents by opaque UUID — Q12 ("which
+        # documents mention Vertex") then answers with **uuid**: blurb
+        # instead of the readable filename. With filenames it produces
+        # ["vertex-msa.pdf — describes the master service agreement", …].
+        md = h.metadata or {}
+        fname = md.get("file_name")
+        dtype = md.get("inferred_doc_type")
+        ctx_bits = []
+        if fname:
+            ctx_bits.append(f"file={fname}")
+        if dtype:
+            ctx_bits.append(f"type={dtype}")
+        ctx_suffix = (" [" + ", ".join(ctx_bits) + "]") if ctx_bits else ""
         # Use full UUID as hit_id so callers can resolve back to the Hit.
-        blocks.append(f"[hit_id: {h.id}] (kind={h.kind}) {snippet}")
+        blocks.append(
+            f"[hit_id: {h.id}] (kind={h.kind}){ctx_suffix} {snippet}"
+        )
     snippets = "\n\n".join(blocks)
 
     conflict_block = (

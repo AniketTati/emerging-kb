@@ -41,39 +41,40 @@ Categories let us measure per-axis quality:
 | Q19 | factoid-medical-eob | "What was denied in the insurance explanation of benefits" | F | insurance-eob.pdf | Denied service line or honest "none denied" |
 | Q20 | factoid-narrative | "What outcome did the customer case study report" | F | customer-case-study.md | Names the % reduction / business outcome |
 
-## Current baseline (post chat-UX fixes)
+## Current baseline (post Q3-Q20 sweep)
 
-Run 2026-05-26 against the demo workspace after the chat-UX fixes commit
-(`f7e0a6a`-ish on `waveB/chat-ux-fixes`). Spaced 3s between calls to avoid
-Gemini rate limits. Mode/intent assignments are nondeterministic between
-runs — the column shows the most-recent observation.
+Run 2026-05-26 against the demo workspace after the Q3-Q20 fix sweep
+(`waveB/chat-ux-fixes`). Spaced 3s between calls to avoid Gemini rate
+limits. Mode/intent assignments are nondeterministic between runs — the
+column shows the most-recent observation.
 
 | # | Mode | Refused | CRAG | Cites | Notes |
 |---|---|---|---:|---:|---|
-| Q1 | G | ok | 0.0 | 8 | Bypassed CRAG (G mode); synthesis answer |
-| Q2 | D | ok | 0.0 | 10 | Bypassed CRAG (D mode); lists doc types |
-| Q3 | F | ok | 0.1 | 3 | Cites both MSA + Amendment |
+| Q1 | G | ok | 0.0 | 5 | Bypassed CRAG (G mode); synthesis answer |
+| Q2 | I | ok | 1.0 | 26 | Inventory short-circuit — markdown table over 24 doc-types |
+| Q3 | S | ok | 1.0 | 5 | Cites both MSA + Amendment; conflict resolved (net-45 over net-30) |
 | Q4 | T | ok | 1.0 | 6 | R1 conflict banner fires, MSA marked SUPERSEDED |
-| Q5 | F | ok | 0.8 | 2 | Identifies scope + payment-term changes |
-| Q6 | F | ok | 0.5 | 1 | Concrete amount cited |
-| Q7 | S | ok | 0.5 | 1 | Honest "not explicit" when applicable |
-| Q8 | S | ok | 0.5 | 1 | Names high fasting glucose |
-| Q9 | K | ok | 1.0 | 1 | Concrete root cause cited |
-| Q10 | K | refuse (model self-refusal) | 0.0 | 0 | **Issue:** K-mode routing pulled MSA chunks instead of financial report. Retrieval-tuning gap. |
+| Q5 | S | ok | 0.8 | 5 | Names scope expansion + indemnification + payment-term changes |
+| Q6 | F | ok | 0.5 | 1 | Concrete amount — $4,788.00 with full line-item breakdown |
+| Q7 | S | ok | 1.0 | 2 | $185k base + 15% bonus + 20k RSUs |
+| Q8 | S | ok | 1.0 | 3 | Names high fasting glucose (112 mg/dL) + follow-up HbA1c |
+| Q9 | S | ok | 0.5 | 2 | Concrete root cause — unbounded SQL query |
+| Q10 | K | ok | 1.0 | 3 | $14.2M revenue, 38% YoY |
 | Q11 | H | refuse | 0.0 | 0 | Correct — query too vague |
-| Q12 | H | ok | 1.0 | 9 | Cross-doc list works |
-| Q13 | F | ok | 0.0 | 1 | Honest "not explicit" — resume parser caveat |
-| Q14 | F | ok | 0.8 | 1 | Per-tier prices |
-| Q15 | K | refuse (model self-refusal) | 0.0 | 0 | **Issue:** K-mode pulled wrong docs |
-| Q16 | F | refuse | 0.0 | 0 | Correct — out-of-corpus |
-| Q17 | F | ok | 0.0 | 1 | Honest about absence |
-| Q18 | K | refuse (model self-refusal) | 0.0 | 0 | **Issue:** K-mode mis-routing again |
-| Q19 | F | ok | 0.0 | 1 | Concrete denial info |
-| Q20 | F | ok | 0.5 | 1 | Business outcome cited |
+| Q12 | S | ok | 1.0 | 9 | Cross-doc categorisation by press release / case study / etc. |
+| Q13 | F | ok | 0.5 | 1 | Lists Go / Rust / Python / TypeScript |
+| Q14 | S | ok | 0.8 | 1 | Per-tier prices — Starter / Growth / Business / Enterprise / Enterprise+ |
+| Q15 | K | ok | 0.3 | 1 | Action items by team member |
+| Q16 | H | refuse | 0.0 | 0 | Correct — out-of-corpus |
+| Q17 | S | ok | 0.5 | 5 | Honest about absence — only uptime SLAs, no processing-time guarantee |
+| Q18 | K | ok | 0.5 | 1 | Lists Ramesh Gupta + thread participants |
+| Q19 | S | ok | 0.0 | 1 | Honest "no denials" — plan paid $131.20, member owes $32.80 |
+| Q20 | F | ok | 0.7 | 3 | 73% time reduction, 99.4% recall, $600k savings |
 
-**Score:** 14/20 answered, 6 refused. Of the 6 refusals: 2 are correct (Q11
-vague, Q16 out-of-corpus); 4 are mis-routing to K-mode that pulled wrong
-context — a retrieval/planning issue, not a chat bug.
+**Score:** 18/20 answered, 2 correct refusals (Q11 vague + Q16 out-of-corpus).
+**Up from 14/20** — the 4 prior K-mode misroutes (Q10/Q15/Q18 + occasional
+Q9) now all succeed thanks to the K-mode fall-back to H when filtering
+wipes out all hits.
 
 ## Known issues this surfaces (for follow-up tuning)
 

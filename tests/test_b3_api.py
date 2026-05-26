@@ -373,6 +373,52 @@ async def test_orchestrator_enriches_citations_with_file_metadata(
     assert enriched.ref["page"] == 3
 
 
+async def test_orchestrator_resolves_truncated_hit_ids(
+    client, test_workspace, db_url_superuser,
+):
+    """T-mode (multi-hop) Gemini answers sometimes shorten hit_ids to
+    8-12 char prefixes (e.g. `7c84e24b` instead of the full UUID).
+    Without prefix resolution the citation never enriches and R1
+    superseded-tagging silently misses. This test fakes that shape
+    and asserts the prefix gets canonicalised to the full hit id and
+    the citation gets fully enriched.
+    """
+    from kb.query.generate import Citation, GenerationResult
+    from kb.query.orchestrator import Orchestrator
+
+    file_id = await _seed_file(
+        db_url_superuser, test_workspace,
+        source_authority=0.5, doc_status="live", name="contract.pdf",
+    )
+    full_hit_id = "7c84e24b-abcd-1234-5678-1234567890ab"
+    hits = [Hit(
+        id=full_hit_id, kind="chunk", score=0.42, snippet="...",
+        metadata={"file_id": file_id, "source_page_numbers": [1]},
+    )]
+    # Citation emitted with the truncated prefix the LLM produced.
+    gen = GenerationResult(
+        answer="some answer",
+        citations=[Citation(
+            hit_id="7c84e24b", kind="chunk", file_id=None,
+            snippet_preview="", score=0.0,
+        )],
+        refused=False,
+        model_id="gemini",
+    )
+
+    orch = Orchestrator.make_default()
+    async with await psycopg.AsyncConnection.connect(db_url_superuser) as conn:
+        await orch._enrich_citations(gen, hits, conn)
+
+    enriched = gen.citations[0]
+    # Prefix got expanded back to the full UUID
+    assert enriched.hit_id == full_hit_id
+    # Enrichment populated the polymorphic fields
+    assert enriched.modality == "pdf_span"
+    assert enriched.file_id == file_id
+    assert (enriched.label or "").startswith("contract.pdf")
+
+
 # ===========================================================================
 # Faithfulness retry loop
 # ===========================================================================

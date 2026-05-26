@@ -597,6 +597,36 @@ class Orchestrator:
                     except Exception:
                         pass
 
+        # ---- Filename enrichment on hits ----
+        # Stash file_name + inferred_doc_type onto hit.metadata so the
+        # generator prompt can show "[file: vertex-msa.pdf]" alongside
+        # each snippet. Without this, the LLM only sees opaque UUIDs and
+        # answers like "Document UUID-7c84... mentions X" instead of the
+        # actual filename (Q12). One batch SQL per turn — cheap.
+        if conn is not None and hits:
+            fname_ids = sorted({
+                (h.metadata or {}).get("file_id")
+                for h in hits if (h.metadata or {}).get("file_id")
+            })
+            fname_ids = [f for f in fname_ids if f]
+            if fname_ids:
+                fname_metas = await fetch_file_metas(
+                    conn, file_ids=fname_ids,
+                )
+                for h in hits:
+                    fid = (h.metadata or {}).get("file_id")
+                    if not fid:
+                        continue
+                    fm = fname_metas.get(fid)
+                    if fm is None:
+                        continue
+                    if h.metadata is None:
+                        h.metadata = {}
+                    if fm.name and "file_name" not in h.metadata:
+                        h.metadata["file_name"] = fm.name
+                    if fm.inferred_doc_type and "inferred_doc_type" not in h.metadata:
+                        h.metadata["inferred_doc_type"] = fm.inferred_doc_type
+
         # ---- Generation + faithfulness retry loop ----
         from kb.query.faithfulness import MAX_REGENERATIONS
 
@@ -782,10 +812,29 @@ class Orchestrator:
     ) -> None:
         """Populate Design 5 polymorphic fields (modality, ref, authority,
         doc_status, chain_id, label, confidence) on each Citation in-place
-        — only for citations that are not already enriched by the LLM."""
+        — only for citations that are not already enriched by the LLM.
+
+        Resilient to LLM hit_id truncation: T-mode (multi-hop) answers
+        frequently come back with 8-12 char prefixes (e.g. `7c84e24b`)
+        instead of full UUIDs. We resolve prefixes back to the original
+        Hit + canonicalise the citation's hit_id so downstream R1
+        supersession-tagging and the UI inline-marker lookup both work.
+        """
         if not generation.citations or conn is None:
             return
         hit_by_id = {str(h.id): h for h in hits}
+
+        # Canonicalise truncated hit_ids → full UUIDs before any lookup.
+        # The LLM sometimes emits `[7c84e24b]` instead of the 36-char
+        # UUID; without this, enrichment silently leaves modality/label/
+        # file_id all None and R1 can't tag supersession.
+        for c in generation.citations:
+            if c.hit_id in hit_by_id:
+                continue
+            matches = [k for k in hit_by_id if k.startswith(c.hit_id)]
+            if len(matches) == 1:
+                c.hit_id = matches[0]
+
         file_ids = [
             (h.metadata or {}).get("file_id")
             for c in generation.citations

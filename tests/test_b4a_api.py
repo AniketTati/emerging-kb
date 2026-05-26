@@ -248,7 +248,15 @@ async def test_chat_planner_can_override_H_default(client, test_workspace):
     """The planner upgrades 'H' to 'Q' on an aggregation query. With B4b
     shipped, Q-mode now executes — but the Identity planner can't emit
     a Q payload, so the synthesized refusal Hit short-circuits the
-    generator to a no_hits-style answer. Either way, body['mode'] is 'Q'."""
+    generator to a no_hits-style answer. Either way, body['mode'] is 'Q'.
+
+    Query phrasing matters here: the post-Q2 inventory detector matches
+    "how many invoices" verbatim (an inventory listing intent) and
+    short-circuits to I-mode before the planner ever sees the query.
+    We use a time-qualified count instead — "last quarter" trips the
+    negative-lookahead in INVENTORY_PATTERNS, so the inventory pattern
+    does NOT match, the planner sees it, and routes to aggregation Q.
+    """
     reset_orchestrator()
     with _env(
         KB_QUERY_LLM="identity",
@@ -260,7 +268,10 @@ async def test_chat_planner_can_override_H_default(client, test_workspace):
         resp = await client.post(
             "/chat",
             headers=headers(test_workspace),
-            json={"query": "how many invoices total", "mode": "H"},
+            json={
+                "query": "how many invoices were filed last quarter",
+                "mode": "H",
+            },
         )
     assert resp.status_code == 200
     body = resp.json()
