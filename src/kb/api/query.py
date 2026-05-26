@@ -87,6 +87,7 @@ def reset_orchestrator() -> None:
 # wired in kb.query.mode_router via kb.q_planner (Design 1 10 layers).
 _ALLOWED_MODES: set[str] = {
     "E", "F", "S", "H", "T", "M", "G", "D", "C", "A", "Q", "K",
+    "I",  # Inventory — SQL metadata listing
 }
 
 

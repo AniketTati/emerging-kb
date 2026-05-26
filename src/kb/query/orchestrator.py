@@ -328,6 +328,52 @@ class Orchestrator:
         )
         await emit("planned", {"mode": plan.mode, "intent": intent.label})
 
+        # ---- I-mode short-circuit ----
+        # Inventory queries ("what types of docs do I have", "list my
+        # files") are metadata questions. The answer lives in the
+        # `files` table, not in chunks/RAPTOR/atomic_units — running
+        # retrieve+rerank+CRAG+LLM here is the wrong tool and produces
+        # CONTENT summaries instead of TYPE listings. Short-circuit to
+        # a deterministic SQL renderer; ~50ms vs ~13s and zero
+        # hallucination risk.
+        if plan.mode == "I":
+            from kb.query.inventory import build_inventory_answer
+            await emit("inventory_lookup", {})
+            generation = await build_inventory_answer(
+                conn, workspace_id=workspace_id,
+            )
+            await emit("generated", {
+                "refused": False, "refusal_reason": None,
+                "n_citations": len(generation.citations),
+            })
+            latency_ms = int((time.monotonic() - t0) * 1000)
+            await emit("done", {})
+            return ChatResult(
+                query_id=query_id,
+                query=query,
+                rewrites={"original": effective_query},
+                generation=generation,
+                hits=[],
+                crag_score=1.0,
+                latency_ms=latency_ms,
+                faithfulness_verdict="skipped",
+                faithfulness_score=None,
+                faithfulness_regenerations=0,
+                faithfulness_model_id=None,
+                citation_modalities=["file_ref"],
+                intent=intent.label,
+                intent_confidence=intent.confidence,
+                mode=plan.mode,
+                plan=plan.to_dict(),
+                session_id=session_id,
+                resolved_query=resolved_query,
+                context_resolution=(
+                    ctx_resolution.to_dict() if ctx_resolution else None
+                ),
+                turn_index=None,
+                conflict_resolutions=[],
+            )
+
         rewrites = await self._rewriter.rewrite(effective_query)
         await emit("query_rewritten", {
             "n_variants": len(self._rewrites_to_dict(rewrites)),

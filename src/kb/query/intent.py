@@ -46,7 +46,70 @@ INTENT_LABELS: tuple[str, ...] = (
     "set_operation",
     "temporal_history",
     "chain_aware",
+    # Inventory — "what types of docs do I have", "list my files",
+    # "how many invoices", "show me my contracts". The answer comes
+    # from `files` table metadata, not chunk content; the orchestrator
+    # short-circuits retrieval + LLM for these and returns a SQL-
+    # rendered markdown table directly. Pattern-matched deterministically
+    # (see `INVENTORY_PATTERNS`) so it doesn't depend on the LLM's
+    # mood. Added 2026-05-26 after Q2 deep-dive showed the LLM
+    # classifier landed `factoid` on "what types of documents do I have"
+    # and the resulting chunk-based answer summarised content, not types.
+    "inventory",
 )
+
+
+# Deterministic pattern match for the inventory intent — runs BEFORE
+# the configured classifier (LLM or heuristic) so an "obvious" inventory
+# question always routes correctly regardless of LLM nondeterminism.
+# Returns (True, confidence) on match or (False, 0.0).
+#
+# Patterns are intentionally narrow — only fire when the query is CLEARLY
+# about metadata listing, not a content question that happens to use
+# similar words.
+INVENTORY_PATTERNS: tuple[re.Pattern[str], ...] = (
+    # "what types/kinds of (docs|files|documents) ..."
+    re.compile(r"\bwhat\s+(types?|kinds?)\s+of\s+(documents?|docs?|files?)\b", re.IGNORECASE),
+    # "what documents/files do I have"
+    re.compile(r"\bwhat\s+(documents?|docs?|files?)\s+(do\s+(i|we)|are)\b", re.IGNORECASE),
+    # "list ... (documents|docs|files)" — loose so "list all the docs",
+    # "list out my files", "list every uploaded doc" all match. 40-char
+    # window keeps false matches contained (a long query that mentions
+    # both "list" and "docs" 200 chars apart probably isn't an inventory
+    # ask).
+    re.compile(r"\blist\b[^.!?\n]{0,40}\b(documents?|docs?|files?)\b", re.IGNORECASE),
+    # "show (me)? (my|all|the)? (documents|docs|files)" — "me" optional
+    # so "show all docs" matches the same as "show me all docs".
+    re.compile(r"\bshow\s+(?:me\s+)?(?:my|all|the|every)?\s*(documents?|docs?|files?)\b", re.IGNORECASE),
+    # "how many (documents|docs|files|invoices|contracts|...)" — single
+    # noun form, EXCLUDING time-qualified asks ("how many invoices last
+    # quarter" wants aggregation Q-mode + date filter, not a raw count
+    # by doc_type). The negative lookahead drops any query that pairs
+    # the count with a temporal qualifier.
+    re.compile(
+        r"\bhow\s+many\s+"
+        r"(documents?|docs?|files?|invoices?|contracts?|emails?|reports?)\b"
+        r"(?!.*\b(last|this|since|next|past|previous|after|before|in\s+\d)\b)",
+        re.IGNORECASE,
+    ),
+    # "what's in (my|the) (workspace|corpus|knowledge\s*base)"
+    re.compile(r"\bwhat'?s?\s+in\s+(my|the|this)\s+(workspace|corpus|knowledge\s*base|kb)\b", re.IGNORECASE),
+    # "inventory of (my|the) ..."
+    re.compile(r"\binventory\s+of\b", re.IGNORECASE),
+)
+
+
+def detect_inventory_intent(query: str) -> tuple[bool, float]:
+    """Pattern-match the query against `INVENTORY_PATTERNS`. Returns
+    `(matched, confidence)`. Confidence is 0.95 on match — high enough
+    to override any softer LLM classification, low enough to leave
+    room for the LLM to revise on ambiguous edge cases."""
+    if not query or not query.strip():
+        return False, 0.0
+    for pat in INVENTORY_PATTERNS:
+        if pat.search(query):
+            return True, 0.95
+    return False, 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -168,6 +231,14 @@ class IdentityIntentClassifier:
     MODEL_ID = "identity-heuristic-v1"
 
     async def classify(self, query: str) -> IntentResult:
+        # Inventory short-circuit — deterministic pattern match takes
+        # precedence over the heuristic. See `INVENTORY_PATTERNS`.
+        inv, inv_conf = detect_inventory_intent(query)
+        if inv:
+            return IntentResult(
+                label="inventory", confidence=inv_conf,
+                notes="pattern_match", model_id=self.MODEL_ID,
+            )
         label, conf = _heuristic_label(query)
         if label not in INTENT_LABELS:
             label = "vague"
@@ -242,6 +313,16 @@ class GeminiIntentClassifier:
             return IntentResult(
                 label="vague", confidence=0.5,
                 notes="empty_query", model_id=self._model,
+            )
+        # Inventory short-circuit — pattern match runs BEFORE the LLM
+        # call. Saves an LLM round-trip when the query is unambiguously
+        # an inventory ask AND insulates against the LLM occasionally
+        # labelling "what types of docs" as `factoid`.
+        inv, inv_conf = detect_inventory_intent(query)
+        if inv:
+            return IntentResult(
+                label="inventory", confidence=inv_conf,
+                notes="pattern_match", model_id=self._model,
             )
         from google.genai import types
         config = types.GenerateContentConfig(

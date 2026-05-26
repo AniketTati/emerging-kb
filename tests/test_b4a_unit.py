@@ -75,11 +75,15 @@ def _hit(*, id="h1", kind="chunk", score=0.5, snippet="", **md) -> Hit:
 # ===========================================================================
 
 
-def test_intent_labels_are_ten():
-    assert len(INTENT_LABELS) == 10
+def test_intent_labels_include_inventory():
+    # `inventory` was added 2026-05-26 to route metadata listing queries
+    # ("what types of docs do I have", "list my files") through a
+    # deterministic SQL handler. Other labels are stable from B4a.
+    assert len(INTENT_LABELS) == 11
     assert "factoid" in INTENT_LABELS
     assert "aggregation" in INTENT_LABELS
     assert "chain_aware" in INTENT_LABELS
+    assert "inventory" in INTENT_LABELS
 
 
 # ===========================================================================
@@ -109,6 +113,80 @@ def test_heuristic_label_dispatch(query, expected):
     label, conf = _heuristic_label(query)
     assert label == expected
     assert 0.0 <= conf <= 1.0
+
+
+# Inventory pattern detector — must short-circuit BEFORE the LLM
+# so the orchestrator routes to mode I deterministically.
+
+
+@pytest.mark.parametrize("query", [
+    # Type/kind questions
+    "What types of documents do I have",
+    "What kinds of files are in my workspace",
+    "what TYPE of docs",
+    # Direct asks
+    "What documents do I have",
+    "What files do we have indexed",
+    # List asks
+    "List my documents",
+    "list all the docs",
+    "list out my files",
+    "list every uploaded doc",
+    # Show asks
+    "show me my files",
+    "show me the documents",
+    "Show all docs",
+    # How many asks
+    "How many invoices do I have",
+    "how many docs",
+    "how many emails",
+    "how many contracts are there",
+    # Whats-in asks
+    "What's in my workspace",
+    "what's in the knowledge base",
+    "whats in my corpus",
+    # Inventory of
+    "inventory of contracts",
+    "give me an inventory of files",
+])
+def test_detect_inventory_intent_matches(query):
+    from kb.query.intent import detect_inventory_intent
+    matched, conf = detect_inventory_intent(query)
+    assert matched is True, f"should match: {query!r}"
+    assert conf >= 0.9
+
+
+@pytest.mark.parametrize("query", [
+    # Content asks that mention files / docs but aren't inventory
+    "What is in the MSA",
+    "What did the postmortem say",
+    "Summarize the contracts",
+    "What does this document mean by 'force majeure'",
+    "Compare the two contracts",
+    # Unrelated mentions of "list" or "show"
+    "I want to list 5 todos for the team",
+    "show me the indemnification cap",
+    # Empty / whitespace
+    "",
+    "   ",
+])
+def test_detect_inventory_intent_no_false_match(query):
+    from kb.query.intent import detect_inventory_intent
+    matched, conf = detect_inventory_intent(query)
+    assert matched is False, f"should NOT match: {query!r}"
+    assert conf == 0.0
+
+
+async def test_identity_classifier_short_circuits_on_inventory():
+    """Inventory patterns should override the heuristic — even if the
+    query also contains keywords that would otherwise classify it as
+    `aggregation` or `vague`."""
+    from kb.query.intent import IdentityIntentClassifier
+    clf = IdentityIntentClassifier()
+    result = await clf.classify("How many invoices do I have")
+    assert result.label == "inventory"
+    assert result.confidence >= 0.9
+    assert result.notes == "pattern_match"
 
 
 # ===========================================================================
@@ -198,10 +276,12 @@ def test_intent_factory_gemini_without_key_raises():
 # ===========================================================================
 
 
-def test_query_modes_are_twelve():
-    assert len(QUERY_MODES) == 12
+def test_query_modes_include_inventory():
+    # `I` (inventory) added 2026-05-26 alongside the inventory intent
+    # for SQL-backed metadata answers. Other modes are stable from B4a.
+    assert len(QUERY_MODES) == 13
     assert set(QUERY_MODES) == {
-        "E", "F", "S", "H", "T", "M", "G", "D", "C", "A", "Q", "K",
+        "E", "F", "S", "H", "T", "M", "G", "D", "C", "A", "Q", "K", "I",
     }
 
 
