@@ -371,12 +371,12 @@ async def test_re_extract_default_stage_enqueues_two_tasks(
     body = resp.json()
     assert body["file_id"] == file_id
     assert body["stage"] == "extraction"
-    assert set(body["deferred"]) == {
-        "extract_fields_file", "extract_atomic_units_file",
-    }
-    assert set(deferred) == {
-        "extract_fields_file", "extract_atomic_units_file",
-    }
+    # Post-refactor: only extract_fields_file is explicitly deferred.
+    # The chain (fields → atomic_units → schema_entities → identities
+    # → ready) runs automatically once the lifecycle is rolled back to
+    # 'fields_extracting'.
+    assert set(body["deferred"]) == {"extract_fields_file"}
+    assert set(deferred) == {"extract_fields_file"}
 
 
 async def test_re_extract_stage_parsing_enqueues_parse_only(
