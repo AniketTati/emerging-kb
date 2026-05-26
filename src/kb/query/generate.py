@@ -83,6 +83,17 @@ class Citation(BaseModel):
     doc_status: str | None = None
     chain_id: str | None = None
     confidence: float | None = None
+    # R1 — populated by the orchestrator's conflict-resolution pass.
+    # `superseded=True` means another doc in the same chain currently
+    # holds the authoritative value for a predicate this citation's
+    # source disagrees on. The UI grays out / annotates these.
+    superseded: bool = False
+    # When supersession fires, names the doc that won. Helpful for the
+    # UI's "Amendment supersedes MSA on payment_terms" hint.
+    superseded_by_doc_id: str | None = None
+    # Optional human-friendly reason ("chain", "status", "authority",
+    # "recency", "unresolved") — surfaced in the UI tooltip.
+    conflict_resolution: str | None = None
 
 
 class GenerationResult(BaseModel):
@@ -100,6 +111,7 @@ class Generator(Protocol):
         hits: list[Hit],
         *,
         force_refuse: bool = False,
+        conflict_context: str | None = None,
     ) -> GenerationResult: ...
 
 
@@ -126,16 +138,30 @@ def _citations_from_hits(hits: list[Hit], limit: int = 3) -> list[Citation]:
     return out
 
 
-def _build_user_prompt(query: str, hits: list[Hit]) -> str:
-    """Build the user message — top-N hits per decision #2."""
+def _build_user_prompt(
+    query: str,
+    hits: list[Hit],
+    *,
+    conflict_context: str | None = None,
+) -> str:
+    """Build the user message — top-N hits per decision #2.
+
+    When `conflict_context` is non-empty (R1 wiring), it's injected
+    BEFORE the retrieved-snippets block so the model can apply the
+    pre-computed resolution decisions when phrasing the answer."""
     blocks: list[str] = []
     for h in hits[:_TOP_N_HITS]:
         snippet = (h.snippet or "")[:500]
         # Use full UUID as hit_id so callers can resolve back to the Hit.
         blocks.append(f"[hit_id: {h.id}] (kind={h.kind}) {snippet}")
     snippets = "\n\n".join(blocks)
+
+    conflict_block = (
+        (conflict_context.strip() + "\n\n") if conflict_context and conflict_context.strip() else ""
+    )
     return (
         f"Query: {query}\n\n"
+        f"{conflict_block}"
         f"Retrieved snippets (top {min(len(hits), _TOP_N_HITS)}):\n"
         f"{snippets}\n\n"
         f"Return JSON only."
@@ -261,7 +287,11 @@ class IdentityGenerator:
         hits: list[Hit],
         *,
         force_refuse: bool = False,
+        conflict_context: str | None = None,
     ) -> GenerationResult:
+        # Identity ignores `conflict_context` — deterministic stub. Real
+        # impl (GeminiGenerator) injects it into the user prompt.
+        _ = conflict_context
         if force_refuse:
             return GenerationResult(
                 answer="",
@@ -315,6 +345,7 @@ class GeminiGenerator:
         hits: list[Hit],
         *,
         force_refuse: bool = False,
+        conflict_context: str | None = None,
     ) -> GenerationResult:
         # Decision #6: orchestrator already knows we should refuse — don't
         # waste a token call.
@@ -348,7 +379,9 @@ class GeminiGenerator:
         try:
             response = await self._client.aio.models.generate_content(
                 model=self._model,
-                contents=_build_user_prompt(query, hits),
+                contents=_build_user_prompt(
+                    query, hits, conflict_context=conflict_context,
+                ),
                 config=config,
             )
         except Exception:

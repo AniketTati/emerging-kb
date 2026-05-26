@@ -107,9 +107,12 @@ class _FakeGenerator:
         self.last_hits: list[Hit] = []
 
     async def generate(self, query: str, hits: list[Hit], *,
-                       force_refuse: bool = False) -> GenerationResult:
+                       force_refuse: bool = False,
+                       conflict_context: str | None = None) -> GenerationResult:
         self.last_force_refuse = force_refuse
         self.last_hits = list(hits)
+        # R1 — capture conflict_context for assertion tests
+        self.last_conflict_context = conflict_context
         if force_refuse:
             return GenerationResult(
                 answer="", citations=[], refused=True,

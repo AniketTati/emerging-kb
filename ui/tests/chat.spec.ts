@@ -49,3 +49,41 @@ test("composer enables Send when text is entered, disables when empty", async ({
   await input.fill("");
   await expect(send).toBeDisabled();
 });
+
+
+/**
+ * R1 verification — drive a question that should retrieve both MSA and
+ * Amendment chunks, confirm the orchestrator surfaces the chain-rule
+ * conflict resolution in the response, and capture the rendered banner.
+ *
+ * Backend (port 8000) must be running with the demo corpus already
+ * extracted (atomic_units present on vertex-msa.pdf + vertex-amendment.txt
+ * AND the two files chained via the E4 fix from PR6). The Playwright
+ * config launches the Next.js dev server.
+ */
+test("conflict-resolution banner renders for MSA ↔ Amendment payment terms", async ({
+  page,
+}) => {
+  await page.goto("/chat", { waitUntil: "networkidle" });
+
+  await page
+    .getByTestId("chat-input")
+    .fill("What were the original payment terms in the MSA before any amendments?");
+  await page.getByTestId("chat-send").click();
+
+  // Wait for the assistant turn to land. The answer-card datatestid is
+  // emitted only after the response arrives.
+  await expect(page.getByTestId("answer-card")).toBeVisible({ timeout: 30_000 });
+
+  // Banner shows up — exactly one conflict resolved (payment_terms.payment_due_days).
+  const banner = page.getByTestId("conflict-resolutions");
+  await expect(banner).toBeVisible({ timeout: 10_000 });
+  await expect(banner).toContainText(/Resolved 1 conflict/i);
+  await expect(banner).toContainText("payment_terms.payment_due_days");
+  await expect(banner).toContainText("via chain");
+
+  await page.screenshot({
+    path: "tests/artifacts/chat-conflict-resolution.png",
+    fullPage: true,
+  });
+});

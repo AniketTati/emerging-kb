@@ -36,6 +36,12 @@ export function AnswerCard({ response }: Props) {
         )}
       </div>
 
+      {/* R1 — Design 2 conflict-resolution banner. Renders only when
+          the orchestrator detected disagreement between chained docs
+          (typical case: MSA vs Amendment on payment_terms). Honest
+          about what we resolved vs. what we couldn't. */}
+      <ConflictResolutionBanner response={response} />
+
       {/* Body */}
       {refused ? (
         <RefusalBody response={response} />
@@ -44,19 +50,34 @@ export function AnswerCard({ response }: Props) {
           className="text-[15px] leading-[1.75] text-zinc-800"
           data-testid="answer-text"
         >
-          {segments.map((seg, i) =>
-            seg.kind === "text" ? (
-              <span key={i}>{seg.value}</span>
-            ) : (
+          {segments.map((seg, i) => {
+            if (seg.kind === "text") {
+              return <span key={i}>{seg.value}</span>;
+            }
+            // Annotate the inline [N] badge with the underlying
+            // citation's status so the user can see at-a-glance which
+            // numbers point at a superseded source.
+            const cit = response.generation.citations[seg.index];
+            const superseded = !!cit?.superseded;
+            return (
               <sup
                 key={i}
-                className="cref text-zinc-500 hover:text-zinc-900 font-medium px-0.5 text-[11px] cursor-pointer"
-                title={`hit ${seg.hitId}`}
+                className={
+                  superseded
+                    ? "cref text-amber-700 hover:text-amber-900 font-medium px-0.5 text-[11px] cursor-pointer line-through decoration-amber-400"
+                    : "cref text-zinc-500 hover:text-zinc-900 font-medium px-0.5 text-[11px] cursor-pointer"
+                }
+                title={
+                  superseded
+                    ? `hit ${seg.hitId} — superseded; newer version cited above`
+                    : `hit ${seg.hitId}`
+                }
+                data-superseded={superseded || undefined}
               >
                 [{seg.index >= 0 ? seg.index + 1 : "?"}]
               </sup>
-            ),
-          )}
+            );
+          })}
         </div>
       )}
 
@@ -98,6 +119,70 @@ export function AnswerCard({ response }: Props) {
           </div>
         </div>
       </details>
+    </div>
+  );
+}
+
+/** R1 — banner above the answer body listing every resolved conflict.
+ *  Hidden when the orchestrator detected none. One row per (entity,
+ *  predicate); the rule that fired is shown as a small chip on the
+ *  right ("chain", "status", "authority", "recency", "unresolved").
+ *
+ *  Goal: make the supersession reasoning legible. A user reading the
+ *  answer should be able to see "we picked net-45 from the Amendment
+ *  because it supersedes the MSA's net-30 via the chain rule" without
+ *  having to dig through the inspector. */
+function ConflictResolutionBanner({ response }: { response: ChatResponse }) {
+  const conflicts = response.conflict_resolutions ?? [];
+  if (conflicts.length === 0) return null;
+
+  return (
+    <div
+      className="mb-4 rounded-lg border border-amber-200 bg-amber-50/40 px-4 py-3"
+      data-testid="conflict-resolutions"
+    >
+      <div className="text-xs font-medium text-amber-900 mb-2 flex items-center gap-2">
+        <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+        Resolved {conflicts.length === 1 ? "1 conflict" : `${conflicts.length} conflicts`} across doc-chain versions
+      </div>
+      <div className="space-y-1.5">
+        {conflicts.map((c, i) => (
+          <div
+            key={`${c.entity_id}-${c.predicate}-${i}`}
+            className="grid grid-cols-[1fr_auto] gap-3 items-center text-[12px]"
+            data-testid="conflict-row"
+          >
+            <div className="text-zinc-800">
+              <span className="mono text-zinc-600">{c.predicate}</span>
+              {c.resolution === "unresolved" ? (
+                <>
+                  {" "}
+                  <span className="text-zinc-500">— ambiguous, showing both:</span>{" "}
+                  <span className="mono">{c.loser_values.join(" / ")}</span>
+                </>
+              ) : (
+                <>
+                  {" picked "}
+                  <span className="mono font-medium text-zinc-900">
+                    {c.picked_value ?? "—"}
+                  </span>
+                  {c.loser_values.length > 0 && (
+                    <>
+                      {" over "}
+                      <span className="mono text-zinc-500 line-through decoration-amber-400">
+                        {c.loser_values.join(" / ")}
+                      </span>
+                    </>
+                  )}
+                </>
+              )}
+            </div>
+            <span className="mono text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 border border-amber-200">
+              via {c.resolution}
+            </span>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
