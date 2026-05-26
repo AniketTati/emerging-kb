@@ -285,6 +285,29 @@ async def read_last_k_turns(
     return list(reversed([_row_to_turn(r) for r in rows]))
 
 
+async def read_turns_for_session(
+    conn: Connection, *, session_id: str,
+    only_with_answer: bool = False,
+) -> list[ChatTurn]:
+    """Chronological full-history reader. Used by the Tier-2 (Design 8)
+    summarizer to fetch every turn that has aged out of the verbatim
+    window. Cheap at conversation scale (sessions max ~hundreds of
+    turns); we don't paginate.
+
+    `only_with_answer=True` skips turns whose answer is null (refused
+    or in-flight); the summarizer wants completed exchanges only.
+    """
+    where = "WHERE session_id = %s"
+    if only_with_answer:
+        where += " AND answer IS NOT NULL"
+    cur = await conn.execute(
+        f"SELECT {_TURN_COLS} FROM chat_turns "
+        f"{where} ORDER BY turn_index ASC",
+        (session_id,),
+    )
+    return [_row_to_turn(r) for r in await cur.fetchall()]
+
+
 async def count_turns_in_session(
     conn: Connection, *, session_id: str,
 ) -> int:

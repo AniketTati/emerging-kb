@@ -431,11 +431,18 @@ async def run_all_channels(
     query: str,
     query_vec: list[float],
     limit: int = TOP_K_PER_CHANNEL,
+    bm25_query: str | None = None,
 ) -> dict[str, list[Hit]]:
     """Run all 6 channels in parallel via asyncio.gather. Returns
     {channel_name: hits}. Failed channels degrade to [] (decision #4 + #12).
 
     Caller (Phase 8f orchestrator) feeds the values() into rrf_fuse.
+
+    `bm25_query` is the optional vocabulary-expanded form of `query`
+    used ONLY for the BM25 channels (Design 6 §"Pipeline integration").
+    Dense channels keep `query_vec` (built from the original) so vector
+    space stays clean — augmenting with OR-of-synonyms would pollute
+    the embedding. When None, BM25 channels also use `query`.
 
     NOTE: this function looks up the 6 channel functions by name at
     runtime via module globals so monkeypatch of any one channel (e.g.,
@@ -456,10 +463,19 @@ async def run_all_channels(
         "dense_raptor": "dense_raptor_channel",
     }
 
+    # BM25 channels get the (optionally) vocab-expanded query. Other
+    # text channels (mentions_exact, atomic_units_rarity) use the
+    # original — they don't benefit from OR-of-synonyms since they
+    # match against entity tables, not free-text.
+    bm25_text = bm25_query or query
     tasks: dict[str, Any] = {}
     for name, attr in text_channels.items():
         fn = getattr(_self, attr)
-        tasks[name] = fn(conn, workspace_id=workspace_id, query=query, limit=limit)
+        text_for_channel = bm25_text if name.startswith("bm25_") else query
+        tasks[name] = fn(
+            conn, workspace_id=workspace_id,
+            query=text_for_channel, limit=limit,
+        )
     for name, attr in vec_channels.items():
         fn = getattr(_self, attr)
         tasks[name] = fn(conn, workspace_id=workspace_id, query_vec=query_vec, limit=limit)

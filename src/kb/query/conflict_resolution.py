@@ -446,14 +446,27 @@ async def resolve_conflicts_for_hits(
     return [r for r in resolutions if r.resolution != "consensus"]
 
 
-async def persist_unresolved_conflicts(
+async def persist_fact_conflicts(
     conn: Any,
     *,
     workspace_id: str,
     resolutions: Iterable[ResolvedConflict],
 ) -> int:
-    """Write `unresolved` resolutions to `fact_conflicts` for the
-    Dashboard Needs-attention surface.
+    """Write resolved + unresolved conflicts to `fact_conflicts` for the
+    Dashboard Needs-attention surface + audit trail.
+
+    Architecture §6 step 7 says "emit fact_conflicts row with all
+    candidate evidence" — i.e. every conflict, regardless of how the
+    Design 2 cascade resolved it. The dashboard filters to
+    `resolution='unresolved'` for the needs-attention surface, but the
+    full set lives in `fact_conflicts` so the Audit page can replay
+    "we found 14 conflicts in this corpus, 13 chain-superseded + 1
+    flagged for human review".
+
+    Pre-fix this function dropped every resolved conflict and only
+    persisted the unresolved ones. That left the table empty during
+    normal use (most conflicts ARE resolvable via chain / authority /
+    recency), so the dashboard always showed 0.
 
     Returns the number of rows written. Idempotency: dedupes on
     (workspace_id, entity_id, predicate, observed_at-bucketed-to-day) —
@@ -464,7 +477,10 @@ async def persist_unresolved_conflicts(
     real entities row, e.g. when we're using chain_id as a stand-in)
     doesn't poison the outer transaction. We just log + continue.
     """
-    rows = [r for r in resolutions if r.resolution == "unresolved"]
+    # `consensus` (all candidates agreed) isn't really a conflict at
+    # all — skip those. Everything else (chain / status / authority /
+    # recency / unresolved) gets a row.
+    rows = [r for r in resolutions if r.resolution != "consensus"]
     if not rows:
         return 0
 
@@ -486,19 +502,52 @@ async def persist_unresolved_conflicts(
             sp = True
         except Exception:
             sp = False
+        # Split the "subject" of the conflict into entity_id vs
+        # chain_id. The detector populates `r.entity_id` with whatever
+        # identifier it has — for clause-level / atomic-unit conflicts
+        # that's actually a `chain_id` (the doc chain the units belong
+        # to). The post-0034 schema has separate FK columns; pick the
+        # right slot by checking whether the value exists in entities
+        # or doc_chains. We keep it simple: if a chain row exists with
+        # that id, treat as chain-based; else assume entity. This
+        # cheap lookup runs at most a handful of times per chat call.
+        subject_entity_id: str | None = None
+        subject_chain_id: str | None = None
+        try:
+            cur = await conn.execute(
+                "SELECT 1 FROM doc_chains WHERE id = %s::uuid",
+                (r.entity_id,),
+            )
+            if await cur.fetchone() is not None:
+                subject_chain_id = r.entity_id
+            else:
+                subject_entity_id = r.entity_id
+        except Exception:
+            # If the lookup blows up (bad UUID, RLS denied), fall back
+            # to writing to entity_id and let the row's FK constraint
+            # be the safety net. SAVEPOINT below catches the failure.
+            subject_entity_id = r.entity_id
+
         try:
             await conn.execute(
                 "INSERT INTO fact_conflicts "
-                "  (workspace_id, entity_id, predicate, evidence, "
-                "   resolution, resolved_value, notes) "
-                "VALUES (%s, %s::uuid, %s, %s::jsonb, %s, %s, %s)",
+                "  (workspace_id, entity_id, chain_id, predicate, "
+                "   evidence, resolution, resolved_value, "
+                "   resolved_doc_id, notes) "
+                "VALUES (%s, %s::uuid, %s::uuid, %s, %s::jsonb, "
+                "        %s, %s, %s::uuid, %s)",
                 (
                     workspace_id,
-                    r.entity_id,
+                    subject_entity_id,
+                    subject_chain_id,
                     r.predicate,
                     __import__("json").dumps(evidence),
                     r.resolution,
                     r.picked_value,
+                    # Audit value — the chain/status/authority rules
+                    # pick a winner; record its doc_id so the Audit
+                    # page can show "X won because chain rule fired".
+                    (r.picked_candidate.doc_id if r.picked_candidate else None),
                     r.notes,
                 ),
             )
