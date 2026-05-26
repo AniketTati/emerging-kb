@@ -7,7 +7,12 @@ import {
   type Dispatch,
   type ReactNode,
 } from "react";
-import type { ChatResponse, ChatStreamEvent } from "./api";
+import type {
+  ChatResponse,
+  ChatStreamEvent,
+  Citation,
+  SessionTurn,
+} from "./api";
 
 export type Turn = {
   id: string;
@@ -21,22 +26,36 @@ export type Turn = {
    *  retained after `pending` flips to false so the "How I answered"
    *  inspector can show the full trace. */
   events?: ChatStreamEvent[];
+  /** Citations attached when the turn is replayed from a past
+   *  session (not from a live SSE stream). Same shape as
+   *  ChatResponse.generation.citations. */
+  replayCitations?: Citation[];
 };
 
-export type State = { turns: Turn[] };
+export type State = {
+  turns: Turn[];
+  /** Backend session ID — null until the first response binds one
+   *  (or until the user clicks a row in the history sidebar). All
+   *  subsequent chat calls pass this so the turn lands in the same
+   *  session and the carry-forward context resolver runs. */
+  sessionId: string | null;
+};
 
 type Action =
   | { type: "user_sent"; userId: string; assistantId: string; content: string }
   | { type: "assistant_event"; assistantId: string; event: ChatStreamEvent }
   | { type: "assistant_answered"; assistantId: string; response: ChatResponse }
-  | { type: "assistant_errored"; assistantId: string; error: string };
+  | { type: "assistant_errored"; assistantId: string; error: string }
+  | { type: "new_chat" }
+  | { type: "load_session"; sessionId: string; turns: SessionTurn[] };
 
-const initialState: State = { turns: [] };
+const initialState: State = { turns: [], sessionId: null };
 
 export function reducer(state: State, action: Action): State {
   switch (action.type) {
     case "user_sent": {
       return {
+        ...state,
         turns: [
           ...state.turns,
           { id: action.userId, role: "user", content: action.content },
@@ -51,6 +70,7 @@ export function reducer(state: State, action: Action): State {
     }
     case "assistant_event": {
       return {
+        ...state,
         turns: state.turns.map((t) =>
           t.id === action.assistantId
             ? { ...t, events: [...(t.events ?? []), action.event] }
@@ -59,7 +79,13 @@ export function reducer(state: State, action: Action): State {
       };
     }
     case "assistant_answered": {
+      const sid = action.response.session_id ?? state.sessionId;
       return {
+        ...state,
+        // Lock the session id once the backend binds it — subsequent
+        // turns reuse this same session so the carry-forward resolver
+        // can apply prior context ("was it changed?" → MSA).
+        sessionId: sid ?? null,
         turns: state.turns.map((t) =>
           t.id === action.assistantId
             ? {
@@ -74,12 +100,59 @@ export function reducer(state: State, action: Action): State {
     }
     case "assistant_errored": {
       return {
+        ...state,
         turns: state.turns.map((t) =>
           t.id === action.assistantId
             ? { ...t, pending: false, error: action.error }
             : t,
         ),
       };
+    }
+    case "new_chat": {
+      // User clicked "+ new chat". Drop everything and let the next
+      // /chat call auto-create a fresh session.
+      return { turns: [], sessionId: null };
+    }
+    case "load_session": {
+      // User clicked a row in the history sidebar. Replay the saved
+      // turns from the backend into the same Turn shape the UI uses
+      // for live messages, so the thread renders identically. We
+      // don't have the streaming events list (those weren't saved)
+      // but we synthesize a minimal `response` so MessageBubble /
+      // AnswerCard render exactly as they do for live turns.
+      const replayed: Turn[] = [];
+      for (const t of action.turns) {
+        replayed.push({
+          id: `replay-u-${action.sessionId}-${t.turn_index}`,
+          role: "user",
+          content: t.user_query,
+        });
+        const synthResponse: ChatResponse = {
+          query_id: `replay-${action.sessionId}-${t.turn_index}`,
+          query: t.user_query,
+          rewrites: {},
+          generation: {
+            answer: t.answer ?? "",
+            citations: t.citations ?? [],
+            refused: !t.answer,
+            refusal_reason: t.answer ? null : "no answer recorded",
+            model_id: "replay",
+          },
+          hits: [],
+          crag_score: 0,
+          latency_ms: 0,
+          session_id: action.sessionId,
+          turn_index: t.turn_index,
+        };
+        replayed.push({
+          id: `replay-a-${action.sessionId}-${t.turn_index}`,
+          role: "assistant",
+          content: t.answer ?? "",
+          response: synthResponse,
+          replayCitations: t.citations ?? [],
+        });
+      }
+      return { turns: replayed, sessionId: action.sessionId };
     }
     default:
       return state;

@@ -8,6 +8,7 @@ import { TopBar } from "@/components/TopBar";
 import { MessageBubble } from "@/components/MessageBubble";
 import { Composer } from "@/components/Composer";
 import { CitationsPanel } from "@/components/CitationsPanel";
+import { ChatHistorySidebar } from "@/components/ChatHistorySidebar";
 
 function ChatShell() {
   const { state, dispatch } = useChat();
@@ -27,10 +28,18 @@ function ChatShell() {
     const assistantId = crypto.randomUUID();
     dispatch({ type: "user_sent", userId, assistantId, content: query });
     try {
-      const response = await postChatStream(query, opts ?? {}, {
-        onEvent: (event) =>
-          dispatch({ type: "assistant_event", assistantId, event }),
-      });
+      const response = await postChatStream(
+        query,
+        // Thread the session_id through so subsequent turns land in the
+        // SAME session — without this, every message in the thread
+        // gets a fresh auto-created session and the recent-chats list
+        // explodes with one row per question.
+        { ...(opts ?? {}), sessionId: state.sessionId ?? undefined },
+        {
+          onEvent: (event) =>
+            dispatch({ type: "assistant_event", assistantId, event }),
+        },
+      );
       dispatch({ type: "assistant_answered", assistantId, response });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -48,6 +57,8 @@ function ChatShell() {
         <ChatTopBar />
 
         <div className="flex-1 flex min-h-0">
+          <ChatHistorySidebar />
+
           <section className="flex-1 flex flex-col min-w-0">
             <div
               ref={threadRef}

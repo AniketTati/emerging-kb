@@ -574,7 +574,50 @@ export type ChatResponse = {
   // R1 — surfaced conflict resolutions for the chat UI banner. Empty
   // when no chained-doc disagreements were detected for this query.
   conflict_resolutions?: ConflictResolution[];
+  // Auto-created when caller doesn't pass one; the UI uses this to
+  // thread subsequent calls into the same session + show history.
+  session_id?: string | null;
+  turn_index?: number | null;
 };
+
+
+// ---------------------------------------------------------------------------
+// Sessions — chat history sidebar
+// ---------------------------------------------------------------------------
+
+export type SessionInfo = {
+  id: string;
+  workspace_id: string;
+  created_at: string;
+  last_active_at: string;
+  title: string | null;
+};
+
+export type SessionTurn = {
+  turn_index: number;
+  user_query: string;
+  resolved_query: string | null;
+  answer: string | null;
+  citations: Citation[];
+  created_at: string;
+};
+
+export async function listSessions(limit = 50): Promise<SessionInfo[]> {
+  const resp = await fetch(`${KB_API_URL}/sessions?limit=${limit}`, {
+    headers: workspaceHeaders(),
+  });
+  const body = await _handle<{ items: SessionInfo[] }>(resp);
+  return body.items ?? [];
+}
+
+export async function getSessionTurns(sessionId: string): Promise<SessionTurn[]> {
+  const resp = await fetch(
+    `${KB_API_URL}/sessions/${sessionId}/turns`,
+    { headers: workspaceHeaders() },
+  );
+  const body = await _handle<{ items: SessionTurn[] }>(resp);
+  return body.items ?? [];
+}
 
 export async function postChat(
   query: string,

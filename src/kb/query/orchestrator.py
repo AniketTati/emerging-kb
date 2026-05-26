@@ -306,6 +306,28 @@ class Orchestrator:
         t0 = time.monotonic()
         query_id = str(uuid.uuid4())
 
+        # Auto-create a session if the caller didn't pass one. Without
+        # this, `_persist_turn` silently skips persistence (session_id
+        # is the NOT-NULL key on chat_turns), and the UI's "recent
+        # chats" list is permanently empty — the user can't see
+        # anything they asked yesterday. Auto-creation makes every
+        # chat call land in a row, named by its first user query
+        # (lazily titled below in _persist_turn).
+        if session_id is None and conn is not None:
+            try:
+                from kb.domain.chat_memory import create_session
+                session_id = await create_session(
+                    conn,
+                    workspace_id=workspace_id,
+                    title=query[:120].strip() or None,
+                )
+            except Exception:  # noqa: BLE001
+                # If session create fails (RLS denied, schema drift,
+                # whatever), proceed without persistence — the user
+                # still gets their answer; the audit row will be
+                # missing but that's strictly better than 5xx-ing.
+                session_id = None
+
         await emit("started", {"query": query, "session_id": session_id})
 
         # B6a — context resolution. Skips quietly when no session_id /
@@ -347,6 +369,17 @@ class Orchestrator:
                 "n_citations": len(generation.citations),
             })
             latency_ms = int((time.monotonic() - t0) * 1000)
+
+            # Persist the inventory turn so it shows up in chat history
+            # too — without this, asking "what docs do I have?" is the
+            # one chat that never makes it into the recent-chats sidebar.
+            inv_turn_index = await self._persist_turn(
+                conn=conn, workspace_id=workspace_id,
+                session_id=session_id, original_query=query,
+                resolved_query=resolved_query, ctx_resolution=ctx_resolution,
+                generation=generation, query_log_id=query_id,
+            )
+
             await emit("done", {})
             return ChatResult(
                 query_id=query_id,
@@ -370,7 +403,7 @@ class Orchestrator:
                 context_resolution=(
                     ctx_resolution.to_dict() if ctx_resolution else None
                 ),
-                turn_index=None,
+                turn_index=inv_turn_index,
                 conflict_resolutions=[],
             )
 
@@ -1005,6 +1038,23 @@ class Orchestrator:
             )
         except Exception:  # noqa: BLE001
             return None
+
+        # Backfill the session title from the first user query so the
+        # sidebar's recent-chats list shows something readable instead
+        # of "Untitled" / a raw UUID. Only fires on turn_index == 0
+        # (first turn) when the session was auto-created without a
+        # caller-supplied title. Wrapped in try/except — title backfill
+        # is cosmetic; never fail the chat turn over it.
+        if turn_index == 0 and not session.title:
+            try:
+                title = (original_query or "").strip()[:120] or "Untitled chat"
+                await conn.execute(
+                    "UPDATE chat_sessions SET title = %s WHERE id = %s "
+                    "AND title IS NULL",
+                    (title, session_id),
+                )
+            except Exception:  # noqa: BLE001
+                pass
 
         # Roll carry-forward state. We append any new entities from
         # ctx_resolution to the session's existing list.
