@@ -371,14 +371,52 @@ async def _search_atomic_units(
 async def _search_entities(
     conn: Connection, like: str, has_query: bool, offset: int, limit: int,
 ) -> tuple[list[ExploreHit], int]:
-    where_q = "AND canonical_name ILIKE %s" if has_query else ""
+    """Entity rows + enrichments the prototype's entity card needs:
+      - Aliases: top 3 distinct surface forms from extracted_mentions
+        (excluding the canonical name itself).
+      - First / last mention: MIN/MAX file.created_at across mentions.
+
+    Both come from a single LATERAL join — one DB round-trip per
+    matching entity. At demo scale this is fine; at 100k entities we'd
+    pre-compute these into an `entity_summary` materialized view
+    refreshed on extraction.
+    """
+    where_q = "AND e.canonical_name ILIKE %s" if has_query else ""
     params: tuple = ((like,) if has_query else ()) + (limit, offset)
     cur = await conn.execute(
         f"""
-        SELECT id::text, canonical_name, entity_type, mention_count
-          FROM entities
+        SELECT e.id::text, e.canonical_name, e.entity_type, e.mention_count,
+               (
+                 SELECT array_agg(DISTINCT em.mention_text)
+                   FROM extracted_mentions em
+                   JOIN mention_to_entity me ON me.mention_id = em.id
+                  WHERE me.entity_id = e.id
+                    AND lower(em.mention_text) <> lower(e.canonical_name)
+                  LIMIT 4
+               ) AS aliases_raw,
+               (
+                 SELECT MIN(f.created_at)::date::text
+                   FROM extracted_mentions em
+                   JOIN mention_to_entity me ON me.mention_id = em.id
+                   JOIN files f ON f.id = em.file_id
+                  WHERE me.entity_id = e.id
+               ) AS first_seen,
+               (
+                 SELECT MAX(f.created_at)::date::text
+                   FROM extracted_mentions em
+                   JOIN mention_to_entity me ON me.mention_id = em.id
+                   JOIN files f ON f.id = em.file_id
+                  WHERE me.entity_id = e.id
+               ) AS last_seen,
+               (
+                 SELECT count(DISTINCT em.file_id)::int
+                   FROM extracted_mentions em
+                   JOIN mention_to_entity me ON me.mention_id = em.id
+                  WHERE me.entity_id = e.id
+               ) AS n_docs
+          FROM entities e
          WHERE 1=1 {where_q}
-         ORDER BY mention_count DESC, canonical_name ASC
+         ORDER BY e.mention_count DESC, e.canonical_name ASC
          LIMIT %s OFFSET %s
         """,
         params,
@@ -387,21 +425,27 @@ async def _search_entities(
 
     count_params: tuple = (like,) if has_query else ()
     cur = await conn.execute(
-        f"SELECT count(*)::int FROM entities WHERE 1=1 {where_q}",
+        f"SELECT count(*)::int FROM entities e WHERE 1=1 {where_q}",
         count_params,
     )
     total = int((await cur.fetchone())[0])
 
-    items = [
-        ExploreHit(
+    items: list[ExploreHit] = []
+    for r in rows:
+        aliases = [a for a in (r[4] or []) if a][:3]
+        items.append(ExploreHit(
             kind="entity",
             id=r[0],
             title=r[1],
             subtitle=r[2],
-            extra={"mention_count": int(r[3] or 0)},
-        )
-        for r in rows
-    ]
+            extra={
+                "mention_count": int(r[3] or 0),
+                "aliases": aliases,
+                "first_seen": r[5],
+                "last_seen": r[6],
+                "n_docs": int(r[7] or 0),
+            },
+        ))
     return items, total
 
 

@@ -299,3 +299,141 @@ async def test_put_response_bumps_current_version_to_2(client, test_workspace):
     )
     assert resp.status_code == 200
     assert resp.json()["current_version"] == 2
+
+
+# ---------------------------------------------------------------------------
+# Inferred-field action endpoints (Schema Studio row buttons)
+# ---------------------------------------------------------------------------
+
+
+async def _seed_inferred_field(
+    db_url_superuser: str, *, workspace_id: str, doc_type: str = "test_contract",
+    canonical_name: str = "test_field", is_promoted: bool = False,
+) -> str:
+    """Open a SEPARATE superuser connection that COMMITS, so the row is
+    visible to the API request that follows. The default db_superuser
+    fixture wraps in force_rollback=True which hides writes from other
+    connections."""
+    import psycopg
+    fid = str(uuid.uuid4())
+    async with await psycopg.AsyncConnection.connect(db_url_superuser) as conn:
+        await conn.execute(
+            "INSERT INTO inferred_schema_fields "
+            "  (id, workspace_id, inferred_doc_type, canonical_name, "
+            "   description, value_type, n_docs_observed, prevalence, "
+            "   stability, value_type_confidence, is_promoted) "
+            "VALUES (%s, %s, %s, %s, 'test field', 'text', "
+            "        10, 0.95, 0.95, 0.95, %s)",
+            (fid, workspace_id, doc_type, canonical_name, is_promoted),
+        )
+        await conn.commit()
+    return fid
+
+
+async def _cleanup_inferred_field(db_url_superuser: str, fid: str) -> None:
+    """Best-effort cleanup so we don't accumulate test rows."""
+    import psycopg
+    try:
+        async with await psycopg.AsyncConnection.connect(db_url_superuser) as conn:
+            await conn.execute(
+                "DELETE FROM inferred_schema_fields WHERE id = %s",
+                (fid,),
+            )
+            await conn.commit()
+    except Exception:
+        pass
+
+
+async def test_promote_inferred_field_creates_typed_schema_field(
+    client, test_workspace, db_url_superuser,
+):
+    """POST /schemas/inferred-fields/{id}/promote inserts a schema_fields
+    row + flips inferred is_promoted. Idempotent on second call."""
+    fid = await _seed_inferred_field(
+        db_url_superuser, workspace_id=test_workspace,
+        canonical_name="promote_me",
+    )
+    resp = await client.post(
+        f"/schemas/inferred-fields/{fid}/promote",
+        headers=headers(test_workspace),
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["inferred_field_id"] == fid
+    assert body["schema_field_id"]
+    assert body["schema_entity_id"]
+
+    import psycopg
+    async with await psycopg.AsyncConnection.connect(db_url_superuser) as conn:
+        cur = await conn.execute(
+            "SELECT is_promoted, promoted_schema_field_id::text "
+            "FROM inferred_schema_fields WHERE id = %s",
+            (uuid.UUID(fid),),
+        )
+        row = await cur.fetchone()
+    assert row[0] is True
+    assert row[1] == body["schema_field_id"]
+
+    # Idempotent
+    resp2 = await client.post(
+        f"/schemas/inferred-fields/{fid}/promote",
+        headers=headers(test_workspace),
+    )
+    assert resp2.status_code == 200
+    assert resp2.json()["schema_field_id"] == body["schema_field_id"]
+
+
+async def test_rename_inferred_field_updates_canonical_name(
+    client, test_workspace, db_url_superuser,
+):
+    """PATCH /schemas/inferred-fields/{id} updates canonical_name only."""
+    fid = await _seed_inferred_field(
+        db_url_superuser, workspace_id=test_workspace,
+        canonical_name="old_name",
+    )
+    resp = await client.patch(
+        f"/schemas/inferred-fields/{fid}",
+        json={"canonical_name": "new_name"},
+        headers=headers(test_workspace),
+    )
+    assert resp.status_code == 200
+    assert resp.json()["canonical_name"] == "new_name"
+
+
+async def test_discard_inferred_field_hard_deletes(
+    client, test_workspace, db_url_superuser,
+):
+    """DELETE /schemas/inferred-fields/{id} hard-deletes the row."""
+    fid = await _seed_inferred_field(
+        db_url_superuser, workspace_id=test_workspace,
+        canonical_name="discard_me",
+    )
+    resp = await client.delete(
+        f"/schemas/inferred-fields/{fid}",
+        headers=headers(test_workspace),
+    )
+    assert resp.status_code == 200
+    assert resp.json()["deleted"] == 1
+
+    # Second delete → 404.
+    resp2 = await client.delete(
+        f"/schemas/inferred-fields/{fid}",
+        headers=headers(test_workspace),
+    )
+    assert resp2.status_code == 404
+
+
+async def test_inferred_field_action_404_outside_workspace(
+    client, test_workspace, db_url_superuser,
+):
+    """RLS scoping: an inferred field in workspace A is 404 to workspace B."""
+    other_ws = str(uuid.uuid4())
+    fid = await _seed_inferred_field(
+        db_url_superuser, workspace_id=other_ws,
+        canonical_name="foreign_field",
+    )
+    resp = await client.post(
+        f"/schemas/inferred-fields/{fid}/promote",
+        headers=headers(test_workspace),  # not the row's workspace
+    )
+    assert resp.status_code == 404

@@ -3,28 +3,35 @@
 /**
  * Schema Studio — the workspace's data-model surface.
  *
- * 6 tabs, lazy-loaded:
- *   - Typed       — curated/promoted schemas (entity types + fields)
- *   - Inferred    — L2b cross-doc field clusters not yet promoted
- *   - Collisions  — placeholder for naming-collision review
- *   - Vocabulary  — Design 6 synonym + acronym discovery
- *   - Lineage     — doc chains (amendments / email threads / revisions)
- *   - Versions    — schema-version history
+ * 6 tabs: Typed · Inferred · Collisions · Vocabulary · Lineage · Versions.
  *
- * Scale to 100k: each tab uses server-side pagination (limit / offset)
- * + an inline search box for the high-cardinality tabs (Inferred,
- * Vocabulary). Per-tab fetches keep the initial page render cheap;
- * Lineage lazy-loads members per chain on click.
+ * The Inferred tab matches the prototype layout (prototype/schema-studio.html):
+ *   - DOC TYPES rail on the left with per-doc-type counts (n_inferred · n_ready)
+ *     and "new" badges for types we haven't seen before today.
+ *   - Auto-promote thresholds card below the rail (prevalence ≥ 0.80,
+ *     stability ≥ 0.90, vt-conf ≥ 0.90, min docs).
+ *   - Header strip: counts in tab labels (Typed 47 · Inferred 12 · …),
+ *     subtitle ("X fields emerging across Y docs · Z ready to promote ·
+ *     N promoted in the last 5 min"), Export YAML.
+ *   - Row content: status dot (typed-promoted / approaching / emerging),
+ *     a progress bar with a threshold-marker on the right end,
+ *     expandable detail with THRESHOLDS · SAMPLE VALUES · INFERRED TYPE ·
+ *     FIRST PROPOSED, action buttons (Promote now · Rename · Discard).
+ *
+ * Scale: client-paginates fields at 1000 per fetch. Per-tab fetches keep
+ * initial render cheap. Vocabulary + Lineage lazy-load on tab activation.
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Layers, GitBranch, AlertOctagon, BookOpen, Network, History,
-  Loader2,
+  Loader2, Download, Filter as FilterIcon, Pencil, Trash2,
+  Sparkles, ChevronRight,
 } from "lucide-react";
 import {
   listSchemas, listSchemaEntities, listSchemaEntityFields,
   listInferredFields, listVocabulary, listDocChains, listSchemaVersions,
+  promoteInferredField, renameInferredField, discardInferredField,
   type SchemaSummary, type SchemaEntity, type SchemaField,
   type InferredField, type VocabEntry, type DocChainSummary,
   type SchemaVersionRow,
@@ -32,16 +39,22 @@ import {
 import { Sidebar } from "@/components/Sidebar";
 
 
-type TabKey = "typed" | "inferred" | "collisions" | "vocabulary" | "lineage" | "versions";
+// ---------------------------------------------------------------------------
+// Auto-promote thresholds (kept in sync with kb.extraction.promotion
+// defaults). Surfacing them in the UI gives curators a visible answer to
+// "what does the system need to see before it promotes this on its own?".
+// ---------------------------------------------------------------------------
 
-const TABS: { key: TabKey; label: string; icon: typeof Layers }[] = [
-  { key: "typed",      label: "Typed",      icon: Layers },
-  { key: "inferred",   label: "Inferred",   icon: GitBranch },
-  { key: "collisions", label: "Collisions", icon: AlertOctagon },
-  { key: "vocabulary", label: "Vocabulary", icon: BookOpen },
-  { key: "lineage",    label: "Lineage",    icon: Network },
-  { key: "versions",   label: "Versions",   icon: History },
-];
+const THRESHOLDS = {
+  prevalence: 0.80,
+  stability:  0.90,
+  vt_conf:    0.90,
+  min_docs_prod: 20,
+  min_docs_demo: 5,
+};
+
+
+type TabKey = "typed" | "inferred" | "collisions" | "vocabulary" | "lineage" | "versions";
 
 
 function getWorkspaceId(): string {
@@ -53,22 +66,116 @@ function getWorkspaceId(): string {
 }
 
 
+// Status the row sits in given its prevalence + promotion state. Drives
+// the colored dot + the inline badge. "approaching" = within 0.05 of the
+// promotion threshold; tweak as needed.
+type RowStatus = "typed-promoted" | "approaching" | "emerging";
+
+function statusOf(f: InferredField): RowStatus {
+  if (f.is_promoted) return "typed-promoted";
+  const distance = THRESHOLDS.prevalence - f.prevalence;
+  if (distance <= 0.05) return "approaching";
+  return "emerging";
+}
+
+
 export default function SchemaStudioPage() {
-  const [tab, setTab] = useState<TabKey>("typed");
+  const [tab, setTab] = useState<TabKey>("inferred");
+  // Aggregate counts for the tab strip header. Loaded once.
+  const [allInferred, setAllInferred] = useState<InferredField[]>([]);
+  const [typedSchemas, setTypedSchemas] = useState<SchemaSummary[]>([]);
+  const [vocabCount, setVocabCount] = useState(0);
+  const [chainCount, setChainCount] = useState(0);
+  const [topbarLoading, setTopbarLoading] = useState(true);
+
+  const refreshAggregates = useCallback(async () => {
+    setTopbarLoading(true);
+    try {
+      const [inferred, schemas, vocab, chains] = await Promise.all([
+        listInferredFields({ limit: 1000 }),
+        listSchemas(),
+        listVocabulary(`workspace:${getWorkspaceId()}`, 500),
+        listDocChains(200),
+      ]);
+      setAllInferred(inferred);
+      setTypedSchemas(schemas);
+      setVocabCount(vocab.length);
+      setChainCount(chains.length);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setTopbarLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { refreshAggregates(); }, [refreshAggregates]);
+
+  // Tab counts shown in the strip (prototype showed
+  // "Typed 47 · Inferred 12 · Collisions 3 · Vocabulary 847").
+  const counts = useMemo(() => ({
+    typed: typedSchemas.length,
+    inferred: allInferred.filter((f) => !f.is_promoted).length,
+    collisions: 0,  // Wave B
+    vocabulary: vocabCount,
+    lineage: chainCount,
+    versions: typedSchemas.length, // one version row per schema picker entry
+  }), [typedSchemas.length, allInferred, vocabCount, chainCount]);
+
+  // Subtitle stats (prototype: "12 fields emerging across 24 contracts · 3 ready to promote · 1 promoted in the last 5 minutes")
+  const subtitleStats = useMemo(() => {
+    const emerging = allInferred.filter((f) => !f.is_promoted).length;
+    const distinctDocTypes = new Set(allInferred.map((f) => f.inferred_doc_type)).size;
+    const ready = allInferred.filter(
+      (f) => !f.is_promoted
+        && f.prevalence >= THRESHOLDS.prevalence
+        && f.stability >= THRESHOLDS.stability,
+    ).length;
+    const fiveMinAgo = Date.now() - 5 * 60_000;
+    const promotedRecent = allInferred.filter(
+      (f) => f.is_promoted && f.created_at
+        && new Date(f.created_at).getTime() >= fiveMinAgo,
+    ).length;
+    return { emerging, distinctDocTypes, ready, promotedRecent };
+  }, [allInferred]);
+
+  const TABS: { key: TabKey; label: string; icon: typeof Layers; count: number }[] = [
+    { key: "typed",      label: "Typed",      icon: Layers,        count: counts.typed },
+    { key: "inferred",   label: "Inferred",   icon: GitBranch,     count: counts.inferred },
+    { key: "collisions", label: "Collisions", icon: AlertOctagon,  count: counts.collisions },
+    { key: "vocabulary", label: "Vocabulary", icon: BookOpen,      count: counts.vocabulary },
+    { key: "lineage",    label: "Lineage",    icon: Network,       count: counts.lineage },
+    { key: "versions",   label: "Versions",   icon: History,       count: counts.versions },
+  ];
 
   return (
     <div className="flex h-full">
       <Sidebar current="schema" />
 
       <main className="flex-1 flex flex-col min-w-0 bg-white">
+        {/* Header strip — prototype: Studio › Schema · v1.4.2 · auto-saved · counts · Export YAML */}
         <header className="h-12 flex-shrink-0 border-b border-zinc-200 flex items-center px-5 gap-4">
-          <span className="text-sm text-zinc-900">Schema Studio</span>
-          <span className="text-[11px] text-zinc-400 mono">
-            Curated schemas · inferred clusters · vocabulary · lineage · versions
-          </span>
+          <span className="text-sm text-zinc-500">Studio</span>
+          <ChevronRight className="w-3 h-3 text-zinc-300" />
+          <span className="text-sm font-medium text-zinc-900">Schema</span>
+          {!topbarLoading && (
+            <span className="text-[11px] text-zinc-400 mono">
+              {counts.typed} typed · {counts.inferred} inferred ·{" "}
+              {counts.collisions} collisions
+            </span>
+          )}
+          <button
+            type="button"
+            className="ml-auto flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md text-zinc-600 hover:text-zinc-900 hover:bg-zinc-100 cursor-pointer"
+            data-testid="schema-export-yaml"
+            onClick={() => alert("Export YAML — wired in Pass B (will download typed schemas as YAML)")}
+            title="Export typed schemas as YAML"
+          >
+            <Download className="w-3.5 h-3.5" strokeWidth={1.75} />
+            Export YAML
+          </button>
         </header>
 
-        {/* Tab strip */}
+        {/* Tab strip with counts */}
         <div className="border-b border-zinc-200 px-6 flex items-end gap-6 text-sm">
           {TABS.map((t) => {
             const Icon = t.icon;
@@ -87,20 +194,493 @@ export default function SchemaStudioPage() {
               >
                 <Icon className="w-3.5 h-3.5" strokeWidth={1.75} />
                 {t.label}
+                <span className={`text-[11px] mono ${active ? "text-zinc-400" : "text-zinc-400"}`}>
+                  {t.count}
+                </span>
               </button>
             );
           })}
         </div>
 
-        <div className="flex-1 overflow-y-auto bg-zinc-50/40">
-          {tab === "typed"      && <TypedTab />}
-          {tab === "inferred"   && <InferredTab />}
+        <div className="flex-1 overflow-hidden bg-zinc-50/40">
+          {tab === "typed"      && <TypedTab schemas={typedSchemas} />}
+          {tab === "inferred"   && (
+            <InferredTabRich
+              fields={allInferred}
+              subtitle={subtitleStats}
+              onMutated={refreshAggregates}
+            />
+          )}
           {tab === "collisions" && <CollisionsTab />}
           {tab === "vocabulary" && <VocabularyTab />}
           {tab === "lineage"    && <LineageTab />}
-          {tab === "versions"   && <VersionsTab />}
+          {tab === "versions"   && <VersionsTab schemas={typedSchemas} />}
         </div>
       </main>
+    </div>
+  );
+}
+
+
+// ===========================================================================
+// Tab: Inferred — the rich prototype layout
+// ===========================================================================
+
+
+function InferredTabRich({
+  fields, subtitle, onMutated,
+}: {
+  fields: InferredField[];
+  subtitle: { emerging: number; distinctDocTypes: number; ready: number; promotedRecent: number };
+  onMutated: () => Promise<void>;
+}) {
+  const [selectedDocType, setSelectedDocType] = useState<string | null>(null);
+  const [statusFilter, setStatusFilter] = useState<"all" | RowStatus>("all");
+  const [sortKey, setSortKey] = useState<"prevalence" | "stability" | "docs" | "name">("prevalence");
+
+  // Per-doc-type counts for the rail. "new" badge if the type has any
+  // row created within the last 24h.
+  const byDocType = useMemo(() => {
+    const m: Record<string, { all: number; ready: number; newish: boolean }> = {};
+    const day = Date.now() - 24 * 60 * 60_000;
+    for (const f of fields) {
+      const k = f.inferred_doc_type;
+      const slot = m[k] ?? { all: 0, ready: 0, newish: false };
+      slot.all += 1;
+      if (!f.is_promoted
+          && f.prevalence >= THRESHOLDS.prevalence
+          && f.stability >= THRESHOLDS.stability) {
+        slot.ready += 1;
+      }
+      if (f.created_at && new Date(f.created_at).getTime() >= day) {
+        slot.newish = true;
+      }
+      m[k] = slot;
+    }
+    return m;
+  }, [fields]);
+
+  const docTypesSorted = useMemo(
+    () => Object.entries(byDocType)
+      .sort((a, b) => b[1].all - a[1].all)
+      .map(([k, v]) => ({ doc_type: k, ...v })),
+    [byDocType],
+  );
+
+  // Auto-select the doc_type with most rows when first loaded.
+  useEffect(() => {
+    if (selectedDocType === null && docTypesSorted.length > 0) {
+      setSelectedDocType(docTypesSorted[0].doc_type);
+    }
+  }, [docTypesSorted, selectedDocType]);
+
+  // Filtered + sorted rows for the right pane.
+  const filteredRows = useMemo(() => {
+    let rows = fields.filter((f) => f.inferred_doc_type === selectedDocType);
+    if (statusFilter !== "all") {
+      rows = rows.filter((f) => statusOf(f) === statusFilter);
+    }
+    rows = [...rows];
+    rows.sort((a, b) => {
+      if (sortKey === "prevalence") return b.prevalence - a.prevalence;
+      if (sortKey === "stability") return b.stability - a.stability;
+      if (sortKey === "docs") return b.n_docs_observed - a.n_docs_observed;
+      return a.canonical_name.localeCompare(b.canonical_name);
+    });
+    return rows;
+  }, [fields, selectedDocType, statusFilter, sortKey]);
+
+  return (
+    <div className="flex h-full overflow-hidden">
+      {/* Inner left rail — DOC TYPES + thresholds */}
+      <aside
+        className="w-[260px] flex-shrink-0 border-r border-zinc-200 bg-white overflow-y-auto"
+        data-testid="schema-doctypes-rail"
+      >
+        <div className="p-4 border-b border-zinc-200">
+          <div className="text-[10px] uppercase tracking-wider text-zinc-400 mb-2">
+            Doc types
+          </div>
+          <ul className="space-y-px">
+            {docTypesSorted.map((d) => {
+              const active = d.doc_type === selectedDocType;
+              return (
+                <li key={d.doc_type}>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedDocType(d.doc_type)}
+                    className={`w-full flex items-center gap-2 px-2 py-1.5 rounded text-xs cursor-pointer ${
+                      active
+                        ? "bg-zinc-100 text-zinc-900"
+                        : "text-zinc-700 hover:bg-zinc-50"
+                    }`}
+                    data-testid="schema-doctype-row"
+                    data-doctype={d.doc_type}
+                  >
+                    <span className="font-medium truncate flex-1 text-left mono">
+                      {d.doc_type}
+                    </span>
+                    {d.newish && (
+                      <span className="text-[9px] mono px-1 py-0.5 rounded bg-blue-100 text-blue-800">
+                        new
+                      </span>
+                    )}
+                    <span className="text-[10px] mono text-zinc-500 tabular-nums">
+                      {d.all} · {d.ready}
+                    </span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+          <div className="text-[10px] text-zinc-400 mt-2 leading-relaxed">
+            <span className="mono">N total</span> ·{" "}
+            <span className="mono">N ready-to-promote</span>
+          </div>
+        </div>
+
+        {/* Auto-promote thresholds card */}
+        <div className="p-4">
+          <div className="text-[10px] uppercase tracking-wider text-zinc-400 mb-2 flex items-center gap-1.5">
+            <Sparkles className="w-3 h-3" strokeWidth={1.75} />
+            Auto-promote thresholds
+          </div>
+          <ul className="space-y-1 text-xs text-zinc-600 mono">
+            <li>prevalence ≥ <span className="text-zinc-900">{THRESHOLDS.prevalence.toFixed(2)}</span></li>
+            <li>stability ≥ <span className="text-zinc-900">{THRESHOLDS.stability.toFixed(2)}</span></li>
+            <li>vt-conf ≥ <span className="text-zinc-900">{THRESHOLDS.vt_conf.toFixed(2)}</span></li>
+            <li>min docs = <span className="text-zinc-900">{THRESHOLDS.min_docs_prod}</span> (prod) / <span className="text-zinc-900">{THRESHOLDS.min_docs_demo}</span> (demo)</li>
+          </ul>
+        </div>
+      </aside>
+
+      {/* Right pane — header + rows */}
+      <section className="flex-1 overflow-y-auto">
+        <div className="max-w-4xl mx-auto px-8 py-6">
+          <div className="flex items-start justify-between mb-1">
+            <h1 className="text-lg font-semibold text-zinc-900">
+              Inferred fields {selectedDocType && (
+                <>
+                  · <span className="mono">{selectedDocType}</span>
+                </>
+              )}
+            </h1>
+            <div className="flex items-center gap-2">
+              <select
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value as "all" | RowStatus)}
+                className="text-xs px-2 py-1 rounded border border-zinc-200 bg-white cursor-pointer"
+                data-testid="schema-filter-status"
+              >
+                <option value="all">All statuses</option>
+                <option value="typed-promoted">Typed (promoted)</option>
+                <option value="approaching">Approaching</option>
+                <option value="emerging">Emerging</option>
+              </select>
+              <select
+                value={sortKey}
+                onChange={(e) => setSortKey(e.target.value as typeof sortKey)}
+                className="text-xs px-2 py-1 rounded border border-zinc-200 bg-white cursor-pointer"
+                data-testid="schema-sort"
+              >
+                <option value="prevalence">Sort: prevalence</option>
+                <option value="stability">Sort: stability</option>
+                <option value="docs">Sort: docs</option>
+                <option value="name">Sort: name</option>
+              </select>
+            </div>
+          </div>
+          <p className="text-xs text-zinc-500 mb-4">
+            {subtitle.emerging} fields emerging across {subtitle.distinctDocTypes} doc type{subtitle.distinctDocTypes !== 1 ? "s" : ""}
+            {" · "}
+            <span className="text-zinc-700">{subtitle.ready}</span> ready to promote
+            {subtitle.promotedRecent > 0 && (
+              <> · {subtitle.promotedRecent} promoted in the last 5 minutes</>
+            )}
+          </p>
+
+          {/* Status legend */}
+          <div className="flex items-center gap-4 text-[11px] mb-3 mono">
+            <span className="flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-zinc-900" /> typed (promoted)
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-blue-500" /> approaching
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-zinc-300" /> emerging
+            </span>
+            <span className="ml-auto text-zinc-400 flex items-center gap-1">
+              <FilterIcon className="w-3 h-3" strokeWidth={1.75} />
+              threshold markers on each bar
+            </span>
+          </div>
+
+          {filteredRows.length === 0 ? (
+            <div className="rounded-lg border border-zinc-200 bg-white p-8 text-center text-sm text-zinc-500">
+              No inferred fields match the current filter.
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {filteredRows.map((f) => (
+                <InferredRow key={f.id} field={f} onMutated={onMutated} />
+              ))}
+            </div>
+          )}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+
+// ---------------------------------------------------------------------------
+// Inferred row — collapsed header (dot · name · description · bar · badge)
+// + expandable detail (thresholds · sample values · type · first proposed)
+// + action buttons
+// ---------------------------------------------------------------------------
+
+
+function InferredRow({
+  field, onMutated,
+}: {
+  field: InferredField;
+  onMutated: () => Promise<void>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState<"promote" | "discard" | "rename" | null>(null);
+  const [renameOpen, setRenameOpen] = useState(false);
+  const [renameVal, setRenameVal] = useState(field.canonical_name);
+
+  const status = statusOf(field);
+  const dotClass =
+    status === "typed-promoted" ? "bg-zinc-900"
+    : status === "approaching"   ? "bg-blue-500"
+    : "bg-zinc-300";
+  const statusBadge =
+    status === "typed-promoted" ? "just promoted"
+    : status === "approaching"   ? "approaching"
+    : "emerging";
+  const badgeClass =
+    status === "typed-promoted" ? "bg-zinc-900 text-white"
+    : status === "approaching"   ? "bg-blue-100 text-blue-800"
+    : "bg-zinc-100 text-zinc-600";
+
+  async function doPromote() {
+    setBusy("promote");
+    try { await promoteInferredField(field.id); await onMutated(); }
+    catch (err) { console.error(err); }
+    finally { setBusy(null); }
+  }
+  async function doDiscard() {
+    if (!confirm(`Discard inferred field "${field.canonical_name}"?`)) return;
+    setBusy("discard");
+    try { await discardInferredField(field.id); await onMutated(); }
+    catch (err) { console.error(err); }
+    finally { setBusy(null); }
+  }
+  async function doRename() {
+    if (!renameVal.trim() || renameVal.trim() === field.canonical_name) {
+      setRenameOpen(false);
+      return;
+    }
+    setBusy("rename");
+    try { await renameInferredField(field.id, renameVal.trim()); await onMutated(); setRenameOpen(false); }
+    catch (err) { console.error(err); }
+    finally { setBusy(null); }
+  }
+
+  return (
+    <div className="rounded-lg border border-zinc-200 bg-white" data-testid="inferred-row" data-status={status}>
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className="w-full flex items-center gap-3 px-4 py-3 hover:bg-zinc-50 cursor-pointer"
+      >
+        <ChevronRight
+          className={`w-3.5 h-3.5 text-zinc-400 transition-transform ${open ? "rotate-90" : ""}`}
+        />
+        <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${dotClass}`} aria-hidden />
+        <span className="mono text-sm text-zinc-900 truncate">{field.canonical_name}</span>
+        {field.description && (
+          <span className="text-xs text-zinc-500 truncate hidden md:inline">
+            {field.description}
+          </span>
+        )}
+
+        {/* Threshold bar */}
+        <div className="ml-auto flex items-center gap-2 flex-shrink-0">
+          <ThresholdBar value={field.prevalence} threshold={THRESHOLDS.prevalence} />
+          <span className={`text-[10px] mono px-1.5 py-0.5 rounded ${badgeClass}`}>
+            {statusBadge}
+          </span>
+        </div>
+      </button>
+
+      {open && (
+        <div className="border-t border-zinc-200 px-4 py-4 bg-zinc-50/40">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-x-6 gap-y-3 text-xs">
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-zinc-400 mb-1">
+                Thresholds
+              </div>
+              <table className="mono">
+                <tbody>
+                  <tr>
+                    <td className="text-zinc-500 pr-3">prevalence</td>
+                    <td className="text-zinc-900 tabular-nums">{field.prevalence.toFixed(2)}</td>
+                    <td className="text-zinc-400 pl-2 tabular-nums">/ {THRESHOLDS.prevalence.toFixed(2)}</td>
+                  </tr>
+                  <tr>
+                    <td className="text-zinc-500 pr-3">stability</td>
+                    <td className="text-zinc-900 tabular-nums">{field.stability.toFixed(2)}</td>
+                    <td className="text-zinc-400 pl-2 tabular-nums">/ {THRESHOLDS.stability.toFixed(2)}</td>
+                  </tr>
+                  <tr>
+                    <td className="text-zinc-500 pr-3">vt confidence</td>
+                    <td className="text-zinc-900 tabular-nums">{field.value_type_confidence.toFixed(2)}</td>
+                    <td className="text-zinc-400 pl-2 tabular-nums">/ {THRESHOLDS.vt_conf.toFixed(2)}</td>
+                  </tr>
+                  <tr>
+                    <td className="text-zinc-500 pr-3">doc count</td>
+                    <td className="text-zinc-900 tabular-nums">{field.n_docs_observed}</td>
+                    <td className="text-zinc-400 pl-2 tabular-nums">/ {THRESHOLDS.min_docs_demo}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-zinc-400 mb-1">
+                Sample values
+              </div>
+              <div className="text-zinc-500 italic text-[11px]">
+                Sample values land in Pass B (needs an endpoint that pulls
+                top-N distinct values from <span className="mono">proposed_fields</span>).
+              </div>
+            </div>
+
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-zinc-400 mb-1">
+                Inferred type
+              </div>
+              <div className="mono text-zinc-900">{field.value_type ?? "text"}</div>
+              <div className="text-[10px] uppercase tracking-wider text-zinc-400 mt-3 mb-1">
+                First proposed
+              </div>
+              <div className="mono text-zinc-700">
+                {field.created_at ? new Date(field.created_at).toLocaleDateString() : "—"}
+              </div>
+            </div>
+          </div>
+
+          {/* Action footer */}
+          <div className="mt-4 pt-3 border-t border-zinc-200 flex items-center gap-2 text-xs">
+            {!field.is_promoted ? (
+              <button
+                type="button"
+                onClick={doPromote}
+                disabled={busy !== null}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-white bg-zinc-900 hover:bg-zinc-800 cursor-pointer disabled:opacity-50"
+                data-testid="inferred-promote"
+              >
+                {busy === "promote" ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
+                Promote now (override)
+              </button>
+            ) : (
+              <span className="text-[11px] mono text-zinc-500">
+                Already promoted to typed schema.
+              </span>
+            )}
+
+            {renameOpen ? (
+              <form
+                onSubmit={(e) => { e.preventDefault(); doRename(); }}
+                className="flex items-center gap-1"
+              >
+                <input
+                  autoFocus
+                  value={renameVal}
+                  onChange={(e) => setRenameVal(e.target.value)}
+                  className="text-xs mono px-2 py-1 rounded border border-zinc-300 focus:border-zinc-500 focus:outline-none"
+                />
+                <button
+                  type="submit"
+                  disabled={busy !== null}
+                  className="px-2 py-1 rounded bg-zinc-900 text-white cursor-pointer"
+                >save</button>
+                <button
+                  type="button"
+                  onClick={() => { setRenameOpen(false); setRenameVal(field.canonical_name); }}
+                  className="px-2 py-1 rounded text-zinc-500 cursor-pointer"
+                >cancel</button>
+              </form>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setRenameOpen(true)}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-zinc-700 hover:bg-zinc-100 cursor-pointer"
+                data-testid="inferred-rename"
+              >
+                <Pencil className="w-3 h-3" />
+                Rename
+              </button>
+            )}
+
+            <button
+              type="button"
+              title="Wave B — merge with another inferred field"
+              disabled
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-zinc-400 cursor-not-allowed"
+            >
+              <GitBranch className="w-3 h-3" />
+              Merge with…
+            </button>
+
+            <button
+              type="button"
+              onClick={doDiscard}
+              disabled={busy !== null}
+              className="ml-auto flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-red-600 hover:bg-red-50 cursor-pointer disabled:opacity-50"
+              data-testid="inferred-discard"
+            >
+              {busy === "discard" ? <Loader2 className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3 h-3" />}
+              Discard
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+// ---------------------------------------------------------------------------
+// Threshold bar — fills up to `value`, with a small marker line at
+// `threshold`. When value crosses the marker, the bar shifts to the
+// "above threshold" color so it visually pops.
+// ---------------------------------------------------------------------------
+
+
+function ThresholdBar({ value, threshold }: { value: number; threshold: number }) {
+  const valuePct  = Math.max(0, Math.min(1, value)) * 100;
+  const markerPct = Math.max(0, Math.min(1, threshold)) * 100;
+  const above = value >= threshold;
+  return (
+    <div className="relative w-32 h-1.5 rounded bg-zinc-100 flex-shrink-0">
+      <div
+        className={`absolute left-0 top-0 bottom-0 rounded ${above ? "bg-zinc-900" : "bg-zinc-400"}`}
+        style={{ width: `${valuePct}%` }}
+      />
+      <div
+        className="absolute top-[-2px] bottom-[-2px] w-px bg-zinc-700"
+        style={{ left: `${markerPct}%` }}
+        aria-hidden
+        title={`threshold ${threshold.toFixed(2)}`}
+      />
+      <span className="absolute -top-4 right-0 text-[10px] mono text-zinc-500 tabular-nums">
+        {value.toFixed(2)}
+      </span>
     </div>
   );
 }
@@ -111,21 +691,14 @@ export default function SchemaStudioPage() {
 // ===========================================================================
 
 
-function TypedTab() {
-  const [schemas, setSchemas] = useState<SchemaSummary[]>([]);
+function TypedTab({ schemas }: { schemas: SchemaSummary[] }) {
   const [activeSchemaId, setActiveSchemaId] = useState<string | null>(null);
   const [entities, setEntities] = useState<SchemaEntity[]>([]);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    (async () => {
-      try {
-        const out = await listSchemas();
-        setSchemas(out);
-        if (out.length > 0) setActiveSchemaId(out[0].id);
-      } catch (err) { console.error(err); }
-    })();
-  }, []);
+    if (schemas.length > 0 && !activeSchemaId) setActiveSchemaId(schemas[0].id);
+  }, [schemas, activeSchemaId]);
 
   useEffect(() => {
     if (!activeSchemaId) return;
@@ -142,20 +715,22 @@ function TypedTab() {
 
   if (schemas.length === 0) {
     return (
-      <EmptyState
-        title="No typed schemas yet"
-        body="Curated schemas appear here once a field clears the auto-promotion threshold OR a user creates one explicitly via POST /schemas."
-      />
+      <div className="max-w-4xl mx-auto px-8 py-6">
+        <EmptyState
+          title="No typed schemas yet"
+          body="Curated schemas appear here once a field clears the auto-promotion threshold or a user creates one explicitly via POST /schemas."
+        />
+      </div>
     );
   }
 
   return (
-    <div className="max-w-5xl mx-auto px-8 py-6">
+    <div className="max-w-4xl mx-auto px-8 py-6 overflow-y-auto h-full">
       <h1 className="text-lg font-semibold text-zinc-900 mb-4">
         Typed schemas <span className="mono text-zinc-400 text-sm">{schemas.length}</span>
       </h1>
 
-      <div className="flex gap-1 mb-5 text-xs">
+      <div className="flex flex-wrap gap-1 mb-5 text-xs">
         {schemas.map((s) => {
           const active = s.id === activeSchemaId;
           return (
@@ -163,7 +738,7 @@ function TypedTab() {
               key={s.id}
               type="button"
               onClick={() => setActiveSchemaId(s.id)}
-              className={`px-3 py-1.5 rounded-md cursor-pointer ${
+              className={`px-3 py-1.5 rounded-md cursor-pointer mono ${
                 active
                   ? "bg-zinc-900 text-white"
                   : "bg-white border border-zinc-200 text-zinc-700 hover:bg-zinc-100"
@@ -178,10 +753,7 @@ function TypedTab() {
       {loading ? (
         <SpinnerInline />
       ) : entities.length === 0 ? (
-        <EmptyState
-          title="No entity types defined"
-          body="This schema has no entity types yet."
-        />
+        <EmptyState title="No entity types defined" body="This schema has no entity types yet." />
       ) : (
         <div className="space-y-3">
           {entities.map((e) => (
@@ -220,6 +792,7 @@ function TypedEntityCard({
         onClick={toggle}
         className="w-full flex items-center gap-3 px-4 py-3 hover:bg-zinc-50 cursor-pointer"
       >
+        <ChevronRight className={`w-3.5 h-3.5 text-zinc-400 transition-transform ${open ? "rotate-90" : ""}`} />
         <span className="text-[10px] mono px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-700">
           {entity.lifecycle_state}
         </span>
@@ -267,136 +840,20 @@ function TypedEntityCard({
 
 
 // ===========================================================================
-// Tab: Inferred
-// ===========================================================================
-
-
-function InferredTab() {
-  const [fields, setFields] = useState<InferredField[]>([]);
-  const [docTypeFilter, setDocTypeFilter] = useState<string>("");
-  const [loading, setLoading] = useState(false);
-  const [debouncedFilter, setDebouncedFilter] = useState("");
-
-  useEffect(() => {
-    const t = setTimeout(() => setDebouncedFilter(docTypeFilter.trim()), 220);
-    return () => clearTimeout(t);
-  }, [docTypeFilter]);
-
-  useEffect(() => {
-    setLoading(true);
-    (async () => {
-      try {
-        const out = await listInferredFields({
-          doc_type: debouncedFilter || undefined,
-          limit: 500,
-        });
-        setFields(out);
-      } finally {
-        setLoading(false);
-      }
-    })();
-  }, [debouncedFilter]);
-
-  // Group by inferred_doc_type.
-  const grouped = useMemo<Record<string, InferredField[]>>(() => {
-    const acc: Record<string, InferredField[]> = {};
-    for (const f of fields) (acc[f.inferred_doc_type] ??= []).push(f);
-    return acc;
-  }, [fields]);
-
-  return (
-    <div className="max-w-5xl mx-auto px-8 py-6">
-      <h1 className="text-lg font-semibold text-zinc-900 mb-1">
-        Inferred fields <span className="mono text-zinc-400 text-sm">{fields.length}</span>
-      </h1>
-      <p className="text-xs text-zinc-500 mb-4">
-        Cross-doc field clusters from L2b extraction. Above-threshold clusters auto-promote to typed schemas.
-      </p>
-
-      <input
-        type="text"
-        value={docTypeFilter}
-        onChange={(e) => setDocTypeFilter(e.target.value)}
-        placeholder="Filter by doc_type (e.g. contract, invoice)"
-        className="w-full text-xs px-3 py-2 mb-4 rounded border border-zinc-200 focus:outline-none focus:border-zinc-400"
-      />
-
-      {loading ? (
-        <SpinnerInline />
-      ) : fields.length === 0 ? (
-        <EmptyState
-          title="No inferred fields"
-          body="Inferred fields show up after a few docs of the same type are ingested."
-        />
-      ) : (
-        <div className="space-y-5">
-          {Object.entries(grouped).map(([doctype, list]) => (
-            <div key={doctype} className="rounded-lg border border-zinc-200 bg-white">
-              <div className="px-4 py-2.5 border-b border-zinc-200 flex items-center gap-2">
-                <span className="text-[10px] uppercase tracking-wider text-zinc-400">Inferred for</span>
-                <span className="text-sm font-medium mono">{doctype}</span>
-                <span className="ml-auto text-[11px] mono text-zinc-400">{list.length} field{list.length !== 1 ? "s" : ""}</span>
-              </div>
-              <table className="w-full text-xs">
-                <thead className="text-zinc-500 bg-zinc-50/40">
-                  <tr>
-                    <th className="text-left px-4 py-2 font-medium">Field</th>
-                    <th className="text-left px-4 py-2 font-medium">Type</th>
-                    <th className="text-left px-4 py-2 font-medium">Docs</th>
-                    <th className="text-left px-4 py-2 font-medium">Prevalence</th>
-                    <th className="text-left px-4 py-2 font-medium">Stability</th>
-                    <th className="text-left px-4 py-2 font-medium">Promoted</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {list.map((f) => (
-                    <tr key={f.id} className="border-t border-zinc-200">
-                      <td className="px-4 py-1.5 mono text-zinc-900">{f.canonical_name}</td>
-                      <td className="px-4 py-1.5 mono text-zinc-600">{f.value_type ?? "text"}</td>
-                      <td className="px-4 py-1.5 text-zinc-600">{f.n_docs_observed}</td>
-                      <td className="px-4 py-1.5 text-zinc-600">
-                        {(f.prevalence * 100).toFixed(0)}%
-                      </td>
-                      <td className="px-4 py-1.5 text-zinc-600">
-                        {(f.stability * 100).toFixed(0)}%
-                      </td>
-                      <td className="px-4 py-1.5">
-                        {f.is_promoted ? (
-                          <span className="text-[10px] mono px-1.5 py-0.5 rounded bg-green-100 text-green-800">promoted</span>
-                        ) : (
-                          <span className="text-[10px] mono text-zinc-500">—</span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-
-// ===========================================================================
 // Tab: Collisions
 // ===========================================================================
 
 
 function CollisionsTab() {
   return (
-    <div className="max-w-5xl mx-auto px-8 py-6">
-      <h1 className="text-lg font-semibold text-zinc-900 mb-1">
-        Collisions
-      </h1>
+    <div className="max-w-4xl mx-auto px-8 py-6 overflow-y-auto h-full">
+      <h1 className="text-lg font-semibold text-zinc-900 mb-1">Collisions</h1>
       <p className="text-xs text-zinc-500 mb-4">
         Naming overlaps between discovered fields and typed schema fields.
       </p>
       <EmptyState
         title="No collisions detected"
-        body="When an L2b cluster's canonical name matches an existing typed schema field, it surfaces here for resolve / merge review. The Wave A heuristic only flags exact-name matches; semantic-similarity detection lands in Wave B."
+        body="Semantic-similarity collision detection (when an L2b cluster's name fuzzy-matches a typed schema field) lands in Pass B. Wave A's exact-name check fires zero collisions on the demo corpus."
       />
     </div>
   );
@@ -415,10 +872,9 @@ function VocabularyTab() {
 
   useEffect(() => {
     setLoading(true);
-    const domainId = `workspace:${getWorkspaceId()}`;
     (async () => {
       try {
-        const out = await listVocabulary(domainId, 500);
+        const out = await listVocabulary(`workspace:${getWorkspaceId()}`, 500);
         setEntries(out);
       } finally {
         setLoading(false);
@@ -436,15 +892,13 @@ function VocabularyTab() {
   }, [entries, search]);
 
   return (
-    <div className="max-w-5xl mx-auto px-8 py-6">
+    <div className="max-w-4xl mx-auto px-8 py-6 overflow-y-auto h-full">
       <h1 className="text-lg font-semibold text-zinc-900 mb-1">
         Vocabulary <span className="mono text-zinc-400 text-sm">{entries.length}</span>
       </h1>
       <p className="text-xs text-zinc-500 mb-4">
-        Synonym + acronym clusters discovered by Design 6 field clustering.
-        BM25 retrieval expands queries via these mappings.
+        Synonym + acronym clusters discovered by Design 6 field clustering. BM25 retrieval expands queries via these mappings.
       </p>
-
       <input
         type="text"
         value={search}
@@ -452,17 +906,13 @@ function VocabularyTab() {
         placeholder="Filter by term or synonym"
         className="w-full text-xs px-3 py-2 mb-4 rounded border border-zinc-200 focus:outline-none focus:border-zinc-400"
       />
-
-      {loading ? (
-        <SpinnerInline />
-      ) : filtered.length === 0 ? (
+      {loading ? <SpinnerInline />
+      : filtered.length === 0 ? (
         <EmptyState
           title={entries.length === 0 ? "No vocabulary entries yet" : "No matches"}
-          body={
-            entries.length === 0
-              ? "Synonym clusters auto-populate as the field-clustering worker runs over your corpus. Manually-added terms also show here."
-              : "No vocabulary term matches that search."
-          }
+          body={entries.length === 0
+            ? "Synonym clusters auto-populate as the field-clustering worker runs over your corpus. Manually-added terms also show here."
+            : "No vocabulary term matches that search."}
         />
       ) : (
         <div className="rounded-lg border border-zinc-200 bg-white">
@@ -508,7 +958,7 @@ function VocabularyTab() {
 
 
 // ===========================================================================
-// Tab: Lineage (doc chains)
+// Tab: Lineage
 // ===========================================================================
 
 
@@ -518,28 +968,22 @@ function LineageTab() {
 
   useEffect(() => {
     (async () => {
-      try {
-        const out = await listDocChains(200);
-        setChains(out);
-      } finally {
-        setLoading(false);
-      }
+      try { setChains(await listDocChains(200)); }
+      finally { setLoading(false); }
     })();
   }, []);
 
   return (
-    <div className="max-w-5xl mx-auto px-8 py-6">
+    <div className="max-w-4xl mx-auto px-8 py-6 overflow-y-auto h-full">
       <h1 className="text-lg font-semibold text-zinc-900 mb-1">
         Lineage <span className="mono text-zinc-400 text-sm">{chains.length}</span>
       </h1>
       <p className="text-xs text-zinc-500 mb-4">
-        Doc chains: amendments, email threads, drawing revisions, circular + corrigendum pairs.
-        The system marks the latest member as current_version; older members are superseded.
+        Doc chains: amendments, email threads, drawing revisions, circulars.
+        Latest member is current_version; older members are superseded.
       </p>
-
-      {loading ? (
-        <SpinnerInline />
-      ) : chains.length === 0 ? (
+      {loading ? <SpinnerInline />
+      : chains.length === 0 ? (
         <EmptyState
           title="No doc chains detected"
           body="Chains form when the worker detects amendment / supersession language across docs, or matching In-Reply-To headers on emails."
@@ -550,7 +994,6 @@ function LineageTab() {
             <div
               key={c.id}
               className="rounded-lg border border-zinc-200 bg-white px-4 py-3"
-              data-testid="schema-chain-row"
             >
               <div className="flex items-center gap-3">
                 <span className="text-[10px] mono px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-700">
@@ -568,11 +1011,7 @@ function LineageTab() {
                   chain {c.id.slice(0, 8)}…
                 </span>
               </div>
-              {c.title && (
-                <div className="text-xs text-zinc-500 mt-1 truncate">
-                  {c.title}
-                </div>
-              )}
+              {c.title && <div className="text-xs text-zinc-500 mt-1 truncate">{c.title}</div>}
             </div>
           ))}
         </div>
@@ -587,49 +1026,39 @@ function LineageTab() {
 // ===========================================================================
 
 
-function VersionsTab() {
-  const [schemas, setSchemas] = useState<SchemaSummary[]>([]);
+function VersionsTab({ schemas }: { schemas: SchemaSummary[] }) {
   const [activeSchemaId, setActiveSchemaId] = useState<string | null>(null);
   const [versions, setVersions] = useState<SchemaVersionRow[]>([]);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    (async () => {
-      const out = await listSchemas();
-      setSchemas(out);
-      if (out.length > 0) setActiveSchemaId(out[0].id);
-    })();
-  }, []);
+    if (schemas.length > 0 && !activeSchemaId) setActiveSchemaId(schemas[0].id);
+  }, [schemas, activeSchemaId]);
 
   useEffect(() => {
     if (!activeSchemaId) return;
     setLoading(true);
     (async () => {
-      try {
-        const out = await listSchemaVersions(activeSchemaId, 50);
-        setVersions(out);
-      } finally {
-        setLoading(false);
-      }
+      try { setVersions(await listSchemaVersions(activeSchemaId, 50)); }
+      finally { setLoading(false); }
     })();
   }, [activeSchemaId]);
 
   if (schemas.length === 0) {
     return (
-      <EmptyState
-        title="No schemas, no versions"
-        body="Versions show schema evolution over time. They appear once any schema has been edited at least once."
-      />
+      <div className="max-w-4xl mx-auto px-8 py-6">
+        <EmptyState
+          title="No schemas, no versions"
+          body="Versions show schema evolution over time. They appear once any schema has been edited."
+        />
+      </div>
     );
   }
 
   return (
-    <div className="max-w-5xl mx-auto px-8 py-6">
-      <h1 className="text-lg font-semibold text-zinc-900 mb-4">
-        Schema versions
-      </h1>
-
-      <div className="flex gap-1 mb-5 text-xs">
+    <div className="max-w-4xl mx-auto px-8 py-6 overflow-y-auto h-full">
+      <h1 className="text-lg font-semibold text-zinc-900 mb-4">Schema versions</h1>
+      <div className="flex flex-wrap gap-1 mb-5 text-xs">
         {schemas.map((s) => {
           const active = s.id === activeSchemaId;
           return (
@@ -637,7 +1066,7 @@ function VersionsTab() {
               key={s.id}
               type="button"
               onClick={() => setActiveSchemaId(s.id)}
-              className={`px-3 py-1.5 rounded-md cursor-pointer ${
+              className={`px-3 py-1.5 rounded-md cursor-pointer mono ${
                 active
                   ? "bg-zinc-900 text-white"
                   : "bg-white border border-zinc-200 text-zinc-700 hover:bg-zinc-100"
@@ -648,13 +1077,11 @@ function VersionsTab() {
           );
         })}
       </div>
-
-      {loading ? (
-        <SpinnerInline />
-      ) : versions.length === 0 ? (
+      {loading ? <SpinnerInline />
+      : versions.length === 0 ? (
         <EmptyState
           title="No versions yet"
-          body="The initial version is created on schema creation. Subsequent edits via /schemas/{id} mint new versions."
+          body="The initial version is created on schema creation. Subsequent edits mint new versions."
         />
       ) : (
         <div className="rounded-lg border border-zinc-200 bg-white">
@@ -690,7 +1117,7 @@ function VersionsTab() {
 
 
 // ===========================================================================
-// Helpers
+// Shared helpers
 // ===========================================================================
 
 
