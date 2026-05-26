@@ -33,6 +33,111 @@ from kb.domain.schemas import (
 router = APIRouter(prefix="/schemas", tags=["schemas"])
 
 
+# ---------------------------------------------------------------------------
+# GET /schemas/export.yaml — dump typed schemas as a single YAML file
+# (Schema Studio header "Export YAML" button — prototype parity)
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/export.yaml",
+    summary="Export all active typed schemas + entities + fields as YAML",
+    responses={200: {"content": {"application/x-yaml": {}}}},
+)
+async def export_schemas_yaml(
+    workspace_id: Annotated[str, Depends(current_workspace_id)],
+    conn: Annotated[Connection, Depends(kb_app_connection)],
+) -> Response:
+    """Streams a single YAML document the curator can commit to version
+    control or share with another workspace. Format keeps things
+    importable later — top-level `schemas:` list, each item with
+    `name` / `description` / `entities` (list) / `fields` (per entity).
+
+    YAML hand-rolled to avoid a runtime PyYAML dependency (we already
+    use json.dumps everywhere else); the structure is small + flat so
+    the indent rules are trivial.
+    """
+    # `schemas` table has `current_version_id` (FK to schema_versions),
+    # not a `current_version` int. Re-derive the version number via the
+    # FK so the YAML can carry it.
+    # `schemas` table has `current_version_id` (FK to schema_versions),
+    # not a `current_version` int. Re-derive the version number via the
+    # FK so the YAML can carry it.
+    cur = await conn.execute(
+        "SELECT s.id::text, s.name, s.description, s.lifecycle_state, "
+        "       sv.version_number "
+        "  FROM schemas s "
+        "  LEFT JOIN schema_versions sv ON sv.id = s.current_version_id "
+        " WHERE s.workspace_id = %s AND s.lifecycle_state = 'active' "
+        " ORDER BY s.name",
+        (workspace_id,),
+    )
+    schemas_rows = await cur.fetchall()
+
+    lines: list[str] = []
+    lines.append("# Emerging KB — schema export")
+    lines.append(f"# workspace_id: {workspace_id}")
+    lines.append("schemas:")
+    if not schemas_rows:
+        lines.append("  []")
+    for sid, sname, sdesc, _slc, sver in schemas_rows:
+        lines.append(f"  - name: {_yaml_str(sname)}")
+        lines.append(f"    description: {_yaml_str(sdesc or '')}")
+        lines.append(f"    current_version: {sver or 1}")
+        # Entities
+        cur = await conn.execute(
+            "SELECT id::text, name, description "
+            "  FROM schema_entities "
+            " WHERE schema_id = %s AND lifecycle_state = 'active' "
+            " ORDER BY name",
+            (sid,),
+        )
+        ent_rows = await cur.fetchall()
+        if not ent_rows:
+            lines.append("    entities: []")
+            continue
+        lines.append("    entities:")
+        for eid, ename, edesc in ent_rows:
+            lines.append(f"      - name: {_yaml_str(ename)}")
+            lines.append(f"        description: {_yaml_str(edesc or '')}")
+            cur = await conn.execute(
+                "SELECT name, type, nl_description, is_required "
+                "  FROM schema_fields "
+                " WHERE entity_id = %s AND lifecycle_state = 'active' "
+                " ORDER BY name",
+                (eid,),
+            )
+            field_rows = await cur.fetchall()
+            if not field_rows:
+                lines.append("        fields: []")
+                continue
+            lines.append("        fields:")
+            for fname, ftype, fdesc, frequired in field_rows:
+                lines.append(f"          - name: {_yaml_str(fname)}")
+                lines.append(f"            type: {_yaml_str(ftype or 'string')}")
+                if fdesc:
+                    lines.append(f"            description: {_yaml_str(fdesc)}")
+                if frequired:
+                    lines.append("            required: true")
+
+    body = "\n".join(lines) + "\n"
+    return Response(
+        content=body,
+        media_type="application/x-yaml",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="kb-schemas-{workspace_id[:8]}.yaml"'
+            ),
+        },
+    )
+
+
+def _yaml_str(value: str) -> str:
+    """Quote a YAML scalar safely. Avoids importing PyYAML for one feature."""
+    s = (value or "").replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{s}"'
+
+
 # ===========================================================================
 # B7 / WA-14 — Inferred fields (Schema Studio "Inferred" tab)
 # ===========================================================================
@@ -70,6 +175,19 @@ class InferredFieldPromotedResponse(BaseModel):
 
 class InferredFieldDeleteResponse(BaseModel):
     deleted: int
+
+
+class InferredFieldSampleValue(BaseModel):
+    value_text: str
+    file_id: str
+    file_name: str | None = None
+    n_occurrences: int = 1
+
+
+class InferredFieldSampleValuesResponse(BaseModel):
+    field_id: str
+    canonical_name: str
+    items: list[InferredFieldSampleValue] = Field(default_factory=list)
 
 
 @router.get(
@@ -266,6 +384,77 @@ async def rename_inferred_field(
             r[12].isoformat() if hasattr(r[12], "isoformat") else
             (str(r[12]) if r[12] else None)
         ),
+    )
+
+
+@router.get(
+    "/inferred-fields/{field_id}/sample-values",
+    response_model=InferredFieldSampleValuesResponse,
+    summary="Top distinct example values for an inferred field (Schema Studio expand)",
+)
+async def get_inferred_field_sample_values(
+    field_id: str,
+    workspace_id: Annotated[str, Depends(current_workspace_id)],
+    conn: Annotated[Connection, Depends(kb_app_connection)],
+    limit: int = 5,
+) -> InferredFieldSampleValuesResponse:
+    """Pull example values from `proposed_fields` joined to `files` for
+    one inferred-cluster row. The cluster key is
+    (workspace_id, inferred_doc_type, field_name), so we match by name.
+
+    Returns at most `limit` distinct values, picking the most-occurring
+    first. Used by the Schema Studio Inferred-row expander — pre-fix
+    that block showed "Sample values land in Pass B".
+    """
+    cur = await conn.execute(
+        "SELECT inferred_doc_type, canonical_name "
+        "  FROM inferred_schema_fields "
+        " WHERE id = %s AND workspace_id = %s",
+        (field_id, workspace_id),
+    )
+    row = await cur.fetchone()
+    if row is None:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="inferred field not found")
+    doc_type, canonical_name = row
+
+    # Pull most-frequent distinct values. We match on
+    # proposed_fields.field_name = canonical_name (the L2b clusterer
+    # populates field_name with the canonical at cluster time).
+    cur = await conn.execute(
+        """
+        SELECT pf.value_text,
+               (array_agg(pf.file_id::text))[1] AS first_file_id,
+               (array_agg(f.name))[1] AS first_file_name,
+               count(*)::int AS n
+          FROM proposed_fields pf
+          JOIN files f ON f.id = pf.file_id
+         WHERE pf.workspace_id = %s
+           AND pf.inferred_doc_type = %s
+           AND pf.field_name = %s
+           AND pf.value_text IS NOT NULL
+           AND length(trim(pf.value_text)) > 0
+           AND f.lifecycle_state NOT IN ('deleted','failed')
+         GROUP BY pf.value_text
+         ORDER BY n DESC, pf.value_text ASC
+         LIMIT %s
+        """,
+        (workspace_id, doc_type, canonical_name, limit),
+    )
+    rows = await cur.fetchall()
+    items = [
+        InferredFieldSampleValue(
+            value_text=str(r[0])[:240],
+            file_id=str(r[1]),
+            file_name=r[2],
+            n_occurrences=int(r[3] or 0),
+        )
+        for r in rows
+    ]
+    return InferredFieldSampleValuesResponse(
+        field_id=field_id,
+        canonical_name=canonical_name,
+        items=items,
     )
 
 

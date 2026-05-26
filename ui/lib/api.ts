@@ -706,12 +706,20 @@ export async function getExploreCounts(): Promise<ExploreCounts> {
 export async function exploreSearch(opts: {
   q?: string;
   kind?: ExploreKind | null;
+  docType?: string | null;
+  hasAnomaly?: boolean;
+  hasConflicts?: boolean;
+  hasChain?: boolean;
   offset?: number;
   limit?: number;
 }): Promise<ExploreSearchResponse> {
   const params = new URLSearchParams();
   if (opts.q) params.set("q", opts.q);
   if (opts.kind) params.set("kind", opts.kind);
+  if (opts.docType) params.set("doc_type", opts.docType);
+  if (opts.hasAnomaly) params.set("has_anomaly", "true");
+  if (opts.hasConflicts) params.set("has_conflicts", "true");
+  if (opts.hasChain) params.set("has_chain", "true");
   if (opts.offset != null) params.set("offset", String(opts.offset));
   if (opts.limit != null) params.set("limit", String(opts.limit));
   const resp = await fetch(
@@ -719,6 +727,43 @@ export async function exploreSearch(opts: {
     { headers: workspaceHeaders() },
   );
   return _handle<ExploreSearchResponse>(resp);
+}
+
+
+// ---------------------------------------------------------------------------
+// Entity profile (Pass B — Related accordion rollup)
+// ---------------------------------------------------------------------------
+
+export type EntityProfileBucket = {
+  key: string;
+  label: string;
+  icon: string;
+  count: number;
+  subtitle: string;
+  deep_link_kind?: string | null;
+  deep_link_doc_type?: string | null;
+  deep_link_q?: string | null;
+};
+
+export type EntityProfile = {
+  id: string;
+  canonical_name: string;
+  entity_type: string;
+  aliases: string[];
+  first_seen: string | null;
+  last_seen: string | null;
+  n_docs: number;
+  mention_count: number;
+  summary: string;
+  related: EntityProfileBucket[];
+};
+
+export async function getEntityProfile(entityId: string): Promise<EntityProfile> {
+  const resp = await fetch(
+    `${KB_API_URL}/explore/entity/${entityId}/profile`,
+    { headers: workspaceHeaders() },
+  );
+  return _handle<EntityProfile>(resp);
 }
 
 
@@ -910,6 +955,52 @@ export async function discardInferredField(fieldId: string): Promise<number> {
   );
   const body = await _handle<{ deleted: number }>(resp);
   return body.deleted ?? 0;
+}
+
+
+// Pass B — sample values + YAML export for Schema Studio.
+
+export type InferredFieldSampleValue = {
+  value_text: string;
+  file_id: string;
+  file_name: string | null;
+  n_occurrences: number;
+};
+
+export async function getInferredFieldSampleValues(
+  fieldId: string, limit = 5,
+): Promise<InferredFieldSampleValue[]> {
+  const resp = await fetch(
+    `${KB_API_URL}/schemas/inferred-fields/${fieldId}/sample-values?limit=${limit}`,
+    { headers: workspaceHeaders() },
+  );
+  const body = await _handle<{ items: InferredFieldSampleValue[] }>(resp);
+  return body.items ?? [];
+}
+
+/** Returns the absolute URL to GET the YAML export. Used as the `href`
+ *  on the download button — the browser does a normal navigation and
+ *  the Content-Disposition response header triggers the download. */
+export function schemaExportYamlUrl(): string {
+  return `${KB_API_URL}/schemas/export.yaml`;
+}
+
+export async function downloadSchemaExportYaml(): Promise<void> {
+  // Direct fetch (not anchor) so we can attach the workspace header.
+  const resp = await fetch(`${KB_API_URL}/schemas/export.yaml`, {
+    headers: workspaceHeaders(),
+  });
+  if (!resp.ok) throw new KbApiError(resp.status, await resp.text(),
+                                     `export.yaml ${resp.status}`);
+  const blob = await resp.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "kb-schemas.yaml";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }
 
 export async function postChat(

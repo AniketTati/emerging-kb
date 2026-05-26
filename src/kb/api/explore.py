@@ -1,4 +1,5 @@
 """Wave A close-up — /explore: faceted search across the workspace.
+Plus /explore/entity/{id}/profile for the Pass B entity-card rollup.
 
 The Explore page is the third primary-nav surface (alongside Chat +
 Upload). It answers "what's in my corpus?" by category:
@@ -80,6 +81,68 @@ class ExploreSearchResponse(BaseModel):
     limit: int = 50
     total_estimate: int = 0
     items: list[ExploreHit] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Filter bag — keeps the search helper signatures compact when we keep
+# adding optional facets. has_conflicts / has_chain are post-extraction
+# joins (fact_conflicts + doc_chain_members); has_anomaly is a per-file
+# EXISTS check against atomic_units.
+# ---------------------------------------------------------------------------
+
+
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class _SearchFilters:
+    doc_type: str | None = None
+    has_anomaly: bool = False
+    has_conflicts: bool = False
+    has_chain: bool = False
+
+    def applies_to_files(self) -> bool:
+        return bool(
+            self.doc_type or self.has_anomaly
+            or self.has_conflicts or self.has_chain
+        )
+
+
+# ---------------------------------------------------------------------------
+# Entity-profile response models (Pass B — Related accordion)
+# ---------------------------------------------------------------------------
+
+
+class EntityProfileBucket(BaseModel):
+    """One row of the entity card's `RELATED` accordion. Maps to the
+    prototype lines like:
+      `17 Contracts — supply, services, employment`
+      `34 Invoices — total ₹4.7 Cr · 31 paid, 3 pending`
+      `11 Connected people — counterparties, signatories, site engineers`
+    """
+    key: str               # stable id for the UI ("contracts" / "projects" / …)
+    label: str             # display title ("17 Contracts")
+    icon: str              # lucide icon name ("file-text" / "users" / …)
+    count: int
+    subtitle: str          # human-readable subtitle (sample titles joined)
+    # The scope-filter pair that `view all →` should apply on /explore
+    # to drill into this bucket (kind + optional inferred_doc_type / etc.).
+    deep_link_kind: str | None = None
+    deep_link_doc_type: str | None = None
+    deep_link_q: str | None = None
+
+
+class EntityProfileResponse(BaseModel):
+    id: str
+    canonical_name: str
+    entity_type: str
+    aliases: list[str] = Field(default_factory=list)
+    first_seen: str | None = None
+    last_seen: str | None = None
+    n_docs: int = 0
+    mention_count: int = 0
+    summary: str = ""      # narrative blurb (template-generated)
+    related: list[EntityProfileBucket] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -172,6 +235,31 @@ async def get_explore_search(
             "atomic_unit, entity, relationship, topic, anomaly."
         ),
     ),
+    doc_type: str | None = Query(
+        default=None,
+        description="Filter document/atomic_unit/anomaly buckets to one doc_type.",
+    ),
+    has_anomaly: bool = Query(
+        default=False,
+        description=(
+            "When true, only return documents/entities whose files contain "
+            "at least one atomic_unit with rarity_score > 0.7."
+        ),
+    ),
+    has_conflicts: bool = Query(
+        default=False,
+        description=(
+            "When true, only return documents whose entity_id or chain_id "
+            "appears in `fact_conflicts`."
+        ),
+    ),
+    has_chain: bool = Query(
+        default=False,
+        description=(
+            "When true, only return documents that are part of a doc_chain "
+            "(amendment / email thread / drawing revision)."
+        ),
+    ),
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=_DEFAULT_LIMIT, ge=1, le=_MAX_LIMIT),
 ) -> ExploreSearchResponse:
@@ -192,17 +280,21 @@ async def get_explore_search(
         kind = None
 
     targets = [kind] if kind else list(_VALID_KINDS)
+    filters = _SearchFilters(
+        doc_type=doc_type, has_anomaly=has_anomaly,
+        has_conflicts=has_conflicts, has_chain=has_chain,
+    )
 
     items: list[ExploreHit] = []
     total_estimate = 0
 
     for tgt in targets:
         if tgt == "document":
-            items_part, n = await _search_documents(conn, like, has_query, offset, limit)
+            items_part, n = await _search_documents(conn, like, has_query, offset, limit, filters)
         elif tgt == "doc_type":
             items_part, n = await _search_doc_types(conn, like, has_query, offset, limit)
         elif tgt == "atomic_unit":
-            items_part, n = await _search_atomic_units(conn, like, has_query, offset, limit)
+            items_part, n = await _search_atomic_units(conn, like, has_query, offset, limit, filters)
         elif tgt == "entity":
             items_part, n = await _search_entities(conn, like, has_query, offset, limit)
         elif tgt == "relationship":
@@ -210,7 +302,7 @@ async def get_explore_search(
         elif tgt == "topic":
             items_part, n = await _search_topics(conn, like, has_query, offset, limit)
         elif tgt == "anomaly":
-            items_part, n = await _search_anomalies(conn, like, has_query, offset, limit)
+            items_part, n = await _search_anomalies(conn, like, has_query, offset, limit, filters)
         else:
             items_part, n = [], 0
         items.extend(items_part)
@@ -232,17 +324,369 @@ async def get_explore_search(
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# /explore/entity/{id}/profile — Pass B rich entity card
+# ---------------------------------------------------------------------------
+
+
+# How doc_types group into the prototype's bucket labels. Anything not
+# in this map falls into the "Other documents" bucket.
+_DOCTYPE_GROUPS: dict[str, tuple[str, str]] = {
+    # (group_key, group_label)
+    "legal_contract":            ("contracts", "Contracts"),
+    "master_services_agreement": ("contracts", "Contracts"),
+    "subscription_agreement":    ("contracts", "Contracts"),
+    "vendor_evaluation":         ("contracts", "Contracts"),
+    "offer_letter":              ("contracts", "Contracts"),
+
+    "invoice":                   ("invoices", "Invoices"),
+    "bank_statement":            ("invoices", "Invoices"),
+    "expense_report":            ("invoices", "Invoices"),
+    "explanation_of_benefits":   ("invoices", "Invoices"),
+    "price_sheet":               ("invoices", "Invoices"),
+
+    "email_thread":              ("emails", "Email threads"),
+
+    "incident_report":           ("reports", "Reports"),
+    "incident_postmortem":       ("reports", "Reports"),
+    "bug_report":                ("reports", "Reports"),
+    "lab_report":                ("reports", "Reports"),
+    "discharge_summary":         ("reports", "Reports"),
+    "financial_report":          ("reports", "Reports"),
+    "case_study":                ("reports", "Reports"),
+    "performance_review":        ("reports", "Reports"),
+    "meeting_minutes":           ("reports", "Reports"),
+    "press_release":             ("reports", "Reports"),
+
+    "resume":                    ("people", "People profiles"),
+    "job_posting":               ("people", "People profiles"),
+
+    "request_for_comments":      ("design", "Design docs"),
+    "handwritten_note":          ("notes", "Notes"),
+}
+
+_GROUP_ICONS: dict[str, str] = {
+    "contracts": "file-text",
+    "invoices":  "dollar-sign",
+    "emails":    "mail",
+    "reports":   "file-text",
+    "people":    "user",
+    "design":    "blueprint",
+    "notes":     "sticky-note",
+    "other":     "file",
+}
+
+
+@router.get(
+    "/explore/entity/{entity_id}/profile",
+    response_model=EntityProfileResponse,
+    summary=(
+        "Rich entity card with Related accordion (Pass B for "
+        "prototype/explore.html parity)"
+    ),
+)
+async def get_entity_profile(
+    entity_id: str,
+    workspace_id: Annotated[str, Depends(current_workspace_id)],  # noqa: ARG001
+    conn: Annotated[Connection, Depends(kb_app_connection)],
+) -> EntityProfileResponse:
+    """Builds the entity card rollup the prototype shows:
+
+      RELATED
+        17 Contracts — supply, services, employment      view all →
+        6 Projects — Aurangabad warehouse, Pune…         view all →
+        34 Invoices — total ₹4.7 Cr · 31 paid, 3 pending view all →
+        3 Employees — Priya Sharma, Rohan Patel…         view all →
+        11 Connected people — counterparties, signat…   view all →
+        1 Anomaly — 4-hour delivery clause on…           view →
+
+    Implementation: 4 indexed sub-queries against
+      entities + extracted_mentions + mention_to_entity + files + atomic_units
+    one per bucket family (file-grouped / co-mentioned PERSON / co-mentioned
+    ORG / anomalies). At demo scale (~hundreds of mentions per entity)
+    this stays under 100ms; at 100k entities × 1M mentions we'd cache
+    the result onto `entity_summary` and refresh on extraction.
+    """
+    # ---- Base entity row ----
+    cur = await conn.execute(
+        "SELECT id::text, canonical_name, entity_type, mention_count "
+        "  FROM entities WHERE id = %s",
+        (entity_id,),
+    )
+    row = await cur.fetchone()
+    if row is None:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="entity not found")
+    _, canonical_name, entity_type, mention_count = row
+
+    # ---- Aliases (top distinct surface forms != canonical) ----
+    cur = await conn.execute(
+        """
+        SELECT DISTINCT em.mention_text
+          FROM extracted_mentions em
+          JOIN mention_to_entity me ON me.mention_id = em.id
+         WHERE me.entity_id = %s
+           AND lower(em.mention_text) <> lower(%s)
+         LIMIT 4
+        """,
+        (entity_id, canonical_name),
+    )
+    aliases = [r[0] for r in await cur.fetchall() if r[0]][:3]
+
+    # ---- First / last seen + n_docs ----
+    cur = await conn.execute(
+        """
+        SELECT MIN(f.created_at)::date::text,
+               MAX(f.created_at)::date::text,
+               count(DISTINCT em.file_id)::int
+          FROM extracted_mentions em
+          JOIN mention_to_entity me ON me.mention_id = em.id
+          JOIN files f ON f.id = em.file_id
+         WHERE me.entity_id = %s
+           AND f.lifecycle_state NOT IN ('deleted','failed')
+        """,
+        (entity_id,),
+    )
+    fs_row = await cur.fetchone()
+    first_seen = fs_row[0] if fs_row else None
+    last_seen = fs_row[1] if fs_row else None
+    n_docs = int(fs_row[2] or 0) if fs_row else 0
+
+    # ---- File buckets: group inferred_doc_type → bucket label, count + sample ----
+    cur = await conn.execute(
+        """
+        SELECT f.inferred_doc_type, count(DISTINCT f.id)::int AS n_files,
+               (array_agg(DISTINCT f.name))[1:5] AS sample_names
+          FROM extracted_mentions em
+          JOIN mention_to_entity me ON me.mention_id = em.id
+          JOIN files f ON f.id = em.file_id
+         WHERE me.entity_id = %s
+           AND f.lifecycle_state NOT IN ('deleted','failed')
+           AND f.inferred_doc_type IS NOT NULL
+         GROUP BY f.inferred_doc_type
+         ORDER BY n_files DESC
+        """,
+        (entity_id,),
+    )
+    file_rows = await cur.fetchall()
+
+    # Roll up by group_key
+    group_acc: dict[str, dict[str, Any]] = {}
+    for dt, n, samples in file_rows:
+        gkey, glabel = _DOCTYPE_GROUPS.get(dt, ("other", "Other documents"))
+        slot = group_acc.setdefault(gkey, {
+            "label": glabel, "count": 0, "doc_types": [], "samples": [],
+        })
+        slot["count"] += int(n)
+        slot["doc_types"].append(dt)
+        slot["samples"].extend(samples or [])
+
+    related: list[EntityProfileBucket] = []
+    for gkey, slot in sorted(
+        group_acc.items(), key=lambda kv: kv[1]["count"], reverse=True,
+    ):
+        subtitle_items = []
+        # Show the doc_types as the subtitle, capped at 3 ("supply, services, employment" style).
+        for dt in slot["doc_types"][:3]:
+            subtitle_items.append(dt.replace("_", " "))
+        if len(slot["doc_types"]) > 3:
+            subtitle_items.append(f"+{len(slot['doc_types']) - 3} more")
+        related.append(EntityProfileBucket(
+            key=gkey,
+            label=f"{slot['count']} {slot['label']}",
+            icon=_GROUP_ICONS.get(gkey, "file"),
+            count=slot["count"],
+            subtitle=", ".join(subtitle_items),
+            deep_link_kind="document",
+            deep_link_doc_type=slot["doc_types"][0] if slot["doc_types"] else None,
+        ))
+
+    # ---- Connected people (PERSON entities co-mentioned in same files) ----
+    cur = await conn.execute(
+        """
+        SELECT e2.id::text, e2.canonical_name,
+               count(DISTINCT em2.file_id)::int AS shared_files
+          FROM extracted_mentions em1
+          JOIN mention_to_entity me1 ON me1.mention_id = em1.id
+          JOIN extracted_mentions em2 ON em2.file_id = em1.file_id
+                                     AND em2.id <> em1.id
+          JOIN mention_to_entity me2 ON me2.mention_id = em2.id
+          JOIN entities e2 ON e2.id = me2.entity_id
+         WHERE me1.entity_id = %s
+           AND e2.entity_type = 'PERSON'
+           AND e2.id <> %s
+         GROUP BY e2.id, e2.canonical_name
+         ORDER BY shared_files DESC, e2.canonical_name
+         LIMIT 25
+        """,
+        (entity_id, entity_id),
+    )
+    people_rows = await cur.fetchall()
+    if people_rows:
+        sample_names = [r[1] for r in people_rows[:3]]
+        more = max(0, len(people_rows) - 3)
+        subtitle = ", ".join(sample_names) + (f", +{more} more" if more else "")
+        related.append(EntityProfileBucket(
+            key="connected_people",
+            label=f"{len(people_rows)} Connected people",
+            icon="users",
+            count=len(people_rows),
+            subtitle=subtitle,
+            deep_link_kind="entity",
+            deep_link_q=canonical_name,  # the explore search will surface people
+        ))
+
+    # ---- Connected orgs (other ORG entities co-mentioned) ----
+    cur = await conn.execute(
+        """
+        SELECT e2.id::text, e2.canonical_name,
+               count(DISTINCT em2.file_id)::int AS shared_files
+          FROM extracted_mentions em1
+          JOIN mention_to_entity me1 ON me1.mention_id = em1.id
+          JOIN extracted_mentions em2 ON em2.file_id = em1.file_id
+                                     AND em2.id <> em1.id
+          JOIN mention_to_entity me2 ON me2.mention_id = em2.id
+          JOIN entities e2 ON e2.id = me2.entity_id
+         WHERE me1.entity_id = %s
+           AND e2.entity_type = 'ORG'
+           AND e2.id <> %s
+         GROUP BY e2.id, e2.canonical_name
+         ORDER BY shared_files DESC, e2.canonical_name
+         LIMIT 25
+        """,
+        (entity_id, entity_id),
+    )
+    org_rows = await cur.fetchall()
+    if org_rows:
+        sample_names = [r[1] for r in org_rows[:3]]
+        more = max(0, len(org_rows) - 3)
+        subtitle = ", ".join(sample_names) + (f", +{more} more" if more else "")
+        related.append(EntityProfileBucket(
+            key="connected_orgs",
+            label=f"{len(org_rows)} Connected orgs",
+            icon="building",
+            count=len(org_rows),
+            subtitle=subtitle,
+            deep_link_kind="entity",
+            deep_link_q=canonical_name,
+        ))
+
+    # ---- Anomalies: high-rarity atomic_units in files mentioning the entity ----
+    cur = await conn.execute(
+        """
+        SELECT au.id::text, au.unit_type, au.rarity_score, f.name,
+               substring(au.parameters::text from 1 for 200) AS preview
+          FROM atomic_units au
+          JOIN files f ON f.id = au.file_id
+         WHERE au.rarity_score IS NOT NULL
+           AND au.rarity_score > 0.7
+           AND f.lifecycle_state NOT IN ('deleted','failed')
+           AND EXISTS (
+             SELECT 1 FROM extracted_mentions em
+              JOIN mention_to_entity me ON me.mention_id = em.id
+              WHERE em.file_id = au.file_id
+                AND me.entity_id = %s
+           )
+         ORDER BY au.rarity_score DESC
+         LIMIT 25
+        """,
+        (entity_id,),
+    )
+    anomaly_rows = await cur.fetchall()
+    if anomaly_rows:
+        top = anomaly_rows[0]
+        subtitle = (
+            f"{top[1] or 'unit'} on {top[3] or '?'} "
+            f"(rarity {float(top[2] or 0):.2f})"
+        )
+        related.append(EntityProfileBucket(
+            key="anomalies",
+            label=f"{len(anomaly_rows)} Anomal{'ies' if len(anomaly_rows) != 1 else 'y'}",
+            icon="alert-circle",
+            count=len(anomaly_rows),
+            subtitle=subtitle,
+            deep_link_kind="anomaly",
+        ))
+
+    # ---- Narrative summary (template — LLM polish is future work) ----
+    type_label = (entity_type or "entity").lower()
+    summary_parts = [
+        f"{entity_type or 'Entity'} mentioned in {n_docs} doc{'s' if n_docs != 1 else ''}."
+    ]
+    if people_rows or org_rows:
+        connections = []
+        if people_rows:
+            connections.append(f"{len(people_rows)} people")
+        if org_rows:
+            connections.append(f"{len(org_rows)} other orgs")
+        if connections:
+            summary_parts.append(f"Connected to {', '.join(connections)}.")
+    if anomaly_rows:
+        summary_parts.append(
+            f"{len(anomaly_rows)} anomal{'ies' if len(anomaly_rows) != 1 else 'y'} flagged in associated docs."
+        )
+    summary = " ".join(summary_parts)
+    _ = type_label  # reserved for future LLM-narrative polish
+
+    return EntityProfileResponse(
+        id=entity_id,
+        canonical_name=canonical_name,
+        entity_type=entity_type or "ENTITY",
+        aliases=aliases,
+        first_seen=first_seen,
+        last_seen=last_seen,
+        n_docs=n_docs,
+        mention_count=int(mention_count or 0),
+        summary=summary,
+        related=related,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Per-kind SQL helpers (each returns (items, total_count_estimate))
+# ---------------------------------------------------------------------------
+
+
 async def _search_documents(
     conn: Connection, like: str, has_query: bool, offset: int, limit: int,
+    filters: _SearchFilters | None = None,
 ) -> tuple[list[ExploreHit], int]:
-    where_q = "AND name ILIKE %s" if has_query else ""
-    params: tuple = ((like,) if has_query else ()) + (limit, offset)
+    filters = filters or _SearchFilters()
+    where_parts = ["lifecycle_state NOT IN ('deleted','failed')"]
+    where_params: list[Any] = []
+    if has_query:
+        where_parts.append("name ILIKE %s")
+        where_params.append(like)
+    if filters.doc_type:
+        where_parts.append("inferred_doc_type = %s")
+        where_params.append(filters.doc_type)
+    if filters.has_anomaly:
+        where_parts.append(
+            "EXISTS (SELECT 1 FROM atomic_units au "
+            "  WHERE au.file_id = files.id "
+            "    AND au.rarity_score IS NOT NULL "
+            "    AND au.rarity_score > 0.7)"
+        )
+    if filters.has_conflicts:
+        # Files whose chain_id appears in fact_conflicts.chain_id.
+        where_parts.append(
+            "EXISTS (SELECT 1 FROM doc_chain_members dcm "
+            "  JOIN fact_conflicts fc ON fc.chain_id = dcm.chain_id "
+            "  WHERE dcm.doc_id = files.id)"
+        )
+    if filters.has_chain:
+        where_parts.append(
+            "EXISTS (SELECT 1 FROM doc_chain_members dcm "
+            "  WHERE dcm.doc_id = files.id)"
+        )
+    where = " AND ".join(where_parts)
+    params: tuple = tuple(where_params) + (limit, offset)
     cur = await conn.execute(
         f"""
         SELECT id::text, name, inferred_doc_type, mime_type,
                size_bytes, created_at::text, lifecycle_state
           FROM files
-         WHERE lifecycle_state NOT IN ('deleted','failed') {where_q}
+         WHERE {where}
          ORDER BY created_at DESC
          LIMIT %s OFFSET %s
         """,
@@ -250,13 +694,9 @@ async def _search_documents(
     )
     rows = await cur.fetchall()
 
-    count_params: tuple = (like,) if has_query else ()
     cur = await conn.execute(
-        f"""
-        SELECT count(*)::int FROM files
-         WHERE lifecycle_state NOT IN ('deleted','failed') {where_q}
-        """,
-        count_params,
+        f"SELECT count(*)::int FROM files WHERE {where}",
+        tuple(where_params),
     )
     total = int((await cur.fetchone())[0])
 
@@ -271,6 +711,8 @@ async def _search_documents(
                 "mime_type": r[3],
                 "size_bytes": int(r[4]),
                 "lifecycle_state": r[6],
+                "inferred_doc_type": r[2],
+                "created_at": r[5],
             },
         )
         for r in rows
@@ -323,18 +765,35 @@ async def _search_doc_types(
 
 async def _search_atomic_units(
     conn: Connection, like: str, has_query: bool, offset: int, limit: int,
+    filters: _SearchFilters | None = None,
 ) -> tuple[list[ExploreHit], int]:
     # atomic_units has unit_type + parameters + rarity_score, plus
     # file_id linking back to the doc.
-    where_q = "AND au.unit_type ILIKE %s" if has_query else ""
-    params: tuple = ((like,) if has_query else ()) + (limit, offset)
+    filters = filters or _SearchFilters()
+    where_parts = ["f.lifecycle_state NOT IN ('deleted','failed')"]
+    where_params: list[Any] = []
+    if has_query:
+        where_parts.append("au.unit_type ILIKE %s")
+        where_params.append(like)
+    if filters.doc_type:
+        where_parts.append("f.inferred_doc_type = %s")
+        where_params.append(filters.doc_type)
+    if filters.has_anomaly:
+        where_parts.append("au.rarity_score > 0.7")
+    if filters.has_chain:
+        where_parts.append(
+            "EXISTS (SELECT 1 FROM doc_chain_members dcm "
+            "  WHERE dcm.doc_id = f.id)"
+        )
+    where = " AND ".join(where_parts)
+    params: tuple = tuple(where_params) + (limit, offset)
     cur = await conn.execute(
         f"""
         SELECT au.id::text, au.unit_type, au.parameters::text,
                au.rarity_score, au.file_id::text, f.name
           FROM atomic_units au
           JOIN files f ON f.id = au.file_id
-         WHERE f.lifecycle_state NOT IN ('deleted','failed') {where_q}
+         WHERE {where}
          ORDER BY COALESCE(au.rarity_score, 0) DESC, au.id
          LIMIT %s OFFSET %s
         """,
@@ -342,14 +801,13 @@ async def _search_atomic_units(
     )
     rows = await cur.fetchall()
 
-    count_params: tuple = (like,) if has_query else ()
     cur = await conn.execute(
         f"""
         SELECT count(*)::int FROM atomic_units au
           JOIN files f ON f.id = au.file_id
-         WHERE f.lifecycle_state NOT IN ('deleted','failed') {where_q}
+         WHERE {where}
         """,
-        count_params,
+        tuple(where_params),
     )
     total = int((await cur.fetchone())[0])
 
@@ -547,18 +1005,30 @@ async def _search_topics(
 
 async def _search_anomalies(
     conn: Connection, like: str, has_query: bool, offset: int, limit: int,
+    filters: _SearchFilters | None = None,
 ) -> tuple[list[ExploreHit], int]:
-    where_q = "AND au.unit_type ILIKE %s" if has_query else ""
-    params: tuple = ((like,) if has_query else ()) + (limit, offset)
+    filters = filters or _SearchFilters()
+    where_parts = [
+        "au.rarity_score IS NOT NULL",
+        "au.rarity_score > 0.7",
+        "f.lifecycle_state NOT IN ('deleted','failed')",
+    ]
+    where_params: list[Any] = []
+    if has_query:
+        where_parts.append("au.unit_type ILIKE %s")
+        where_params.append(like)
+    if filters.doc_type:
+        where_parts.append("f.inferred_doc_type = %s")
+        where_params.append(filters.doc_type)
+    where = " AND ".join(where_parts)
+    params: tuple = tuple(where_params) + (limit, offset)
     cur = await conn.execute(
         f"""
         SELECT au.id::text, au.unit_type, au.rarity_score,
                au.file_id::text, f.name, au.parameters::text
           FROM atomic_units au
           JOIN files f ON f.id = au.file_id
-         WHERE au.rarity_score IS NOT NULL
-           AND au.rarity_score > 0.7
-           AND f.lifecycle_state NOT IN ('deleted','failed') {where_q}
+         WHERE {where}
          ORDER BY au.rarity_score DESC
          LIMIT %s OFFSET %s
         """,
@@ -566,16 +1036,13 @@ async def _search_anomalies(
     )
     rows = await cur.fetchall()
 
-    count_params: tuple = (like,) if has_query else ()
     cur = await conn.execute(
         f"""
         SELECT count(*)::int FROM atomic_units au
           JOIN files f ON f.id = au.file_id
-         WHERE au.rarity_score IS NOT NULL
-           AND au.rarity_score > 0.7
-           AND f.lifecycle_state NOT IN ('deleted','failed') {where_q}
+         WHERE {where}
         """,
-        count_params,
+        tuple(where_params),
     )
     total = int((await cur.fetchone())[0])
 

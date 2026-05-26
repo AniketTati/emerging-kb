@@ -32,9 +32,11 @@ import {
   listSchemas, listSchemaEntities, listSchemaEntityFields,
   listInferredFields, listVocabulary, listDocChains, listSchemaVersions,
   promoteInferredField, renameInferredField, discardInferredField,
+  getInferredFieldSampleValues, downloadSchemaExportYaml,
   type SchemaSummary, type SchemaEntity, type SchemaField,
   type InferredField, type VocabEntry, type DocChainSummary,
   type SchemaVersionRow,
+  type InferredFieldSampleValue,
 } from "@/lib/api";
 import { Sidebar } from "@/components/Sidebar";
 
@@ -167,8 +169,13 @@ export default function SchemaStudioPage() {
             type="button"
             className="ml-auto flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md text-zinc-600 hover:text-zinc-900 hover:bg-zinc-100 cursor-pointer"
             data-testid="schema-export-yaml"
-            onClick={() => alert("Export YAML — wired in Pass B (will download typed schemas as YAML)")}
-            title="Export typed schemas as YAML"
+            onClick={() => {
+              downloadSchemaExportYaml().catch((err) => {
+                console.error("export.yaml failed", err);
+                alert("Failed to export YAML — see console.");
+              });
+            }}
+            title="Download all active typed schemas as a YAML file"
           >
             <Download className="w-3.5 h-3.5" strokeWidth={1.75} />
             Export YAML
@@ -451,6 +458,9 @@ function InferredRow({
   const [busy, setBusy] = useState<"promote" | "discard" | "rename" | null>(null);
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameVal, setRenameVal] = useState(field.canonical_name);
+  // Sample values lazy-loaded on first expand (Pass B endpoint).
+  const [samples, setSamples] = useState<InferredFieldSampleValue[] | null>(null);
+  const [samplesLoading, setSamplesLoading] = useState(false);
 
   const status = statusOf(field);
   const dotClass =
@@ -490,11 +500,28 @@ function InferredRow({
     finally { setBusy(null); }
   }
 
+  async function toggleOpen() {
+    const next = !open;
+    setOpen(next);
+    if (next && samples === null) {
+      setSamplesLoading(true);
+      try {
+        const out = await getInferredFieldSampleValues(field.id, 5);
+        setSamples(out);
+      } catch (err) {
+        console.error("getInferredFieldSampleValues failed", err);
+        setSamples([]);
+      } finally {
+        setSamplesLoading(false);
+      }
+    }
+  }
+
   return (
     <div className="rounded-lg border border-zinc-200 bg-white" data-testid="inferred-row" data-status={status}>
       <button
         type="button"
-        onClick={() => setOpen(!open)}
+        onClick={toggleOpen}
         className="w-full flex items-center gap-3 px-4 py-3 hover:bg-zinc-50 cursor-pointer"
       >
         <ChevronRight
@@ -554,10 +581,35 @@ function InferredRow({
               <div className="text-[10px] uppercase tracking-wider text-zinc-400 mb-1">
                 Sample values
               </div>
-              <div className="text-zinc-500 italic text-[11px]">
-                Sample values land in Pass B (needs an endpoint that pulls
-                top-N distinct values from <span className="mono">proposed_fields</span>).
-              </div>
+              {samplesLoading ? (
+                <div className="flex items-center gap-2 text-zinc-400 text-[11px]">
+                  <Loader2 className="w-3 h-3 animate-spin" /> loading…
+                </div>
+              ) : !samples || samples.length === 0 ? (
+                <div className="text-zinc-500 italic text-[11px]">
+                  No sample values found.
+                </div>
+              ) : (
+                <ul className="space-y-1 text-[11px]">
+                  {samples.map((s, i) => (
+                    <li key={`${s.file_id}-${i}`} className="text-zinc-700">
+                      <span className="mono">
+                        &ldquo;{s.value_text.length > 60
+                          ? s.value_text.slice(0, 60) + "…"
+                          : s.value_text}&rdquo;
+                      </span>
+                      {s.file_name && (
+                        <span className="text-zinc-400"> — {s.file_name}</span>
+                      )}
+                    </li>
+                  ))}
+                  {samples.length === 5 && (
+                    <li className="text-[10px] mono text-zinc-400">
+                      + more in <span className="text-zinc-500">proposed_fields</span>
+                    </li>
+                  )}
+                </ul>
+              )}
             </div>
 
             <div>
