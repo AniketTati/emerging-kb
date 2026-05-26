@@ -600,6 +600,17 @@ export type SessionTurn = {
   answer: string | null;
   citations: Citation[];
   created_at: string;
+  // Pipeline-stage metadata from query_log (LEFT JOIN'd server-side).
+  // Populates the "How I answered" inspector on replay so it doesn't
+  // show ? for Intent / Faithfulness / Mode.
+  mode?: string | null;
+  intent?: string | null;
+  intent_confidence?: number | null;
+  crag_score?: number | null;
+  faithfulness_verdict?: string | null;
+  faithfulness_score?: number | null;
+  refused?: boolean | null;
+  refusal_reason?: string | null;
 };
 
 export async function listSessions(limit = 50): Promise<SessionInfo[]> {
@@ -616,6 +627,253 @@ export async function getSessionTurns(sessionId: string): Promise<SessionTurn[]>
     { headers: workspaceHeaders() },
   );
   const body = await _handle<{ items: SessionTurn[] }>(resp);
+  return body.items ?? [];
+}
+
+export async function deleteSession(sessionId: string): Promise<number> {
+  const resp = await fetch(
+    `${KB_API_URL}/sessions/${sessionId}`,
+    { method: "DELETE", headers: workspaceHeaders() },
+  );
+  const body = await _handle<{ deleted: number }>(resp);
+  return body.deleted ?? 0;
+}
+
+export async function deleteSessionsBatch(
+  sessionIds: string[],
+): Promise<number> {
+  if (sessionIds.length === 0) return 0;
+  const resp = await fetch(`${KB_API_URL}/sessions/delete-batch`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...workspaceHeaders() },
+    body: JSON.stringify({ session_ids: sessionIds }),
+  });
+  const body = await _handle<{ deleted: number }>(resp);
+  return body.deleted ?? 0;
+}
+
+
+// ---------------------------------------------------------------------------
+// Explore — faceted search across the workspace
+// ---------------------------------------------------------------------------
+
+export type ExploreKind =
+  | "document"
+  | "doc_type"
+  | "atomic_unit"
+  | "entity"
+  | "relationship"
+  | "topic"
+  | "anomaly";
+
+export type ExploreCounts = {
+  documents: number;
+  doc_types: number;
+  atomic_units: number;
+  entities: number;
+  relationships: number;
+  topics: number;
+  anomalies: number;
+};
+
+export type ExploreHit = {
+  kind: ExploreKind;
+  id: string;
+  title: string;
+  subtitle?: string | null;
+  snippet?: string | null;
+  file_id?: string | null;
+  file_name?: string | null;
+  extra?: Record<string, unknown>;
+};
+
+export type ExploreSearchResponse = {
+  q: string;
+  kind: ExploreKind | null;
+  offset: number;
+  limit: number;
+  total_estimate: number;
+  items: ExploreHit[];
+};
+
+export async function getExploreCounts(): Promise<ExploreCounts> {
+  const resp = await fetch(`${KB_API_URL}/explore/counts`, {
+    headers: workspaceHeaders(),
+  });
+  return _handle<ExploreCounts>(resp);
+}
+
+export async function exploreSearch(opts: {
+  q?: string;
+  kind?: ExploreKind | null;
+  offset?: number;
+  limit?: number;
+}): Promise<ExploreSearchResponse> {
+  const params = new URLSearchParams();
+  if (opts.q) params.set("q", opts.q);
+  if (opts.kind) params.set("kind", opts.kind);
+  if (opts.offset != null) params.set("offset", String(opts.offset));
+  if (opts.limit != null) params.set("limit", String(opts.limit));
+  const resp = await fetch(
+    `${KB_API_URL}/explore/search?${params.toString()}`,
+    { headers: workspaceHeaders() },
+  );
+  return _handle<ExploreSearchResponse>(resp);
+}
+
+
+// ---------------------------------------------------------------------------
+// Schema Studio — Typed / Inferred / Vocabulary / Lineage / Versions
+// ---------------------------------------------------------------------------
+
+export type SchemaSummary = {
+  id: string;
+  name: string;
+  description: string | null;
+  domain_id?: string | null;
+  lifecycle_state: string;
+  current_version?: number;
+};
+
+export type SchemaListResp = { items: SchemaSummary[] };
+
+export type SchemaEntity = {
+  id: string;
+  name: string;
+  description: string | null;
+  lifecycle_state: string;
+};
+
+export type SchemaField = {
+  id: string;
+  name: string;
+  type: string | null;            // server returns 'type'
+  nl_description?: string | null; // server returns 'nl_description'
+  is_required?: boolean;
+};
+
+export type InferredField = {
+  id: string;
+  workspace_id: string;
+  inferred_doc_type: string;
+  canonical_name: string;
+  description: string | null;
+  value_type: string | null;
+  n_docs_observed: number;
+  prevalence: number;
+  stability: number;
+  value_type_confidence: number;
+  is_promoted: boolean;
+  promoted_schema_field_id: string | null;
+  created_at: string | null;
+};
+
+export type VocabEntry = {
+  id: string;
+  domain_id: string;
+  canonical_term: string;
+  synonyms: string[];
+  acronym_of: string | null;
+  expansion: string | null;
+  definition: string | null;
+  source: string;          // 'discovered' | 'user_defined' | 'imported'
+  confidence: number;
+  n_docs_observed: number;
+  active: boolean;
+};
+
+export type DocChainSummary = {
+  id: string;
+  type: string;                      // server: 'type' (e.g. 'contract_chain')
+  title?: string | null;
+  current_version_id: string | null;
+  member_count: number;
+  detection_confidence?: number | null;
+  created_at: string | null;
+};
+
+export type SchemaVersionRow = {
+  version: number;
+  kind?: string;
+  parent_version?: number | null;
+  created_at: string | null;
+  description?: string | null;
+  created_by?: string | null;
+};
+
+
+export async function listSchemas(): Promise<SchemaSummary[]> {
+  const resp = await fetch(`${KB_API_URL}/schemas`, {
+    headers: workspaceHeaders(),
+  });
+  const body = await _handle<SchemaListResp>(resp);
+  return body.items ?? [];
+}
+
+export async function listSchemaEntities(schemaId: string): Promise<SchemaEntity[]> {
+  const resp = await fetch(
+    `${KB_API_URL}/schemas/${schemaId}/entities`,
+    { headers: workspaceHeaders() },
+  );
+  const body = await _handle<{ items: SchemaEntity[] }>(resp);
+  return body.items ?? [];
+}
+
+export async function listSchemaEntityFields(
+  schemaId: string, entityId: string,
+): Promise<SchemaField[]> {
+  const resp = await fetch(
+    `${KB_API_URL}/schemas/${schemaId}/entities/${entityId}/fields`,
+    { headers: workspaceHeaders() },
+  );
+  const body = await _handle<{ items: SchemaField[] }>(resp);
+  return body.items ?? [];
+}
+
+export async function listInferredFields(opts: {
+  doc_type?: string;
+  only_promotable?: boolean;
+  limit?: number;
+} = {}): Promise<InferredField[]> {
+  const params = new URLSearchParams();
+  if (opts.doc_type) params.set("doc_type", opts.doc_type);
+  if (opts.only_promotable) params.set("only_promotable", "true");
+  if (opts.limit) params.set("limit", String(opts.limit));
+  const qs = params.toString();
+  const url = `${KB_API_URL}/schemas/inferred-fields${qs ? `?${qs}` : ""}`;
+  const resp = await fetch(url, { headers: workspaceHeaders() });
+  const body = await _handle<{ items: InferredField[] }>(resp);
+  return body.items ?? [];
+}
+
+export async function listVocabulary(
+  domainId: string, limit = 200,
+): Promise<VocabEntry[]> {
+  const resp = await fetch(
+    `${KB_API_URL}/vocabulary?domain_id=${encodeURIComponent(domainId)}&limit=${limit}`,
+    { headers: workspaceHeaders() },
+  );
+  const body = await _handle<{ items: VocabEntry[] }>(resp);
+  return body.items ?? [];
+}
+
+export async function listDocChains(limit = 100): Promise<DocChainSummary[]> {
+  const resp = await fetch(
+    `${KB_API_URL}/chains?limit=${limit}`,
+    { headers: workspaceHeaders() },
+  );
+  const body = await _handle<{ items: DocChainSummary[] }>(resp);
+  return body.items ?? [];
+}
+
+export async function listSchemaVersions(
+  schemaId: string, limit = 50,
+): Promise<SchemaVersionRow[]> {
+  const resp = await fetch(
+    `${KB_API_URL}/schemas/${schemaId}/versions?limit=${limit}`,
+    { headers: workspaceHeaders() },
+  );
+  const body = await _handle<{ items: SchemaVersionRow[] }>(resp);
   return body.items ?? [];
 }
 

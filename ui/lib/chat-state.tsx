@@ -127,6 +127,12 @@ export function reducer(state: State, action: Action): State {
           role: "user",
           content: t.user_query,
         });
+        // Synthesize a ChatResponse from the persisted turn so
+        // MessageBubble / AnswerCard render replayed history exactly
+        // like a live turn. The pipeline-stage fields (mode / intent /
+        // crag / faithfulness) come back via the LEFT JOIN to
+        // query_log so the "How I answered" inspector doesn't show "?"
+        // for replayed turns the way it used to.
         const synthResponse: ChatResponse = {
           query_id: `replay-${action.sessionId}-${t.turn_index}`,
           query: t.user_query,
@@ -134,15 +140,20 @@ export function reducer(state: State, action: Action): State {
           generation: {
             answer: t.answer ?? "",
             citations: t.citations ?? [],
-            refused: !t.answer,
-            refusal_reason: t.answer ? null : "no answer recorded",
+            refused: t.refused ?? !t.answer,
+            refusal_reason: t.refusal_reason ?? (t.answer ? null : "no answer recorded"),
             model_id: "replay",
           },
           hits: [],
-          crag_score: 0,
+          crag_score: t.crag_score ?? 0,
           latency_ms: 0,
           session_id: action.sessionId,
           turn_index: t.turn_index,
+          mode: t.mode ?? undefined,
+          intent: t.intent ?? undefined,
+          intent_confidence: t.intent_confidence ?? undefined,
+          faithfulness_verdict: t.faithfulness_verdict ?? undefined,
+          faithfulness_score: t.faithfulness_score ?? undefined,
         };
         replayed.push({
           id: `replay-a-${action.sessionId}-${t.turn_index}`,

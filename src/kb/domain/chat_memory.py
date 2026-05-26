@@ -183,6 +183,39 @@ async def update_session_carry_forward(
     return getattr(cur, "rowcount", 0) > 0
 
 
+async def delete_session(
+    conn: Connection, *, session_id: str, workspace_id: str,
+) -> int:
+    """Hard-delete a single chat session + cascade to its turns.
+
+    Workspace-scoped: rows in other workspaces are invisible due to RLS
+    so the WHERE adds belt-and-braces. Returns the number of session
+    rows actually removed (0 = not found / wrong workspace).
+    """
+    cur = await conn.execute(
+        "DELETE FROM chat_sessions "
+        " WHERE id = %s AND workspace_id = %s",
+        (session_id, workspace_id),
+    )
+    # chat_turns has FK ON DELETE CASCADE so the rows go with the parent.
+    return getattr(cur, "rowcount", 0) or 0
+
+
+async def delete_sessions_batch(
+    conn: Connection, *, session_ids: list[str], workspace_id: str,
+) -> int:
+    """Bulk variant for the multi-select sidebar UX. Caps at the caller's
+    list length (the API layer enforces a 200 max via Pydantic)."""
+    if not session_ids:
+        return 0
+    cur = await conn.execute(
+        "DELETE FROM chat_sessions "
+        " WHERE id::text = ANY(%s) AND workspace_id = %s",
+        (session_ids, workspace_id),
+    )
+    return getattr(cur, "rowcount", 0) or 0
+
+
 async def list_recent_sessions(
     conn: Connection, *, workspace_id: str, limit: int = 50,
 ) -> list[ChatSession]:

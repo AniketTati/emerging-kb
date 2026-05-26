@@ -97,25 +97,34 @@ async def test_chat_turns_table_rls_forced(db_url_superuser):
 
 
 async def test_chat_sessions_grants(db_url_superuser):
-    """Sessions are mutable (carry-forward updates); turns are append-only."""
+    """Sessions are mutable (carry-forward updates) AND deletable by the
+    chat-history sidebar's row-trash UX (migration 0035). The old
+    contract was "no DELETE for kb_app" — that left the user with no
+    way to clean up their history."""
     async with await psycopg.AsyncConnection.connect(db_url_superuser) as conn:
         cur = await conn.execute(
             "SELECT privilege_type FROM information_schema.role_table_grants "
             "WHERE grantee = 'kb_app' AND table_name = 'chat_sessions'"
         )
         privs = {r[0] for r in await cur.fetchall()}
-        assert {"SELECT", "INSERT", "UPDATE"}.issubset(privs)
-        assert "DELETE" not in privs
+        assert {"SELECT", "INSERT", "UPDATE", "DELETE"}.issubset(privs)
 
 
-async def test_chat_turns_grants_append_only(db_url_superuser):
+async def test_chat_turns_grants(db_url_superuser):
+    """Turns are insert-and-read by kb_app, plus DELETE via cascade on
+    session removal (migration 0035 grants the DELETE so the cascade
+    fires under the kb_app role; without it the API's session-delete
+    would fail with 'permission denied for table chat_turns')."""
     async with await psycopg.AsyncConnection.connect(db_url_superuser) as conn:
         cur = await conn.execute(
             "SELECT privilege_type FROM information_schema.role_table_grants "
             "WHERE grantee = 'kb_app' AND table_name = 'chat_turns'"
         )
         privs = {r[0] for r in await cur.fetchall()}
-        assert privs == {"SELECT", "INSERT"}
+        assert {"SELECT", "INSERT", "DELETE"}.issubset(privs)
+        # UPDATE intentionally NOT granted — turns are immutable once
+        # persisted (the audit-style append-only contract).
+        assert "UPDATE" not in privs
 
 
 async def test_chat_turns_unique_per_session_index(
@@ -578,3 +587,128 @@ async def test_b4b_search_endpoint_still_works(client, test_workspace):
             json={"query": "x", "mode": "H"},
         )
     assert resp.status_code == 200
+
+
+# ===========================================================================
+# DELETE /sessions (single + batch)
+# ===========================================================================
+
+
+async def test_delete_session_removes_row_and_cascades_turns(
+    client, test_workspace, db_url_superuser,
+):
+    """DELETE /sessions/{id} hard-removes the session + its turns
+    (FK ON DELETE CASCADE). Returns the number of session rows removed.
+    """
+    reset_orchestrator()
+    with _env(
+        KB_QUERY_LLM="identity", KB_FAITHFULNESS_GATE="identity",
+        KB_INTENT_CLASSIFIER="identity", KB_PLANNER="identity",
+        KB_CONTEXT_RESOLVER="identity",
+    ):
+        reset_orchestrator()
+        # Land a turn so we have a real session + turn row to delete.
+        chat_resp = await client.post(
+            "/chat", headers=headers(test_workspace),
+            json={"query": "doomed turn"},
+        )
+    sid = chat_resp.json()["session_id"]
+    assert sid is not None
+
+    # Delete it.
+    resp = await client.delete(
+        f"/sessions/{sid}", headers=headers(test_workspace),
+    )
+    assert resp.status_code == 200
+    assert resp.json()["deleted"] == 1
+
+    # Confirm the row is gone + the cascade fired.
+    async with await psycopg.AsyncConnection.connect(db_url_superuser) as conn:
+        cur = await conn.execute(
+            "SELECT count(*)::int FROM chat_sessions WHERE id = %s", (sid,),
+        )
+        assert (await cur.fetchone())[0] == 0
+        cur = await conn.execute(
+            "SELECT count(*)::int FROM chat_turns WHERE session_id = %s", (sid,),
+        )
+        assert (await cur.fetchone())[0] == 0
+
+
+async def test_delete_session_404_when_missing(client, test_workspace):
+    """Deleting a non-existent session id returns 404, not 200/0."""
+    import uuid as _uuid
+    bogus = str(_uuid.uuid4())
+    resp = await client.delete(
+        f"/sessions/{bogus}", headers=headers(test_workspace),
+    )
+    assert resp.status_code == 404
+
+
+async def test_delete_sessions_batch_drops_multiple(
+    client, test_workspace, db_url_superuser,
+):
+    """POST /sessions/delete-batch removes several sessions in one call."""
+    reset_orchestrator()
+    with _env(
+        KB_QUERY_LLM="identity", KB_FAITHFULNESS_GATE="identity",
+        KB_INTENT_CLASSIFIER="identity", KB_PLANNER="identity",
+        KB_CONTEXT_RESOLVER="identity",
+    ):
+        reset_orchestrator()
+        ids: list[str] = []
+        for i in range(3):
+            r = await client.post(
+                "/chat", headers=headers(test_workspace),
+                json={"query": f"batch turn {i}"},
+            )
+            ids.append(r.json()["session_id"])
+
+    resp = await client.post(
+        "/sessions/delete-batch",
+        headers=headers(test_workspace),
+        json={"session_ids": ids},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["deleted"] == 3
+
+    async with await psycopg.AsyncConnection.connect(db_url_superuser) as conn:
+        cur = await conn.execute(
+            "SELECT count(*)::int FROM chat_sessions WHERE id::text = ANY(%s)",
+            (ids,),
+        )
+        assert (await cur.fetchone())[0] == 0
+
+
+async def test_get_session_turns_includes_pipeline_metadata(
+    client, test_workspace,
+):
+    """Turns LEFT JOIN query_log so mode/intent/crag/faithfulness come
+    back inline. Pre-fix the chat UI's replay showed '?' for these
+    fields because they lived on query_log but the /turns endpoint
+    only read chat_turns columns."""
+    reset_orchestrator()
+    with _env(
+        KB_QUERY_LLM="identity", KB_FAITHFULNESS_GATE="identity",
+        KB_INTENT_CLASSIFIER="identity", KB_PLANNER="identity",
+        KB_CONTEXT_RESOLVER="identity",
+    ):
+        reset_orchestrator()
+        chat_resp = await client.post(
+            "/chat", headers=headers(test_workspace),
+            json={"query": "metadata-test query"},
+        )
+    sid = chat_resp.json()["session_id"]
+
+    resp = await client.get(
+        f"/sessions/{sid}/turns", headers=headers(test_workspace),
+    )
+    assert resp.status_code == 200
+    items = resp.json()["items"]
+    assert len(items) == 1
+    turn = items[0]
+    # The Identity stack always sets a mode + intent + crag, so these
+    # must come through (any non-null value passes — we're testing the
+    # JOIN wiring, not the exact stack output).
+    assert turn.get("mode") is not None
+    assert turn.get("intent") is not None
+    assert turn.get("crag_score") is not None

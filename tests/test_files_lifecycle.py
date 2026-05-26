@@ -193,3 +193,113 @@ async def test_file_lifecycle_table_rejects_update_via_kb_app(
             (fid,),
         )
         conn.commit()
+
+
+# ===========================================================================
+# Forward-only lifecycle guard
+# ===========================================================================
+#
+# 19 docs were left stuck mid-pipeline because a re-trigger of
+# `extract_atomic_units_file` on a `ready` file clobbered its state
+# back to `entities_extracting`. transition_lifecycle() unconditionally
+# overwrote whatever was in the column; downstream chains then either
+# raced, missed idempotency checks, or saw stale state.
+#
+# The fix (kb.domain.files._is_valid_transition) rejects any transition
+# that walks the file backward in the pipeline order. These tests cover
+# the rule directly so future refactors can't regress it.
+
+
+def test_lifecycle_order_is_monotonic_for_happy_path():
+    """Defined order must match the worker chain: queued → parsing →
+    parsed → chunked → contextualized → embedded → raptor_building →
+    mentions_extracting → fields_extracting → units_extracting →
+    entities_extracting → identity_resolving → ready."""
+    from kb.domain.files import _LIFECYCLE_ORDER as ORDER
+    happy = [
+        "queued", "parsing", "parsed", "chunked", "contextualized",
+        "embedded", "raptor_building", "mentions_extracting",
+        "fields_extracting", "units_extracting", "entities_extracting",
+        "identity_resolving", "ready",
+    ]
+    ranks = [ORDER[s] for s in happy]
+    assert ranks == sorted(ranks)
+
+
+@pytest.mark.parametrize("frm,to,expected", [
+    # Forward moves — allowed.
+    ("queued", "parsing", True),
+    ("parsed", "chunked", True),
+    ("entities_extracting", "identity_resolving", True),
+    ("identity_resolving", "ready", True),
+    # Self-transitions — allowed (relationships_built / graph_built /
+    # doc_chain_detected audit events on a ready file).
+    ("ready", "ready", True),
+    ("entities_extracting", "entities_extracting", True),
+    # Terminal-on-entry — always allowed.
+    ("ready", "failed", True),
+    ("chunked", "failed", True),
+    ("contextualized", "deleted", True),
+    # Backward — refused. This IS the exact 19-stuck-doc bug pattern.
+    ("ready", "entities_extracting", False),
+    ("ready", "units_extracting", False),
+    ("identity_resolving", "units_extracting", False),
+    ("chunked", "parsing", False),
+    # Terminals are sticky.
+    ("failed", "ready", False),
+    ("deleted", "parsing", False),
+])
+def test_is_valid_transition_enforces_forward_only(frm, to, expected):
+    from kb.domain.files import _is_valid_transition
+    assert _is_valid_transition(frm, to) is expected
+
+
+async def test_transition_lifecycle_silently_rejects_backward_writes(
+    client, test_workspace, db_url_superuser,
+):
+    """End-to-end: bring a file to `ready`, then ask transition_lifecycle
+    to walk it back to `entities_extracting`. The function returns the
+    current `ready` state, the column stays `ready`, no audit row lands."""
+    from kb.db.pool import open_connection
+    from kb.domain.files import transition_lifecycle
+
+    fid = str(uuid.uuid4())
+    async with await psycopg.AsyncConnection.connect(db_url_superuser) as conn:
+        await conn.execute(
+            "SELECT set_config('app.workspace_id', %s, true)", (test_workspace,),
+        )
+        await conn.execute(
+            "INSERT INTO files (id, workspace_id, name, mime_type, "
+            "size_bytes, content_sha, object_key, lifecycle_state) "
+            "VALUES (%s, %s, 'guard-test.pdf', 'application/pdf', "
+            "0, repeat('a', 64), 'guard-test/key', 'ready')",
+            (fid, test_workspace),
+        )
+
+    async with open_connection(db_url_superuser) as conn:
+        await conn.execute(
+            "SELECT set_config('app.workspace_id', %s, true)",
+            (test_workspace,),
+        )
+        async with conn.transaction():
+            from_state = await transition_lifecycle(
+                conn, workspace_id=test_workspace, file_id=fid,
+                to_state="entities_extracting",
+                event="backward_re_extract_attempt",
+            )
+
+    # Refuse signal: from_state echoed back as the unchanged current state.
+    assert from_state == "ready"
+
+    async with await psycopg.AsyncConnection.connect(db_url_superuser) as conn:
+        cur = await conn.execute(
+            "SELECT lifecycle_state FROM files WHERE id = %s", (fid,),
+        )
+        assert (await cur.fetchone())[0] == "ready"
+        # No audit-event row for the refused transition.
+        cur = await conn.execute(
+            "SELECT count(*)::int FROM file_lifecycle "
+            "WHERE file_id = %s AND event = 'backward_re_extract_attempt'",
+            (fid,),
+        )
+        assert (await cur.fetchone())[0] == 0

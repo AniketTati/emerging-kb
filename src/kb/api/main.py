@@ -38,6 +38,7 @@ from kb.api.sessions import router as sessions_router
 from kb.api.corpus import router as corpus_router
 from kb.api.doc_chains import router as doc_chains_router
 from kb.api.entities import router as entities_router
+from kb.api.explore import router as explore_router
 from kb.api.files import _chunks_router as chunks_router
 from kb.api.files import router as files_router
 from kb.api.query import router as query_router
@@ -143,6 +144,7 @@ def build_app() -> FastAPI:
     app.include_router(sessions_router)
     app.include_router(corrections_router)
     app.include_router(dashboard_router)
+    app.include_router(explore_router)
 
     # Phase 2a — register default parsers (Docling). Idempotent.
     from kb.parsers import register_default_parsers
