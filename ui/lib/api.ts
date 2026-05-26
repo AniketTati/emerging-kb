@@ -561,15 +561,77 @@ export type ChatResponse = {
   hits: Hit[];
   crag_score: number;
   latency_ms: number;
+  // Pipeline-stage outcomes — all optional for back-compat with older
+  // /chat clients; populated by Wave A orchestrator on every call.
+  intent?: string;
+  intent_confidence?: number;
+  mode?: string;
+  faithfulness_verdict?: string;
+  faithfulness_score?: number | null;
+  faithfulness_regenerations?: number;
+  faithfulness_model_id?: string | null;
+  citation_modalities?: string[];
   // R1 — surfaced conflict resolutions for the chat UI banner. Empty
   // when no chained-doc disagreements were detected for this query.
   conflict_resolutions?: ConflictResolution[];
+  // Auto-created when caller doesn't pass one; the UI uses this to
+  // thread subsequent calls into the same session + show history.
+  session_id?: string | null;
+  turn_index?: number | null;
 };
+
+
+// ---------------------------------------------------------------------------
+// Sessions — chat history sidebar
+// ---------------------------------------------------------------------------
+
+export type SessionInfo = {
+  id: string;
+  workspace_id: string;
+  created_at: string;
+  last_active_at: string;
+  title: string | null;
+};
+
+export type SessionTurn = {
+  turn_index: number;
+  user_query: string;
+  resolved_query: string | null;
+  answer: string | null;
+  citations: Citation[];
+  created_at: string;
+};
+
+export async function listSessions(limit = 50): Promise<SessionInfo[]> {
+  const resp = await fetch(`${KB_API_URL}/sessions?limit=${limit}`, {
+    headers: workspaceHeaders(),
+  });
+  const body = await _handle<{ items: SessionInfo[] }>(resp);
+  return body.items ?? [];
+}
+
+export async function getSessionTurns(sessionId: string): Promise<SessionTurn[]> {
+  const resp = await fetch(
+    `${KB_API_URL}/sessions/${sessionId}/turns`,
+    { headers: workspaceHeaders() },
+  );
+  const body = await _handle<{ items: SessionTurn[] }>(resp);
+  return body.items ?? [];
+}
 
 export async function postChat(
   query: string,
-  idempotencyKey: string = crypto.randomUUID(),
+  opts: {
+    idempotencyKey?: string;
+    /** Chat-UX `@ doc filter` — scope retrieval to these file_ids. */
+    fileIds?: string[];
+    /** Override the planner-suggested mode. Defaults to 'H' (hybrid). */
+    mode?: string;
+  } = {},
 ): Promise<ChatResponse> {
+  const idempotencyKey = opts.idempotencyKey ?? crypto.randomUUID();
+  const body: Record<string, unknown> = { query, mode: opts.mode ?? "H" };
+  if (opts.fileIds && opts.fileIds.length > 0) body.file_ids = opts.fileIds;
   const resp = await fetch(`${KB_API_URL}/chat`, {
     method: "POST",
     headers: {
@@ -577,9 +639,137 @@ export async function postChat(
       "Idempotency-Key": idempotencyKey,
       ...workspaceHeaders(),
     },
-    body: JSON.stringify({ query, mode: "H" }),
+    body: JSON.stringify(body),
   });
   return _handle(resp);
+}
+
+
+/** Live pipeline event from POST /chat/stream — each backend stage
+ *  emits one of these as it happens. The `data` payload is opaque to
+ *  the client; the UI reads stage-specific keys (label, score, n_hits,
+ *  …) per event type. `t_ms` is always present and measured from the
+ *  start of the chat request on the server. */
+export type ChatStreamEvent = {
+  event: string;
+  data: Record<string, unknown> & { t_ms?: number };
+};
+
+
+/** Stream chat events from POST /chat/stream. Returns a Promise that
+ *  resolves to the final ChatResponse envelope (extracted from the
+ *  terminal `done` event). Handlers fire for every intermediate event
+ *  so the UI can render a live progress timeline.
+ *
+ *  Why fetch + manual SSE parsing instead of native EventSource:
+ *  EventSource is GET-only and can't carry the X-Test-Workspace header
+ *  or a JSON body. So we manually split the response stream on the
+ *  SSE `\n\n` block delimiter and parse `event: …\ndata: …` lines. */
+export async function postChatStream(
+  query: string,
+  opts: {
+    idempotencyKey?: string;
+    fileIds?: string[];
+    mode?: string;
+    sessionId?: string;
+  } = {},
+  handlers: {
+    onEvent?: (evt: ChatStreamEvent) => void;
+    onError?: (err: Error) => void;
+    signal?: AbortSignal;
+  } = {},
+): Promise<ChatResponse> {
+  const idempotencyKey = opts.idempotencyKey ?? crypto.randomUUID();
+  const body: Record<string, unknown> = { query, mode: opts.mode ?? "H" };
+  if (opts.fileIds && opts.fileIds.length > 0) body.file_ids = opts.fileIds;
+  if (opts.sessionId) body.session_id = opts.sessionId;
+
+  const resp = await fetch(`${KB_API_URL}/chat/stream`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Idempotency-Key": idempotencyKey,
+      Accept: "text/event-stream",
+      ...workspaceHeaders(),
+    },
+    body: JSON.stringify(body),
+    signal: handlers.signal,
+  });
+  if (!resp.ok || !resp.body) {
+    const errBody = await resp.text().catch(() => "");
+    throw new KbApiError(
+      resp.status,
+      errBody,
+      `chat/stream ${resp.status}: ${errBody.slice(0, 200)}`,
+    );
+  }
+
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder("utf-8");
+  let buffer = "";
+  let final: ChatResponse | null = null;
+
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      // SSE blocks are delimited by a blank line ("\n\n"). Process
+      // whole blocks; keep the partial trailing fragment in `buffer`.
+      let sep: number;
+      while ((sep = buffer.indexOf("\n\n")) !== -1) {
+        const block = buffer.slice(0, sep);
+        buffer = buffer.slice(sep + 2);
+        const evt = parseSseBlock(block);
+        if (!evt) continue;
+        if (evt.event === "done") {
+          final = evt.data as unknown as ChatResponse;
+        }
+        if (evt.event === "error") {
+          const detail =
+            (evt.data as Record<string, unknown>).detail ?? "stream error";
+          throw new Error(String(detail));
+        }
+        handlers.onEvent?.(evt);
+      }
+    }
+  } catch (err) {
+    const e = err instanceof Error ? err : new Error(String(err));
+    handlers.onError?.(e);
+    throw e;
+  }
+
+  if (!final) {
+    throw new Error("chat/stream ended without a `done` event");
+  }
+  return final;
+}
+
+
+/** Parse one SSE block ("event: ...\ndata: ..." lines) into a typed event.
+ *  Returns null for blocks without a recognisable `event:` line. */
+function parseSseBlock(block: string): ChatStreamEvent | null {
+  let event: string | null = null;
+  let data = "";
+  for (const line of block.split("\n")) {
+    if (line.startsWith("event:")) {
+      event = line.slice("event:".length).trim();
+    } else if (line.startsWith("data:")) {
+      // SSE spec: multiple data lines are joined with newlines. Most
+      // backends emit one — ours included — but handle both shapes.
+      data = data ? data + "\n" + line.slice("data:".length).trim()
+                   : line.slice("data:".length).trim();
+    }
+  }
+  if (!event) return null;
+  let parsed: Record<string, unknown> = {};
+  try {
+    parsed = data ? JSON.parse(data) : {};
+  } catch {
+    parsed = {};
+  }
+  return { event, data: parsed };
 }
 
 /**

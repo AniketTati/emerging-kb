@@ -380,6 +380,17 @@ def _format_label(hit: Hit, meta: FileMetaForCitation | None, modality: str) -> 
         return f"{name} · spreadsheet"
     if modality == "raptor_summary":
         level = md.get("level")
+        scope = md.get("scope")
+        if scope == "corpus":
+            # Corpus-scope RAPTOR nodes don't belong to a single file —
+            # they're per-workspace summaries. Label them by what they
+            # are (root vs cluster) rather than dangling a "document ·"
+            # prefix that points nowhere clickable.
+            if level == 3 or (level and level >= 3):
+                return "Workspace summary"
+            if level == 2:
+                return "Topic cluster summary"
+            return f"Corpus summary L{level}"
         return f"{name} · RAPTOR L{level}" if level is not None else f"{name} · summary"
     if modality == "atomic_unit":
         unit_type = md.get("unit_type") or "unit"

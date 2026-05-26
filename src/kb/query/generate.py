@@ -36,24 +36,44 @@ from kb.query.rrf import Hit
 _TOP_N_HITS = 10
 
 # Decision #11: max output tokens.
-_MAX_OUTPUT_TOKENS = 2048
+#
+# Bumped 2048 → 8000 after the chat-UX audit found that summarize /
+# overview queries hit MAX_TOKENS mid-response — Gemini was being
+# asked to echo back `snippet_preview` (~200 chars × 10 citations) in
+# the JSON output. The simplified citation schema below also helps,
+# but a larger cap means longer answers don't truncate either.
+_MAX_OUTPUT_TOKENS = 8000
 
 # Decision #15: Astute defensive system prompt.
+#
+# Citation schema simplified to JUST `hit_id` per citation. Pre-fix the
+# prompt asked the model to also echo back kind/file_id/snippet_preview/
+# score, all of which the server already has on the Hit list and
+# back-fills in `_parse_result`. Echoing them cost ~400 output tokens
+# per citation and was the main driver of MAX_TOKENS truncation on
+# synthesis answers.
 _SYSTEM_PROMPT = (
     "You are a careful question-answering assistant grounded in the "
     "retrieved snippets below. Follow this discipline:\n"
     "1. Read each snippet's [hit_id] and snippet text.\n"
     "2. Compose an answer using ONLY information present in the snippets. "
     "Do NOT invent facts.\n"
-    "3. Cite every claim inline using the [hit_id] marker for the snippet "
-    "that supports it.\n"
-    "4. If the snippets do not support a confident answer to the query, "
+    "3. **Format the `answer` field as readable Markdown.** Use bullets "
+    "for lists, **bold** for key terms / numbers / dates, headings "
+    "(## / ###) when the answer has 3+ distinct sections, tables for "
+    "comparisons across documents, and short paragraphs (3-4 sentences "
+    "max). Plain prose is fine for one-fact answers; structure helps "
+    "when the answer has multiple parts.\n"
+    "4. Cite every claim inline using the [hit_id] marker for the snippet "
+    "that supports it. The marker stays INSIDE prose — e.g. "
+    "\"payment terms are net-45 [a8b21618]\" — not as a separate line.\n"
+    "5. If the snippets do not support a confident answer to the query, "
     "refuse: return JSON with refused=true and a brief refusal_reason. "
     "It is better to refuse than to guess.\n"
-    "5. Return STRICTLY a JSON object matching: "
-    '{"answer": str, "citations": [{"hit_id": str, "kind": str, '
-    '"file_id": str|null, "snippet_preview": str, "score": float}], '
-    '"refused": bool, "refusal_reason": str|null}.'
+    "6. Return STRICTLY a JSON object matching: "
+    '{"answer": str, "citations": [{"hit_id": str}], '
+    '"refused": bool, "refusal_reason": str|null}. '
+    "Only include hit_ids you actually cited in `answer`."
 )
 
 
@@ -151,9 +171,31 @@ def _build_user_prompt(
     pre-computed resolution decisions when phrasing the answer."""
     blocks: list[str] = []
     for h in hits[:_TOP_N_HITS]:
-        snippet = (h.snippet or "")[:500]
+        # Per-snippet ceiling — matched to the channel-layer _SNIPPET_MAX
+        # in channels.py (currently 2500). Keep the two in sync: chunks
+        # arrive from BM25/dense already truncated to that ceiling, so
+        # any smaller value here would re-truncate. Kept as a defensive
+        # second cap in case a channel ever forgets to truncate.
+        snippet = (h.snippet or "")[:2500]
+        # Surface file_name / doc_type when the orchestrator stashed
+        # them on hit.metadata. Without filenames in the prompt the LLM
+        # is forced to refer to documents by opaque UUID — Q12 ("which
+        # documents mention Vertex") then answers with **uuid**: blurb
+        # instead of the readable filename. With filenames it produces
+        # ["vertex-msa.pdf — describes the master service agreement", …].
+        md = h.metadata or {}
+        fname = md.get("file_name")
+        dtype = md.get("inferred_doc_type")
+        ctx_bits = []
+        if fname:
+            ctx_bits.append(f"file={fname}")
+        if dtype:
+            ctx_bits.append(f"type={dtype}")
+        ctx_suffix = (" [" + ", ".join(ctx_bits) + "]") if ctx_bits else ""
         # Use full UUID as hit_id so callers can resolve back to the Hit.
-        blocks.append(f"[hit_id: {h.id}] (kind={h.kind}) {snippet}")
+        blocks.append(
+            f"[hit_id: {h.id}] (kind={h.kind}){ctx_suffix} {snippet}"
+        )
     snippets = "\n\n".join(blocks)
 
     conflict_block = (
@@ -231,19 +273,43 @@ def _parse_result(
             model_id=model_id,
         )
 
+    # Post-fix the citation schema only requires `hit_id` from the LLM
+    # (everything else is on the Hit list and gets backfilled here). We
+    # still accept the old shape for back-compat — old prompts in flight
+    # / replayed cache entries / external clients sending the legacy
+    # `{hit_id, kind, file_id, snippet_preview, score}` envelope all
+    # parse the same way.
+    hit_index: dict[str, Hit] = {str(h.id): h for h in hits}
     raw_citations = data.get("citations") or []
     citations: list[Citation] = []
     if isinstance(raw_citations, list):
         for rc in raw_citations:
             if not isinstance(rc, dict):
                 continue
+            hit_id = str(rc.get("hit_id", "")).strip()
+            if not hit_id:
+                continue
+            # Backfill kind / file_id / snippet / score from the matching
+            # Hit. The LLM's echo (when present) wins — useful for the
+            # rare case where the model annotates page numbers / labels
+            # the server doesn't have.
+            hit = hit_index.get(hit_id)
+            hit_md = (hit.metadata if hit else None) or {}
             try:
                 citations.append(Citation(**{
-                    "hit_id": str(rc.get("hit_id", "")),
-                    "kind": str(rc.get("kind", "chunk")),
-                    "file_id": rc.get("file_id"),
-                    "snippet_preview": str(rc.get("snippet_preview", ""))[:500],
-                    "score": float(rc.get("score", 0.0) or 0.0),
+                    "hit_id": hit_id,
+                    "kind": str(rc.get("kind") or (hit.kind if hit else "chunk")),
+                    "file_id": rc.get("file_id") or hit_md.get("file_id"),
+                    "snippet_preview": (
+                        str(rc.get("snippet_preview"))[:500]
+                        if rc.get("snippet_preview")
+                        else ((hit.snippet or "")[:200] if hit else "")
+                    ),
+                    "score": float(
+                        rc.get("score")
+                        if rc.get("score") is not None
+                        else (hit.score if hit else 0.0)
+                    ),
                     # B3 polymorphic fields — accept whatever the LLM gives
                     # (or omits). Orchestrator does the canonical enrichment.
                     "modality": rc.get("modality"),

@@ -436,9 +436,19 @@ async def test_chat_followup_uses_prior_context(
     assert n == 2
 
 
-async def test_chat_without_session_id_skips_memory(client, test_workspace):
-    """No session_id → no resolver, no turn persistence; envelope still
-    valid (session_id/turn_index NULL)."""
+async def test_chat_without_session_id_auto_creates_session(
+    client, test_workspace,
+):
+    """No session_id passed → orchestrator auto-creates one + persists the
+    turn. Without this the chat-history sidebar would be permanently
+    empty for any client that doesn't manage sessions itself.
+
+    Prior contract was "no session_id → skip memory entirely" but that
+    left every UI-driven chat as an unrecoverable orphan. New contract:
+    every chat lands in chat_turns, identified by an auto-created
+    session id that the response echoes back. The title backfills from
+    the first user query so the sidebar reads as a thread label.
+    """
     reset_orchestrator()
     with _env(
         KB_QUERY_LLM="identity",
@@ -454,8 +464,47 @@ async def test_chat_without_session_id_skips_memory(client, test_workspace):
         )
     assert resp.status_code == 200
     body = resp.json()
-    assert body["session_id"] is None
-    assert body["turn_index"] is None
+    assert body["session_id"] is not None
+    assert body["turn_index"] == 0
+
+
+async def test_chat_session_title_backfills_from_first_user_query(
+    client, test_workspace, db_url_superuser,
+):
+    """The auto-created session's title is set to the first user query
+    so the chat-history sidebar shows a readable label instead of
+    "Untitled". Only fires on turn_index == 0 — subsequent turns must
+    not overwrite the title.
+    """
+    import psycopg as _psycopg
+    reset_orchestrator()
+    with _env(
+        KB_QUERY_LLM="identity",
+        KB_FAITHFULNESS_GATE="identity",
+        KB_INTENT_CLASSIFIER="identity",
+        KB_PLANNER="identity",
+        KB_CONTEXT_RESOLVER="identity",
+    ):
+        reset_orchestrator()
+        resp1 = await client.post(
+            "/chat", headers=headers(test_workspace),
+            json={"query": "what's in this workspace", "mode": "H"},
+        )
+        sid = resp1.json()["session_id"]
+        # Second turn in same session must NOT overwrite the title.
+        await client.post(
+            "/chat", headers=headers(test_workspace),
+            json={"query": "follow-up question", "mode": "H",
+                  "session_id": sid},
+        )
+
+    async with await _psycopg.AsyncConnection.connect(db_url_superuser) as conn:
+        cur = await conn.execute(
+            "SELECT title FROM chat_sessions WHERE id = %s", (sid,),
+        )
+        row = await cur.fetchone()
+    assert row is not None
+    assert row[0] == "what's in this workspace"
 
 
 async def test_chat_with_invalid_session_id_is_treated_as_standalone(

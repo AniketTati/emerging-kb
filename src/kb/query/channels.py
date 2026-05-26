@@ -35,7 +35,15 @@ from kb.query.rrf import Hit
 TOP_K_PER_CHANNEL = 20
 
 # Decision #11: snippet truncation for downstream rendering.
-_SNIPPET_MAX = 500
+# Bumped 500→1500 (Q6 fix), then 1500→2500 (Q13 fix). Both bumps were
+# motivated by the contextual_prefix + contextual_text envelope: BM25
+# returns prefix(~200) + text(up to ~2000) = ~2200 chars for typical
+# single-chunk business docs. The earlier 1500 ceiling lopped off the
+# bottom 30% — the SKILLS section of resumes, the SLA table of pricing
+# sheets, the line items of invoices. 2500 covers all single-chunk
+# demo docs comfortably; prompt total stays well within Gemini's
+# window (top-10 × 2500 ≈ 25k chars).
+_SNIPPET_MAX = 2500
 
 
 # R3-supporting fix — channel queries are SAVEPOINT-isolated so a single

@@ -39,6 +39,7 @@ from kb.query.intent import IntentResult
 
 QUERY_MODES: tuple[str, ...] = (
     "E", "F", "S", "H", "T", "M", "G", "D", "C", "A", "Q", "K",
+    "I",  # Inventory — SQL metadata listing (no chunks / no LLM)
 )
 
 # Architecture default — "H" (hybrid) when the planner has no confident pick.
@@ -56,6 +57,9 @@ _INTENT_TO_MODE: dict[str, str] = {
     "set_operation":    "Q",
     "temporal_history": "K",   # doc-chain aware
     "chain_aware":      "K",
+    "inventory":        "I",   # SQL metadata listing — orchestrator
+                               # short-circuits retrieval / LLM
+                               # (added with the inventory intent fix)
 }
 
 
@@ -297,6 +301,20 @@ class GeminiPlanner:
                 intent=intent.label,
                 intent_confidence=intent.confidence,
                 notes="explicit_mode_override",
+                model_id=self._model,
+            )
+
+        # Inventory intent → mode I, no LLM call. The Gemini planner's
+        # system prompt doesn't enumerate mode I (we'd have to retrain
+        # it on every new mode); short-circuit here keeps the contract
+        # stable: when the intent classifier says "inventory" the
+        # planner ALWAYS picks I, regardless of LLM weather.
+        if intent.label == "inventory":
+            return Plan(
+                mode="I",
+                intent=intent.label,
+                intent_confidence=intent.confidence,
+                notes="inventory_short_circuit",
                 model_id=self._model,
             )
 

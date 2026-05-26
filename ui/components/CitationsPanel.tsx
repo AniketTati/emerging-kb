@@ -130,10 +130,15 @@ function CitationCardRow({ c, index }: { c: Citation; index: number }) {
 
   return (
     <div
+      // `id` is consumed by AnswerCard's inline [N] click handler so it
+      // can scroll the matching card into view + flash it. `index` is
+      // 1-based in the UI but we key DOM ids on the 0-based array index
+      // for consistency with `data-citation-index` on the chip itself.
+      id={`citation-card-${index - 1}`}
       className={
         superseded
-          ? "rounded-lg border border-amber-200 bg-amber-50/30 p-3 space-y-2"
-          : "rounded-lg border border-zinc-200 bg-white p-3 space-y-2"
+          ? "rounded-lg border border-amber-200 bg-amber-50/30 p-3 space-y-2 transition-shadow data-[citation-flash]:ring-2 data-[citation-flash]:ring-amber-300 data-[citation-flash]:shadow-lg"
+          : "rounded-lg border border-zinc-200 bg-white p-3 space-y-2 transition-shadow data-[citation-flash]:ring-2 data-[citation-flash]:ring-zinc-900 data-[citation-flash]:shadow-lg"
       }
       data-testid="citation-card"
       data-superseded={superseded || undefined}

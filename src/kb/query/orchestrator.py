@@ -25,9 +25,33 @@ from __future__ import annotations
 
 import time
 import uuid
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from pydantic import BaseModel, Field
+
+
+# Live pipeline-event callback. The orchestrator invokes it (when set)
+# at the boundary of every meaningful stage so the API layer can push
+# the events to an SSE stream. Signature is async because some sinks
+# (asyncio.Queue.put) are coroutines; sinks that don't need awaiting
+# just `async def` and return immediately.
+EventSink = Callable[[str, dict[str, Any]], Awaitable[None]]
+
+
+async def _noop_sink(_event_type: str, _payload: dict[str, Any]) -> None:
+    """Default sink — silently drops events when no listener is wired."""
+    return
+
+
+def _count_by(items: Any, key_fn: Callable[[Any], str]) -> dict[str, int]:
+    """Small helper for the emit() payloads. Returns a {category: count}
+    dict — used to summarise hits-by-kind, conflicts-by-rule, etc.
+    without dragging the whole list into the SSE payload."""
+    out: dict[str, int] = {}
+    for it in items:
+        k = key_fn(it)
+        out[k] = out.get(k, 0) + 1
+    return out
 
 from kb.embeddings import Embedder, make_embedder
 from kb.query.channels import run_all_channels
@@ -242,6 +266,8 @@ class Orchestrator:
         conn: Any = None,
         requested_mode: str | None = None,
         session_id: str | None = None,
+        file_ids: list[str] | None = None,
+        event_sink: EventSink | None = None,
     ) -> ChatResult:
         """Run context resolution → intent → planner → search → mode router
         → CRAG-gated generation → HHEM faithfulness gate → persist turn.
@@ -251,9 +277,58 @@ class Orchestrator:
         before intent classification (Design 8 step 0.5). The final turn
         is persisted to chat_turns; the session's carry-forward state
         is rolled.
+
+        When `file_ids` is non-empty, retrieval is scoped to that file
+        set (chat-UX `@ doc filter`). Hits from other files are
+        post-filtered out after the fused/reranked top-K — cheaper than
+        threading filters through every channel's SQL, and the typical
+        scope (1-10 files) means we still have plenty of in-scope hits.
+
+        When `event_sink` is provided, the orchestrator invokes it at
+        each pipeline stage so an SSE caller can stream progress to the
+        chat UI. Sink failures are silently swallowed — the pipeline
+        keeps running even if the listener goes away mid-stream.
         """
+        sink = event_sink or _noop_sink
+
+        async def emit(event_type: str, payload: dict[str, Any]) -> None:
+            try:
+                # Always include `t_ms` so the UI can render a timeline
+                # without having to track its own start clock.
+                await sink(event_type, {
+                    **payload,
+                    "t_ms": int((time.monotonic() - t0) * 1000),
+                })
+            except Exception:
+                # A failed sink (closed SSE connection, etc.) must NOT
+                # crash the pipeline. Best-effort observability only.
+                pass
         t0 = time.monotonic()
         query_id = str(uuid.uuid4())
+
+        # Auto-create a session if the caller didn't pass one. Without
+        # this, `_persist_turn` silently skips persistence (session_id
+        # is the NOT-NULL key on chat_turns), and the UI's "recent
+        # chats" list is permanently empty — the user can't see
+        # anything they asked yesterday. Auto-creation makes every
+        # chat call land in a row, named by its first user query
+        # (lazily titled below in _persist_turn).
+        if session_id is None and conn is not None:
+            try:
+                from kb.domain.chat_memory import create_session
+                session_id = await create_session(
+                    conn,
+                    workspace_id=workspace_id,
+                    title=query[:120].strip() or None,
+                )
+            except Exception:  # noqa: BLE001
+                # If session create fails (RLS denied, schema drift,
+                # whatever), proceed without persistence — the user
+                # still gets their answer; the audit row will be
+                # missing but that's strictly better than 5xx-ing.
+                session_id = None
+
+        await emit("started", {"query": query, "session_id": session_id})
 
         # B6a — context resolution. Skips quietly when no session_id /
         # no prior context.
@@ -261,13 +336,81 @@ class Orchestrator:
             query, session_id=session_id, conn=conn,
         )
         effective_query = resolved_query or query
+        if resolved_query and resolved_query != query:
+            await emit("context_resolved", {
+                "original": query, "resolved": resolved_query,
+            })
 
         intent = await self._intent_classifier.classify(effective_query)
+        await emit("intent_classified", {
+            "label": intent.label, "confidence": intent.confidence,
+        })
         plan = await self._planner.plan(
             effective_query, intent, requested_mode=requested_mode,
         )
+        await emit("planned", {"mode": plan.mode, "intent": intent.label})
+
+        # ---- I-mode short-circuit ----
+        # Inventory queries ("what types of docs do I have", "list my
+        # files") are metadata questions. The answer lives in the
+        # `files` table, not in chunks/RAPTOR/atomic_units — running
+        # retrieve+rerank+CRAG+LLM here is the wrong tool and produces
+        # CONTENT summaries instead of TYPE listings. Short-circuit to
+        # a deterministic SQL renderer; ~50ms vs ~13s and zero
+        # hallucination risk.
+        if plan.mode == "I":
+            from kb.query.inventory import build_inventory_answer
+            await emit("inventory_lookup", {})
+            generation = await build_inventory_answer(
+                conn, workspace_id=workspace_id,
+            )
+            await emit("generated", {
+                "refused": False, "refusal_reason": None,
+                "n_citations": len(generation.citations),
+            })
+            latency_ms = int((time.monotonic() - t0) * 1000)
+
+            # Persist the inventory turn so it shows up in chat history
+            # too — without this, asking "what docs do I have?" is the
+            # one chat that never makes it into the recent-chats sidebar.
+            inv_turn_index = await self._persist_turn(
+                conn=conn, workspace_id=workspace_id,
+                session_id=session_id, original_query=query,
+                resolved_query=resolved_query, ctx_resolution=ctx_resolution,
+                generation=generation, query_log_id=query_id,
+            )
+
+            await emit("done", {})
+            return ChatResult(
+                query_id=query_id,
+                query=query,
+                rewrites={"original": effective_query},
+                generation=generation,
+                hits=[],
+                crag_score=1.0,
+                latency_ms=latency_ms,
+                faithfulness_verdict="skipped",
+                faithfulness_score=None,
+                faithfulness_regenerations=0,
+                faithfulness_model_id=None,
+                citation_modalities=["file_ref"],
+                intent=intent.label,
+                intent_confidence=intent.confidence,
+                mode=plan.mode,
+                plan=plan.to_dict(),
+                session_id=session_id,
+                resolved_query=resolved_query,
+                context_resolution=(
+                    ctx_resolution.to_dict() if ctx_resolution else None
+                ),
+                turn_index=inv_turn_index,
+                conflict_resolutions=[],
+            )
 
         rewrites = await self._rewriter.rewrite(effective_query)
+        await emit("query_rewritten", {
+            "n_variants": len(self._rewrites_to_dict(rewrites)),
+        })
         # R3-supporting fix — `_retrieve_and_rerank` runs 6 channels in
         # parallel via asyncio.gather on a SHARED psycopg connection.
         # When one channel's SQL errors (paradedb edge case, missing
@@ -289,6 +432,7 @@ class Orchestrator:
             retrieve_sp_open = True
         except Exception:
             pass
+        await emit("retrieving", {})
         try:
             hits = await self._retrieve_and_rerank(
                 query=effective_query,
@@ -326,12 +470,34 @@ class Orchestrator:
                 except Exception:
                     pass
             hits = []
+        await emit("retrieved", {
+            "n_hits": len(hits),
+            "by_kind": _count_by(hits, lambda h: h.kind),
+        })
+
+        # Chat-UX `@ doc filter` — scope hits to the file_ids the user
+        # explicitly picked. Done before apply_mode so the mode router
+        # (e.g. T-mode PPR) operates over the scoped set. Pre-filter
+        # because the channels themselves don't know about UI scoping —
+        # cheaper than threading filters through every channel SQL.
+        if file_ids:
+            scope = {str(fid) for fid in file_ids if fid}
+            before = len(hits)
+            hits = [
+                h for h in hits
+                if (h.metadata or {}).get("file_id") in scope
+            ]
+            await emit("doc_filter_applied", {
+                "scope_size": len(scope),
+                "kept": len(hits), "dropped": before - len(hits),
+            })
 
         try:
             hits = await apply_mode(
                 plan, hits,
                 workspace_id=workspace_id, query=effective_query, conn=conn,
             )
+            await emit("mode_routed", {"mode": plan.mode, "kept": len(hits)})
         except QModeNotImplementedError as exc:
             # Q-mode pipeline ships in B4b; return a refusal envelope so
             # the API stays stable.
@@ -343,8 +509,48 @@ class Orchestrator:
             )
 
         crag_score = await self._crag.assess(effective_query, hits)
+        await emit("crag_assessed", {
+            "score": round(crag_score, 3),
+            "threshold": self._crag_threshold,
+            "bypassed": plan.mode != "H",
+        })
 
-        force_refuse = crag_score < self._crag_threshold
+        # CRAG asks "do these snippets answer the query?" — a question
+        # that only makes sense for FACT-style asks ("what's the payment
+        # cap"). For corpus-scope asks ("summarize the corpus", "what
+        # documents do I have", "give me an overview") no individual
+        # chunk snippet IS the answer — the answer is a synthesis ACROSS
+        # snippets. CRAG correctly scores those snippets as low-relevance
+        # to the literal question, but its refusal is the wrong move:
+        # the downstream faithfulness gate will still catch generation
+        # hallucinations, and these users would rather see a synthesized
+        # overview than a "I can't answer that" refusal.
+        #
+        # Bypass everything EXCEPT H (hybrid). CRAG's "do these snippets
+        # answer the query?" check assumes a fact-style ask where some
+        # chunk should literally contain the answer text. That assumption
+        # holds for H (default factoid retrieval) but breaks for the
+        # planner's structured modes:
+        #   G — global/thematic summary
+        #   D — doc-metadata filter
+        #   F — schema field predicates
+        #   S — scoped chunk (within a parent doc/contract/project)
+        #   T — graph traversal (multi-hop)
+        #   M — mention search
+        #   E — entity-centric
+        #   C — atomic-unit filter
+        #   A — anomaly filter
+        #   K — doc-chain aware (current_version / all_versions)
+        #   Q — structured SQL aggregate
+        # In all the above, retrieval is filtered or restructured before
+        # synthesis; the chunks returned may be 100% relevant to the
+        # answer without containing the literal query string. The
+        # downstream faithfulness gate still catches hallucinations.
+        # The LLM also self-refuses cleanly when snippets really don't
+        # answer the question (Q16-style out-of-corpus asks).
+        force_refuse = (
+            crag_score < self._crag_threshold and plan.mode == "H"
+        )
 
         # ---- R1 — Design 2 conflict resolution ----
         # Run REGARDLESS of force_refuse — the detected conflicts are
@@ -381,6 +587,12 @@ class Orchestrator:
                         conn, hits,
                     )
                     if conflict_resolutions:
+                        await emit("conflicts_resolved", {
+                            "n_conflicts": len(conflict_resolutions),
+                            "by_rule": _count_by(
+                                conflict_resolutions, lambda r: r.resolution,
+                            ),
+                        })
                         conflict_context = build_conflict_prompt_block(
                             conflict_resolutions,
                         ) or None
@@ -418,25 +630,72 @@ class Orchestrator:
                     except Exception:
                         pass
 
+        # ---- Filename enrichment on hits ----
+        # Stash file_name + inferred_doc_type onto hit.metadata so the
+        # generator prompt can show "[file: vertex-msa.pdf]" alongside
+        # each snippet. Without this, the LLM only sees opaque UUIDs and
+        # answers like "Document UUID-7c84... mentions X" instead of the
+        # actual filename (Q12). One batch SQL per turn — cheap.
+        if conn is not None and hits:
+            fname_ids = sorted({
+                (h.metadata or {}).get("file_id")
+                for h in hits if (h.metadata or {}).get("file_id")
+            })
+            fname_ids = [f for f in fname_ids if f]
+            if fname_ids:
+                fname_metas = await fetch_file_metas(
+                    conn, file_ids=fname_ids,
+                )
+                for h in hits:
+                    fid = (h.metadata or {}).get("file_id")
+                    if not fid:
+                        continue
+                    fm = fname_metas.get(fid)
+                    if fm is None:
+                        continue
+                    if h.metadata is None:
+                        h.metadata = {}
+                    if fm.name and "file_name" not in h.metadata:
+                        h.metadata["file_name"] = fm.name
+                    if fm.inferred_doc_type and "inferred_doc_type" not in h.metadata:
+                        h.metadata["inferred_doc_type"] = fm.inferred_doc_type
+
         # ---- Generation + faithfulness retry loop ----
         from kb.query.faithfulness import MAX_REGENERATIONS
 
         regenerations = 0
+        await emit("generating", {
+            "force_refuse": force_refuse, "n_hits_seen": len(hits),
+        })
         generation = await self._generator.generate(
             effective_query, hits, force_refuse=force_refuse,
             conflict_context=conflict_context,
         )
+        await emit("generated", {
+            "refused": generation.refused,
+            "refusal_reason": generation.refusal_reason,
+            "n_citations": len(generation.citations),
+        })
         faithfulness = await self._assess_faithfulness(generation, hits, conn)
+        await emit("faithfulness_checked", {
+            "verdict": faithfulness.verdict, "score": faithfulness.score,
+            "regenerations": regenerations,
+        })
         while (
             should_regenerate(faithfulness.verdict, regenerations)
             and not generation.refused
         ):
             regenerations += 1
+            await emit("regenerating", {"attempt": regenerations})
             generation = await self._generator.generate(
                 effective_query, hits, force_refuse=force_refuse,
                 conflict_context=conflict_context,
             )
             faithfulness = await self._assess_faithfulness(generation, hits, conn)
+            await emit("faithfulness_checked", {
+                "verdict": faithfulness.verdict, "score": faithfulness.score,
+                "regenerations": regenerations,
+            })
 
         if faithfulness.verdict == "refused" and not generation.refused:
             # Out of retries — abstain (architecture §6 step 9 final branch).
@@ -447,6 +706,9 @@ class Orchestrator:
 
         # ---- Citation enrichment (Design 5) ----
         await self._enrich_citations(generation, hits, conn)
+        await emit("citations_enriched", {
+            "n_citations": len(generation.citations),
+        })
 
         # R1 — tag citations whose source doc lost a conflict so the UI
         # can render a `superseded` ribbon. Runs AFTER citation
@@ -583,10 +845,29 @@ class Orchestrator:
     ) -> None:
         """Populate Design 5 polymorphic fields (modality, ref, authority,
         doc_status, chain_id, label, confidence) on each Citation in-place
-        — only for citations that are not already enriched by the LLM."""
+        — only for citations that are not already enriched by the LLM.
+
+        Resilient to LLM hit_id truncation: T-mode (multi-hop) answers
+        frequently come back with 8-12 char prefixes (e.g. `7c84e24b`)
+        instead of full UUIDs. We resolve prefixes back to the original
+        Hit + canonicalise the citation's hit_id so downstream R1
+        supersession-tagging and the UI inline-marker lookup both work.
+        """
         if not generation.citations or conn is None:
             return
         hit_by_id = {str(h.id): h for h in hits}
+
+        # Canonicalise truncated hit_ids → full UUIDs before any lookup.
+        # The LLM sometimes emits `[7c84e24b]` instead of the 36-char
+        # UUID; without this, enrichment silently leaves modality/label/
+        # file_id all None and R1 can't tag supersession.
+        for c in generation.citations:
+            if c.hit_id in hit_by_id:
+                continue
+            matches = [k for k in hit_by_id if k.startswith(c.hit_id)]
+            if len(matches) == 1:
+                c.hit_id = matches[0]
+
         file_ids = [
             (h.metadata or {}).get("file_id")
             for c in generation.citations
@@ -757,6 +1038,23 @@ class Orchestrator:
             )
         except Exception:  # noqa: BLE001
             return None
+
+        # Backfill the session title from the first user query so the
+        # sidebar's recent-chats list shows something readable instead
+        # of "Untitled" / a raw UUID. Only fires on turn_index == 0
+        # (first turn) when the session was auto-created without a
+        # caller-supplied title. Wrapped in try/except — title backfill
+        # is cosmetic; never fail the chat turn over it.
+        if turn_index == 0 and not session.title:
+            try:
+                title = (original_query or "").strip()[:120] or "Untitled chat"
+                await conn.execute(
+                    "UPDATE chat_sessions SET title = %s WHERE id = %s "
+                    "AND title IS NULL",
+                    (title, session_id),
+                )
+            except Exception:  # noqa: BLE001
+                pass
 
         # Roll carry-forward state. We append any new entities from
         # ctx_resolution to the session's existing list.

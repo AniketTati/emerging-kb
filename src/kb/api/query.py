@@ -48,6 +48,11 @@ class QueryRequest(BaseModel):
     # orchestrator loads the session's ChatContext, runs the anaphora
     # resolver, and appends a chat_turns row.
     session_id: str | None = None
+    # Chat-UX — optional document scoping. When the user picks files
+    # via the @ doc-filter UI, retrieval is restricted to those file_ids.
+    # Cap at 50 ids per request (defensive — the file picker UX caps at
+    # 50 in the dropdown so this is belt-and-braces).
+    file_ids: list[str] | None = Field(default=None, max_length=50)
 
 
 # ---------------------------------------------------------------------------
@@ -82,6 +87,7 @@ def reset_orchestrator() -> None:
 # wired in kb.query.mode_router via kb.q_planner (Design 1 10 layers).
 _ALLOWED_MODES: set[str] = {
     "E", "F", "S", "H", "T", "M", "G", "D", "C", "A", "Q", "K",
+    "I",  # Inventory — SQL metadata listing
 }
 
 
@@ -294,6 +300,7 @@ async def post_chat(
             body.query, workspace_id=workspace_id, conn=conn,
             requested_mode=body.mode,
             session_id=body.session_id,
+            file_ids=body.file_ids,
         )
     except Exception as exc:  # noqa: BLE001
         _LOG.exception("chat pipeline failed: %s", exc)
