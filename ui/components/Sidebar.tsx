@@ -22,7 +22,8 @@ type NavKey =
   | "extraction"
   | "playground"
   | "dashboard"
-  | "audit";
+  | "audit"
+  | "settings";
 
 type NavItem = { key: NavKey; href: string; icon: LucideIcon; label: string };
 
@@ -109,26 +110,32 @@ export function Sidebar({ current = "upload" }: { current?: string }) {
       <NavGroup title="Admin" items={ADMIN} current={current} />
 
       <div className="mt-auto px-2 pb-2 space-y-0.5">
-        <button
-          type="button"
+        <a
+          href="https://github.com/AniketTati/emerging-kb#readme"
+          target="_blank"
+          rel="noopener noreferrer"
           className="w-full flex items-center gap-3 px-2.5 py-1.5 rounded-md text-sm text-zinc-700 hover:bg-zinc-50 hover:text-zinc-900"
-          aria-label="Help"
+          aria-label="Help (opens README)"
         >
           <HelpCircle className="w-4 h-4 flex-shrink-0" strokeWidth={1.75} aria-hidden />
           <span className="opacity-0 group-hover:opacity-100 transition-opacity duration-150 whitespace-nowrap">
             Help
           </span>
-        </button>
-        <button
-          type="button"
-          className="w-full flex items-center gap-3 px-2.5 py-1.5 rounded-md text-sm text-zinc-700 hover:bg-zinc-50 hover:text-zinc-900"
+        </a>
+        <a
+          href="/settings"
+          className={`w-full flex items-center gap-3 px-2.5 py-1.5 rounded-md text-sm transition-colors ${
+            current === "settings"
+              ? "bg-zinc-100 text-zinc-900"
+              : "text-zinc-700 hover:bg-zinc-50 hover:text-zinc-900"
+          }`}
           aria-label="Settings"
         >
           <Settings className="w-4 h-4 flex-shrink-0" strokeWidth={1.75} aria-hidden />
           <span className="opacity-0 group-hover:opacity-100 transition-opacity duration-150 whitespace-nowrap">
             Settings
           </span>
-        </button>
+        </a>
       </div>
     </aside>
   );
