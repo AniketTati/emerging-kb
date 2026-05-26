@@ -209,10 +209,23 @@ def _pdf_span_ref(hit: Hit, meta: FileMetaForCitation | None) -> dict[str, Any]:
     md = hit.metadata or {}
     pages = md.get("source_page_numbers") or md.get("pages") or []
     page = pages[0] if pages else md.get("page")
+    # R2 — prefer the PR2 source-resolver output (worker-time char range
+    # inside a specific chunk) over the chunk's whole-text range. When
+    # both are present the resolver's narrower window wins because that
+    # was the actual snippet the LLM extracted, not the whole chunk.
+    src_chunk = md.get("source_chunk_id")
+    src_start = md.get("source_char_start")
+    src_end = md.get("source_char_end")
     return {
         "page": int(page) if page is not None else None,
-        "char_start": md.get("char_start"),
-        "char_end": md.get("char_end"),
+        "char_start": src_start if src_start is not None else md.get("char_start"),
+        "char_end": src_end if src_end is not None else md.get("char_end"),
+        # Distinct from the citation's `hit_id` — `source_chunk_id` is
+        # the RAW chunks.id the worker resolver pinpointed (not the
+        # contextual_chunk that the BM25/dense channels return). UI
+        # fetches /chunks/:id and slices [char_start:char_end] for an
+        # exact verbatim highlight, just like DocDetail does.
+        "source_chunk_id": src_chunk,
     }
 
 
@@ -301,6 +314,12 @@ def _atomic_unit_ref(hit: Hit, meta: FileMetaForCitation | None) -> dict[str, An
         "doc_id": meta.file_id if meta else md.get("file_id"),
         "page": md.get("page"),
         "bbox": md.get("bbox"),
+        # R2 — same as _pdf_span_ref. Atomic-unit channel surfaces the
+        # PR2 source-resolver output so the chat right rail can render
+        # an exact verbatim slice instead of just the chunk preview.
+        "source_chunk_id": md.get("source_chunk_id"),
+        "char_start": md.get("source_char_start"),
+        "char_end": md.get("source_char_end"),
     }
 
 

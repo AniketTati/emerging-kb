@@ -236,9 +236,15 @@ async def mentions_exact_channel(
     if not query.strip():
         return []
     try:
+        # R2 — same source-position columns as the atomic-unit channel so
+        # the citation envelope can highlight the exact mention span
+        # inside the chunk. extracted_mentions.source_chunk_id is the
+        # raw chunks.id (not contextual_chunks.id); UI consumes the same
+        # /chunks/:id endpoint either way.
         cur = await conn.execute(
             "SELECT em.contextual_chunk_id::text, em.mention_text, em.mention_type, "
-            "  em.file_id::text, cc.contextual_text "
+            "  em.file_id::text, cc.contextual_text, "
+            "  em.source_chunk_id::text, em.source_char_start, em.source_char_end "
             "FROM extracted_mentions em "
             "JOIN contextual_chunks cc ON cc.id = em.contextual_chunk_id "
             "WHERE em.workspace_id = %s "
@@ -261,6 +267,12 @@ async def mentions_exact_channel(
                 "channel": "mentions_exact",
                 "matched_mention": r[1],
                 "matched_type": r[2],
+                # R2 — char-range location of the matched mention in
+                # the source chunk. Present when the PR2 resolver
+                # found it at index time.
+                "source_chunk_id": r[5] if r[5] else None,
+                "source_char_start": r[6] if r[6] is not None else None,
+                "source_char_end": r[7] if r[7] is not None else None,
             },
         )
         for r in rows
@@ -293,9 +305,15 @@ async def atomic_units_rarity_channel(
     elif "row" in q_low:
         unit_filter = "AND unit_type = 'row'"
     try:
+        # R2 — pull source_chunk_id + char-range columns (migration 0032)
+        # so the citation envelope can render an exact verbatim snippet
+        # in the chat right rail (the same way DocDetail does in the
+        # upload flow). Cast to text once at SQL level so we don't have
+        # to UUID-coerce in Python.
         cur = await conn.execute(
             f"SELECT id::text, parameters::text, file_id::text, unit_type, "
-            f"  COALESCE(rarity_score, 0) AS rscore "
+            f"  COALESCE(rarity_score, 0) AS rscore, "
+            f"  source_chunk_id::text, source_char_start, source_char_end "
             f"FROM atomic_units "
             f"WHERE workspace_id = %s {unit_filter} "
             f"ORDER BY rscore DESC NULLS LAST LIMIT %s",
@@ -314,6 +332,12 @@ async def atomic_units_rarity_channel(
                 "file_id": str(r[2]),
                 "unit_type": r[3],
                 "channel": "atomic_units_rarity",
+                # R2 — present when the PR2 source-resolver located the
+                # extracted text in the source chunk at index time. UI
+                # uses these to slice exact verbatim snippets.
+                "source_chunk_id": r[5] if r[5] else None,
+                "source_char_start": r[6] if r[6] is not None else None,
+                "source_char_end": r[7] if r[7] is not None else None,
             },
         )
         for r in rows

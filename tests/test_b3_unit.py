@@ -192,7 +192,30 @@ def test_pick_modality_none_meta_safe():
 def test_pdf_span_ref_extracts_first_page_from_source_page_numbers():
     h = _hit(source_page_numbers=[7, 8], char_start=1248, char_end=1392)
     ref = build_ref("pdf_span", h, _meta())
-    assert ref == {"page": 7, "char_start": 1248, "char_end": 1392}
+    # R2 — `source_chunk_id` added to ref shape (None when the resolver
+    # didn't find a narrower span). The char_start/end from md are
+    # honored as the fallback when source_char_start/end isn't set.
+    assert ref == {
+        "page": 7, "char_start": 1248, "char_end": 1392,
+        "source_chunk_id": None,
+    }
+
+
+def test_pdf_span_ref_prefers_source_char_range_over_md_char_range():
+    """R2 — when the worker's source-resolver located a narrower span
+    inside the chunk (PR2), prefer it. md.char_start is the whole-chunk
+    bound; source_char_start is the exact extracted-text bound."""
+    h = _hit(
+        source_page_numbers=[3],
+        char_start=0, char_end=2400,
+        source_chunk_id="c1-uuid",
+        source_char_start=410, source_char_end=420,
+    )
+    ref = build_ref("pdf_span", h, _meta())
+    assert ref == {
+        "page": 3, "char_start": 410, "char_end": 420,
+        "source_chunk_id": "c1-uuid",
+    }
 
 
 def test_xlsx_row_ref_carries_sheet_and_row():
