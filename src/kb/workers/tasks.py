@@ -1843,6 +1843,75 @@ async def extract_schema_entities_file_impl(file_id: str) -> None:
             # No matching schema? Decision #4: no-op advance to ready.
             if not inferred_doc_type:
                 inferred_doc_type = "unknown"
+
+            # Nested-entities P1.5: bootstrap the doc_root + sub_entity
+            # types for THIS file's inferred_doc_type before reading
+            # schema_entities. This guarantees:
+            #   - The doc_root entity_type (e.g. BankStatement) exists
+            #     under its auto:<doc_type> schema, properly named (no
+            #     more anonymous "Doc" placeholder).
+            #   - For every distinct unit_type produced by L3 plugins
+            #     into atomic_units for this file (transaction, clause,
+            #     line_item, ...), a sub_entity type exists under the
+            #     doc_root + a `contains` schema_relationship links
+            #     them.
+            # Combined, this populates the schema layer with proper
+            # types so `assign_lineage_for_entity` can resolve real
+            # parents at lineage time. With the legacy code, schema_
+            # entities was always a single anonymous Doc and schema_
+            # relationships was always empty — nothing ever became a
+            # child of anything.
+            from kb.domain.atomic_units import read_atomic_units_for_file
+            from kb.extraction.promotion import (
+                ensure_auto_schema_entity, ensure_contains_relationship,
+                ensure_sub_entity_type,
+            )
+
+            schema_id_for_doctype: str | None = None
+            doc_root_entity_id: str | None = None
+            if inferred_doc_type and inferred_doc_type != "unknown":
+                schema_id_for_doctype, doc_root_entity_id = (
+                    await ensure_auto_schema_entity(
+                        conn, workspace_id=workspace_id_str,
+                        doc_type=inferred_doc_type,
+                    )
+                )
+
+            # Read atomic_units to discover which sub_entity types this
+            # file needs. We capture full payload here so we can promote
+            # each row to a child extracted_entity in Phase 3 without a
+            # second round-trip.
+            atomic_units_for_file = await read_atomic_units_for_file(
+                conn, file_id=file_id,
+            )
+            unit_types_in_file = sorted({
+                u["unit_type"] for u in atomic_units_for_file
+                if u.get("unit_type")
+            })
+            # unit_type → sub_entity schema_entity_id
+            sub_entity_type_by_unit: dict[str, str] = {}
+            if (
+                doc_root_entity_id is not None
+                and schema_id_for_doctype is not None
+                and unit_types_in_file
+            ):
+                for unit_type in unit_types_in_file:
+                    sub_id = await ensure_sub_entity_type(
+                        conn,
+                        workspace_id=workspace_id_str,
+                        schema_id=schema_id_for_doctype,
+                        parent_type_id=doc_root_entity_id,
+                        unit_type=unit_type,
+                    )
+                    await ensure_contains_relationship(
+                        conn,
+                        workspace_id=workspace_id_str,
+                        schema_id=schema_id_for_doctype,
+                        parent_entity_id=doc_root_entity_id,
+                        child_entity_id=sub_id,
+                    )
+                    sub_entity_type_by_unit[unit_type] = sub_id
+
             active_schemas = await read_active_schemas_for_doctype(
                 conn,
                 workspace_id=workspace_id_str,
@@ -1900,7 +1969,14 @@ async def extract_schema_entities_file_impl(file_id: str) -> None:
             )
             await delete_extracted_entities_for_file(conn, file_id=file_id)
 
-            # PASS 1: insert all entities (no lineage yet).
+            # PASS 1: insert LLM-extracted parent (doc_root) entities.
+            # The LLM only runs against schema_entities that have
+            # promoted schema_fields — in practice, this is the parent
+            # type (e.g. BankStatement) carrying scalars like
+            # account_holder / opening_balance. Sub_entity types
+            # created in Phase 1.5 have no schema_fields yet, so the
+            # LLM is never invoked for them; their instances come from
+            # PASS 1.5 below.
             inserted: list[tuple[str, str]] = []  # (entity_id, schema_entity_id)
             for entity_def, result in results:
                 if result is None or not result.instances:
@@ -1924,6 +2000,50 @@ async def extract_schema_entities_file_impl(file_id: str) -> None:
                     )
                     inserted.append((eid, schema_entity_id))
                     total_inserted += 1
+
+            # PASS 1.5: promote atomic_units → child extracted_entities.
+            # Each row from the L3 plugin (transaction, clause,
+            # line_item, ...) becomes one extracted_entity row of the
+            # corresponding sub_entity type. `parameters` jsonb maps
+            # directly to `fields` jsonb; the structural unit_type and
+            # rarity_score are stamped on the child for the anomaly /
+            # rarity retrieval channels to pick up. parent_entity_id
+            # is left NULL here — PASS 2 / PASS 3 below resolves it
+            # via schema_relationships(kind='contains'), which Phase
+            # 1.5 just populated.
+            #
+            # The atomic_units rows STAY in place during this transitional
+            # commit so the existing readers (anomaly retrieval channel,
+            # Q-mode catalog, Doc Detail UI) keep working until each is
+            # migrated to read from extracted_entities in subsequent
+            # commits. Migration 0038 drops the table once all readers
+            # have moved over.
+            for unit in atomic_units_for_file:
+                unit_type = unit["unit_type"]
+                sub_entity_id = sub_entity_type_by_unit.get(unit_type)
+                if sub_entity_id is None:
+                    # No sub_entity type was bootstrapped — happens
+                    # when inferred_doc_type was 'unknown' so we
+                    # never called ensure_auto_schema_entity. Skip;
+                    # the file still has its atomic_units row as
+                    # before.
+                    continue
+                citations_for_unit: dict[str, str] = {}
+                if unit.get("anchor_chunk_id"):
+                    citations_for_unit["_anchor"] = unit["anchor_chunk_id"]
+                eid = await insert_extracted_entity(
+                    conn,
+                    schema_entity_id=sub_entity_id,
+                    file_id=file_id,
+                    workspace_id=workspace_id_str,
+                    fields=unit["parameters"] or {},
+                    citations=citations_for_unit,
+                    model_id=unit.get("model_id") or "l3_plugin",
+                    rarity_score=unit.get("rarity_score"),
+                    unit_type=unit_type,
+                )
+                inserted.append((eid, sub_entity_id))
+                total_inserted += 1
 
             # PASS 2: topologically sort `inserted` so parents come BEFORE
             # children, then assign lineage in that order. Otherwise Clause

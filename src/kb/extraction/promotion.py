@@ -295,6 +295,61 @@ async def ensure_auto_schema_entity(
     return schema_id, entity_id
 
 
+async def ensure_contains_relationship(
+    conn: Connection,
+    *,
+    workspace_id: str,
+    schema_id: str,
+    parent_entity_id: str,
+    child_entity_id: str,
+    name_hint: str | None = None,
+) -> str:
+    """Ensure the schema_relationships row that declares
+    `parent contains child` (cardinality one_to_many, cascade_delete=true,
+    single_parent=true). The lineage assignment in
+    `kb.extraction.lineage` reads exactly this row when computing
+    parent_entity_id for each extracted_entity.
+
+    Returns the relationship id. Idempotent — matches on
+    (from_entity_id, to_entity_id, kind='contains', active)
+    so re-running this for the same parent/child pair is a no-op.
+
+    `name_hint` defaults to `has_<child_name_lowercase>` — readable
+    but not user-visible.
+    """
+    cur = await conn.execute(
+        "SELECT id::text FROM schema_relationships "
+        "WHERE schema_id = %s AND from_entity_id = %s AND to_entity_id = %s "
+        "  AND kind = 'contains' AND lifecycle_state = 'active' "
+        "LIMIT 1",
+        (schema_id, parent_entity_id, child_entity_id),
+    )
+    row = await cur.fetchone()
+    if row:
+        return row[0]
+
+    # Read child name to build the relationship's `name` field.
+    cur = await conn.execute(
+        "SELECT name FROM schema_entities WHERE id = %s", (child_entity_id,),
+    )
+    child_row = await cur.fetchone()
+    child_name = child_row[0] if child_row else "child"
+    rel_name = name_hint or f"has_{child_name.lower()}s"
+
+    cur = await conn.execute(
+        "INSERT INTO schema_relationships "
+        "  (schema_id, workspace_id, name, "
+        "   from_entity_id, to_entity_id, kind, cardinality, "
+        "   cascade_delete, single_parent, lifecycle_state) "
+        "VALUES (%s, %s, %s, %s, %s, 'contains', 'one_to_many', "
+        "        true, true, 'active') "
+        "RETURNING id::text",
+        (schema_id, workspace_id, rel_name,
+         parent_entity_id, child_entity_id),
+    )
+    return (await cur.fetchone())[0]
+
+
 async def ensure_sub_entity_type(
     conn: Connection,
     *,

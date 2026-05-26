@@ -386,9 +386,11 @@ async def test_extract_entities_assigns_lineage_for_contains_relationship(
         )
         await conn.commit()
 
-    # Mock extractor returns 1 Doc + 1 Clause across the 2 schema_entities.
-    # The worker calls extract() once per entity, in DB order (Doc first since
-    # it was inserted first).
+    # Mock extractor returns 1 doc-root + 1 Clause across the 2 schema_entities.
+    # The nested-entities refactor renames the pre-seeded "Doc" entity to
+    # the doc_type's PascalCase form on first ensure_auto_schema_entity()
+    # call ("LegalContract" here), so the mock matches by either name to
+    # remain robust across the rename.
     from kb.extraction.entities import (
         ExtractedInstance, SchemaExtractionResult,
     )
@@ -397,7 +399,10 @@ async def test_extract_entities_assigns_lineage_for_contains_relationship(
     class FakeMixedExtractor:
         async def extract(self, *, request):
             call_count["n"] += 1
-            if request.schema_entity_name == "Doc":
+            # Doc / LegalContract are the same row (renamed by the worker
+            # bootstrap); match both so the test stays passing both before
+            # and after the rename lands.
+            if request.schema_entity_name in ("Doc", "LegalContract"):
                 return SchemaExtractionResult(
                     instances=[ExtractedInstance(
                         fields={"title": "MSA 2024"},
