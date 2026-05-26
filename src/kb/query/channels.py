@@ -109,12 +109,17 @@ async def bm25_chunks_channel(
     """BM25 over contextual_chunks via pg_search `@@@` operator."""
     if not query.strip():
         return []
+    # Filter out chunks belonging to soft-deleted files. Otherwise re-
+    # uploads (which dedupe by content_sha and soft-delete the loser)
+    # leak ghost chunks into retrieval — citations point at deleted
+    # rows + R1's superseded-tagging can't match by file_id.
     rows = await _run_channel_query(
         conn, "ch_bm25_chunks",
         "SELECT cc.id::text, cc.contextual_text, "
         "  paradedb.score(cc.id) AS sc, c.file_id::text "
         "FROM contextual_chunks cc "
         "JOIN chunks c ON c.id = cc.chunk_id "
+        "JOIN files f ON f.id = c.file_id AND f.lifecycle_state <> 'deleted' "
         "WHERE cc.workspace_id = %s AND cc.contextual_text @@@ %s "
         "ORDER BY sc DESC LIMIT %s",
         (workspace_id, query, limit),
@@ -147,12 +152,18 @@ async def bm25_raptor_channel(
     """BM25 over raptor_nodes.text — covers per_doc + corpus summaries."""
     if not query.strip():
         return []
+    # Live-files-only filter. raptor_nodes.file_id is nullable for
+    # corpus-level summary rows (no per-file scope) — keep those by
+    # using NOT EXISTS so a null file_id passes through.
     rows = await _run_channel_query(
         conn, "ch_bm25_raptor",
         "SELECT id::text, text, paradedb.score(id) AS sc, "
         "  level, scope, file_id::text "
-        "FROM raptor_nodes "
+        "FROM raptor_nodes rn "
         "WHERE workspace_id = %s AND text @@@ %s "
+        "  AND (rn.file_id IS NULL OR NOT EXISTS ("
+        "    SELECT 1 FROM files f "
+        "     WHERE f.id = rn.file_id AND f.lifecycle_state = 'deleted')) "
         "ORDER BY sc DESC LIMIT %s",
         (workspace_id, query, limit),
     )
@@ -204,6 +215,7 @@ async def dense_chunks_channel(
         "  cc.file_id::text "
         "FROM chunk_embeddings ce "
         "JOIN contextual_chunks cc ON cc.id = ce.contextual_chunk_id "
+        "JOIN files f ON f.id = cc.file_id AND f.lifecycle_state <> 'deleted' "
         "WHERE ce.workspace_id = %s "
         "ORDER BY ce.embedding <=> %s::halfvec LIMIT %s",
         (vec, workspace_id, vec, limit),
@@ -242,8 +254,11 @@ async def dense_raptor_channel(
         "SELECT id::text, text, "
         "  (1.0 - (embedding <=> %s::halfvec))::float AS sim, "
         "  level, scope, file_id::text "
-        "FROM raptor_nodes "
+        "FROM raptor_nodes rn "
         "WHERE workspace_id = %s "
+        "  AND (rn.file_id IS NULL OR NOT EXISTS ("
+        "    SELECT 1 FROM files f "
+        "     WHERE f.id = rn.file_id AND f.lifecycle_state = 'deleted')) "
         "ORDER BY embedding <=> %s::halfvec LIMIT %s",
         (vec, workspace_id, vec, limit),
     )
@@ -299,6 +314,7 @@ async def mentions_exact_channel(
         "  em.source_chunk_id::text, em.source_char_start, em.source_char_end "
         "FROM extracted_mentions em "
         "JOIN contextual_chunks cc ON cc.id = em.contextual_chunk_id "
+        "JOIN files f ON f.id = em.file_id AND f.lifecycle_state <> 'deleted' "
         "WHERE em.workspace_id = %s "
         "AND lower(em.mention_text) LIKE lower(%s) "
         "LIMIT %s",
@@ -362,11 +378,12 @@ async def atomic_units_rarity_channel(
     # to UUID-coerce in Python.
     rows = await _run_channel_query(
         conn, "ch_atomic_units_rarity",
-        f"SELECT id::text, parameters::text, file_id::text, unit_type, "
-        f"  COALESCE(rarity_score, 0) AS rscore, "
-        f"  source_chunk_id::text, source_char_start, source_char_end "
-        f"FROM atomic_units "
-        f"WHERE workspace_id = %s {unit_filter} "
+        f"SELECT au.id::text, au.parameters::text, au.file_id::text, au.unit_type, "
+        f"  COALESCE(au.rarity_score, 0) AS rscore, "
+        f"  au.source_chunk_id::text, au.source_char_start, au.source_char_end "
+        f"FROM atomic_units au "
+        f"JOIN files f ON f.id = au.file_id AND f.lifecycle_state <> 'deleted' "
+        f"WHERE au.workspace_id = %s {unit_filter} "
         f"ORDER BY rscore DESC NULLS LAST LIMIT %s",
         (workspace_id, limit),
     )
