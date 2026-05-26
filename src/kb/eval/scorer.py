@@ -12,16 +12,25 @@ Pure-function metrics, computed per result + aggregated by stratum:
 Aggregate ScoreReport breaks down per-stratum totals so the eval CSV
 matches the architecture's "per-stratum" reporting expectation.
 
-LLM-based metrics (RAGAS context precision/recall, FactScore for
-long-form, HalluGraph alignment) are NOT computed in Wave A — they
-require either real corpora or scored ground-truth and a separate LLM
-budget. The hook points are documented for Wave B / a follow-up.
+Optional LLM-based scorers (opt-in via flags on `score_results`):
+
+  - RAGAS (`enable_ragas=True`, requires `pip install -e .[eval]`):
+      faithfulness        — answer claims grounded in contexts
+      answer_relevancy    — answer semantically aligned to question
+      context_relevance   — retrieved chunks relevant to question
+    Skipped on the fly when `EvalResult.contexts` is empty or the
+    runtime LLM/embedder cannot be constructed.
+
+  - HHEM (`enable_hhem=True`, reuses `kb/query/faithfulness.py`):
+      hhem_pass_rate      — fraction of non-refused answers whose
+                            HHEM verdict is 'pass'.
 """
 
 from __future__ import annotations
 
 import csv
 import io
+import logging
 import re
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -29,6 +38,9 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from kb.eval.runner import EvalResult, STRATA
+
+
+logger = logging.getLogger(__name__)
 
 
 _WORD = re.compile(r"\w+")
@@ -41,6 +53,10 @@ _CSV_FIELDS: tuple[str, ...] = (
     "citations_count", "citation_modalities",
     "faithfulness_verdict", "faithfulness_score",
     "lexical_overlap", "refusal_correct", "citation_ok",
+    # Optional LLM-judged metrics — empty cells when scoring was disabled
+    # or the per-row dependency was missing (no contexts / no LLM).
+    "ragas_faithfulness", "ragas_answer_relevancy", "ragas_context_relevance",
+    "hhem_pass",
     "latency_ms", "error",
 )
 
@@ -121,6 +137,14 @@ class ScoreReport:
     overall_avg_latency_ms: float
     total_errors: int
     by_stratum: tuple[StratumScore, ...] = field(default_factory=tuple)
+    # Optional LLM-judged aggregates. `None` when the scorer was not
+    # asked to compute them; the UI/CSV renders blanks in that case.
+    ragas_faithfulness_avg: float | None = None
+    ragas_answer_relevancy_avg: float | None = None
+    ragas_context_relevance_avg: float | None = None
+    hhem_pass_rate: float | None = None
+    # Optional human-readable note (e.g. "ragas skipped: no LLM key").
+    notes: tuple[str, ...] = field(default_factory=tuple)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -131,6 +155,11 @@ class ScoreReport:
             "overall_faithfulness_avg": self.overall_faithfulness_avg,
             "overall_avg_latency_ms": self.overall_avg_latency_ms,
             "total_errors": self.total_errors,
+            "ragas_faithfulness_avg": self.ragas_faithfulness_avg,
+            "ragas_answer_relevancy_avg": self.ragas_answer_relevancy_avg,
+            "ragas_context_relevance_avg": self.ragas_context_relevance_avg,
+            "hhem_pass_rate": self.hhem_pass_rate,
+            "notes": list(self.notes),
             "by_stratum": [
                 {
                     "stratum": s.stratum,
@@ -147,8 +176,21 @@ class ScoreReport:
         }
 
 
-def score_results(results: list[EvalResult]) -> ScoreReport:
-    """Aggregate per-result metrics into overall + per-stratum scores."""
+def score_results(
+    results: list[EvalResult],
+    *,
+    enable_ragas: bool = False,
+    enable_hhem: bool = False,
+    ragas_llm: Any | None = None,
+    ragas_embeddings: Any | None = None,
+) -> ScoreReport:
+    """Aggregate per-result metrics into overall + per-stratum scores.
+
+    `enable_ragas` / `enable_hhem` are opt-in because both pull heavy
+    deps (RAGAS via `[eval]` extras, HHEM via `transformers`/`torch` +
+    ~600MB model). Each scorer attempts a lazy import and degrades to a
+    `None` aggregate + a `notes` entry rather than crashing the run.
+    """
     if not results:
         return ScoreReport(
             total=0, overall_lexical_avg=0.0,
@@ -208,6 +250,31 @@ def score_results(results: list[EvalResult]) -> ScoreReport:
             errors=agg["errors"],
         ))
 
+    notes: list[str] = []
+    ragas_aggs: dict[str, float | None] = {
+        "faithfulness": None,
+        "answer_relevancy": None,
+        "context_relevance": None,
+    }
+    hhem_agg: float | None = None
+
+    if enable_ragas:
+        ragas_aggs, ragas_per_q, ragas_note = ragas_scores(
+            results, llm=ragas_llm, embeddings=ragas_embeddings,
+        )
+        if ragas_note:
+            notes.append(ragas_note)
+        # Stash per-question scores on the results so the CSV writer
+        # can render them inline. Using a sidecar dict keeps EvalResult
+        # frozen.
+        _per_question_ragas.update(ragas_per_q)
+
+    if enable_hhem:
+        hhem_agg, hhem_per_q, hhem_note = hhem_scores(results)
+        if hhem_note:
+            notes.append(hhem_note)
+        _per_question_hhem.update(hhem_per_q)
+
     return ScoreReport(
         total=len(results),
         overall_lexical_avg=overall["lexical"],
@@ -217,7 +284,232 @@ def score_results(results: list[EvalResult]) -> ScoreReport:
         overall_avg_latency_ms=overall["latency"],
         total_errors=overall["errors"],
         by_stratum=tuple(stratum_scores),
+        ragas_faithfulness_avg=ragas_aggs.get("faithfulness"),
+        ragas_answer_relevancy_avg=ragas_aggs.get("answer_relevancy"),
+        ragas_context_relevance_avg=ragas_aggs.get("context_relevance"),
+        hhem_pass_rate=hhem_agg,
+        notes=tuple(notes),
     )
+
+
+# ---------------------------------------------------------------------------
+# RAGAS — opt-in, lazy-imported
+#
+# Sidecar dicts let `write_results_csv` render per-question scores after
+# `score_results` ran with the corresponding `enable_*` flag. Keyed by
+# `EvalResult.question.id`. Kept module-level (not in ScoreReport) so
+# the dataclass stays frozen + JSON-safe.
+# ---------------------------------------------------------------------------
+
+
+_per_question_ragas: dict[str, dict[str, float]] = {}
+_per_question_hhem: dict[str, float] = {}
+
+
+def reset_sidecars() -> None:
+    """Test helper — wipe the per-question RAGAS/HHEM caches."""
+    _per_question_ragas.clear()
+    _per_question_hhem.clear()
+
+
+def ragas_scores(
+    results: list[EvalResult],
+    *,
+    llm: Any | None = None,
+    embeddings: Any | None = None,
+) -> tuple[dict[str, float | None], dict[str, dict[str, float]], str | None]:
+    """Run the 3-metric RAGAS judge on `results`. Returns
+    `(aggregates, per_question, note)` where:
+
+    - `aggregates`: dict with keys `faithfulness`, `answer_relevancy`,
+      `context_relevance` mapped to overall mean (None when no rows
+      had usable contexts).
+    - `per_question`: `{question_id: {metric: score}}` for CSV inline.
+    - `note`: human-readable string when scoring was degraded
+      (no LLM, no contexts, ragas import failed), else None.
+
+    Scorable rows are those that:
+      - did not refuse (refused answers carry no claims to ground),
+      - have at least one retrieved context snippet,
+      - have a non-empty answer.
+
+    The default `llm` / `embeddings` are constructed from
+    `langchain_google_genai` against `KB_GEMINI_API_KEY`. When that
+    key is absent, RAGAS scoring is skipped with a clean note rather
+    than raised.
+    """
+    aggregates: dict[str, float | None] = {
+        "faithfulness": None,
+        "answer_relevancy": None,
+        "context_relevance": None,
+    }
+    per_question: dict[str, dict[str, float]] = {}
+
+    scorable = [
+        r for r in results
+        if not r.refused and r.answer and r.contexts and not r.error
+    ]
+    if not scorable:
+        return aggregates, per_question, (
+            "ragas skipped: no scorable rows "
+            "(need non-refused answers with retrieved contexts)"
+        )
+
+    # Lazy imports — keep the eval module importable in CI without the
+    # `[eval]` extras installed.
+    try:
+        from ragas import evaluate                         # type: ignore
+        from ragas.metrics import (                        # type: ignore
+            Faithfulness, AnswerRelevancy, ContextRelevance,
+        )
+        from datasets import Dataset                       # type: ignore
+    except Exception as exc:  # noqa: BLE001
+        return aggregates, per_question, (
+            f"ragas skipped: pip install -e .[eval] failed import: {exc}"
+        )
+
+    # LLM / embedder bootstrap — caller can inject (tests) else we
+    # construct a Gemini-backed pair when a key is present.
+    if llm is None or embeddings is None:
+        try:
+            llm, embeddings, note = _bootstrap_gemini_for_ragas(llm, embeddings)
+            if note:
+                return aggregates, per_question, note
+        except Exception as exc:  # noqa: BLE001
+            return aggregates, per_question, f"ragas skipped: {exc}"
+
+    # RAGAS expects a HuggingFace Dataset; build it from scorable rows.
+    dataset = Dataset.from_dict({
+        "question":     [r.question.text for r in scorable],
+        "answer":       [r.answer        for r in scorable],
+        "contexts":     [list(r.contexts) for r in scorable],
+    })
+
+    try:
+        result = evaluate(
+            dataset,
+            metrics=[Faithfulness(), AnswerRelevancy(), ContextRelevance()],
+            llm=llm,
+            embeddings=embeddings,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("ragas evaluate failed")
+        return aggregates, per_question, f"ragas failed: {exc}"
+
+    # RAGAS 0.2 returns a `Result` object with `.scores` (list of per-row
+    # dicts) and aggregate access via dict-like indexing.
+    try:
+        per_rows = list(result.scores)  # type: ignore[attr-defined]
+    except Exception:
+        per_rows = []
+
+    for r, row in zip(scorable, per_rows):
+        clean: dict[str, float] = {}
+        for k in ("faithfulness", "answer_relevancy", "context_relevance"):
+            v = row.get(k) if isinstance(row, dict) else None
+            if isinstance(v, (int, float)) and not _isnan(float(v)):
+                clean[k] = float(v)
+        if clean:
+            per_question[r.question.id] = clean
+
+    # Aggregate by averaging non-None per-question scores.
+    for k in ("faithfulness", "answer_relevancy", "context_relevance"):
+        vals = [
+            d[k] for d in per_question.values()
+            if k in d
+        ]
+        aggregates[k] = sum(vals) / len(vals) if vals else None
+
+    return aggregates, per_question, None
+
+
+def _bootstrap_gemini_for_ragas(
+    llm: Any | None, embeddings: Any | None,
+) -> tuple[Any, Any, str | None]:
+    """Build LangchainLLMWrapper(Gemini) + LangchainEmbeddingsWrapper
+    (Gemini) for RAGAS. Returns (llm, embeddings, note). `note` is
+    non-None when bootstrap failed (skip ragas with that message)."""
+    import os
+    api_key = os.environ.get("KB_GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    if not api_key:
+        return llm, embeddings, (
+            "ragas skipped: KB_GEMINI_API_KEY not set "
+            "(scoring needs an LLM judge)"
+        )
+    try:
+        from langchain_google_genai import (                              # type: ignore
+            ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings,
+        )
+        from ragas.llms import LangchainLLMWrapper                        # type: ignore
+        from ragas.embeddings import LangchainEmbeddingsWrapper           # type: ignore
+    except Exception as exc:  # noqa: BLE001
+        return llm, embeddings, (
+            f"ragas skipped: `langchain-google-genai` not installed ({exc}); "
+            f"pip install -e .[eval] to enable"
+        )
+    if llm is None:
+        llm = LangchainLLMWrapper(ChatGoogleGenerativeAI(
+            model="gemini-2.5-flash", google_api_key=api_key,
+        ))
+    if embeddings is None:
+        embeddings = LangchainEmbeddingsWrapper(GoogleGenerativeAIEmbeddings(
+            model="models/embedding-001", google_api_key=api_key,
+        ))
+    return llm, embeddings, None
+
+
+def _isnan(x: float) -> bool:
+    return x != x
+
+
+# ---------------------------------------------------------------------------
+# HHEM — reuses kb/query/faithfulness.py (already lazy-loads transformers)
+# ---------------------------------------------------------------------------
+
+
+def hhem_scores(
+    results: list[EvalResult],
+) -> tuple[float | None, dict[str, float], str | None]:
+    """Score every non-refused answer against its retrieved contexts via
+    HHEM-2.1. Returns `(pass_rate, per_question_score, note)` where
+    pass_rate is the fraction of rows whose HHEM verdict == 'pass'.
+
+    A row is scorable when it has both a non-empty answer and at least
+    one context snippet. Refusals skip cleanly.
+    """
+    scorable = [
+        r for r in results
+        if not r.refused and r.answer and r.contexts and not r.error
+    ]
+    if not scorable:
+        return None, {}, (
+            "hhem skipped: no scorable rows "
+            "(need non-refused answers with retrieved contexts)"
+        )
+
+    try:
+        from kb.query.faithfulness import HHEMFaithfulnessGate
+    except Exception as exc:  # noqa: BLE001
+        return None, {}, f"hhem skipped: import failed: {exc}"
+
+    gate = HHEMFaithfulnessGate()
+    import asyncio
+
+    per_q: dict[str, float] = {}
+    passes = 0
+    n = 0
+    for r in scorable:
+        try:
+            res = asyncio.run(gate.assess(r.answer, r.contexts))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("hhem failed on %s: %s", r.question.id, exc)
+            continue
+        per_q[r.question.id] = float(res.score)
+        if res.verdict == "pass":
+            passes += 1
+        n += 1
+
+    return (passes / n) if n else None, per_q, None
 
 
 # ---------------------------------------------------------------------------
@@ -238,6 +530,8 @@ def write_results_csv(
         writer = csv.DictWriter(fh, fieldnames=list(_CSV_FIELDS))
         writer.writeheader()
         for r in results:
+            rg = _per_question_ragas.get(r.question.id, {})
+            hh = _per_question_hhem.get(r.question.id)
             row = {
                 "question_id": r.question.id,
                 "stratum": r.question.stratum,
@@ -264,6 +558,10 @@ def write_results_csv(
                         refused=r.refused,
                     ) else "0"
                 ),
+                "ragas_faithfulness": _fmt(rg.get("faithfulness")),
+                "ragas_answer_relevancy": _fmt(rg.get("answer_relevancy")),
+                "ragas_context_relevance": _fmt(rg.get("context_relevance")),
+                "hhem_pass": _fmt(hh),
                 "latency_ms": r.latency_ms,
                 "error": r.error or "",
             }
@@ -271,8 +569,14 @@ def write_results_csv(
     return p
 
 
+def _fmt(v: float | None) -> str:
+    """Format an optional float for CSV — blank when None."""
+    return f"{v:.3f}" if isinstance(v, (int, float)) else ""
+
+
 def render_summary(report: ScoreReport) -> str:
-    """Human-readable summary string (one block per stratum + overall)."""
+    """Human-readable summary string (one block per stratum + overall +
+    optional RAGAS / HHEM aggregates when present)."""
     lines: list[str] = []
     lines.append(
         f"=== Eval Summary ({report.total} questions, "
@@ -285,6 +589,21 @@ def render_summary(report: ScoreReport) -> str:
         f"faith={report.overall_faithfulness_avg:.2f} "
         f"avg_lat={report.overall_avg_latency_ms:.0f}ms"
     )
+
+    optional: list[str] = []
+    if report.ragas_faithfulness_avg is not None:
+        optional.append(f"ragas_faith={report.ragas_faithfulness_avg:.2f}")
+    if report.ragas_answer_relevancy_avg is not None:
+        optional.append(f"ragas_rel={report.ragas_answer_relevancy_avg:.2f}")
+    if report.ragas_context_relevance_avg is not None:
+        optional.append(f"ragas_ctx={report.ragas_context_relevance_avg:.2f}")
+    if report.hhem_pass_rate is not None:
+        optional.append(f"hhem={report.hhem_pass_rate:.2f}")
+    if optional:
+        lines.append("LLM-judged: " + " ".join(optional))
+    for note in report.notes:
+        lines.append(f"  · {note}")
+
     for s in report.by_stratum:
         lines.append(
             f"  [{s.stratum:<14}] n={s.count} "

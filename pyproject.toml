@@ -57,6 +57,24 @@ dev = [
     "pyright>=1.1.380",
 ]
 
+# Eval extras — pulled only when running the 45-Q regression with
+# RAGAS / HHEM scoring enabled. Kept out of base deps so docker compose
+# images stay slim and `uv sync` in CI doesn't drag in langchain
+# transitively for unit tests.
+#
+# Install with: `uv sync --extra eval`  (or  `pip install -e .[eval]`)
+[project.optional-dependencies]
+eval = [
+    # RAGAS 0.2 + Gemini wiring. Pinned because the 0.1 → 0.2 surface
+    # change broke import paths (`ragas.metrics` reshuffled).
+    "ragas>=0.2,<0.3",
+    "datasets>=2.20",
+    "langchain-google-genai>=2.0",
+    # HHEM-2.1 is loaded from HuggingFace via transformers; torch is
+    # already a top-level dep (Docling pulls it). No extra dep here.
+    "transformers>=4.45",
+]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
