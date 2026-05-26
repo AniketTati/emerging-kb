@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { Suspense, useEffect, useRef } from "react";
+import { useSearchParams } from "next/navigation";
 import { postChatStream } from "@/lib/api";
 import { ChatProvider, useChat } from "@/lib/chat-state";
 import { Sidebar } from "@/components/Sidebar";
@@ -13,12 +14,27 @@ import { ChatHistorySidebar } from "@/components/ChatHistorySidebar";
 function ChatShell() {
   const { state, dispatch } = useChat();
   const threadRef = useRef<HTMLDivElement>(null);
+  const searchParams = useSearchParams();
 
   // Auto-scroll the thread to the bottom on each new turn.
   useEffect(() => {
     if (!threadRef.current) return;
     threadRef.current.scrollTop = threadRef.current.scrollHeight;
   }, [state.turns]);
+
+  // /audit "Replay" deep-link: ?q=… submits once on mount when the
+  // thread is empty. Guard with a ref so React strict-mode double-
+  // mount doesn't fire it twice.
+  const replayedRef = useRef(false);
+  useEffect(() => {
+    if (replayedRef.current) return;
+    const q = searchParams.get("q");
+    if (q && state.turns.length === 0) {
+      replayedRef.current = true;
+      void handleSubmit(q);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function handleSubmit(
     query: string,
@@ -197,7 +213,12 @@ function SuggestedQuery({
 export default function ChatPage() {
   return (
     <ChatProvider>
-      <ChatShell />
+      {/* Suspense boundary required because ChatShell uses
+       *  useSearchParams() to honour the /audit "Replay" deep-link.
+       *  Without it, Next 15 fails the static prerender. */}
+      <Suspense fallback={null}>
+        <ChatShell />
+      </Suspense>
     </ChatProvider>
   );
 }

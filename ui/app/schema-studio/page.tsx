@@ -22,7 +22,7 @@
  * initial render cheap. Vocabulary + Lineage lazy-load on tab activation.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
@@ -96,6 +96,15 @@ function parseTab(v: string | null): TabKey {
 
 
 export default function SchemaStudioPage() {
+  return (
+    <Suspense fallback={null}>
+      <SchemaStudioShell />
+    </Suspense>
+  );
+}
+
+
+function SchemaStudioShell() {
   const router = useRouter();
   const pathname = usePathname();
   const sp = useSearchParams();

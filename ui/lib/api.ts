@@ -1381,3 +1381,223 @@ export async function getNeedsAttention(
   const body = (await resp.json()) as { items: NeedsAttentionItem[] };
   return body.items ?? [];
 }
+
+
+// ---------------------------------------------------------------------------
+// Audit — query log + hash-chained audit_log + integrity check
+// ---------------------------------------------------------------------------
+
+export type AuditEntry = {
+  id: string;
+  created_at: string;
+  endpoint: string;
+  query: string;
+  mode: string;
+  crag_score: number | null;
+  refused: boolean;
+  refusal_reason: string | null;
+  /** Truncated server-side to 500 chars. */
+  answer: string | null;
+  latency_ms: number | null;
+  model_id: string | null;
+};
+
+export type AuditResponse = {
+  items: AuditEntry[];
+  next_cursor: string | null;
+};
+
+/** GET /audit — paginated query log, newest first.
+ *  `cursor` is opaque (base64-encoded `{created_at, id}`); pass the
+ *  prior response's `next_cursor` for the next page. */
+export async function listAudit(opts?: {
+  cursor?: string;
+  limit?: number;
+}): Promise<AuditResponse> {
+  const params = new URLSearchParams();
+  if (opts?.cursor) params.set("cursor", opts.cursor);
+  if (opts?.limit != null) params.set("limit", String(opts.limit));
+  const resp = await fetch(
+    `${KB_API_URL}/audit?${params.toString()}`,
+    { headers: workspaceHeaders() },
+  );
+  return _handle<AuditResponse>(resp);
+}
+
+
+export type AuditLogItem = {
+  id: string;
+  workspace_id: string;
+  created_at: string;
+  actor: string;
+  action: string;
+  entity_type: string | null;
+  entity_id: string | null;
+  query_id: string | null;
+  payload: Record<string, unknown>;
+  prev_hash: string;
+  hash: string;
+};
+
+
+export async function listAuditLog(
+  limit = 100,
+): Promise<AuditLogItem[]> {
+  const resp = await fetch(
+    `${KB_API_URL}/audit-log?limit=${limit}`,
+    { headers: workspaceHeaders() },
+  );
+  const body = await _handle<{ items: AuditLogItem[] }>(resp);
+  return body.items ?? [];
+}
+
+
+export type IntegrityResponse = {
+  ok: boolean;
+  workspace_id: string;
+  total_rows: number;
+  broken_at_row_id: string | null;
+  broken_at_position: number | null;
+  expected_hash: string | null;
+  actual_hash: string | null;
+  notes: string | null;
+};
+
+
+export async function getAuditIntegrity(
+  limit = 5000,
+): Promise<IntegrityResponse> {
+  const resp = await fetch(
+    `${KB_API_URL}/audit-log/integrity?limit=${limit}`,
+    { headers: workspaceHeaders() },
+  );
+  return _handle<IntegrityResponse>(resp);
+}
+
+
+// ---------------------------------------------------------------------------
+// Settings — effective config, model choices, runtime overrides
+// ---------------------------------------------------------------------------
+
+export type EffectiveEntry = {
+  key: string;
+  value: unknown;
+  /** Layer of origin: 'defaults' | 'global' | 'domain' | 'workspace' |
+   *  'doc_type' | 'doc' | 'user'. */
+  layer: string;
+  scope_id: string | null;
+};
+
+export type EffectiveConfigResponse = {
+  entries: EffectiveEntry[];
+};
+
+
+export async function getEffectiveConfig(opts?: {
+  domain?: string;
+  docType?: string;
+  docId?: string;
+  userId?: string;
+}): Promise<EffectiveConfigResponse> {
+  const params = new URLSearchParams();
+  if (opts?.domain) params.set("domain", opts.domain);
+  if (opts?.docType) params.set("doc_type", opts.docType);
+  if (opts?.docId) params.set("doc_id", opts.docId);
+  if (opts?.userId) params.set("user_id", opts.userId);
+  const resp = await fetch(
+    `${KB_API_URL}/settings/effective-config?${params.toString()}`,
+    { headers: workspaceHeaders() },
+  );
+  return _handle<EffectiveConfigResponse>(resp);
+}
+
+
+export type ModelChoicesResponse = {
+  extraction_llm: string | null;
+  hard_query_llm: string | null;
+  embedder: string | null;
+  reranker: string | null;
+  faithfulness: string | null;
+  intent_classifier: string | null;
+  conflict_detector: string | null;
+  generation: string | null;
+  generation_hard: string | null;
+};
+
+
+export async function getModelChoices(
+  domain?: string,
+): Promise<ModelChoicesResponse> {
+  const url = domain
+    ? `${KB_API_URL}/settings/models?domain=${encodeURIComponent(domain)}`
+    : `${KB_API_URL}/settings/models`;
+  const resp = await fetch(url, { headers: workspaceHeaders() });
+  return _handle<ModelChoicesResponse>(resp);
+}
+
+
+export type OverrideOut = {
+  id: string;
+  workspace_id: string;
+  scope_kind: string;
+  scope_id: string | null;
+  config_key: string;
+  config_value: unknown;
+  reason: string | null;
+  set_by: string | null;
+  set_at: string;
+  active: boolean;
+};
+
+
+export async function listOverrides(): Promise<OverrideOut[]> {
+  const resp = await fetch(
+    `${KB_API_URL}/settings/overrides`,
+    { headers: workspaceHeaders() },
+  );
+  const body = await _handle<{ items: OverrideOut[] }>(resp);
+  return body.items ?? [];
+}
+
+
+export async function createOverride(body: {
+  scope_kind: string;
+  scope_id: string;
+  config_key: string;
+  config_value: unknown;
+  reason?: string | null;
+  set_by?: string | null;
+}): Promise<{ id: string | null; revoked: boolean }> {
+  const resp = await fetch(
+    `${KB_API_URL}/settings/overrides`,
+    {
+      method: "POST",
+      headers: {
+        ...workspaceHeaders(),
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    },
+  );
+  return _handle(resp);
+}
+
+
+export async function revokeOverride(body: {
+  scope_kind: string;
+  scope_id: string;
+  config_key: string;
+}): Promise<{ id: string | null; revoked: boolean }> {
+  const resp = await fetch(
+    `${KB_API_URL}/settings/overrides`,
+    {
+      method: "DELETE",
+      headers: {
+        ...workspaceHeaders(),
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    },
+  );
+  return _handle(resp);
+}

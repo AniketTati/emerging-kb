@@ -26,7 +26,7 @@
  * "view all →" which deep-links into a scoped Explore view.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import {
   Search, LayoutGrid, FileText, Folder, Puzzle, Users, GitMerge,
@@ -151,6 +151,15 @@ function dateRangeToFromTo(d: DateRange): { from?: string; to?: string } {
 
 
 export default function ExplorePage() {
+  return (
+    <Suspense fallback={null}>
+      <ExploreShell />
+    </Suspense>
+  );
+}
+
+
+function ExploreShell() {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
