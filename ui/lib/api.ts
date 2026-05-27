@@ -689,6 +689,10 @@ export type SessionTurn = {
   faithfulness_score?: number | null;
   refused?: boolean | null;
   refusal_reason?: string | null;
+  // Pulled from query_log so the "How I answered" inspector shows
+  // real numbers (not 0ms / 0 hits) when a session is reopened.
+  latency_ms?: number | null;
+  hits_count?: number | null;
 };
 
 export async function listSessions(limit = 50): Promise<SessionInfo[]> {

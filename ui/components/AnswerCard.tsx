@@ -441,36 +441,67 @@ function MarkdownAnswer({
 
 
 /** Build a `(children: ReactNode) => ReactNode` walker that replaces
- *  inline `[uuid]` patterns inside string children with `<CitationChip>`
- *  buttons. Non-string children (already-rendered ReactElements) pass
- *  through unchanged. */
+ *  inline `[uuid]` or `[uuid1, uuid2, …]` patterns inside string
+ *  children with `<CitationChip>` buttons. Non-string children
+ *  (already-rendered ReactElements) pass through unchanged.
+ *
+ *  The bracket can carry a SINGLE UUID OR multiple comma-separated
+ *  UUIDs — the gen-LLM often groups its sources that way when one
+ *  claim is supported by multiple snippets. We render one chip per
+ *  UUID, separated by a thin space, so the user sees [1] [2] [3]
+ *  instead of a raw `[uuid, uuid, uuid]` dump in the prose.
+ *
+ *  Short forms (e.g. `[a8b21618]`) and full UUIDs both supported —
+ *  the gen prompt asks for full UUIDs but older / partial-quote
+ *  variants land too. */
 function makeChildrenTransformer(
   citations: Citation[],
   indexByShortId: Map<string, number>,
 ): (children: ReactNode) => ReactNode {
-  const CITE_RE = /\[([0-9a-f]{8}(?:-[0-9a-f]{4}){0,4}(?:-[0-9a-f]{12})?)\]/gi;
+  // One UUID-ish token — match the canonical RFC-4122 form (8-4-4-4-12
+  // with hyphens) OR an 8-char short id. The full form is listed
+  // FIRST in the alternation so the regex engine greedily consumes
+  // the whole UUID instead of matching just the leading 8 hex chars
+  // (the trailing 12-hex segment doesn't have a leading dash, so a
+  // looser pattern would split one UUID into two false "tokens").
+  const UUID_FULL = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+  const UUID_SHORT = "[0-9a-f]{8}";
+  const UUID_TOKEN = `(?:${UUID_FULL}|${UUID_SHORT})`;
+  // Bracket containing ONE or more UUIDs separated by `,` + whitespace.
+  const CITE_GROUP_RE = new RegExp(
+    `\\[(${UUID_TOKEN}(?:\\s*,\\s*${UUID_TOKEN})*)\\]`,
+    "gi",
+  );
+  const UUID_RE = new RegExp(UUID_TOKEN, "gi");
 
   function replaceInString(s: string, keyPrefix: string): ReactNode[] {
     const out: ReactNode[] = [];
     let last = 0;
     let n = 0;
-    for (const m of s.matchAll(CITE_RE)) {
+    for (const m of s.matchAll(CITE_GROUP_RE)) {
       if (m.index === undefined) continue;
       if (m.index > last) {
         out.push(
           <Fragment key={`${keyPrefix}-t${n++}`}>{s.slice(last, m.index)}</Fragment>,
         );
       }
-      const raw = m[1];
-      const shortId = raw.slice(0, 8);
-      const index = indexByShortId.get(shortId) ?? -1;
-      out.push(
-        <CitationChip
-          key={`${keyPrefix}-c${n++}`}
-          index={index}
-          citation={index >= 0 ? citations[index] : undefined}
-        />,
-      );
+      // Split the inside-of-brackets into one or more UUID tokens.
+      const ids = m[1].match(UUID_RE) ?? [];
+      ids.forEach((raw, j) => {
+        if (j > 0) {
+          // Tight visual gap between chips for the multi-citation form.
+          out.push(<span key={`${keyPrefix}-sp${n++}`}>&thinsp;</span>);
+        }
+        const shortId = raw.slice(0, 8);
+        const index = indexByShortId.get(shortId) ?? -1;
+        out.push(
+          <CitationChip
+            key={`${keyPrefix}-c${n++}`}
+            index={index}
+            citation={index >= 0 ? citations[index] : undefined}
+          />,
+        );
+      });
       last = m.index + m[0].length;
     }
     if (last < s.length) {
@@ -495,55 +526,100 @@ function makeChildrenTransformer(
 }
 
 
-/** Derive up to 3 contextual follow-up prompts from the response. Pulls
- *  the top hit's entity / filename to personalize the suggestions; falls
- *  back to intent-keyed generic prompts when nothing stands out.
+/** Derive up to 3 contextual follow-up prompts from the response.
+ *  Steered by (intent, mode, top-hit filename, conflict presence) so
+ *  the chips relate to what the user just asked — not generic
+ *  "what changed" / "what contradicts" prompts that are jarring on
+ *  one-shot factoid lookups (e.g. "what is the salary in the offer
+ *  letter" doesn't benefit from "what other documents contradict
+ *  this answer?" — there's nothing chain-able about a salary).
  *
- *  Kept fully client-side (no backend "next questions" call) so the pills
- *  appear instantly when the answer renders and don't add latency. */
+ *  Kept fully client-side (no backend "next questions" call) so the
+ *  pills appear instantly when the answer renders. */
 function deriveFollowUps(response: ChatResponse): string[] {
   const out: string[] = [];
   const hits = response.hits ?? [];
+  const intent = response.intent ?? "";
+  const mode = response.mode ?? "";
+  const hasConflicts = (response.conflict_resolutions ?? []).length > 0;
 
-  // 1. Drill into the strongest source — useful when the user wants to
-  //    audit the evidence behind a particular claim.
+  // Pull the top hit's filename stem (e.g. "employment-offer-letter")
+  // for personalized prompts. If the answer cites multiple files we
+  // can still drill into the top one.
   const topFile = hits.find((h) => {
     const md = h.metadata as Record<string, unknown>;
     return typeof md.file_name === "string" && md.file_name.length > 0;
   });
-  if (topFile) {
-    const name = (topFile.metadata as { file_name: string }).file_name;
-    const stem = name.replace(/\.[^.]+$/, "");
-    out.push(`Summarize ${stem} in more detail`);
+  const fileStem = topFile
+    ? ((topFile.metadata as { file_name: string }).file_name).replace(/\.[^.]+$/, "")
+    : null;
+
+  // -----------------------------------------------------------------
+  // 1. Q-mode aggregations → drilldown into the same data, not the
+  //    "what contradicts" generic chip.
+  // -----------------------------------------------------------------
+  if (mode === "Q") {
+    const aggMd = hits[0]?.metadata as Record<string, unknown> | undefined;
+    const cols = Array.isArray(aggMd?.column_names) ? aggMd!.column_names as string[] : [];
+    if (cols.length > 0) {
+      out.push(`Break this down by file`);
+      out.push(`Show me the raw rows that produced this`);
+    } else {
+      out.push("Break this down by category");
+      out.push("Show me outliers and anomalies");
+    }
   }
 
-  // 2. Conflict probe — surfaces chained-doc disagreement the
-  //    user might not have noticed yet (always useful for legal/ops).
-  if ((response.conflict_resolutions ?? []).length === 0) {
-    out.push("What other documents contradict this answer?");
-  } else {
+  // -----------------------------------------------------------------
+  // 2. Conflict-aware: only suggest "what contradicts" when the chain
+  //    actually CONTAINS a chained doc (so the question is meaningful).
+  //    For one-shot lookups (offer letter, NDA, resume) skip it.
+  // -----------------------------------------------------------------
+  if (hasConflicts) {
     out.push("Show every superseded value the answer skipped");
+  } else if (mode !== "Q") {
+    // Only suggest doc-chain probes if the response actually involves
+    // a chained doc (e.g. MSA + amendment). Heuristic: hit filenames
+    // that suggest versioning (amendment, addendum, v2, revised, …).
+    const hasVersioned = hits.some((h) => {
+      const name = ((h.metadata as { file_name?: string })?.file_name || "").toLowerCase();
+      return /amend|addendum|revised|\bv\d|\bversion\b/.test(name);
+    });
+    if (hasVersioned) {
+      out.push("Which version is currently in effect?");
+    }
   }
 
-  // 3. Intent-keyed drilldown. Falls back to a generic "what changed"
-  //    prompt when we don't have a richer signal.
-  const intent = response.intent ?? "";
-  if (intent === "summarize") {
-    out.push("Which document is most authoritative on this?");
+  // -----------------------------------------------------------------
+  // 3. Intent-keyed drilldown — tailored per intent.
+  // -----------------------------------------------------------------
+  if (intent === "factoid" && fileStem) {
+    out.push(`What else is in ${fileStem}?`);
+  } else if (intent === "summarize" && fileStem) {
+    out.push(`Which document is most authoritative on this?`);
   } else if (intent === "find" || intent === "search") {
     out.push("Group these results by document type");
   } else if (intent === "compare") {
     out.push("Highlight the differences in a table");
-  } else if (intent === "explain") {
-    out.push("Trace this back to the primary source");
+  } else if (intent === "explain" && fileStem) {
+    out.push(`Trace this back to the primary source in ${fileStem}`);
   } else if (intent === "list" || intent === "inventory") {
     out.push("Filter this list to the most recent additions");
-  } else {
-    out.push("What changed most recently on this topic?");
+  } else if (intent === "aggregation") {
+    // Already partially handled by mode='Q' branch above; redundant
+    // chip would dedupe.
+  } else if (fileStem) {
+    out.push(`What else is in ${fileStem}?`);
   }
 
-  // Dedupe while preserving order — defensive against the same prompt
-  // surfacing from two heuristics.
+  // -----------------------------------------------------------------
+  // 4. Last-resort drilldown into the top file.
+  // -----------------------------------------------------------------
+  if (out.length < 2 && fileStem) {
+    out.push(`Summarize ${fileStem} in more detail`);
+  }
+
+  // Dedupe while preserving order; cap to 3.
   return Array.from(new Set(out)).slice(0, 3);
 }
 

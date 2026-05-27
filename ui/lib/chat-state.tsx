@@ -144,9 +144,20 @@ export function reducer(state: State, action: Action): State {
             refusal_reason: t.refusal_reason ?? (t.answer ? null : "no answer recorded"),
             model_id: "replay",
           },
-          hits: [],
+          // We don't persist the hit list — synthesize a sentinel array
+          // sized to `hits_count` so the inspector's "N hits" readout is
+          // accurate even though the metadata is sparse.
+          hits: t.hits_count && t.hits_count > 0
+            ? Array.from({ length: t.hits_count }, (_, i) => ({
+                id: `replay-hit-${i}`,
+                kind: "chunk" as const,
+                score: 0,
+                snippet: "",
+                metadata: {},
+              }))
+            : [],
           crag_score: t.crag_score ?? 0,
-          latency_ms: 0,
+          latency_ms: t.latency_ms ?? 0,
           session_id: action.sessionId,
           turn_index: t.turn_index,
           mode: t.mode ?? undefined,

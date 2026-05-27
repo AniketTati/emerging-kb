@@ -82,6 +82,10 @@ class TurnOut(BaseModel):
     faithfulness_score: float | None = None
     refused: bool | None = None
     refusal_reason: str | None = None
+    # Real numbers from query_log so the "How I answered" inspector
+    # doesn't show 0ms / 0 hits when the user reopens a chat session.
+    latency_ms: int | None = None
+    hits_count: int | None = None
 
 
 class TurnsListResponse(BaseModel):
@@ -197,7 +201,8 @@ async def get_session_turns(
                t.created_at::text, t.query_log_id::text,
                ql.mode, ql.intent, ql.intent_confidence,
                ql.crag_score, ql.faithfulness_verdict,
-               ql.faithfulness_score, ql.refused, ql.refusal_reason
+               ql.faithfulness_score, ql.refused, ql.refusal_reason,
+               ql.latency_ms, jsonb_array_length(coalesce(ql.hit_ids, '[]'::jsonb))
           FROM chat_turns t
           LEFT JOIN query_log ql ON ql.id = t.query_log_id
          WHERE t.session_id = %s
@@ -226,6 +231,8 @@ async def get_session_turns(
             faithfulness_score=(float(r[14]) if r[14] is not None else None),
             refused=r[15],
             refusal_reason=r[16],
+            latency_ms=(int(r[17]) if r[17] is not None else None),
+            hits_count=(int(r[18]) if r[18] is not None else None),
         ))
     return TurnsListResponse(items=items)
 
