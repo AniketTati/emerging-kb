@@ -35,6 +35,7 @@ ALLOWED_TABLES: frozenset[str] = frozenset({
     "files",
     "extracted_entities",
     "canonical_entities",
+    "proposed_fields",
     "relationships",
     "fact_conflicts",
     "doc_chains",
@@ -100,6 +101,24 @@ ALLOWED_COLUMNS: dict[tuple[str, str], ColumnType] = {
     ("canonical_entities", "mention_count"):   "integer",
     ("canonical_entities", "created_at"):      "timestamptz",
     ("canonical_entities", "updated_at"):      "timestamptz",
+    # ----- proposed_fields -----
+    # Top-level scalar fields extracted per doc (KV+Tables phase).
+    # These are the doc-summary values: contract_value, total_amount,
+    # effective_date, etc. — one row per (file, field_name). Use for
+    # cross-doc summary aggregations where the answer lives in a
+    # named scalar field (e.g. "total cumulative change-order value"
+    # = SUM of `total_cost_premium` across all change_order docs).
+    # `value_text` is always TEXT — cast as needed (::numeric, ::date).
+    ("proposed_fields", "id"):                 "uuid",
+    ("proposed_fields", "file_id"):            "uuid",
+    ("proposed_fields", "workspace_id"):       "uuid",
+    ("proposed_fields", "inferred_doc_type"):  "text",
+    ("proposed_fields", "field_name"):         "text",
+    ("proposed_fields", "value_text"):         "text",
+    ("proposed_fields", "value_type"):         "text",
+    ("proposed_fields", "is_pii"):             "boolean",
+    ("proposed_fields", "model_id"):           "text",
+    ("proposed_fields", "created_at"):         "timestamptz",
     # ----- relationships -----
     ("relationships", "id"):                  "uuid",
     ("relationships", "workspace_id"):        "uuid",

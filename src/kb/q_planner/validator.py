@@ -136,35 +136,56 @@ def _validate_aggregation(table: str, a: Aggregation) -> tuple[str, str] | None:
             )
         return None
 
-    # JSONB-path branch: validate (table, jsonb_col) is whitelisted +
-    # cast type matches the aggregation op.
+    # JSONB-path branch OR column-cast branch: validate (table, col)
+    # is whitelisted + cast type matches the aggregation op.
     if a.jsonb_path is not None:
         from kb.q_planner.catalog import is_jsonb_agg_allowed
-        jsonb_col, jsonb_key, cast_type = a.jsonb_path
-        col_type = column_type(table, jsonb_col)
-        if col_type != "jsonb":
-            raise QPlanValidationError(
-                f"aggregation field {a.field!r}: {jsonb_col!r} on {table!r} "
-                f"is not a jsonb column"
-            )
-        if not is_jsonb_agg_allowed(table, jsonb_col):
-            raise QPlanValidationError(
-                f"jsonb aggregation on ({table!r}, {jsonb_col!r}) "
-                f"is not in the Q-mode allowlist"
-            )
+        col_name, jsonb_key, cast_type = a.jsonb_path
+        col_type = column_type(table, col_name)
+        is_column_cast = (jsonb_key == "")
+        if is_column_cast:
+            # Plain column cast (e.g. `value_text::numeric`). Column
+            # must exist in the catalog; type must be text or a type
+            # that's reasonable to cast (we allow cast-from-text since
+            # that's the common case for proposed_fields.value_text;
+            # cast-from-jsonb-via-column-cast is rejected — use the
+            # jsonb path form for that).
+            if col_type is None:
+                raise QPlanValidationError(
+                    f"aggregation field {a.field!r}: column {col_name!r} "
+                    f"not in catalog for table {table!r}"
+                )
+            if col_type == "jsonb":
+                raise QPlanValidationError(
+                    f"aggregation field {a.field!r}: column-cast form "
+                    f"`<col>::<cast>` not valid on jsonb column "
+                    f"{col_name!r}; use jsonb-path form "
+                    f"`{col_name}.<key>::<cast>` instead"
+                )
+        else:
+            if col_type != "jsonb":
+                raise QPlanValidationError(
+                    f"aggregation field {a.field!r}: {col_name!r} on {table!r} "
+                    f"is not a jsonb column"
+                )
+            if not is_jsonb_agg_allowed(table, col_name):
+                raise QPlanValidationError(
+                    f"jsonb aggregation on ({table!r}, {col_name!r}) "
+                    f"is not in the Q-mode allowlist"
+                )
         if a.op in ("SUM", "AVG") and cast_type not in _NUMERIC_CASTS:
             raise QPlanValidationError(
-                f"aggregation {a.op!r} on jsonb path {a.field!r} requires "
+                f"aggregation {a.op!r} on {a.field!r} requires "
                 f"a numeric cast (got ::{cast_type})"
             )
         if a.op in ("MIN", "MAX") and cast_type not in _COMPARABLE_CASTS:
             raise QPlanValidationError(
-                f"aggregation {a.op!r} on jsonb path {a.field!r} requires "
+                f"aggregation {a.op!r} on {a.field!r} requires "
                 f"a comparable cast (got ::{cast_type})"
             )
-        # The (table, jsonb_col) tuple still goes into column_types for
+        # The (table, col_name) tuple still goes into column_types for
         # bookkeeping; the compiler doesn't need a per-key entry.
-        return (table, jsonb_col)
+        return (table, col_name)
 
     # Plain column reference — existing behavior.
     col_type = _check_column(table, a.field)

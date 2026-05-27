@@ -529,13 +529,20 @@ class LLMPlanner:
         if plan.mode != "Q" or plan.q_payload is not None:
             return plan
         from kb.query.q_payload_gen import (
-            discover_unit_type_schema, generate_q_payload,
+            discover_unit_type_schema,
+            discover_proposed_fields_schema,
+            generate_q_payload,
         )
         schema_hints = await discover_unit_type_schema(
             conn, workspace_id=workspace_id,
         )
+        proposed_fields_hints = await discover_proposed_fields_schema(
+            conn, workspace_id=workspace_id,
+        )
         payload, reason = await generate_q_payload(
-            query, llm=self._llm, schema_hints=schema_hints,
+            query, llm=self._llm,
+            schema_hints=schema_hints,
+            proposed_fields_hints=proposed_fields_hints,
         )
         if payload is not None:
             return Plan(

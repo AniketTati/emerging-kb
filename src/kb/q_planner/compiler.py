@@ -92,12 +92,21 @@ _SAFE_JSONB_CASTS: frozenset[str] = frozenset({
 
 
 def _jsonb_extract_sql(table: str, col: str, key: str, cast: str) -> str:
-    """Emit `(<table>."<col>"->>'<key>')::<cast>` with all parts safely
-    quoted / cast-whitelisted. The key is single-quoted with internal
-    single quotes doubled — defensive, even though the grammar's
-    identifier regex already rejects quotes."""
+    """Emit one of:
+      - `(<table>."<col>"->>'<key>')::<cast>` when key is non-empty
+        (jsonb extraction + cast)
+      - `(<table>."<col>")::<cast>` when key is "" (plain column cast,
+        used for text-typed scalar columns like proposed_fields.value_text)
+
+    All parts are safely quoted / cast-whitelisted. The key (when
+    present) is single-quoted with internal single quotes doubled —
+    defensive, even though the grammar's identifier regex already
+    rejects quotes."""
     if cast not in _SAFE_JSONB_CASTS:
         raise ValueError(f"jsonb cast {cast!r} not whitelisted")
+    if not key:
+        # Plain column cast: `(t."value_text")::numeric`.
+        return f"({_quote_ident(table)}.{_quote_ident(col)})::{cast}"
     safe_key = key.replace("'", "''")
     return (
         f"({_quote_ident(table)}.{_quote_ident(col)}->>"

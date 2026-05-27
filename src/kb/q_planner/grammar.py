@@ -43,6 +43,14 @@ _JSONB_PATH_RE = re.compile(
     r"^([a-zA-Z_][a-zA-Z0-9_]{0,62})\.([a-zA-Z_][a-zA-Z0-9_]{0,62})"
     r"::([a-z]+)$"
 )
+# Column-level cast (no jsonb key): `value_text::numeric`. Used for
+# text-typed scalar columns like proposed_fields.value_text where the
+# value needs to be cast for SUM/AVG/MIN/MAX. Encoded as a (col, "",
+# cast) triple to reuse the jsonb_path slot in Filter/Aggregation
+# dataclasses; the compiler treats empty key as "no ->> extraction".
+_COLUMN_CAST_RE = re.compile(
+    r"^([a-zA-Z_][a-zA-Z0-9_]{0,62})::([a-z]+)$"
+)
 ALLOWED_JSONB_CASTS: frozenset[str] = frozenset({
     "numeric", "integer", "bigint", "real", "text", "date", "timestamptz",
 })
@@ -53,24 +61,40 @@ def _is_valid_ident(s: str) -> bool:
 
 
 def _parse_jsonb_path(s: str) -> tuple[str, str, str] | None:
-    """Parse `<col>.<key>::<cast>` → (col, key, cast). Returns None when
-    the string isn't in jsonb-path form. Raises on partial / unsafe forms
-    so the user gets a clear error instead of a fallthrough."""
+    """Parse `<col>.<key>::<cast>` → (col, key, cast) for jsonb extraction,
+    OR `<col>::<cast>` → (col, "", cast) for column-level cast (no jsonb
+    key extraction; used for text columns like proposed_fields.value_text
+    where we just need a type cast). Returns None when the string isn't
+    in either form. Raises on partial / unsafe forms so the user gets a
+    clear error instead of a fallthrough."""
     if "." not in s and "::" not in s:
         return None  # plain identifier — caller handles
+    # Try jsonb-path first (more specific).
     m = _JSONB_PATH_RE.match(s)
-    if m is None:
-        raise QPlanParseError(
-            f"field={s!r} is not a plain identifier or a valid jsonb path; "
-            f"expected '<col>.<key>::<cast>' (e.g. 'fields.debit::numeric')"
-        )
-    col, key, cast = m.group(1), m.group(2), m.group(3)
-    if cast not in ALLOWED_JSONB_CASTS:
-        raise QPlanParseError(
-            f"jsonb cast={cast!r} not allowed; expected one of "
-            f"{sorted(ALLOWED_JSONB_CASTS)}"
-        )
-    return col, key, cast
+    if m is not None:
+        col, key, cast = m.group(1), m.group(2), m.group(3)
+        if cast not in ALLOWED_JSONB_CASTS:
+            raise QPlanParseError(
+                f"jsonb cast={cast!r} not allowed; expected one of "
+                f"{sorted(ALLOWED_JSONB_CASTS)}"
+            )
+        return col, key, cast
+    # Then plain column cast.
+    m2 = _COLUMN_CAST_RE.match(s)
+    if m2 is not None:
+        col, cast = m2.group(1), m2.group(2)
+        if cast not in ALLOWED_JSONB_CASTS:
+            raise QPlanParseError(
+                f"column cast={cast!r} not allowed; expected one of "
+                f"{sorted(ALLOWED_JSONB_CASTS)}"
+            )
+        return col, "", cast
+    raise QPlanParseError(
+        f"field={s!r} is not a plain identifier, a valid jsonb path, "
+        f"or a valid column cast; expected '<col>' OR '<col>.<key>::<cast>' "
+        f"(e.g. 'fields.debit::numeric') OR '<col>::<cast>' "
+        f"(e.g. 'value_text::numeric')"
+    )
 
 
 # ---------------------------------------------------------------------------

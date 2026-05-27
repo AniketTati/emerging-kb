@@ -214,21 +214,40 @@ def _build_system_prompt() -> str:
         "in extracted_entities with parent_entity_id pointing at the\n"
         "doc_root and unit_type naming the structural kind).\n"
         "\n"
+        "## Cross-doc summary scalars — use `proposed_fields`\n"
+        "Per-document summary values (contract_value, total_amount,\n"
+        "total_cost_premium, effective_date, drawing_number, etc.) are\n"
+        "stored in `proposed_fields` — one row per (file, field_name)\n"
+        "with `value_text` (always TEXT — cast as needed) and\n"
+        "`inferred_doc_type` directly on the row (no join needed).\n"
+        "\n"
+        "Use proposed_fields when the question asks for an aggregation\n"
+        "over a TOP-LEVEL doc-summary field, e.g.:\n"
+        "  - 'total cumulative change-order value' →\n"
+        "    {from:'proposed_fields',\n"
+        "     filters:[{field:'inferred_doc_type',op:'eq',value:'change_order'},\n"
+        "              {field:'field_name',op:'eq',value:'total_cost_premium'}],\n"
+        "     aggregations:[{op:'SUM', field:'value_text::numeric', alias:'total'}]}\n"
+        "  - 'count of distinct drawing numbers' →\n"
+        "    {from:'proposed_fields', filters:[{field:'field_name',op:'eq',value:'drawing_number'}],\n"
+        "     aggregations:[{op:'COUNT_DISTINCT', field:'value_text', alias:'n'}]}\n"
+        "  - 'earliest contract effective date' →\n"
+        "    {from:'proposed_fields',\n"
+        "     filters:[{field:'inferred_doc_type',op:'eq',value:'construction_contract'},\n"
+        "              {field:'field_name',op:'eq',value:'effective_date'}],\n"
+        "     aggregations:[{op:'MIN', field:'value_text::date', alias:'earliest'}]}\n"
+        "\n"
+        "Cast `value_text` to the right type for the aggregation:\n"
+        "  - ::numeric for SUM/AVG/MIN/MAX over numeric values\n"
+        "  - ::date for MIN/MAX over dates\n"
+        "  - leave as text for COUNT / COUNT_DISTINCT\n"
+        "\n"
         "## When sum/count needs to be over WHOLE DOCS, not sub-entities\n"
-        "Some questions are about per-document totals where the answer\n"
-        "lives at the doc-root entity level (one row per doc with\n"
-        "summary fields like `total_value`). Filter\n"
-        "`extracted_entities` by `parent_entity_id IS NULL` to get just\n"
-        "the doc-root rows, then aggregate. If the user asks 'total\n"
-        "value across all <doc_type> docs' and the schema hints show\n"
-        "the relevant numeric column on the doc-root level, use:\n"
-        "  {from:'extracted_entities',\n"
-        "   filters:[{field:'parent_entity_id', op:'is_null'}],\n"
-        "   aggregations:[{op:'SUM', field:'fields.<numeric_key>::numeric',\n"
-        "                  alias:'total'}]}\n"
-        "(Note: filtering by `files.inferred_doc_type` requires a join\n"
-        "which is not supported in Wave A. Use unit_type or fields\n"
-        "filters on extracted_entities itself.)\n"
+        "Alternative: filter `extracted_entities` by\n"
+        "`parent_entity_id IS NULL` to get just the doc-root rows, then\n"
+        "aggregate on `fields.<key>::numeric`. Prefer proposed_fields\n"
+        "when the value is a top-level summary scalar (faster: no jsonb\n"
+        "extraction).\n"
         "\n"
         "Return JSON only. No prose, no markdown fences."
     )
@@ -298,6 +317,79 @@ async def discover_unit_type_schema(
     return out
 
 
+async def discover_proposed_fields_schema(
+    conn: Connection | None,
+    *,
+    workspace_id: str | None,
+    limit_fields_per_type: int = 30,
+) -> dict[str, list[str]]:
+    """Return `{inferred_doc_type: [field_name, …]}` listing the
+    proposed_fields field_names that exist for each doctype in this
+    workspace. Mirrors `discover_unit_type_schema` but for the
+    top-level scalar layer.
+
+    Without this hint the LLM can't know e.g. that the construction
+    workspace has `inferred_doc_type='change_order'` with fields
+    `total_cost_premium`, `original_contract_value`, etc., so it
+    refuses (or guesses) when asked for cross-doc summary
+    aggregations. This was Bug q033 in the construction eval.
+    """
+    if conn is None or not workspace_id:
+        return {}
+    cur = await conn.execute(
+        "SELECT inferred_doc_type, field_name, count(*) AS n "
+        "FROM proposed_fields "
+        "WHERE workspace_id = %s "
+        "  AND inferred_doc_type IS NOT NULL "
+        "GROUP BY inferred_doc_type, field_name "
+        "ORDER BY inferred_doc_type, n DESC",
+        (workspace_id,),
+    )
+    rows = await cur.fetchall()
+    out: dict[str, list[str]] = {}
+    for dt, fn, _n in rows:
+        bucket = out.setdefault(str(dt), [])
+        if len(bucket) < limit_fields_per_type:
+            bucket.append(str(fn))
+    return out
+
+
+def _format_proposed_fields_hints(schema: dict[str, list[str]]) -> str:
+    """Render the discovered doctype→field_name map as a hint block.
+
+    Tells the LLM which (inferred_doc_type, field_name) pairs exist in
+    `proposed_fields` for this workspace, so cross-doc summary
+    aggregations don't refuse with "no such doctype available".
+    """
+    if not schema:
+        return ""
+    lines = [
+        "",
+        "## proposed_fields by doc_type (authoritative)",
+        "",
+        "Cross-doc summary scalars live in `proposed_fields` (one row per "
+        "(file, field_name) with `value_text` always TEXT — cast via "
+        "`value_text::numeric` / `::date` etc. as needed). The "
+        "(inferred_doc_type, field_name) pairs available in THIS "
+        "workspace are listed below. Filter `inferred_doc_type` AND "
+        "`field_name` with `eq` to scope a SUM/COUNT/MIN/MAX to the "
+        "right field across all docs of that type.",
+        "",
+        "inferred_doc_type → available field_names:",
+    ]
+    all_types = sorted(schema.keys())
+    truncated = all_types[60:]
+    for dt in all_types[:60]:
+        fns = schema[dt]
+        lines.append(f"  {dt}: [{', '.join(fns)}]")
+    if truncated:
+        lines.append(
+            f"  …and {len(truncated)} more doc_types not shown "
+            f"({len(all_types)} total)."
+        )
+    return "\n".join(lines)
+
+
 def _format_schema_hints(schema: dict[str, list[str]]) -> str:
     """Render the discovered jsonb-key map as a per-call hint block
     prepended to the LLM user message. Kept terse because the system
@@ -357,6 +449,7 @@ async def generate_q_payload(
     *,
     llm: JsonLLMClient | None,
     schema_hints: dict[str, list[str]] | None = None,
+    proposed_fields_hints: dict[str, list[str]] | None = None,
 ) -> tuple[dict[str, Any] | None, str | None]:
     """Run the LLM-to-QPlan path. Returns ``(payload, reason)``:
 
@@ -385,8 +478,10 @@ async def generate_q_payload(
         )
 
     hint_block = _format_schema_hints(schema_hints or {})
+    pf_block = _format_proposed_fields_hints(proposed_fields_hints or {})
+    combined_hints = "\n\n".join(b for b in (hint_block, pf_block) if b)
     user_msg = (
-        f"{hint_block}\n\nUser question: {query}" if hint_block
+        f"{combined_hints}\n\nUser question: {query}" if combined_hints
         else f"User question: {query}"
     )
     try:
