@@ -469,7 +469,7 @@ function DetailBody({ detail }: { detail: FileDetails }) {
             <span>{detail.n_chunks}</span>
             <span className="text-zinc-500">mentions</span>
             <span>{detail.n_mentions}</span>
-            <span className="text-zinc-500">atomic units</span>
+            <span className="text-zinc-500">sub-entities</span>
             <span>{detail.n_sub_entities}</span>
             <span className="text-zinc-500">entities</span>
             <span>{detail.n_entities_linked}</span>
@@ -638,6 +638,11 @@ function computeStageTimeline(events: FileDetails["lifecycle"]): StageInfo[] {
   const embed = byEvent.get("embedding_done");
   const raptor = byEvent.get("raptor_build_done");
   const mentions = byEvent.get("mentions_extracted");
+  // PR #42 collapsed the legacy "fields_extracted" + "atomic_units_extracted"
+  // pair into a single "kv_tables_extracted" event. We keep the legacy
+  // lookups for back-compat with old lifecycle history rows; new events
+  // come through `kvTables`.
+  const kvTables = byEvent.get("kv_tables_extracted");
   const fields = byEvent.get("fields_extracted");
   const units = byEvent.get("atomic_units_extracted");
   const identities = byEvent.get("identities_resolved");
@@ -665,12 +670,23 @@ function computeStageTimeline(events: FileDetails["lifecycle"]): StageInfo[] {
     },
     {
       label: "Extract",
-      detail: fields
-        ? `${(mentions?.payload as { mention_count?: number })?.mention_count ?? 0} mentions · ${(fields.payload as { field_count?: number }).field_count ?? 0} fields`
-        : mentions
-          ? `${(mentions.payload as { mention_count?: number }).mention_count ?? 0} mentions`
-          : "—",
-      doneAt: at(fields ?? mentions ?? units),
+      detail: kvTables
+        ? (() => {
+            const p = kvTables.payload as {
+              scalar_count?: number;
+              row_count?: number;
+              unit_types?: string[];
+            };
+            const mc = (mentions?.payload as { mention_count?: number })?.mention_count ?? 0;
+            const types = p.unit_types?.length ?? 0;
+            return `${mc} mentions · ${p.scalar_count ?? 0} fields · ${p.row_count ?? 0} sub-entities${types > 0 ? ` (${types} type${types === 1 ? "" : "s"})` : ""}`;
+          })()
+        : fields
+          ? `${(mentions?.payload as { mention_count?: number })?.mention_count ?? 0} mentions · ${(fields.payload as { field_count?: number }).field_count ?? 0} fields`
+          : mentions
+            ? `${(mentions.payload as { mention_count?: number }).mention_count ?? 0} mentions`
+            : "—",
+      doneAt: at(kvTables ?? fields ?? mentions ?? units),
     },
     {
       label: "Resolve",

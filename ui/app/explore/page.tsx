@@ -70,7 +70,7 @@ const RAIL_ITEMS: RailItem[] = [
   { key: "all",          label: "All results",   icon: LayoutGrid },
   { key: "document",     label: "Documents",     icon: FileText,    countKey: "documents" },
   { key: "doc_type",     label: "Doc types",     icon: Folder,      countKey: "doc_types" },
-  { key: "sub_entity",  label: "Atomic units",  icon: Puzzle,      countKey: "sub_entities" },
+  { key: "sub_entity",  label: "Sub-entities",  icon: Puzzle,      countKey: "sub_entities" },
   { key: "entity",       label: "Entities",      icon: Users,       countKey: "entities" },
   { key: "relationship", label: "Relationships", icon: GitMerge,    countKey: "relationships" },
   { key: "topic",        label: "Topics",        icon: Tag,         countKey: "topics" },
@@ -322,7 +322,7 @@ function ExploreShell() {
           {counts && (
             <span className="text-[11px] text-zinc-400 mono">
               {counts.documents} docs · {counts.doc_types} doc types ·{" "}
-              {counts.sub_entities} atomic units · {counts.entities} entities ·{" "}
+              {counts.sub_entities} sub-entities · {counts.entities} entities ·{" "}
               {counts.relationships} relationships
             </span>
           )}

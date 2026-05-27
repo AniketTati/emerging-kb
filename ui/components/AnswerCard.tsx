@@ -148,7 +148,7 @@ export function AnswerCard({ response, events, onFollowUp }: Props) {
               <div className="text-zinc-400">Channels</div>
               <div className="text-zinc-700">
                 bm25_chunks · bm25_raptor · dense_chunks · dense_raptor ·
-                mentions_exact · atomic_units_rarity (6)
+                mentions_exact · sub_entities_rarity (6)
               </div>
               <AutoMergeRow response={response} />
               <div className="text-zinc-400">CRAG</div>

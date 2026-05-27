@@ -23,7 +23,7 @@ import {
   type Citation,
 } from "./DocDetailCitation";
 import {
-  type AtomicUnit,
+  type SubEntity,
   type ChunkSummary,
   type CitationByQuery,
   type EntityMentioned,
@@ -105,7 +105,7 @@ export function DocDetail({ fileId }: { fileId: string }) {
                 <ParsedTextSection fileId={fileId} totalPages={details.n_pages} />
                 <ChunksTreeSection fileId={fileId} total={details.n_chunks} />
                 <ProposedFieldsSection fileId={fileId} />
-                <AtomicUnitsSection fileId={fileId} total={details.n_sub_entities} />
+                <SubEntitiesSection fileId={fileId} total={details.n_sub_entities} />
                 <ExtractedEntitiesSection fileId={fileId} />
                 <MentionsSection fileId={fileId} total={details.n_mentions} />
                 <EntitiesMentionedSection
@@ -262,11 +262,11 @@ function CountPill({
 
 
 // ---------------------------------------------------------------------------
-// Featured clause — top atomic_unit by rarity. The prototype's hero zone.
+// Featured clause — top sub-entity by rarity. The prototype's hero zone.
 // ---------------------------------------------------------------------------
 
 function FeaturedClause({ fileId }: { fileId: string }) {
-  const [unit, setUnit] = useState<AtomicUnit | "none" | null>(null);
+  const [unit, setUnit] = useState<SubEntity | "none" | null>(null);
   useEffect(() => {
     let cancelled = false;
     getSubEntities(fileId, { limit: 1 }).then((r) => {
@@ -309,7 +309,7 @@ function FeaturedClause({ fileId }: { fileId: string }) {
 }
 
 function prettyParameters(p: Record<string, unknown>): string {
-  // Atomic units come in flavors: clause text, table rows, price rows, etc.
+  // Sub-entities come in flavors: clause text, table rows, price rows, etc.
   // Render the most useful prose form rather than dumping JSON.
   if (typeof p.text === "string") return p.text;
   if (Array.isArray(p.cells)) {
@@ -879,31 +879,31 @@ function ProposedFieldsBody({ fileId, open }: { fileId: string; open: boolean })
   );
 }
 
-function AtomicUnitsSection({ fileId, total }: { fileId: string; total: number }) {
+function SubEntitiesSection({ fileId, total }: { fileId: string; total: number }) {
   return (
     <Accordion
       icon={FileText}
       title="Sub-entities (transactions · clauses · line items · …)"
       count={total}
-      testId="doc-detail-units"
+      testId="doc-detail-sub-entities"
     >
-      {(open) => <PaginatedAccordion fileId={fileId} open={open} total={total} renderItems={renderUnits} fetcher={getSubEntities} pageSize={25} />}
+      {(open) => <PaginatedAccordion fileId={fileId} open={open} total={total} renderItems={renderSubEntities} fetcher={getSubEntities} pageSize={25} />}
     </Accordion>
   );
 }
 
-function renderUnits(items: AtomicUnit[]) {
-  return <UnitList items={items} />;
+function renderSubEntities(items: SubEntity[]) {
+  return <SubEntityList items={items} />;
 }
 
-function UnitList({ items }: { items: AtomicUnit[] }) {
+function SubEntityList({ items }: { items: SubEntity[] }) {
   const { cite, citation } = useCitation();
 
   // Nested-entities refactor: group by unit_type so the user sees
   // "Transaction (21)", "Clause (12)" instead of one mixed list.
   // Preserves rarity ordering inside each group (server already
   // returned items sorted by rarity DESC).
-  const grouped: Record<string, AtomicUnit[]> = {};
+  const grouped: Record<string, SubEntity[]> = {};
   for (const u of items) {
     const key = u.unit_type || "(other)";
     (grouped[key] = grouped[key] || []).push(u);
@@ -928,7 +928,7 @@ function UnitList({ items }: { items: AtomicUnit[] }) {
             </div>
             <div className="space-y-2">
               {groupItems.map((u) => {
-                const c = citationForUnit(u);
+                const c = citationForSubEntity(u);
                 const active =
                   c && citation && JSON.stringify(c) === JSON.stringify(citation);
                 return (
@@ -965,11 +965,11 @@ function UnitList({ items }: { items: AtomicUnit[] }) {
   );
 }
 
-/** Pick the best citation shape for an atomic_unit. Priority:
+/** Pick the best citation shape for a sub-entity. Priority:
  *  1. xlsx row coordinates (sheet + row_index) — pinpoint precision
  *  2. worker-resolved source offsets (clause summary located in source)
  *  3. fallback text search */
-function citationForUnit(u: AtomicUnit): Citation | null {
+function citationForSubEntity(u: SubEntity): Citation | null {
   const p = u.parameters as { sheet_name?: string; row_index?: number; text?: string; summary?: string };
   if (typeof p.row_index === "number") {
     return { kind: "xlsx-row", sheet: p.sheet_name, rowIndex: p.row_index };

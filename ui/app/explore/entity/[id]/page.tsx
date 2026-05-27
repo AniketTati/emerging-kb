@@ -193,7 +193,7 @@ function ProfileBody({ profile }: { profile: EntityProfile }) {
         </div>
         {profile.related.length === 0 ? (
           <div className="rounded-lg border border-dashed border-zinc-200 bg-white px-6 py-10 text-center text-sm text-zinc-500">
-            No related buckets — this entity has no linked atomic units,
+            No related buckets — this entity has no linked sub-entities,
             relationships, or co-occurring entities yet.
           </div>
         ) : (

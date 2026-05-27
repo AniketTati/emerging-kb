@@ -3,7 +3,7 @@
 /**
  * Shared citation state for the doc-detail page.
  *
- * Right-pane components (mentions, atomic units, triples, fields)
+ * Right-pane components (mentions, sub-entities, triples, fields)
  * publish a Citation when the user clicks them. The left-pane source
  * viewer subscribes and routes it to the format-specific renderer
  * (text-span highlight, xlsx row highlight, PDF page jump).
@@ -26,7 +26,7 @@ export type Citation =
   // snippet (LLM paraphrased, only in contextual prefix, …) or for
   // pre-PR2 data the backfill couldn't repair.
   | { kind: "text"; text: string; page?: number[]; chunkId?: string | null }
-  // Spreadsheet row hit — atomic_units carry sheet_name + row_index.
+  // Spreadsheet row hit — sub-entity rows carry sheet_name + row_index.
   | { kind: "xlsx-row"; sheet?: string; rowIndex: number }
   // Plain page jump — used when we only know which raw_page the data
   // came from (no extractable text query).

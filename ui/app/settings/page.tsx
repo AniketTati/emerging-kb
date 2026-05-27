@@ -138,7 +138,7 @@ function SettingsShell() {
 // ---------------------------------------------------------------------------
 
 const MODEL_STAGES: Array<{ key: keyof ModelChoicesResponse; label: string; hint: string }> = [
-  { key: "extraction_llm",     label: "Extraction LLM",     hint: "Mentions / fields / atomic units extraction" },
+  { key: "extraction_llm",     label: "Extraction LLM",     hint: "Mentions + KV+Tables (scalars + sub-entities) extraction" },
   { key: "hard_query_llm",     label: "Hard-query LLM",     hint: "Complex multi-hop generation (mode H)" },
   { key: "generation",         label: "Generation",         hint: "Default answer generation" },
   { key: "generation_hard",    label: "Generation (hard)",  hint: "Generation when CRAG triggers hard mode" },

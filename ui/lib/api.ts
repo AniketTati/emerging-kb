@@ -207,7 +207,12 @@ export type ProposedField = SourcePos & {
   model_id: string | null;
 };
 
-export type AtomicUnit = SourcePos & {
+/** A typed sub-entity instance — one row from `extracted_entities`
+ *  where `unit_type IS NOT NULL`. Historically called "atomic units"
+ *  in the prototype + early Wave A code; canonicalized to "sub-entity"
+ *  after PR #45 dropped the legacy `atomic_units` staging table and
+ *  the data moved into the unified `extracted_entities` shape. */
+export type SubEntity = SourcePos & {
   id: string;
   unit_type: string;
   parameters: Record<string, unknown>;
@@ -350,7 +355,7 @@ export const getExtractedEntities = (id: string) =>
 export const getSubEntities = (
   id: string, opts?: { limit?: number; offset?: number },
 ) =>
-  _getJson<Paginated<AtomicUnit>>(
+  _getJson<Paginated<SubEntity>>(
     `/files/${id}/sub-entities?limit=${opts?.limit ?? 50}&offset=${opts?.offset ?? 0}`,
   );
 
