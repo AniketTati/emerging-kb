@@ -25,7 +25,8 @@ import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import {
   Download, Library, AlertTriangle, Clock, ChevronRight, ChevronDown,
   Loader2, FileText, MessageSquare, X, Search, Flame, AlertOctagon,
-  Sprout, BookOpen,
+  Sprout, BookOpen, Network, ArrowRight, ArrowLeft,
+  Users, Building2, MapPin, Sparkles,
 } from "lucide-react";
 
 import { Sidebar } from "@/components/Sidebar";
@@ -33,10 +34,13 @@ import {
   getKnowledgeMapStats, getKnowledgeMapCatalog,
   getKnowledgeMapNeedsReview, getKnowledgeMapHistory,
   getKnowledgeMapSchemaSample, getKnowledgeMapAnomalyCohort,
+  getKnowledgeMapEntities, getKnowledgeMapEntityDetail,
   downloadSchemaExportYaml,
   type KMStats, type KMSchemaCard, type KMNeedsReview, type KMHistoryResp,
   type KMHistoryEvent, type KMAnomaly, type KMConflict,
   type KMSchemaSample, type KMSubEntitySample, type KMCohortResponse,
+  type KMEntity, type KMEntityDetailResponse, type KMEntityNeighbor,
+  type KMEntityFile,
 } from "@/lib/api";
 import {
   humanizeSchemaName, categorizeSchema, DOMAINS, VISIBLE_DOMAINS,
@@ -44,8 +48,8 @@ import {
 } from "@/lib/schema-helpers";
 
 
-type TabKey = "catalog" | "review" | "history";
-const TAB_KEYS: TabKey[] = ["catalog", "review", "history"];
+type TabKey = "catalog" | "review" | "history" | "entities";
+const TAB_KEYS: TabKey[] = ["catalog", "review", "history", "entities"];
 
 function parseTab(v: string | null): TabKey {
   return (TAB_KEYS as readonly string[]).includes(v ?? "")
@@ -130,12 +134,14 @@ function KnowledgeMapShell() {
         {/* Sticky tab strip */}
         <div className="border-b border-zinc-200 px-5 flex items-end gap-5 text-sm bg-white sticky top-12 z-20">
           <TabButton active={tab === "catalog"} onClick={() => setTab("catalog")} icon={Library} label="Catalog" count={stats?.doc_types ?? null} />
+          <TabButton active={tab === "entities"} onClick={() => setTab("entities")} icon={Network} label="Entities" count={null} />
           <TabButton active={tab === "review"}  onClick={() => setTab("review")}  icon={AlertTriangle} label="Needs Review" count={stats?.pending_review ?? null} pendingHighlight />
           <TabButton active={tab === "history"} onClick={() => setTab("history")} icon={Clock} label="History" count={null} />
         </div>
 
         <div className="flex-1 overflow-y-auto bg-zinc-50/40">
           {tab === "catalog" && <CatalogTab />}
+          {tab === "entities" && <EntitiesTab />}
           {tab === "review"  && <NeedsReviewTab />}
           {tab === "history" && <HistoryTab />}
         </div>
@@ -1348,4 +1354,362 @@ function formatDayHeader(yyyymmdd: string): string {
   return new Date(yyyymmdd).toLocaleDateString(undefined, {
     weekday: "long", year: "numeric", month: "short", day: "numeric",
   });
+}
+
+
+// ===========================================================================
+// 🕸 Entities tab — cross-doc canonical entity browser
+// ===========================================================================
+//
+// Lists deduplicated entities (people, organizations, locations, ...)
+// recognised across the workspace. Click a row to open a side panel
+// showing the entity's 1-hop neighborhood (relationships + co-mentions)
+// and the files that mention it.
+//
+// This is the user-facing surface for the graph layer (HippoRAG-2
+// PPR underneath). Together with T-mode multi-hop retrieval and the
+// /entities/{id}/relationships API, this completes the G-mode story:
+// the user can EXPLORE the graph here AND query it from the chat
+// (T-mode handles "who supplies the supplier of X" style asks).
+
+type EntityFilter = "ALL" | "ORG" | "PERSON" | "LOC" | "GPE" | "PRODUCT" | "EVENT" | "FAC" | "NORP" | "LAW";
+
+function EntitiesTab() {
+  const [filter, setFilter] = useState<EntityFilter>("ALL");
+  const [query, setQuery] = useState("");
+  const [entities, setEntities] = useState<KMEntity[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [total, setTotal] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
+  const [pageSize] = useState(50);
+  const [openId, setOpenId] = useState<string | null>(null);
+
+  const fetchEntities = useCallback(async (extend: boolean = false) => {
+    setLoading(true);
+    try {
+      const offset = extend ? entities.length : 0;
+      const resp = await getKnowledgeMapEntities({
+        q: query || undefined,
+        entityType: filter !== "ALL" ? filter : undefined,
+        limit: pageSize,
+        offset,
+      });
+      setEntities(extend ? [...entities, ...resp.items] : resp.items);
+      setTotal(resp.total);
+      setHasMore(resp.has_more);
+    } catch (e) {
+      console.error("entities fetch failed", e);
+    } finally {
+      setLoading(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filter, query, pageSize]);
+
+  useEffect(() => {
+    fetchEntities(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filter, query]);
+
+  return (
+    <>
+      {/* Sticky filter strip */}
+      <div className="sticky top-0 z-10 bg-zinc-50/90 backdrop-blur border-b border-zinc-200 px-5 py-2.5">
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="relative flex-1 min-w-[200px] max-w-[400px]">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-zinc-400" strokeWidth={2} />
+            <input
+              type="text"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search entity name…"
+              className="w-full h-8 pl-8 pr-3 text-sm border border-zinc-200 rounded-md bg-white focus:outline-none focus:border-zinc-400"
+            />
+          </div>
+          {(["ALL", "ORG", "PERSON", "LOC", "GPE", "PRODUCT", "EVENT"] as EntityFilter[]).map((f) => (
+            <button
+              key={f}
+              onClick={() => setFilter(f)}
+              className={`text-xs px-2.5 py-1 rounded-md border cursor-pointer ${
+                filter === f
+                  ? "bg-zinc-900 text-white border-zinc-900"
+                  : "bg-white text-zinc-700 border-zinc-200 hover:border-zinc-400"
+              }`}
+            >
+              {f === "ALL" ? "All" : f}
+            </button>
+          ))}
+          <span className="ml-auto text-[11px] text-zinc-500 mono">
+            {loading && entities.length === 0
+              ? "loading…"
+              : `${entities.length} of ${total.toLocaleString()}`}
+          </span>
+        </div>
+      </div>
+
+      <div className="px-5 py-3">
+        {entities.length === 0 && !loading && (
+          <div className="text-center py-12 text-zinc-500 text-sm">
+            No entities match. Try a different filter or search term.
+          </div>
+        )}
+
+        {entities.length > 0 && (
+          <div className="bg-white border border-zinc-200 rounded-lg overflow-hidden">
+            {/* Header row */}
+            <div className="grid grid-cols-[1fr_80px_80px_80px_80px] gap-3 px-3 py-2 text-[11px] uppercase tracking-wider text-zinc-500 bg-zinc-50 border-b border-zinc-200">
+              <div>Entity</div>
+              <div className="text-right">Mentions</div>
+              <div className="text-right">Rels</div>
+              <div className="text-right">Files</div>
+              <div></div>
+            </div>
+            {entities.map((e) => (
+              <button
+                key={e.id}
+                onClick={() => setOpenId(e.id)}
+                className="w-full grid grid-cols-[1fr_80px_80px_80px_80px] gap-3 px-3 py-2 text-sm hover:bg-zinc-50 border-b border-zinc-100 last:border-b-0 cursor-pointer text-left"
+              >
+                <div className="flex items-center gap-2 min-w-0">
+                  <EntityTypeBadge entityType={e.entity_type} />
+                  <span className="truncate text-zinc-900">{e.canonical_name}</span>
+                </div>
+                <div className="text-right text-zinc-600 mono">{e.mention_count}</div>
+                <div className="text-right text-zinc-600 mono">{e.n_relationships ?? 0}</div>
+                <div className="text-right text-zinc-600 mono">{e.n_files ?? 0}</div>
+                <div className="text-right">
+                  <ChevronRight className="w-4 h-4 text-zinc-300 inline" />
+                </div>
+              </button>
+            ))}
+            {hasMore && (
+              <div className="px-3 py-3 border-t border-zinc-100 text-center">
+                <button
+                  onClick={() => fetchEntities(true)}
+                  disabled={loading}
+                  className="text-xs px-3 py-1.5 rounded-md bg-zinc-100 hover:bg-zinc-200 text-zinc-700 cursor-pointer disabled:opacity-50"
+                >
+                  {loading ? "Loading…" : `Load ${Math.min(pageSize, total - entities.length)} more`}
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {openId && (
+        <EntityDetailPanel
+          entityId={openId}
+          onClose={() => setOpenId(null)}
+          onOpen={(id) => setOpenId(id)}
+        />
+      )}
+    </>
+  );
+}
+
+
+function EntityTypeBadge({ entityType }: { entityType: string }) {
+  const config: Record<string, { icon: typeof Building2; label: string; className: string }> = {
+    ORG: { icon: Building2, label: "ORG", className: "bg-blue-50 text-blue-800 border-blue-200" },
+    PERSON: { icon: Users, label: "PERSON", className: "bg-emerald-50 text-emerald-800 border-emerald-200" },
+    LOC: { icon: MapPin, label: "LOC", className: "bg-amber-50 text-amber-800 border-amber-200" },
+    GPE: { icon: MapPin, label: "GPE", className: "bg-amber-50 text-amber-800 border-amber-200" },
+    PRODUCT: { icon: Sparkles, label: "PROD", className: "bg-purple-50 text-purple-800 border-purple-200" },
+    EVENT: { icon: Sparkles, label: "EVENT", className: "bg-pink-50 text-pink-800 border-pink-200" },
+    FAC: { icon: Building2, label: "FAC", className: "bg-zinc-50 text-zinc-800 border-zinc-200" },
+  };
+  const cfg = config[entityType] || { icon: Sparkles, label: entityType, className: "bg-zinc-50 text-zinc-700 border-zinc-200" };
+  const Icon = cfg.icon;
+  return (
+    <span className={`inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded border ${cfg.className} mono shrink-0`}>
+      <Icon className="w-3 h-3" strokeWidth={2} />
+      {cfg.label}
+    </span>
+  );
+}
+
+
+function EntityDetailPanel({
+  entityId,
+  onClose,
+  onOpen,
+}: {
+  entityId: string;
+  onClose: () => void;
+  onOpen: (id: string) => void;
+}) {
+  const [data, setData] = useState<KMEntityDetailResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    setLoading(true);
+    setData(null);
+    getKnowledgeMapEntityDetail(entityId, { neighborLimit: 50 })
+      .then(setData)
+      .catch((e) => console.error("entity detail failed", e))
+      .finally(() => setLoading(false));
+  }, [entityId]);
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  // Group neighbors by edge_kind
+  const grouped = useMemo(() => {
+    if (!data) return { relationships: [], co_mentions: [] };
+    const rels: KMEntityNeighbor[] = [];
+    const cos: KMEntityNeighbor[] = [];
+    for (const n of data.neighbors) {
+      if (n.edge_kind === "relationship") rels.push(n);
+      else cos.push(n);
+    }
+    return { relationships: rels, co_mentions: cos };
+  }, [data]);
+
+  return (
+    <>
+      <div
+        className="fixed inset-0 bg-black/20 z-40"
+        onClick={onClose}
+      />
+      <aside className="fixed top-0 right-0 h-full w-[640px] bg-white border-l border-zinc-200 z-50 shadow-2xl overflow-y-auto">
+        <div className="sticky top-0 bg-white border-b border-zinc-200 px-5 py-3 flex items-center justify-between z-10">
+          <div className="flex items-center gap-2 min-w-0">
+            <Network className="w-4 h-4 text-zinc-500 shrink-0" strokeWidth={1.75} />
+            <span className="text-sm font-medium text-zinc-900 truncate">
+              {data ? data.entity.canonical_name : "Loading…"}
+            </span>
+            {data && <EntityTypeBadge entityType={data.entity.entity_type} />}
+          </div>
+          <button
+            onClick={onClose}
+            className="p-1 rounded hover:bg-zinc-100 cursor-pointer"
+            title="Close (Esc)"
+          >
+            <X className="w-4 h-4 text-zinc-500" strokeWidth={1.75} />
+          </button>
+        </div>
+
+        {loading && (
+          <div className="px-5 py-12 text-center text-sm text-zinc-500 flex items-center justify-center gap-2">
+            <Loader2 className="w-4 h-4 animate-spin" /> loading neighborhood…
+          </div>
+        )}
+
+        {data && !loading && (
+          <div className="px-5 py-4 space-y-5">
+            {/* Summary */}
+            <div className="rounded-lg bg-zinc-50 border border-zinc-200 px-3 py-2.5 flex items-center gap-5 text-xs">
+              <div>
+                <div className="text-[10px] uppercase text-zinc-500 tracking-wider">Mentions</div>
+                <div className="text-base font-medium text-zinc-900 mono">{data.entity.mention_count}</div>
+              </div>
+              <div>
+                <div className="text-[10px] uppercase text-zinc-500 tracking-wider">Relationships</div>
+                <div className="text-base font-medium text-zinc-900 mono">{grouped.relationships.length}</div>
+              </div>
+              <div>
+                <div className="text-[10px] uppercase text-zinc-500 tracking-wider">Co-mentions</div>
+                <div className="text-base font-medium text-zinc-900 mono">{grouped.co_mentions.length}</div>
+              </div>
+              <div>
+                <div className="text-[10px] uppercase text-zinc-500 tracking-wider">Files</div>
+                <div className="text-base font-medium text-zinc-900 mono">{data.files.length}</div>
+              </div>
+            </div>
+
+            {/* Relationship neighbors */}
+            {grouped.relationships.length > 0 && (
+              <section>
+                <h3 className="text-xs uppercase tracking-wider text-zinc-500 mb-2 flex items-center gap-1.5">
+                  <Sparkles className="w-3 h-3" strokeWidth={2} />
+                  Relationships
+                  <span className="text-[10px] text-zinc-400 mono ml-1">({grouped.relationships.length})</span>
+                </h3>
+                <div className="rounded-lg border border-zinc-200 bg-white divide-y divide-zinc-100">
+                  {grouped.relationships.map((n, idx) => (
+                    <button
+                      key={`${n.entity_id}-${idx}`}
+                      onClick={() => onOpen(n.entity_id)}
+                      className="w-full px-3 py-2 hover:bg-zinc-50 cursor-pointer text-left flex items-center gap-2"
+                    >
+                      {n.direction === "out" ? (
+                        <ArrowRight className="w-3.5 h-3.5 text-zinc-400 shrink-0" strokeWidth={2} />
+                      ) : (
+                        <ArrowLeft className="w-3.5 h-3.5 text-zinc-400 shrink-0" strokeWidth={2} />
+                      )}
+                      <span className="text-xs text-zinc-600 mono shrink-0">
+                        {n.predicate || "—"}
+                      </span>
+                      <EntityTypeBadge entityType={n.entity_type} />
+                      <span className="text-sm text-zinc-900 truncate flex-1">
+                        {n.canonical_name}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {/* Co-mention neighbors */}
+            {grouped.co_mentions.length > 0 && (
+              <section>
+                <h3 className="text-xs uppercase tracking-wider text-zinc-500 mb-2 flex items-center gap-1.5">
+                  <Network className="w-3 h-3" strokeWidth={2} />
+                  Co-mentioned with
+                  <span className="text-[10px] text-zinc-400 mono ml-1">({grouped.co_mentions.length})</span>
+                </h3>
+                <div className="rounded-lg border border-zinc-200 bg-white divide-y divide-zinc-100">
+                  {grouped.co_mentions.slice(0, 20).map((n, idx) => (
+                    <button
+                      key={`${n.entity_id}-${idx}`}
+                      onClick={() => onOpen(n.entity_id)}
+                      className="w-full px-3 py-2 hover:bg-zinc-50 cursor-pointer text-left flex items-center gap-2"
+                    >
+                      <EntityTypeBadge entityType={n.entity_type} />
+                      <span className="text-sm text-zinc-900 truncate flex-1">
+                        {n.canonical_name}
+                      </span>
+                      <span className="text-[10px] text-zinc-400 mono">w={n.weight.toFixed(1)}</span>
+                    </button>
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {/* Files */}
+            {data.files.length > 0 && (
+              <section>
+                <h3 className="text-xs uppercase tracking-wider text-zinc-500 mb-2 flex items-center gap-1.5">
+                  <FileText className="w-3 h-3" strokeWidth={2} />
+                  Files mentioning
+                  <span className="text-[10px] text-zinc-400 mono ml-1">({data.files.length})</span>
+                </h3>
+                <div className="rounded-lg border border-zinc-200 bg-white divide-y divide-zinc-100">
+                  {data.files.map((f) => (
+                    <a
+                      key={f.file_id}
+                      href={`/files/${f.file_id}`}
+                      className="block px-3 py-2 hover:bg-zinc-50 text-left"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-sm text-zinc-900 truncate flex-1">{f.file_name}</span>
+                        <span className="text-[10px] text-zinc-500 mono shrink-0">
+                          {f.n_mentions}× mentions
+                        </span>
+                      </div>
+                    </a>
+                  ))}
+                </div>
+              </section>
+            )}
+          </div>
+        )}
+      </aside>
+    </>
+  );
 }

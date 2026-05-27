@@ -867,3 +867,248 @@ async def get_anomaly_cohort(
         anomaly_field_stats=field_stats,
         typical_rows=typical,
     )
+
+
+# ===========================================================================
+# 🕸 Entities — cross-doc canonical entity browser
+# ===========================================================================
+
+
+class KMEntity(BaseModel):
+    """One canonical entity row for the Entities tab."""
+    id: str
+    canonical_name: str
+    entity_type: str
+    mention_count: int
+    n_relationships: int = 0
+    n_files: int = 0
+
+
+class KMEntityListResponse(BaseModel):
+    items: list[KMEntity] = Field(default_factory=list)
+    total: int = 0
+    has_more: bool = False
+
+
+class KMEntityNeighbor(BaseModel):
+    """One 1-hop neighbor of a canonical entity. Source of edge is
+    either a `relationship` triple (with predicate text) or a
+    `co_mention` (sub-doc proximity) or a graph_edges row."""
+    entity_id: str
+    canonical_name: str
+    entity_type: str
+    edge_kind: str        # 'relationship' | 'co_mention'
+    direction: str        # 'out' (this→other) | 'in' (other→this) | 'undirected'
+    predicate: str | None = None
+    weight: float = 1.0
+    n_evidence: int = 1
+
+
+class KMEntityFile(BaseModel):
+    file_id: str
+    file_name: str
+    n_mentions: int
+
+
+class KMEntityDetailResponse(BaseModel):
+    """Side-panel payload for one canonical entity — its 1-hop
+    neighborhood + files that mention it."""
+    entity: KMEntity
+    neighbors: list[KMEntityNeighbor] = Field(default_factory=list)
+    files: list[KMEntityFile] = Field(default_factory=list)
+
+
+@router.get(
+    "/entities",
+    response_model=KMEntityListResponse,
+    summary="Paginated list of canonical entities for the Entities tab.",
+)
+async def get_entities(
+    workspace_id: Annotated[str, Depends(current_workspace_id)],
+    conn: Annotated[Connection, Depends(kb_app_connection)],
+    entity_type: str | None = Query(default=None),
+    q: str | None = Query(default=None, description="Substring of canonical_name"),
+    limit: int = Query(default=50, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+) -> KMEntityListResponse:
+    """Browse the cross-doc canonical entity layer. Each row has
+    counts of how many relationships + files reference it so the UI
+    can show the most-connected entities first."""
+    where = ["ce.workspace_id = %s"]
+    params: list[Any] = [workspace_id]
+    if entity_type:
+        where.append("ce.entity_type = %s")
+        params.append(entity_type)
+    if q:
+        where.append("ce.canonical_name ILIKE %s")
+        params.append(f"%{q}%")
+    where_sql = " AND ".join(where)
+
+    # Total for pagination
+    cur = await conn.execute(
+        f"SELECT count(*) FROM canonical_entities ce WHERE {where_sql}",
+        tuple(params),
+    )
+    total = int((await cur.fetchone())[0])
+
+    # Page of rows + counts. LEFT JOIN to relationships + mention map
+    # so 0-relationship entities still show up.
+    cur = await conn.execute(
+        f"""
+        SELECT ce.id::text, ce.canonical_name, ce.entity_type,
+               COALESCE(ce.mention_count, 0)::int AS mc,
+               (SELECT count(*) FROM relationships r
+                 WHERE r.workspace_id = ce.workspace_id
+                   AND (r.subject_entity_id = ce.id OR r.object_entity_id = ce.id)
+               ) AS n_rels,
+               (SELECT count(DISTINCT em.file_id)
+                  FROM extracted_mentions em
+                  JOIN mention_to_entity me ON me.mention_id = em.id
+                 WHERE me.workspace_id = ce.workspace_id AND me.entity_id = ce.id
+               ) AS n_files
+          FROM canonical_entities ce
+         WHERE {where_sql}
+         ORDER BY ce.mention_count DESC NULLS LAST, ce.canonical_name ASC
+         LIMIT %s OFFSET %s
+        """,
+        (*params, limit, offset),
+    )
+    rows = await cur.fetchall()
+    items = [
+        KMEntity(
+            id=str(r[0]), canonical_name=str(r[1]),
+            entity_type=str(r[2]), mention_count=int(r[3] or 0),
+            n_relationships=int(r[4] or 0),
+            n_files=int(r[5] or 0),
+        )
+        for r in rows
+    ]
+    return KMEntityListResponse(
+        items=items, total=total,
+        has_more=(offset + len(items)) < total,
+    )
+
+
+@router.get(
+    "/entities/{entity_id}",
+    response_model=KMEntityDetailResponse,
+    summary="Side-panel payload for one entity — neighborhood + files.",
+)
+async def get_entity_detail(
+    entity_id: str,
+    workspace_id: Annotated[str, Depends(current_workspace_id)],
+    conn: Annotated[Connection, Depends(kb_app_connection)],
+    neighbor_limit: int = Query(default=30, ge=1, le=200),
+) -> KMEntityDetailResponse:
+    # 1) the entity itself
+    cur = await conn.execute(
+        """
+        SELECT id::text, canonical_name, entity_type,
+               COALESCE(mention_count, 0)::int
+          FROM canonical_entities
+         WHERE workspace_id = %s AND id = %s
+        """,
+        (workspace_id, entity_id),
+    )
+    row = await cur.fetchone()
+    if row is None:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="entity not found")
+    entity = KMEntity(
+        id=str(row[0]), canonical_name=str(row[1]),
+        entity_type=str(row[2]), mention_count=int(row[3] or 0),
+    )
+
+    # 2) Neighbors from `relationships` (typed predicate edges) +
+    # `graph_edges` co_mentions (proximity edges with no predicate).
+    # Both joined to canonical_entities to render the other end.
+    cur = await conn.execute(
+        """
+        WITH rel_out AS (
+          SELECT r.object_entity_id AS other_id,
+                 'relationship' AS edge_kind,
+                 'out' AS direction,
+                 r.predicate, COALESCE(r.confidence, 1.0) AS weight,
+                 COALESCE(r.n_evidence, 1) AS n_evidence
+            FROM relationships r
+           WHERE r.workspace_id = %s AND r.subject_entity_id = %s
+        ),
+        rel_in AS (
+          SELECT r.subject_entity_id AS other_id,
+                 'relationship' AS edge_kind,
+                 'in' AS direction,
+                 r.predicate, COALESCE(r.confidence, 1.0) AS weight,
+                 COALESCE(r.n_evidence, 1) AS n_evidence
+            FROM relationships r
+           WHERE r.workspace_id = %s AND r.object_entity_id = %s
+        ),
+        co AS (
+          SELECT CASE WHEN ge.src_entity_id = %s
+                      THEN ge.dst_entity_id
+                      ELSE ge.src_entity_id END AS other_id,
+                 ge.edge_kind, 'undirected' AS direction,
+                 NULL::text AS predicate, ge.weight,
+                 1 AS n_evidence
+            FROM graph_edges ge
+           WHERE ge.workspace_id = %s
+             AND (ge.src_entity_id = %s OR ge.dst_entity_id = %s)
+             AND ge.edge_kind = 'co_mention'
+        )
+        SELECT all_edges.other_id::text, ce.canonical_name, ce.entity_type,
+               all_edges.edge_kind, all_edges.direction,
+               all_edges.predicate, all_edges.weight, all_edges.n_evidence
+          FROM (
+            SELECT * FROM rel_out
+            UNION ALL SELECT * FROM rel_in
+            UNION ALL SELECT * FROM co
+          ) all_edges
+          JOIN canonical_entities ce ON ce.id = all_edges.other_id
+         ORDER BY (all_edges.edge_kind = 'relationship') DESC,
+                  all_edges.weight DESC
+         LIMIT %s
+        """,
+        (
+            workspace_id, entity_id,
+            workspace_id, entity_id,
+            entity_id,
+            workspace_id, entity_id, entity_id,
+            neighbor_limit,
+        ),
+    )
+    neighbors = [
+        KMEntityNeighbor(
+            entity_id=str(r[0]),
+            canonical_name=str(r[1]),
+            entity_type=str(r[2]),
+            edge_kind=str(r[3]),
+            direction=str(r[4]),
+            predicate=(str(r[5]) if r[5] is not None else None),
+            weight=float(r[6] or 0.0),
+            n_evidence=int(r[7] or 1),
+        )
+        for r in await cur.fetchall()
+    ]
+
+    # 3) Files that mention this entity (top 20 by mention count).
+    cur = await conn.execute(
+        """
+        SELECT f.id::text, f.name, count(em.id)::int
+          FROM extracted_mentions em
+          JOIN mention_to_entity me ON me.mention_id = em.id
+          JOIN files f ON f.id = em.file_id
+         WHERE me.workspace_id = %s AND me.entity_id = %s
+           AND f.lifecycle_state <> 'deleted'
+         GROUP BY f.id, f.name
+         ORDER BY count(em.id) DESC
+         LIMIT 20
+        """,
+        (workspace_id, entity_id),
+    )
+    files = [
+        KMEntityFile(file_id=str(r[0]), file_name=str(r[1]), n_mentions=int(r[2]))
+        for r in await cur.fetchall()
+    ]
+
+    return KMEntityDetailResponse(
+        entity=entity, neighbors=neighbors, files=files,
+    )

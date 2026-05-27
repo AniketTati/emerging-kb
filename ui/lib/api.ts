@@ -2022,3 +2022,79 @@ export async function getKnowledgeMapAnomalyCohort(
   );
   return _handle<KMCohortResponse>(resp);
 }
+
+
+// ===========================================================================
+// 🕸 Entities — Knowledge Map cross-doc canonical entities
+// ===========================================================================
+
+export type KMEntity = {
+  id: string;
+  canonical_name: string;
+  entity_type: string;
+  mention_count: number;
+  n_relationships?: number;
+  n_files?: number;
+};
+
+export type KMEntityListResponse = {
+  items: KMEntity[];
+  total: number;
+  has_more: boolean;
+};
+
+export type KMEntityNeighbor = {
+  entity_id: string;
+  canonical_name: string;
+  entity_type: string;
+  edge_kind: string;       // 'relationship' | 'co_mention'
+  direction: string;       // 'out' | 'in' | 'undirected'
+  predicate: string | null;
+  weight: number;
+  n_evidence: number;
+};
+
+export type KMEntityFile = {
+  file_id: string;
+  file_name: string;
+  n_mentions: number;
+};
+
+export type KMEntityDetailResponse = {
+  entity: KMEntity;
+  neighbors: KMEntityNeighbor[];
+  files: KMEntityFile[];
+};
+
+export async function getKnowledgeMapEntities(opts?: {
+  q?: string;
+  entityType?: string;
+  limit?: number;
+  offset?: number;
+}): Promise<KMEntityListResponse> {
+  const params = new URLSearchParams();
+  if (opts?.q) params.set("q", opts.q);
+  if (opts?.entityType) params.set("entity_type", opts.entityType);
+  if (opts?.limit) params.set("limit", String(opts.limit));
+  if (opts?.offset) params.set("offset", String(opts.offset));
+  const qs = params.toString();
+  const resp = await fetch(
+    `${KB_API_URL}/knowledge-map/entities${qs ? `?${qs}` : ""}`,
+    { headers: workspaceHeaders(), cache: "no-store" },
+  );
+  return _handle<KMEntityListResponse>(resp);
+}
+
+export async function getKnowledgeMapEntityDetail(
+  entityId: string,
+  opts?: { neighborLimit?: number },
+): Promise<KMEntityDetailResponse> {
+  const params = new URLSearchParams();
+  if (opts?.neighborLimit) params.set("neighbor_limit", String(opts.neighborLimit));
+  const qs = params.toString();
+  const resp = await fetch(
+    `${KB_API_URL}/knowledge-map/entities/${entityId}${qs ? `?${qs}` : ""}`,
+    { headers: workspaceHeaders(), cache: "no-store" },
+  );
+  return _handle<KMEntityDetailResponse>(resp);
+}
