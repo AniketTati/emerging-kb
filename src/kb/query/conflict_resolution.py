@@ -325,7 +325,7 @@ def build_fact_candidates(
         triples = [(fid, uid, p) for (uid, fid, _ut, p) in units_by_file]
     elif hits is not None and atomic_unit_params is not None:
         for h in hits:
-            if h.kind != "atomic_unit":
+            if h.kind != "sub_entity":
                 continue
             file_id = (h.metadata or {}).get("file_id")
             if not file_id:

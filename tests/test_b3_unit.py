@@ -109,7 +109,7 @@ def test_citation_modalities_are_design_5_twelve():
         "xlsx_row", "xlsx_cell",
         "image_bbox", "ocr_span",
         "email_message",
-        "raptor_summary", "aggregate", "atomic_unit",
+        "raptor_summary", "aggregate", "sub_entity",
         "entity_ref", "chain_ref",
     }
 
@@ -131,8 +131,8 @@ def test_threshold_invariants():
 
 
 def test_pick_modality_atomic_unit_wins_over_pdf_span():
-    h = _hit(kind="atomic_unit", file_id="f1", unit_type="clause")
-    assert pick_modality(h, _meta()) == "atomic_unit"
+    h = _hit(kind="sub_entity", file_id="f1", unit_type="clause")
+    assert pick_modality(h, _meta()) == "sub_entity"
 
 
 def test_pick_modality_raptor_node_returns_raptor_summary():
@@ -228,8 +228,8 @@ def test_xlsx_row_ref_carries_sheet_and_row():
 
 
 def test_atomic_unit_ref_uses_hit_id_as_unit_id():
-    h = _hit(id="u-42", kind="atomic_unit", unit_type="clause", file_id="f1")
-    ref = build_ref("atomic_unit", h, _meta(file_id="f1"))
+    h = _hit(id="u-42", kind="sub_entity", unit_type="clause", file_id="f1")
+    ref = build_ref("sub_entity", h, _meta(file_id="f1"))
     assert ref["unit_id"] == "u-42"
     assert ref["unit_type"] == "clause"
     assert ref["doc_id"] == "f1"
@@ -293,9 +293,9 @@ def test_build_citation_default_pdf_span_envelope():
 
 
 def test_build_citation_atomic_unit_confidence_uses_score():
-    h = _hit(id="u-1", kind="atomic_unit", score=0.62, unit_type="clause")
+    h = _hit(id="u-1", kind="sub_entity", score=0.62, unit_type="clause")
     c = build_citation(h, _meta())
-    assert c.modality == "atomic_unit"
+    assert c.modality == "sub_entity"
     assert c.confidence == pytest.approx(0.62)
 
 
@@ -339,11 +339,11 @@ def test_build_citation_dict_payload_serializable():
 def test_distinct_modalities_preserves_order():
     cs = [
         RichCitation("h1", "chunk", "f1", "s", 0.1, "pdf_span", {}),
-        RichCitation("h2", "atomic_unit", "f1", "s", 0.2, "atomic_unit", {}),
+        RichCitation("h2", "sub_entity", "f1", "s", 0.2, "sub_entity", {}),
         RichCitation("h3", "chunk", "f1", "s", 0.3, "pdf_span", {}),  # dup
         RichCitation("h4", "chunk", "f2", "s", 0.4, "xlsx_row", {}),
     ]
-    assert distinct_modalities(cs) == ["pdf_span", "atomic_unit", "xlsx_row"]
+    assert distinct_modalities(cs) == ["pdf_span", "sub_entity", "xlsx_row"]
 
 
 def test_distinct_modalities_empty():

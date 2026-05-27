@@ -74,7 +74,7 @@ class FileDetailsResponse(BaseModel):
     n_chunks: int = 0
     n_contextual_chunks: int = 0
     n_mentions: int = 0
-    n_atomic_units: int = 0
+    n_sub_entities: int = 0
     n_entities_linked: int = 0
     n_triples: int = 0
     # Doc-chain membership (WA-3). chain_id is null for files not in any
@@ -376,7 +376,7 @@ async def get_file_details(
         n_chunks=int(rollups[1]),
         n_contextual_chunks=int(rollups[2]),
         n_mentions=int(rollups[3]),
-        n_atomic_units=int(rollups[4]),
+        n_sub_entities=int(rollups[4]),
         n_entities_linked=int(rollups[5]),
         n_triples=int(rollups[6]),
         chain_id=chain_id,
@@ -553,7 +553,7 @@ async def list_extracted_entities(
     ]
 
 
-async def list_atomic_units(
+async def list_sub_entities(
     conn: Connection, file_id: str, *, limit: int = 50, offset: int = 0,
 ) -> tuple[list[AtomicUnit], int]:
     """Return sub_entity rows (transactions / clauses / line_items / ...)

@@ -34,7 +34,7 @@ import {
   type ProposedField,
   type RawPage,
   type TripleInDoc,
-  getAtomicUnits,
+  getSubEntities,
   getDocCitations,
   getDocMentions,
   getDocPages,
@@ -101,7 +101,7 @@ export function DocDetail({ fileId }: { fileId: string }) {
               <SectionGroup>
                 <ParsedTextSection fileId={fileId} totalPages={details.n_pages} />
                 <ProposedFieldsSection fileId={fileId} />
-                <AtomicUnitsSection fileId={fileId} total={details.n_atomic_units} />
+                <AtomicUnitsSection fileId={fileId} total={details.n_sub_entities} />
                 <ExtractedEntitiesSection fileId={fileId} />
                 <MentionsSection fileId={fileId} total={details.n_mentions} />
                 <EntitiesMentionedSection
@@ -197,7 +197,7 @@ function HeaderCard({
         <CountPill label="pages" n={details.n_pages} />
         <CountPill label="chunks" n={details.n_chunks} />
         <CountPill label="mentions" n={details.n_mentions} warn={details.n_mentions === 0} />
-        <CountPill label="units" n={details.n_atomic_units} />
+        <CountPill label="units" n={details.n_sub_entities} />
         <CountPill label="entities" n={details.n_entities_linked} warn={details.n_entities_linked === 0} />
         <CountPill label="triples" n={details.n_triples} />
       </div>
@@ -265,7 +265,7 @@ function FeaturedClause({ fileId }: { fileId: string }) {
   const [unit, setUnit] = useState<AtomicUnit | "none" | null>(null);
   useEffect(() => {
     let cancelled = false;
-    getAtomicUnits(fileId, { limit: 1 }).then((r) => {
+    getSubEntities(fileId, { limit: 1 }).then((r) => {
       if (cancelled) return;
       setUnit(r.items[0] ?? "none");
     });
@@ -720,7 +720,7 @@ function AtomicUnitsSection({ fileId, total }: { fileId: string; total: number }
       count={total}
       testId="doc-detail-units"
     >
-      {(open) => <PaginatedAccordion fileId={fileId} open={open} total={total} renderItems={renderUnits} fetcher={getAtomicUnits} pageSize={25} />}
+      {(open) => <PaginatedAccordion fileId={fileId} open={open} total={total} renderItems={renderUnits} fetcher={getSubEntities} pageSize={25} />}
     </Accordion>
   );
 }

@@ -56,7 +56,7 @@ router = APIRouter(tags=["explore"])
 class ExploreCounts(BaseModel):
     documents: int = 0
     doc_types: int = 0
-    atomic_units: int = 0
+    sub_entities: int = 0
     entities: int = 0
     relationships: int = 0
     topics: int = 0
@@ -64,7 +64,7 @@ class ExploreCounts(BaseModel):
 
 
 class ExploreHit(BaseModel):
-    kind: str            # "document" | "doc_type" | "atomic_unit" | "entity" | "relationship" | "topic" | "anomaly"
+    kind: str            # "document" | "doc_type" | "sub_entity" | "entity" | "relationship" | "topic" | "anomaly"
     id: str              # primary key (or canonical handle, e.g. doc_type name)
     title: str           # display label
     subtitle: str | None = None
@@ -209,7 +209,7 @@ async def get_explore_counts(
         "SELECT count(*)::int FROM extracted_entities "
         "WHERE unit_type IS NOT NULL"
     )
-    out.atomic_units = int((await cur.fetchone())[0])
+    out.sub_entities = int((await cur.fetchone())[0])
 
     cur = await conn.execute("SELECT count(*)::int FROM canonical_entities")
     out.entities = int((await cur.fetchone())[0])
@@ -241,7 +241,7 @@ async def get_explore_counts(
 
 
 _VALID_KINDS = {
-    "document", "doc_type", "atomic_unit", "entity", "relationship",
+    "document", "doc_type", "sub_entity", "entity", "relationship",
     "topic", "anomaly",
 }
 
@@ -368,8 +368,8 @@ async def get_explore_search(
             items_part, n = await _search_documents(conn, like, has_query, offset, limit, filters)
         elif tgt == "doc_type":
             items_part, n = await _search_doc_types(conn, like, has_query, offset, limit)
-        elif tgt == "atomic_unit":
-            items_part, n = await _search_atomic_units(conn, like, has_query, offset, limit, filters)
+        elif tgt == "sub_entity":
+            items_part, n = await _search_sub_entities(conn, like, has_query, offset, limit, filters)
         elif tgt == "entity":
             items_part, n = await _search_entities(conn, like, has_query, offset, limit, filters)
         elif tgt == "relationship":
@@ -859,7 +859,7 @@ async def _search_doc_types(
     return items, total
 
 
-async def _search_atomic_units(
+async def _search_sub_entities(
     conn: Connection, like: str, has_query: bool, offset: int, limit: int,
     filters: _SearchFilters | None = None,
 ) -> tuple[list[ExploreHit], int]:
@@ -921,7 +921,7 @@ async def _search_atomic_units(
 
     items = [
         ExploreHit(
-            kind="atomic_unit",
+            kind="sub_entity",
             id=r[0],
             title=str(r[1] or "(untyped unit)"),
             subtitle=(r[5] or None),

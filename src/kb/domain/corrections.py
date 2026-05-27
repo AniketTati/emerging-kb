@@ -638,7 +638,7 @@ async def route_correction(
                             name="extract_fields_file"
                         ).defer_async(file_id=file_id)
                         await procrastinate_app.configure_task(
-                            name="extract_atomic_units_file"
+                            name="extract_kv_tables_file"
                         ).defer_async(file_id=file_id)
                         deferred_for.append(file_id)
                     except Exception as exc:  # noqa: BLE001

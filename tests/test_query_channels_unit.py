@@ -283,10 +283,10 @@ async def _seed_sub_entity(
     return (await cur.fetchone())[0]
 
 
-async def test_atomic_units_rarity_channel_filters_by_unit_type_keyword(
+async def test_sub_entities_rarity_channel_filters_by_unit_type_keyword(
     client, db_url_superuser,
 ):
-    from kb.query.channels import atomic_units_rarity_channel
+    from kb.query.channels import sub_entities_rarity_channel
 
     workspace = str(uuid.uuid4())
     async with await psycopg.AsyncConnection.connect(db_url_superuser) as conn:
@@ -308,18 +308,18 @@ async def test_atomic_units_rarity_channel_filters_by_unit_type_keyword(
     async with await psycopg.AsyncConnection.connect(db_url_superuser) as conn:
         await conn.execute("SELECT set_config('app.workspace_id', %s, true)", (workspace,))
         # Query mentions 'clause' → filter to clause type
-        hits = await atomic_units_rarity_channel(
+        hits = await sub_entities_rarity_channel(
             conn, workspace_id=workspace, query="any clause questions", limit=5,
         )
     assert len(hits) >= 1
     assert all(h.metadata.get("unit_type") == "clause" for h in hits)
 
 
-async def test_atomic_units_rarity_channel_no_keyword_returns_all_types(
+async def test_sub_entities_rarity_channel_no_keyword_returns_all_types(
     client, db_url_superuser,
 ):
     """Query has no unit_type keyword → returns top across all unit_types."""
-    from kb.query.channels import atomic_units_rarity_channel
+    from kb.query.channels import sub_entities_rarity_channel
 
     workspace = str(uuid.uuid4())
     async with await psycopg.AsyncConnection.connect(db_url_superuser) as conn:
@@ -336,7 +336,7 @@ async def test_atomic_units_rarity_channel_no_keyword_returns_all_types(
 
     async with await psycopg.AsyncConnection.connect(db_url_superuser) as conn:
         await conn.execute("SELECT set_config('app.workspace_id', %s, true)", (workspace,))
-        hits = await atomic_units_rarity_channel(
+        hits = await sub_entities_rarity_channel(
             conn, workspace_id=workspace, query="generic question", limit=5,
         )
     types = {h.metadata.get("unit_type") for h in hits}
@@ -471,7 +471,7 @@ async def test_run_all_channels_returns_dict_with_all_6_keys(client, db_url_supe
         )
     assert set(result.keys()) == {
         "bm25_chunks", "bm25_raptor", "dense_chunks", "dense_raptor",
-        "mentions_exact", "atomic_units_rarity",
+        "mentions_exact", "sub_entities_rarity",
     }
 
 
