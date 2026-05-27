@@ -295,13 +295,23 @@ async def get_needs_attention(
         (workspace_id, limit),
     )
     for r in await cur.fetchall():
+        # entity_id can be NULL on doc-internal conflicts (e.g. one
+        # row's `service_location.in_scope` disagrees with another in
+        # the SAME doc). Format the title without slicing None.
+        entity_label = (
+            f"entity {r[1][:8]}..." if r[1] is not None
+            else "(within-doc)"
+        )
         items.append(NeedsAttentionItem(
             kind="conflict",
             id=str(r[0]),
-            title=f"Conflict on '{r[2]}' for entity {r[1][:8]}...",
+            title=f"Conflict on '{r[2]}' for {entity_label}",
             severity="important",
             created_at=r[3].isoformat() if hasattr(r[3], "isoformat") else str(r[3]),
-            payload={"entity_id": str(r[1]), "predicate": str(r[2])},
+            payload={
+                "entity_id": str(r[1]) if r[1] is not None else None,
+                "predicate": str(r[2]),
+            },
         ))
 
     # 2) Open + fixing corrections
