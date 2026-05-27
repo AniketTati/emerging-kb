@@ -34,6 +34,7 @@ from typing import Literal
 ALLOWED_TABLES: frozenset[str] = frozenset({
     "files",
     "extracted_entities",
+    "canonical_entities",
     "relationships",
     "fact_conflicts",
     "doc_chains",
@@ -78,6 +79,27 @@ ALLOWED_COLUMNS: dict[tuple[str, str], ColumnType] = {
     ("extracted_entities", "rarity_score"):      "real",
     ("extracted_entities", "unit_type"):         "text",
     ("extracted_entities", "created_at"):        "timestamptz",
+    # ----- canonical_entities -----
+    # Cross-doc deduplicated entity layer (one row per unique person /
+    # org / location / etc., aggregated across all docs that mention
+    # them). Use for cardinality questions that span the corpus:
+    #
+    #   "how many distinct sub-contractors are on the project"     →
+    #     SELECT COUNT(*) FROM canonical_entities WHERE entity_type='ORG'
+    #
+    #   "list all people involved across the contracts"            →
+    #     SELECT canonical_name FROM canonical_entities WHERE entity_type='PERSON'
+    #
+    # NOT a replacement for extracted_entities — extracted_entities
+    # has the per-doc structural row (one safety_incident, one
+    # transaction, …), canonical_entities has the dedup'd entity.
+    ("canonical_entities", "id"):              "uuid",
+    ("canonical_entities", "workspace_id"):    "uuid",
+    ("canonical_entities", "canonical_name"):  "text",
+    ("canonical_entities", "entity_type"):     "text",
+    ("canonical_entities", "mention_count"):   "integer",
+    ("canonical_entities", "created_at"):      "timestamptz",
+    ("canonical_entities", "updated_at"):      "timestamptz",
     # ----- relationships -----
     ("relationships", "id"):                  "uuid",
     ("relationships", "workspace_id"):        "uuid",
