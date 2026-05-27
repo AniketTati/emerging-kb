@@ -1945,3 +1945,42 @@ export async function getKnowledgeMapHistory(opts?: {
   );
   return _handle<KMHistoryResp>(resp);
 }
+
+
+// Per-schema sample fetched when the Catalog side panel opens.
+export type KMDocRootField = {
+  name: string;
+  type: string | null;
+  value: unknown;
+  description: string | null;
+};
+
+export type KMSubEntitySample = {
+  unit_type: string;
+  name: string;
+  row_count: number;
+  columns: string[];
+  rows: Record<string, unknown>[];
+};
+
+export type KMSchemaSample = {
+  schema_id: string;
+  file_count: number;
+  file_ids: string[];
+  doc_root_fields: KMDocRootField[];
+  sub_entity_samples: KMSubEntitySample[];
+};
+
+export async function getKnowledgeMapSchemaSample(
+  schemaId: string,
+  opts?: { subRows?: number },
+): Promise<KMSchemaSample> {
+  const params = new URLSearchParams();
+  if (opts?.subRows) params.set("sub_rows", String(opts.subRows));
+  const qs = params.toString();
+  const resp = await fetch(
+    `${KB_API_URL}/knowledge-map/schema/${schemaId}/sample${qs ? `?${qs}` : ""}`,
+    { headers: workspaceHeaders(), cache: "no-store" },
+  );
+  return _handle<KMSchemaSample>(resp);
+}

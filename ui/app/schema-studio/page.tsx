@@ -32,9 +32,11 @@ import { Sidebar } from "@/components/Sidebar";
 import {
   getKnowledgeMapStats, getKnowledgeMapCatalog,
   getKnowledgeMapNeedsReview, getKnowledgeMapHistory,
+  getKnowledgeMapSchemaSample,
   downloadSchemaExportYaml,
   type KMStats, type KMSchemaCard, type KMNeedsReview, type KMHistoryResp,
-  type KMSubEntityType, type KMHistoryEvent, type KMAnomaly, type KMConflict,
+  type KMHistoryEvent, type KMAnomaly, type KMConflict,
+  type KMSchemaSample, type KMSubEntitySample,
 } from "@/lib/api";
 import {
   humanizeSchemaName, categorizeSchema, DOMAINS, VISIBLE_DOMAINS,
@@ -470,6 +472,13 @@ function CatalogList({
 function CatalogRow({ card, onOpen }: { card: KMSchemaCard; onOpen: () => void }) {
   const title = humanizeSchemaName(card.name);
   const subRows = card.sub_entity_types.reduce((acc, s) => acc + s.row_count, 0);
+  // Doc-types learned in the last 24h get a NEW chip so the user can
+  // spot recent arrivals at a glance — answers the "where does an
+  // emerged doc-type show up?" question.
+  const isNew = useMemo(() => {
+    const then = new Date(card.created_at).getTime();
+    return Number.isFinite(then) && (Date.now() - then) < 24 * 3600 * 1000;
+  }, [card.created_at]);
   return (
     <button
       type="button"
@@ -477,7 +486,17 @@ function CatalogRow({ card, onOpen }: { card: KMSchemaCard; onOpen: () => void }
       className="w-full px-3 py-2 text-left hover:bg-zinc-50 cursor-pointer flex items-center gap-3"
       data-testid="km-catalog-row"
     >
-      <span className="text-[13px] text-zinc-900 truncate flex-1">{title}</span>
+      <span className="text-[13px] text-zinc-900 truncate flex-1 flex items-center gap-2">
+        {title}
+        {isNew && (
+          <span
+            className="text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 font-medium mono"
+            title="Discovered in the last 24 hours"
+          >
+            new
+          </span>
+        )}
+      </span>
       <span className="text-[11px] mono text-zinc-500 flex-shrink-0">
         {card.file_count} file{card.file_count === 1 ? "" : "s"}
         <span className="mx-1.5 text-zinc-300">·</span>
@@ -502,6 +521,21 @@ function CatalogRow({ card, onOpen }: { card: KMSchemaCard; onOpen: () => void }
 function CatalogDetail({ card }: { card: KMSchemaCard }) {
   const router = useRouter();
   const title = humanizeSchemaName(card.name);
+
+  // Fetch the per-schema sample — gives us actual field VALUES + the
+  // first N rows of each sub-entity type so we can render a table.
+  const [sample, setSample] = useState<KMSchemaSample | null>(null);
+  const [sampleErr, setSampleErr] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    setSample(null);
+    setSampleErr(null);
+    getKnowledgeMapSchemaSample(card.id, { subRows: 10 })
+      .then((r) => !cancelled && setSample(r))
+      .catch((e) => !cancelled && setSampleErr(String(e)));
+    return () => { cancelled = true; };
+  }, [card.id]);
+
   return (
     <div className="p-5 space-y-5">
       {/* Action bar */}
@@ -538,38 +572,83 @@ function CatalogDetail({ card }: { card: KMSchemaCard }) {
         </button>
       </div>
 
-      {/* Doc-root fields */}
+      {sampleErr && <ErrorBanner msg={sampleErr} />}
+
+      {/* Doc-level fields — value column ONLY shown when there's a
+          unique source file (otherwise different files have different
+          values; showing one would be misleading). */}
       <section>
         <div className="text-[10px] uppercase tracking-wider text-zinc-400 mb-1.5">
           Doc-level fields ({card.doc_root_fields.length})
+          {card.file_count === 1 && (
+            <span className="ml-1.5 text-zinc-400 normal-case tracking-normal">
+              · values from the only source file
+            </span>
+          )}
         </div>
         {card.doc_root_fields.length === 0 ? (
           <div className="text-[12px] text-zinc-400 italic">No doc-level fields.</div>
+        ) : sample === null ? (
+          <SkeletonLines count={Math.min(8, card.doc_root_fields.length)} />
         ) : (
-          <ul className="space-y-0.5">
-            {card.doc_root_fields.map((f) => (
-              <li
-                key={f.name}
-                className="text-[12px] grid grid-cols-[1fr_auto] gap-3 items-baseline py-1 border-b border-zinc-100 last:border-b-0"
-                title={f.description ?? undefined}
-              >
-                <span className="mono text-zinc-700">{f.name}</span>
-                <span className="text-[11px] text-zinc-400">{f.type ?? "—"}</span>
-              </li>
-            ))}
-          </ul>
+          <table className="w-full text-[12px] border border-zinc-200 rounded-md overflow-hidden">
+            <thead className="bg-zinc-50 text-[10px] uppercase tracking-wider text-zinc-500">
+              <tr>
+                <th className="text-left px-2.5 py-1.5 font-medium">Field</th>
+                {card.file_count === 1 && (
+                  <th className="text-left px-2.5 py-1.5 font-medium">Value</th>
+                )}
+                <th className="text-left px-2.5 py-1.5 font-medium w-16">Type</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sample.doc_root_fields.map((f) => (
+                <tr
+                  key={f.name}
+                  className="border-t border-zinc-100"
+                  title={f.description ?? undefined}
+                >
+                  <td className="px-2.5 py-1.5 mono text-zinc-700 align-top">{f.name}</td>
+                  {card.file_count === 1 && (
+                    <td className="px-2.5 py-1.5 mono text-zinc-800 align-top break-all">
+                      {formatCellValue(f.value)}
+                    </td>
+                  )}
+                  <td className="px-2.5 py-1.5 text-[11px] text-zinc-500 align-top">
+                    {f.type ?? "—"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         )}
       </section>
 
-      {/* Sub-entity types */}
-      {card.sub_entity_types.length > 0 && (
-        <section>
+      {/* Sub-entity tables — one per type, showing first N rows */}
+      {sample && sample.sub_entity_samples.length > 0 && (
+        <section className="space-y-4">
           <div className="text-[10px] uppercase tracking-wider text-zinc-400 mb-1.5">
             Contains
           </div>
-          <div className="space-y-2">
-            {card.sub_entity_types.map((s) => <SubEntityBlock key={s.unit_type} sub={s} />)}
-          </div>
+          {sample.sub_entity_samples.map((s) => (
+            <SubEntityTable key={s.unit_type} sub={s} />
+          ))}
+        </section>
+      )}
+      {/* While loading, render compact placeholders for the sub-entity
+          sections so the panel doesn't reflow when sample lands. */}
+      {!sample && card.sub_entity_types.length > 0 && (
+        <section className="space-y-4">
+          <div className="text-[10px] uppercase tracking-wider text-zinc-400 mb-1.5">Contains</div>
+          {card.sub_entity_types.map((s) => (
+            <div key={s.unit_type}>
+              <div className="text-[12px] font-medium text-zinc-700 mb-1">
+                ↳ {humanizeSchemaName(s.unit_type)}{" "}
+                <span className="text-[10px] text-zinc-400 mono">{s.row_count} rows</span>
+              </div>
+              <SkeletonLines count={2} />
+            </div>
+          ))}
         </section>
       )}
     </div>
@@ -577,23 +656,75 @@ function CatalogDetail({ card }: { card: KMSchemaCard }) {
 }
 
 
-function SubEntityBlock({ sub }: { sub: KMSubEntityType }) {
+function SubEntityTable({ sub }: { sub: KMSubEntitySample }) {
+  if (sub.rows.length === 0 || sub.columns.length === 0) {
+    return (
+      <div>
+        <div className="text-[12px] font-medium text-zinc-700 mb-1">
+          ↳ {humanizeSchemaName(sub.unit_type)}{" "}
+          <span className="text-[10px] text-zinc-400 mono">0 rows</span>
+        </div>
+        <div className="text-[11px] text-zinc-400 italic">No rows extracted yet.</div>
+      </div>
+    );
+  }
+  const moreCount = sub.row_count - sub.rows.length;
   return (
-    <div className="rounded-md bg-zinc-50 border border-zinc-100 px-3 py-2">
-      <div className="text-[12px] font-medium text-zinc-800 flex items-center gap-2">
-        <span className="text-zinc-400">↳</span>
-        <span>{humanizeSchemaName(sub.unit_type)}</span>
+    <div>
+      <div className="text-[12px] font-medium text-zinc-700 mb-1.5 flex items-baseline gap-2">
+        <span>↳ {humanizeSchemaName(sub.unit_type)}</span>
         <span className="text-[10px] text-zinc-400 mono">
           {sub.row_count} row{sub.row_count === 1 ? "" : "s"}
+          {moreCount > 0 && ` · showing first ${sub.rows.length}`}
         </span>
       </div>
-      {sub.fields.length > 0 && (
-        <div className="mt-1.5 text-[11px] text-zinc-600 flex flex-wrap gap-x-3 gap-y-0.5 mono ml-4">
-          {sub.fields.map((f) => <span key={f.name}>{f.name}</span>)}
+      <div className="overflow-x-auto border border-zinc-200 rounded-md">
+        <table className="w-full text-[11px]">
+          <thead className="bg-zinc-50 text-[10px] uppercase tracking-wider text-zinc-500">
+            <tr>
+              {sub.columns.map((col) => (
+                <th key={col} className="text-left px-2.5 py-1.5 font-medium whitespace-nowrap">
+                  {col}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {sub.rows.map((row, i) => (
+              <tr key={i} className="border-t border-zinc-100">
+                {sub.columns.map((col) => (
+                  <td
+                    key={col}
+                    className="px-2.5 py-1.5 mono text-zinc-800 align-top max-w-[240px] truncate"
+                    title={formatCellValue(row[col])}
+                  >
+                    {formatCellValue(row[col])}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {moreCount > 0 && (
+        <div className="text-[10px] text-zinc-400 mt-1">
+          + {moreCount} more row{moreCount === 1 ? "" : "s"} not shown
         </div>
       )}
     </div>
   );
+}
+
+
+/** Friendly stringification for a single cell. NULL → em dash;
+ *  booleans → "true"/"false"; numbers → as-is; strings → as-is;
+ *  arrays/objects → compact JSON. */
+function formatCellValue(v: unknown): string {
+  if (v === null || v === undefined || v === "") return "—";
+  if (typeof v === "boolean") return v ? "true" : "false";
+  if (typeof v === "number") return String(v);
+  if (typeof v === "string") return v;
+  try { return JSON.stringify(v); } catch { return String(v); }
 }
 
 

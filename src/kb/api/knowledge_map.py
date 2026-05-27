@@ -525,3 +525,186 @@ async def get_stats(
         sub_entities=sub_entities,
         pending_review=pending,
     )
+
+
+# ===========================================================================
+# Per-schema sample — actual extracted values for the side panel.
+# ===========================================================================
+
+
+class KMDocRootField(BaseModel):
+    """One row in the side panel's 'Doc-level fields' table.
+    `value` is from the FIRST file (when file_count==1 that IS the only
+    file's value; when file_count > 1, it's the first as a sample).
+    `value` is None if the field is null on that row."""
+
+    name: str
+    type: str | None = None
+    value: Any | None = None
+    description: str | None = None
+
+
+class KMSubEntitySample(BaseModel):
+    unit_type: str
+    name: str
+    row_count: int
+    columns: list[str]
+    rows: list[dict[str, Any]]   # up to N rows of `fields` jsonb
+
+
+class KMSchemaSample(BaseModel):
+    schema_id: str
+    file_count: int
+    file_ids: list[str]
+    doc_root_fields: list[KMDocRootField]
+    sub_entity_samples: list[KMSubEntitySample]
+
+
+@router.get(
+    "/schema/{schema_id}/sample",
+    response_model=KMSchemaSample,
+    summary="Fetch a representative sample of extracted values for one "
+            "schema: first file's doc-root field values + first N rows "
+            "of each sub-entity type. Powers the Catalog side panel.",
+)
+async def get_schema_sample(
+    schema_id: str,
+    workspace_id: Annotated[str, Depends(current_workspace_id)],
+    conn: Annotated[Connection, Depends(kb_app_connection)],
+    sub_rows: int = Query(default=5, ge=1, le=50),
+) -> KMSchemaSample:
+    # Validate schema belongs to this workspace.
+    cur = await conn.execute(
+        "SELECT id FROM schemas "
+        "WHERE id = %s AND workspace_id = %s AND lifecycle_state = 'active'",
+        (schema_id, workspace_id),
+    )
+    if (await cur.fetchone()) is None:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="schema not found")
+
+    # File ids + count via the same path as the catalog endpoint.
+    cur = await conn.execute(
+        """
+        SELECT array_agg(DISTINCT ee.file_id::text), count(DISTINCT ee.file_id)
+          FROM extracted_entities ee
+          JOIN schema_entities se ON se.id = ee.schema_entity_id
+         WHERE se.schema_id = %s AND ee.unit_type IS NULL
+        """,
+        (schema_id,),
+    )
+    row = await cur.fetchone()
+    file_ids: list[str] = [str(x) for x in (row[0] or [])]
+    file_count = int(row[1] or 0)
+
+    # Doc-root schema_fields + the FIRST file's doc-root fields jsonb.
+    cur = await conn.execute(
+        """
+        SELECT sf.name, sf.type, sf.nl_description
+          FROM schema_fields sf
+          JOIN schema_entities se ON se.id = sf.entity_id
+         WHERE se.schema_id = %s AND se.kind = 'doc_root'
+           AND se.lifecycle_state = 'active'
+           AND sf.lifecycle_state = 'active'
+         ORDER BY sf.created_at
+        """,
+        (schema_id,),
+    )
+    field_defs = [
+        (str(r[0]), (str(r[1]) if r[1] is not None else None),
+         (str(r[2]) if r[2] is not None else None))
+        for r in await cur.fetchall()
+    ]
+
+    # Pull the doc-root row from the first file (jsonb fields).
+    sample_values: dict[str, Any] = {}
+    if file_ids:
+        cur = await conn.execute(
+            """
+            SELECT ee.fields
+              FROM extracted_entities ee
+              JOIN schema_entities se ON se.id = ee.schema_entity_id
+             WHERE se.schema_id = %s AND ee.file_id = %s::uuid
+               AND ee.unit_type IS NULL
+             LIMIT 1
+            """,
+            (schema_id, file_ids[0]),
+        )
+        r = await cur.fetchone()
+        if r and isinstance(r[0], dict):
+            sample_values = r[0]
+
+    doc_root_fields = [
+        KMDocRootField(
+            name=name,
+            type=ftype,
+            value=sample_values.get(name),
+            description=descr,
+        )
+        for name, ftype, descr in field_defs
+    ]
+
+    # Sub-entity types + first N rows of each.
+    cur = await conn.execute(
+        """
+        SELECT se.id::text, se.name
+          FROM schema_entities se
+         WHERE se.schema_id = %s AND se.kind = 'sub_entity'
+           AND se.lifecycle_state = 'active'
+         ORDER BY se.created_at
+        """,
+        (schema_id,),
+    )
+    sub_types = [(str(r[0]), str(r[1])) for r in await cur.fetchall()]
+
+    import re
+    def _pascal_to_snake(s: str) -> str:
+        return re.sub(r"(?<!^)(?=[A-Z])", "_", s).lower()
+
+    sub_samples: list[KMSubEntitySample] = []
+    for sub_entity_id, sub_name in sub_types:
+        unit_type = _pascal_to_snake(sub_name)
+        cur = await conn.execute(
+            """
+            SELECT fields
+              FROM extracted_entities
+             WHERE workspace_id = %s AND schema_entity_id = %s::uuid
+             ORDER BY created_at
+             LIMIT %s
+            """,
+            (workspace_id, sub_entity_id, sub_rows),
+        )
+        rows_data = [dict(r[0]) for r in await cur.fetchall() if isinstance(r[0], dict)]
+
+        # Total row count for this sub-entity type.
+        cur = await conn.execute(
+            """
+            SELECT count(*) FROM extracted_entities
+             WHERE workspace_id = %s AND schema_entity_id = %s::uuid
+            """,
+            (workspace_id, sub_entity_id),
+        )
+        total = int((await cur.fetchone())[0])
+
+        # Column order: stable across rows by first observed.
+        cols_seen: list[str] = []
+        for r in rows_data:
+            for k in r.keys():
+                if k not in cols_seen:
+                    cols_seen.append(k)
+
+        sub_samples.append(KMSubEntitySample(
+            unit_type=unit_type,
+            name=sub_name,
+            row_count=total,
+            columns=cols_seen,
+            rows=rows_data,
+        ))
+
+    return KMSchemaSample(
+        schema_id=str(schema_id),
+        file_count=file_count,
+        file_ids=file_ids,
+        doc_root_fields=doc_root_fields,
+        sub_entity_samples=sub_samples,
+    )
