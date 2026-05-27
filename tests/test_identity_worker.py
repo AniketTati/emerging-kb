@@ -148,7 +148,7 @@ async def test_resolve_identities_creates_new_entities_for_unique_mentions(
         assert (await cur.fetchone())[0] == "ready"
 
         cur = await conn.execute(
-            "SELECT count(*) FROM entities WHERE workspace_id = %s", (workspace,),
+            "SELECT count(*) FROM canonical_entities WHERE workspace_id = %s", (workspace,),
         )
         # Three signal mentions → 3 entities. The DATE mention is skipped.
         assert (await cur.fetchone())[0] == 3
@@ -161,7 +161,7 @@ async def test_resolve_identities_creates_new_entities_for_unique_mentions(
 
         # The noise mention type must not appear in `entities.entity_type`.
         cur = await conn.execute(
-            "SELECT DISTINCT entity_type FROM entities WHERE workspace_id = %s "
+            "SELECT DISTINCT entity_type FROM canonical_entities WHERE workspace_id = %s "
             "ORDER BY entity_type", (workspace,),
         )
         types = [r[0] for r in await cur.fetchall()]
@@ -198,7 +198,7 @@ async def test_resolve_identities_deterministic_match_reuses_entity(
 
         # Only 1 entity (deterministic match collapsed both)
         cur = await conn.execute(
-            "SELECT count(*) FROM entities WHERE workspace_id = %s", (workspace,),
+            "SELECT count(*) FROM canonical_entities WHERE workspace_id = %s", (workspace,),
         )
         assert (await cur.fetchone())[0] == 1
 
@@ -276,7 +276,7 @@ async def test_resolve_identities_with_no_mentions_advances_to_ready(client, db_
         await conn.execute("SELECT set_config('app.workspace_id', %s, true)", (workspace,))
         cur = await conn.execute("SELECT lifecycle_state FROM files WHERE id = %s", (file_id,))
         assert (await cur.fetchone())[0] == "ready"
-        cur = await conn.execute("SELECT count(*) FROM entities WHERE workspace_id = %s", (workspace,))
+        cur = await conn.execute("SELECT count(*) FROM canonical_entities WHERE workspace_id = %s", (workspace,))
         assert (await cur.fetchone())[0] == 0
 
 
@@ -344,7 +344,7 @@ async def test_resolve_identities_entities_persist_across_files(client, db_url_s
         await conn.execute("SELECT set_config('app.workspace_id', %s, true)", (workspace,))
         # Only 1 entity exists (deterministic collapse) — and mention_count tracks both files.
         cur = await conn.execute(
-            "SELECT count(*), max(mention_count) FROM entities WHERE workspace_id = %s",
+            "SELECT count(*), max(mention_count) FROM canonical_entities WHERE workspace_id = %s",
             (workspace,),
         )
         n_entities, max_count = await cur.fetchone()
@@ -469,7 +469,7 @@ async def test_resolve_identities_embedding_blocking_matches_existing_entity(
     async with await psycopg.AsyncConnection.connect(db_url_superuser) as conn:
         await conn.execute("SELECT set_config('app.workspace_id', %s, true)", (workspace,))
         await conn.execute(
-            "INSERT INTO entities "
+            "INSERT INTO canonical_entities "
             "(workspace_id, canonical_name, entity_type, embedding) "
             "VALUES (%s, 'OldEntityName', 'ORG', %s::halfvec)",
             (workspace, vec_literal),
@@ -512,7 +512,7 @@ async def test_resolve_identities_embedding_blocking_matches_existing_entity(
         # Only 1 entity should exist — the pre-seeded one (NewAlias didn't
         # create a 2nd entity because embedding-match collapsed it).
         cur = await conn.execute(
-            "SELECT count(*) FROM entities WHERE workspace_id = %s", (workspace,),
+            "SELECT count(*) FROM canonical_entities WHERE workspace_id = %s", (workspace,),
         )
         n = (await cur.fetchone())[0]
         assert n == 1, f"expected 1 entity (embedding-match collapsed alias); got {n}"

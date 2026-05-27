@@ -122,7 +122,7 @@ async def _seed_conflict(db_url: str, workspace: str) -> str:
         )
         # Seed entity (required by FK).
         await conn.execute(
-            "INSERT INTO entities (id, workspace_id, canonical_name, "
+            "INSERT INTO canonical_entities (id, workspace_id, canonical_name, "
             "entity_type, mention_count) VALUES (%s, %s, 'ent', 'ORG', 0)",
             (ent_id, workspace),
         )

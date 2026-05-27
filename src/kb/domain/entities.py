@@ -17,7 +17,7 @@ async def find_entity_deterministic(
 ) -> str | None:
     """Stage 1: exact lowercased name + type match."""
     cur = await conn.execute(
-        "SELECT id::text FROM entities "
+        "SELECT id::text FROM canonical_entities "
         "WHERE workspace_id = %s AND lower(canonical_name) = lower(%s) "
         "AND entity_type = %s LIMIT 1",
         (workspace_id, name, entity_type),
@@ -46,7 +46,7 @@ async def find_entity_by_embedding(
     cur = await conn.execute(
         "SELECT id::text, canonical_name, "
         "(1.0 - (embedding <=> %s::halfvec))::float AS sim "
-        "FROM entities "
+        "FROM canonical_entities "
         "WHERE workspace_id = %s AND entity_type = %s AND embedding IS NOT NULL "
         "ORDER BY embedding <=> %s::halfvec LIMIT %s",
         (vec_literal, workspace_id, entity_type, vec_literal, limit),
@@ -67,7 +67,7 @@ async def insert_entity(
     if embedding:
         vec_literal = "[" + ",".join(repr(float(v)) for v in embedding) + "]"
     cur = await conn.execute(
-        "INSERT INTO entities (workspace_id, canonical_name, entity_type, embedding) "
+        "INSERT INTO canonical_entities (workspace_id, canonical_name, entity_type, embedding) "
         "VALUES (%s, %s, %s, %s::halfvec) "
         "ON CONFLICT (workspace_id, lower(canonical_name), entity_type) "
         "DO UPDATE SET updated_at = now() "
@@ -81,7 +81,7 @@ async def increment_mention_count(
     conn: Connection, *, entity_id: str, by: int = 1,
 ) -> None:
     await conn.execute(
-        "UPDATE entities SET mention_count = mention_count + %s, "
+        "UPDATE canonical_entities SET mention_count = mention_count + %s, "
         "updated_at = now() WHERE id = %s",
         (by, entity_id),
     )
@@ -139,7 +139,7 @@ async def read_mentions_for_file(
 
 async def count_entities(conn: Connection, *, workspace_id: str) -> int:
     cur = await conn.execute(
-        "SELECT count(*) FROM entities WHERE workspace_id = %s",
+        "SELECT count(*) FROM canonical_entities WHERE workspace_id = %s",
         (workspace_id,),
     )
     return (await cur.fetchone())[0]

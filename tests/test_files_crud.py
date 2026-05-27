@@ -330,11 +330,14 @@ async def test_re_extract_404_for_missing_file(client, test_workspace):
     assert resp.status_code == 404
 
 
-async def test_re_extract_default_stage_enqueues_two_tasks(
+async def test_re_extract_default_stage_enqueues_kv_tables(
     client, test_workspace, monkeypatch,
 ):
-    """`stage` defaults to 'extraction' → defers extract_fields_file +
-    extract_atomic_units_file. Returns 202 + the deferred task names."""
+    """`stage` defaults to 'extraction' → defers extract_kv_tables_file
+    (the post-collapse replacement for the legacy extract_fields_file +
+    extract_atomic_units_file pair). The downstream chain
+    (kv_tables → schema_entities → identities → ready) runs
+    automatically. Returns 202 + the deferred task name."""
     # Seed a file via the normal POST path so RLS + lifecycle are real.
     resp = await client.post(
         "/files",
@@ -371,12 +374,12 @@ async def test_re_extract_default_stage_enqueues_two_tasks(
     body = resp.json()
     assert body["file_id"] == file_id
     assert body["stage"] == "extraction"
-    # Post-refactor: only extract_fields_file is explicitly deferred.
-    # The chain (fields → atomic_units → schema_entities → identities
-    # → ready) runs automatically once the lifecycle is rolled back to
-    # 'fields_extracting'.
-    assert set(body["deferred"]) == {"extract_fields_file"}
-    assert set(deferred) == {"extract_fields_file"}
+    # Post-KV+Tables collapse: only extract_kv_tables_file is
+    # explicitly deferred. The chain (kv_tables → schema_entities →
+    # identities → ready) runs automatically once the lifecycle is
+    # rolled back to 'fields_extracting'.
+    assert set(body["deferred"]) == {"extract_kv_tables_file"}
+    assert set(deferred) == {"extract_kv_tables_file"}
 
 
 async def test_re_extract_stage_parsing_enqueues_parse_only(

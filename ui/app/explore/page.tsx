@@ -70,7 +70,7 @@ const RAIL_ITEMS: RailItem[] = [
   { key: "all",          label: "All results",   icon: LayoutGrid },
   { key: "document",     label: "Documents",     icon: FileText,    countKey: "documents" },
   { key: "doc_type",     label: "Doc types",     icon: Folder,      countKey: "doc_types" },
-  { key: "atomic_unit",  label: "Atomic units",  icon: Puzzle,      countKey: "atomic_units" },
+  { key: "sub_entity",  label: "Atomic units",  icon: Puzzle,      countKey: "sub_entities" },
   { key: "entity",       label: "Entities",      icon: Users,       countKey: "entities" },
   { key: "relationship", label: "Relationships", icon: GitMerge,    countKey: "relationships" },
   { key: "topic",        label: "Topics",        icon: Tag,         countKey: "topics" },
@@ -112,7 +112,7 @@ function parseExploreUrl(sp: URLSearchParams): ExploreUrlState {
   return {
     q: sp.get("q") ?? "",
     kind: ([
-      "all", "document", "doc_type", "atomic_unit",
+      "all", "document", "doc_type", "sub_entity",
       "entity", "relationship", "topic", "anomaly",
     ].includes(kind) ? kind : "all") as RailKey,
     docTypes: (sp.get("dt") ?? "").split(",").map((s) => s.trim()).filter(Boolean),
@@ -299,7 +299,7 @@ function ExploreShell() {
   function scopeToBucket(bucket: EntityProfileBucket) {
     const patch: Partial<ExploreUrlState> = {};
     if (bucket.deep_link_kind && [
-      "document", "atomic_unit", "anomaly", "entity",
+      "document", "sub_entity", "anomaly", "entity",
       "doc_type", "relationship", "topic",
     ].includes(bucket.deep_link_kind)) {
       patch.kind = bucket.deep_link_kind as ExploreKind;
@@ -322,7 +322,7 @@ function ExploreShell() {
           {counts && (
             <span className="text-[11px] text-zinc-400 mono">
               {counts.documents} docs · {counts.doc_types} doc types ·{" "}
-              {counts.atomic_units} atomic units · {counts.entities} entities ·{" "}
+              {counts.sub_entities} atomic units · {counts.entities} entities ·{" "}
               {counts.relationships} relationships
             </span>
           )}

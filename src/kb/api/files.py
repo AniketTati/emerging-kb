@@ -46,7 +46,7 @@ from kb.domain.files import (
     get_file,
     get_file_details,
     get_file_with_lifecycle,
-    list_atomic_units,
+    list_sub_entities,
     list_citations_of_doc,
     list_entities_mentioned,
     list_extracted_entities,
@@ -479,11 +479,11 @@ async def get_extracted_entities(
 
 
 @router.get(
-    "/{file_id}/atomic-units",
+    "/{file_id}/sub-entities",
     response_model=PaginatedList,
     summary="L3 atomic units (clauses, price rows, etc.) sorted by rarity DESC.",
 )
-async def get_atomic_units(
+async def get_sub_entities(
     file_id: str,
     conn: Annotated[Connection, Depends(kb_app_connection)],
     limit: int = Query(default=50),
@@ -491,7 +491,7 @@ async def get_atomic_units(
 ) -> PaginatedList:
     _check_pagination(limit, offset)
     await get_file(conn, file_id)
-    items, total = await list_atomic_units(conn, file_id, limit=limit, offset=offset)
+    items, total = await list_sub_entities(conn, file_id, limit=limit, offset=offset)
     return PaginatedList(
         items=[i.model_dump() for i in items],
         total=total, limit=limit, offset=offset,

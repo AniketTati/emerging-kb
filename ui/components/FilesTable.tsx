@@ -384,7 +384,7 @@ function DetectedSummary({
   if (detail === "error") return <span className="text-zinc-400">—</span>;
   const parts: string[] = [];
   if (detail.n_entities_linked > 0) parts.push(`${detail.n_entities_linked} ent`);
-  if (detail.n_atomic_units > 0) parts.push(`${detail.n_atomic_units} au`);
+  if (detail.n_sub_entities > 0) parts.push(`${detail.n_sub_entities} au`);
   if (parts.length === 0 && detail.n_chunks > 0) parts.push(`${detail.n_chunks} ch`);
   return <span>{parts.join(" · ") || "—"}</span>;
 }
@@ -470,7 +470,7 @@ function DetailBody({ detail }: { detail: FileDetails }) {
             <span className="text-zinc-500">mentions</span>
             <span>{detail.n_mentions}</span>
             <span className="text-zinc-500">atomic units</span>
-            <span>{detail.n_atomic_units}</span>
+            <span>{detail.n_sub_entities}</span>
             <span className="text-zinc-500">entities</span>
             <span>{detail.n_entities_linked}</span>
             <span className="text-zinc-500">triples</span>

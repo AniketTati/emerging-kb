@@ -1288,302 +1288,6 @@ async def extract_mentions_file_impl(file_id: str) -> None:
         traceback.print_exc()
 
 
-# ---------------------------------------------------------------------------
-# Phase 5b — extract_fields_file_impl
-# ---------------------------------------------------------------------------
-
-
-async def extract_fields_file_impl(file_id: str) -> None:
-    """Classify doc-type → propose fields → cluster across workspace+doc_type
-    → check promotion thresholds → promote if crossed → advance lifecycle to
-    `units_extracting`.
-
-    Per build_tracker §5.12.2 (11 locked decisions).
-
-    Per-stage idempotency: returns immediately if already past fields_extracting.
-    """
-    from kb.config import get_settings
-    from kb.domain.fields import (
-        count_docs_of_doctype,
-        delete_proposed_fields_for_file,
-        insert_proposed_field,
-        mark_inferred_field_promoted,
-        read_proposed_fields_for_doctype,
-        update_file_inferred_doc_type,
-        upsert_inferred_schema_field,
-    )
-    from kb.domain.conflicts import apply_source_authority_from_config
-    from kb.extraction.fields import FieldExtractionError, make_field_extractor
-    from kb.extraction.promotion import (
-        PromotionThresholds,
-        cluster_fields_for_doctype,
-        ensure_auto_schema_entity,
-        promote_field,
-        should_promote,
-    )
-
-    settings = get_settings()
-    db_url = settings.database_url
-
-    # Phase 1: state check + read full doc text for classifier/proposer input.
-    async with open_connection(db_url) as conn:
-        async with conn.transaction():
-            cur = await conn.execute(
-                "SELECT workspace_id, lifecycle_state FROM files WHERE id = %s",
-                (file_id,),
-            )
-            row = await cur.fetchone()
-            if row is None:
-                raise FileNotFoundError(file_id)
-            workspace_id, lifecycle_state = row
-
-            if lifecycle_state in ("units_extracting", "ready", "failed", "deleted"):
-                return
-            if lifecycle_state != "fields_extracting":
-                return
-
-            await conn.execute(
-                "SELECT set_config('app.workspace_id', %s, true)",
-                (str(workspace_id),),
-            )
-            # Concat raw_pages text as the doc context for classify + propose.
-            cur = await conn.execute(
-                "SELECT text FROM raw_pages WHERE file_id = %s ORDER BY page_number",
-                (file_id,),
-            )
-            page_rows = await cur.fetchall()
-            doc_text = "\n\n".join(r[0] for r in page_rows if r[0])
-
-            # Also pull every chunk for the file so the resolver can map
-            # each proposed-field value_text back to a (chunk_id, char
-            # offset) at insert time. Citation UI uses these.
-            cur = await conn.execute(
-                "SELECT id::text, text FROM chunks WHERE file_id = %s "
-                "ORDER BY chunk_index ASC",
-                (file_id,),
-            )
-            file_chunks: list[tuple[str, str]] = [
-                (r[0], r[1] or "") for r in await cur.fetchall()
-            ]
-
-    # Phase 2: classify + propose (LLM calls).
-    extractor = make_field_extractor()
-    try:
-        cls = await extractor.classify(doc_text=doc_text)
-        doc_type = cls.doc_type or "unknown"
-        proposal = await extractor.propose(doc_text=doc_text)
-    except FieldExtractionError:
-        # Don't block the chain on extractor failure — log + advance with
-        # doc_type='unknown' + no fields. Phase 9 will re-run via admin endpoint.
-        traceback.print_exc()
-        doc_type = "unknown"
-        proposal = None
-        cls = None
-
-    # Phase 3: atomic DB write — DELETE existing proposals + INSERT new +
-    # update doc_type + recompute clusters + check promotions.
-    async with open_connection(db_url) as conn:
-        async with conn.transaction():
-            await conn.execute(
-                "SELECT set_config('app.workspace_id', %s, true)",
-                (str(workspace_id),),
-            )
-
-            await update_file_inferred_doc_type(
-                conn, file_id=file_id, doc_type=doc_type,
-            )
-
-            # WA-6 / B2 — apply source_authority from config now that we
-            # know the doc-type. Strategy B: additive side-effect only;
-            # does not gate lifecycle. Swallow exceptions so an authority
-            # lookup failure cannot block the pipeline.
-            try:
-                await apply_source_authority_from_config(
-                    conn,
-                    file_id=file_id,
-                    workspace_id=str(workspace_id),
-                    inferred_doc_type=doc_type,
-                )
-            except Exception:  # noqa: BLE001
-                traceback.print_exc()
-
-            await delete_proposed_fields_for_file(conn, file_id=file_id)
-
-            from kb.extraction.source_resolver import (
-                resolve as resolve_source_position,
-            )
-
-            n_proposed = 0
-            if proposal is not None:
-                for f in proposal.fields:
-                    # Find the first chunk whose body contains the
-                    # extracted value_text — that's the field's source
-                    # provenance for the citation UI. Skipped when the
-                    # LLM paraphrased or for fields with no value_text.
-                    src_chunk = src_start = src_end = None
-                    if f.value_text:
-                        for cid, ctext in file_chunks:
-                            pos = resolve_source_position(f.value_text, ctext)
-                            if pos:
-                                src_chunk = cid
-                                src_start = pos.char_start
-                                src_end = pos.char_end
-                                break
-                    await insert_proposed_field(
-                        conn,
-                        file_id=file_id,
-                        workspace_id=str(workspace_id),
-                        inferred_doc_type=doc_type,
-                        field_name=f.field_name,
-                        field_description=f.field_description,
-                        value_text=f.value_text,
-                        value_type=f.value_type,
-                        is_pii=f.is_pii,
-                        model_id=proposal.model_id,
-                        source_chunk_id=src_chunk,
-                        source_char_start=src_start,
-                        source_char_end=src_end,
-                    )
-                    n_proposed += 1
-
-            # Cross-doc clustering: read all proposed_fields for this
-            # (workspace, doc_type) — including the rows we just inserted.
-            proposed_per_doc = await read_proposed_fields_for_doctype(
-                conn, workspace_id=str(workspace_id), inferred_doc_type=doc_type,
-            )
-            n_docs = await count_docs_of_doctype(
-                conn, workspace_id=str(workspace_id), inferred_doc_type=doc_type,
-            )
-            clusters = cluster_fields_for_doctype(
-                proposed_per_doc=proposed_per_doc,
-                total_docs_of_type=n_docs,
-            )
-
-            # WA-2 / Design 6 — vocabulary discovery. When two clusters
-            # in the same doc_type have semantically similar canonical
-            # names ("non_compete" + "non_competition_clause"), emit a
-            # synonym entry into `domain_vocabulary` so the query-time
-            # BM25 expansion (architecture §6 step 2.5) can union them
-            # together. Pre-fix: discovery function existed in
-            # extraction/vocabulary.py but nothing called it, so the
-            # table stayed empty + the Schema-Studio Vocabulary tab
-            # had nothing to show.
-            try:
-                from kb.extraction.vocabulary import (
-                    discover_vocabulary_candidates,
-                )
-                from kb.domain.vocabulary import upsert_vocabulary
-
-                # Embed every cluster's canonical_name in one batch so
-                # the pairwise cosine in discover_vocabulary_candidates
-                # can compute similarity. The embedder is the same one
-                # used for chunks (Gemini Embedding 001, 3072-dim).
-                cluster_names_for_embed = [c.canonical_name for c in clusters]
-                if cluster_names_for_embed:
-                    from kb.embeddings import make_embedder
-                    embedder = make_embedder()
-                    embeddings = await embedder.embed_batch(
-                        cluster_names_for_embed,
-                    )
-                    name_embed_map = {
-                        n: list(e) for n, e in zip(
-                            cluster_names_for_embed, embeddings,
-                        )
-                    }
-                    vocab_candidates = discover_vocabulary_candidates(
-                        clusters=clusters,
-                        name_embeddings=name_embed_map,
-                    )
-                    # Resolve the workspace's domain_id for this
-                    # vocabulary scope. Falls back to a workspace-
-                    # scoped sentinel when no domain config maps the
-                    # workspace explicitly — that way vocab still
-                    # accumulates per workspace and we can promote
-                    # to a shared domain later.
-                    domain_id = (
-                        os.environ.get("KB_DEFAULT_DOMAIN")
-                        or f"workspace:{workspace_id}"
-                    )
-                    for cand in vocab_candidates:
-                        await upsert_vocabulary(
-                            conn,
-                            domain_id=domain_id,
-                            canonical_term=cand.canonical_term,
-                            synonyms=cand.synonyms,
-                            source="discovered",
-                            confidence=cand.confidence,
-                            n_docs_observed=cand.n_docs_observed,
-                        )
-            except Exception:  # noqa: BLE001
-                # Vocabulary discovery is best-effort observability
-                # — never fail the ingest chain over it.
-                traceback.print_exc()
-
-            # UPSERT inferred_schema_fields rows + check promotion.
-            thresholds = PromotionThresholds.from_env()
-            promotion_count = 0
-            schema_entity_id: str | None = None
-            for cluster in clusters:
-                inferred_id = await upsert_inferred_schema_field(
-                    conn,
-                    workspace_id=str(workspace_id),
-                    inferred_doc_type=doc_type,
-                    canonical_name=cluster.canonical_name,
-                    description=cluster.description,
-                    value_type=cluster.value_type,
-                    n_docs_observed=cluster.n_docs_observed,
-                    prevalence=cluster.prevalence,
-                    stability=cluster.stability,
-                    value_type_confidence=cluster.value_type_confidence,
-                )
-                if should_promote(cluster, thresholds):
-                    # Lazy-create schema_entity only when we need it.
-                    if schema_entity_id is None:
-                        _, schema_entity_id = await ensure_auto_schema_entity(
-                            conn,
-                            workspace_id=str(workspace_id),
-                            doc_type=doc_type,
-                        )
-                    schema_field_id = await promote_field(
-                        conn,
-                        workspace_id=str(workspace_id),
-                        schema_entity_id=schema_entity_id,
-                        canonical_name=cluster.canonical_name,
-                        description=cluster.description,
-                        value_type=cluster.value_type,
-                    )
-                    await mark_inferred_field_promoted(
-                        conn,
-                        inferred_field_id=inferred_id,
-                        promoted_schema_field_id=schema_field_id,
-                    )
-                    promotion_count += 1
-
-            await transition_lifecycle(
-                conn,
-                workspace_id=str(workspace_id),
-                file_id=file_id,
-                to_state="units_extracting",
-                event="fields_extracted",
-                payload={
-                    "doc_type": doc_type,
-                    "field_count": n_proposed,
-                    "n_clusters": len(clusters),
-                    "promotions": promotion_count,
-                    "model_id": (cls.model_id if cls else "identity"),
-                },
-            )
-
-    # Phase 5c §5.12.3 #6: chain extract_atomic_units_file.
-    try:
-        await procrastinate_app.configure_task(
-            name="extract_atomic_units_file"
-        ).defer_async(file_id=file_id)
-    except Exception:  # noqa: BLE001
-        traceback.print_exc()
-
-
-# ---------------------------------------------------------------------------
 # Phase 5d — extract_kv_tables_file_impl (KV+Tables collapse)
 # ---------------------------------------------------------------------------
 
@@ -1601,24 +1305,25 @@ async def extract_kv_tables_file_impl(file_id: str) -> None:
       - proposed_fields  (from KV+Tables scalars)
       - inferred_schema_fields + schema_fields (via cluster + promote)
       - domain_vocabulary (discovery, best-effort)
-      - atomic_units (from KV+Tables tables[] rows — replaces plugin call)
-
-    The downstream extract_schema_entities_file task is unchanged: it
-    still bootstraps sub_entity types from atomic_units in Phase 1.5,
-    so the nested-entity refactor work continues to pay off.
+      - schema_entities: bootstrapped doc_root + sub_entity types
+        (BankStatement contains Transaction, etc.)
+      - extracted_entities: child rows DIRECTLY (with unit_type,
+        rarity_score, fields jsonb, source positions). parent_entity_id
+        stays NULL — set later by extract_schema_entities_file lineage
+        pass against the doc_root entity that LLM extraction creates.
 
     Net LLM-call savings: 5 → 2 per doc (mentions + KV+Tables).
 
     Per-stage idempotency: returns if already past fields_extracting.
     """
     from kb.config import get_settings
-    from kb.domain.atomic_units import (
-        delete_atomic_units_for_file,
-        insert_atomic_unit,
-        read_existing_unit_parameters,
-        update_atomic_unit_rarity,
-    )
     from kb.domain.conflicts import apply_source_authority_from_config
+    from kb.domain.extracted_entities import (
+        delete_extracted_entities_children_for_file,
+        insert_extracted_entity,
+        read_existing_entity_fields_for_unit_type,
+        update_entity_rarity,
+    )
     from kb.domain.fields import (
         count_docs_of_doctype,
         delete_proposed_fields_for_file,
@@ -1638,6 +1343,8 @@ async def extract_kv_tables_file_impl(file_id: str) -> None:
         PromotionThresholds,
         cluster_fields_for_doctype,
         ensure_auto_schema_entity,
+        ensure_contains_relationship,
+        ensure_sub_entity_type,
         promote_field,
         should_promote,
     )
@@ -1682,11 +1389,12 @@ async def extract_kv_tables_file_impl(file_id: str) -> None:
 
             # Read chunks paired with their contextual text. The LLM
             # sees `contextual_text` (carries Anthropic-style context
-            # prefixes). For storage we need BOTH ids:
-            #   - `chunks.id` for proposed_fields/atomic_units.source_chunk_id
-            #     (FKs added in migration 0032)
-            #   - `contextual_chunks.id` for atomic_units.anchor_chunk_id
-            #     (original FK from 0016)
+            # prefixes). Storage targets:
+            #   - `proposed_fields.source_chunk_id`  → chunks(id)
+            #     (FK added in migration 0032)
+            #   - `extracted_entities.source_chunk_id` → contextual_chunks(id)
+            #     (FK added in migration 0037 — different target than
+            #     the legacy atomic_units path took)
             cur = await conn.execute(
                 "SELECT c.id::text, cc.id::text, cc.contextual_text "
                 "FROM contextual_chunks cc "
@@ -1696,8 +1404,9 @@ async def extract_kv_tables_file_impl(file_id: str) -> None:
                 (file_id,),
             )
             chunk_rows = await cur.fetchall()
-            # chunks list shape: [(chunks.id, contextual_text), ...] for
-            # build_chunk_indexed_text; cc_ids parallel list for anchor.
+            # chunks list shape: [(chunks.id, contextual_text), ...] —
+            # chunks.id is used for proposed_fields.source_chunk_id;
+            # cc_ids parallel list is used for extracted_entities.
             chunks = [(r[0], r[2] or "") for r in chunk_rows]
             cc_ids: list[str] = [r[1] for r in chunk_rows]
 
@@ -1873,46 +1582,95 @@ async def extract_kv_tables_file_impl(file_id: str) -> None:
                     )
                     promotion_count += 1
 
-            # ---- Tables → atomic_units ----
-            await delete_atomic_units_for_file(conn, file_id=file_id)
+            # ---- Tables → extracted_entities children (direct write) ----
+            # Pre-collapse: rows went to atomic_units first, then
+            # extract_schema_entities_file_impl promoted them to
+            # extracted_entities children. We now skip the
+            # atomic_units intermediate and write the canonical
+            # storage shape directly, removing a whole layer of
+            # duplication and the related chunks.id ↔
+            # contextual_chunks.id FK-translation step.
+            #
+            # parent_entity_id stays NULL here; the lineage pass in
+            # extract_schema_entities_file_impl walks
+            # schema_relationships(kind='contains') to find each child's
+            # parent doc_root instance for this file and UPDATEs the FK.
+
+            # Bootstrap schema_entities types FIRST (the children need
+            # their schema_entity_id FK to point at a real sub_entity
+            # type row). doc_root_entity_type_id is the BankStatement /
+            # MSA / etc. type row id we attach children's
+            # parent_type_id to.
+            doc_root_schema_id: str | None = None
+            doc_root_entity_type_id: str | None = None
+            sub_entity_type_by_unit: dict[str, str] = {}
+            if payload.tables and doc_type and doc_type != "unknown":
+                doc_root_schema_id, doc_root_entity_type_id = (
+                    await ensure_auto_schema_entity(
+                        conn,
+                        workspace_id=workspace_id_str,
+                        doc_type=doc_type,
+                    )
+                )
+                for tbl in payload.tables:
+                    sub_id = await ensure_sub_entity_type(
+                        conn,
+                        workspace_id=workspace_id_str,
+                        schema_id=doc_root_schema_id,
+                        parent_type_id=doc_root_entity_type_id,
+                        unit_type=tbl.name,
+                    )
+                    sub_entity_type_by_unit[tbl.name] = sub_id
+                    await ensure_contains_relationship(
+                        conn,
+                        workspace_id=workspace_id_str,
+                        schema_id=doc_root_schema_id,
+                        parent_entity_id=doc_root_entity_type_id,
+                        child_entity_id=sub_id,
+                    )
+
+            await delete_extracted_entities_children_for_file(
+                conn, file_id=file_id,
+            )
 
             inserted_ids: list[str] = []
             inserted_params: list[dict] = []
             inserted_types: list[str] = []
             total_rows = 0
             for tbl in payload.tables:
-                # Each row of each table → one atomic_unit. unit_type is
-                # the table.name (snake_case) — the L4 Phase 1.5
-                # bootstrap will create matching sub_entity types.
+                sub_entity_id = sub_entity_type_by_unit.get(tbl.name)
+                if sub_entity_id is None:
+                    # Unknown doc_type → no bootstrap happened above.
+                    # Skip child writes; the rows have nowhere to attach.
+                    continue
                 for row in tbl.rows:
-                    src_chunk_id = None  # FK → chunks.id
-                    anchor_cc_id = None  # FK → contextual_chunks.id
+                    src_cc_id: str | None = None
                     if (
                         row.source_chunk is not None
-                        and 0 <= row.source_chunk < len(chunks)
+                        and 0 <= row.source_chunk < len(cc_ids)
                     ):
-                        src_chunk_id = chunks[row.source_chunk][0]
-                        anchor_cc_id = cc_ids[row.source_chunk]
-                    uid = await insert_atomic_unit(
+                        src_cc_id = cc_ids[row.source_chunk]
+                    eid = await insert_extracted_entity(
                         conn,
+                        schema_entity_id=sub_entity_id,
                         file_id=file_id,
                         workspace_id=workspace_id_str,
-                        unit_type=tbl.name,
-                        parameters=row.values,
-                        anchor_chunk_id=anchor_cc_id,
-                        rarity_score=None,
+                        fields=row.values,
+                        citations={},
                         model_id=payload.model_id,
-                        source_chunk_id=src_chunk_id,
+                        rarity_score=None,  # filled by JIT pass below
+                        unit_type=tbl.name,
+                        source_chunk_id=src_cc_id,
                         source_char_start=row.source_char_start,
                         source_char_end=row.source_char_end,
                     )
-                    inserted_ids.append(uid)
+                    inserted_ids.append(eid)
                     inserted_params.append(row.values)
                     inserted_types.append(tbl.name)
                     total_rows += 1
 
-            # JIT anomaly scoring — score per unit_type so cohorts
-            # match (transactions only compared to other transactions).
+            # JIT anomaly scoring — score per unit_type so cohorts match
+            # (transactions only compared to other transactions).
             distinct_unit_types = sorted(set(inserted_types))
             for ut in distinct_unit_types:
                 idx_for_type = [
@@ -1920,14 +1678,14 @@ async def extract_kv_tables_file_impl(file_id: str) -> None:
                 ]
                 params_for_type = [inserted_params[i] for i in idx_for_type]
                 ids_for_type = [inserted_ids[i] for i in idx_for_type]
-                historical = await read_existing_unit_parameters(
+                historical = await read_existing_entity_fields_for_unit_type(
                     conn, workspace_id=workspace_id_str, unit_type=ut,
                 )
                 scores = score_units_jit(params_for_type, historical)
-                for uid, sc in zip(ids_for_type, scores, strict=True):
+                for eid, sc in zip(ids_for_type, scores, strict=True):
                     if sc is not None:
-                        await update_atomic_unit_rarity(
-                            conn, unit_id=uid, rarity_score=float(sc),
+                        await update_entity_rarity(
+                            conn, entity_id=eid, rarity_score=float(sc),
                         )
 
             # Lifecycle: jump straight to entities_extracting, skipping
@@ -1970,202 +1728,6 @@ async def extract_kv_tables_file_impl(file_id: str) -> None:
         traceback.print_exc()
 
 
-# ---------------------------------------------------------------------------
-# Phase 5c — extract_atomic_units_file_impl
-# ---------------------------------------------------------------------------
-
-
-async def extract_atomic_units_file_impl(file_id: str) -> None:
-    """Dispatch a doc-type-aware plugin → write atomic_units rows → JIT
-    anomaly scoring → advance lifecycle to `ready`.
-
-    Per build_tracker §5.12.3 (10 locked decisions).
-    """
-    from kb.config import get_settings
-    from kb.domain.atomic_units import (
-        delete_atomic_units_for_file,
-        insert_atomic_unit,
-        read_existing_unit_parameters,
-        update_atomic_unit_rarity,
-    )
-    from kb.extraction.anomaly import score_units_jit
-    from kb.extraction.plugins import FileMeta, dispatch
-
-    settings = get_settings()
-    db_url = settings.database_url
-
-    # Phase 1: state check + read file metadata + raw_pages.
-    file_meta: FileMeta | None = None
-    raw_pages: list[tuple[int, str, dict]] = []
-    workspace_id_str = ""
-    async with open_connection(db_url) as conn:
-        async with conn.transaction():
-            cur = await conn.execute(
-                "SELECT workspace_id, lifecycle_state, mime_type, name, "
-                "inferred_doc_type FROM files WHERE id = %s",
-                (file_id,),
-            )
-            row = await cur.fetchone()
-            if row is None:
-                raise FileNotFoundError(file_id)
-            workspace_id, lifecycle_state, mime_type, name, inferred_doc_type = row
-
-            if lifecycle_state in ("ready", "failed", "deleted"):
-                return
-            if lifecycle_state != "units_extracting":
-                return
-
-            workspace_id_str = str(workspace_id)
-            file_meta = FileMeta(
-                file_id=file_id,
-                workspace_id=workspace_id_str,
-                mime_type=mime_type,
-                inferred_doc_type=inferred_doc_type,
-                name=name,
-            )
-
-            await conn.execute(
-                "SELECT set_config('app.workspace_id', %s, true)",
-                (workspace_id_str,),
-            )
-            cur = await conn.execute(
-                "SELECT page_number, text, layout_json FROM raw_pages "
-                "WHERE file_id = %s ORDER BY page_number",
-                (file_id,),
-            )
-            page_rows = await cur.fetchall()
-            raw_pages = [(int(p[0]), p[1] or "", p[2] or {}) for p in page_rows]
-
-    if file_meta is None:
-        return
-
-    plugin = dispatch(file_meta)
-    units = []
-    if plugin is not None:
-        doc_text = "\n\n".join(p[1] for p in raw_pages if p[1])
-        try:
-            units = await plugin.extract(
-                file_meta=file_meta, doc_text=doc_text, raw_pages=raw_pages,
-            )
-        except Exception:  # noqa: BLE001
-            traceback.print_exc()
-            units = []
-
-    # Pre-fetch chunks for source-position resolution. For row-style
-    # units (xlsx) we already have parameters.row_index; for clause-style
-    # units the resolver finds the summary text in the source chunk.
-    unit_chunks: list[tuple[str, str]] = []
-    if units:
-        async with open_connection(db_url) as conn:
-            cur = await conn.execute(
-                "SELECT id::text, text FROM chunks WHERE file_id = %s "
-                "ORDER BY chunk_index ASC",
-                (file_id,),
-            )
-            unit_chunks = [(r[0], r[1] or "") for r in await cur.fetchall()]
-
-    # Phase 2: atomic write — DELETE existing + INSERT new + JIT anomaly.
-    async with open_connection(db_url) as conn:
-        async with conn.transaction():
-            await conn.execute(
-                "SELECT set_config('app.workspace_id', %s, true)",
-                (workspace_id_str,),
-            )
-            await delete_atomic_units_for_file(conn, file_id=file_id)
-
-            unit_type = plugin.UNIT_TYPE if plugin is not None else ""
-            model_id_used = "identity" if not units else (
-                "rows" if plugin is dispatch(file_meta) and plugin.UNIT_TYPE == "row"
-                else "gemini-2.5-flash"
-            )
-
-            from kb.extraction.source_resolver import (
-                resolve as resolve_source_position,
-            )
-
-            inserted_ids: list[str] = []
-            inserted_params: list[dict] = []
-            for u in units:
-                # For clause-style units the LLM returns parameters.summary
-                # — find which chunk's body contains it and store the
-                # offset. For row-style xlsx units, parameters.row_index +
-                # sheet_name already pinpoint the source so we leave the
-                # offset columns null.
-                src_chunk = src_start = src_end = None
-                summary = (u.parameters or {}).get("summary")
-                if isinstance(summary, str) and summary.strip():
-                    for cid, ctext in unit_chunks:
-                        pos = resolve_source_position(summary, ctext)
-                        if pos:
-                            src_chunk = cid
-                            src_start = pos.char_start
-                            src_end = pos.char_end
-                            break
-                uid = await insert_atomic_unit(
-                    conn,
-                    file_id=file_id,
-                    workspace_id=workspace_id_str,
-                    unit_type=u.unit_type,
-                    parameters=u.parameters,
-                    anchor_chunk_id=u.anchor_chunk_id,
-                    rarity_score=None,
-                    model_id=model_id_used,
-                    source_chunk_id=src_chunk,
-                    source_char_start=src_start,
-                    source_char_end=src_end,
-                )
-                inserted_ids.append(uid)
-                inserted_params.append(u.parameters)
-
-            # JIT anomaly: read all units for this (workspace, unit_type)
-            # AFTER insert, score new units, UPDATE their rarity_score.
-            if units and unit_type:
-                historical = await read_existing_unit_parameters(
-                    conn, workspace_id=workspace_id_str, unit_type=unit_type,
-                )
-                scores = score_units_jit(inserted_params, historical)
-                for uid, sc in zip(inserted_ids, scores, strict=True):
-                    if sc is not None:
-                        await update_atomic_unit_rarity(
-                            conn, unit_id=uid, rarity_score=float(sc),
-                        )
-
-            # Phase 6 §5.13 #9: transition to entities_extracting (was 'ready'
-            # in 5c; Phase 6 inserts schema-driven extraction before ready).
-            await transition_lifecycle(
-                conn,
-                workspace_id=workspace_id_str,
-                file_id=file_id,
-                to_state="entities_extracting",
-                event="atomic_units_extracted",
-                payload={
-                    "unit_type": unit_type or "none",
-                    "unit_count": len(units),
-                    "plugin": plugin.__class__.__name__ if plugin else "none",
-                },
-            )
-
-    # Phase 6 §5.13 #1: chain extract_schema_entities_file in a SEPARATE tx.
-    try:
-        await procrastinate_app.configure_task(
-            name="extract_schema_entities_file"
-        ).defer_async(file_id=file_id)
-    except Exception:  # noqa: BLE001
-        traceback.print_exc()
-
-    # B1 / WA-4: also defer extract_triples_file in parallel — triples
-    # extraction is additive and doesn't depend on schema entities. It
-    # reads contextual_chunks (Phase 3b) which are already in place by
-    # the time atomic_units finished.
-    try:
-        await procrastinate_app.configure_task(
-            name="extract_triples_file"
-        ).defer_async(file_id=file_id)
-    except Exception:  # noqa: BLE001
-        traceback.print_exc()
-
-
-# ---------------------------------------------------------------------------
 # Phase 6 — extract_schema_entities_file_impl
 # ---------------------------------------------------------------------------
 
@@ -2235,24 +1797,15 @@ async def extract_schema_entities_file_impl(file_id: str) -> None:
             if not inferred_doc_type:
                 inferred_doc_type = "unknown"
 
-            # Nested-entities P1.5: bootstrap the doc_root + sub_entity
-            # types for THIS file's inferred_doc_type before reading
-            # schema_entities. This guarantees:
-            #   - The doc_root entity_type (e.g. BankStatement) exists
-            #     under its auto:<doc_type> schema, properly named (no
-            #     more anonymous "Doc" placeholder).
-            #   - For every distinct unit_type produced by L3 plugins
-            #     into atomic_units for this file (transaction, clause,
-            #     line_item, ...), a sub_entity type exists under the
-            #     doc_root + a `contains` schema_relationship links
-            #     them.
-            # Combined, this populates the schema layer with proper
-            # types so `assign_lineage_for_entity` can resolve real
-            # parents at lineage time. With the legacy code, schema_
-            # entities was always a single anonymous Doc and schema_
-            # relationships was always empty — nothing ever became a
-            # child of anything.
-            from kb.domain.atomic_units import read_atomic_units_for_file
+            # Nested-entities defensive bootstrap. Normally this work
+            # already happened inside extract_kv_tables_file_impl —
+            # KV+Tables creates the doc_root entity_type, the sub_entity
+            # types for each table, the `contains` relationships, AND
+            # writes the child extracted_entities directly. We run the
+            # bootstrap again here (idempotent) as a safety net for
+            # the rare path where a file lands in entities_extracting
+            # without having gone through KV+Tables (e.g. a manual
+            # lifecycle nudge, or a future ingestion mode).
             from kb.extraction.promotion import (
                 ensure_auto_schema_entity, ensure_contains_relationship,
                 ensure_sub_entity_type,
@@ -2268,18 +1821,16 @@ async def extract_schema_entities_file_impl(file_id: str) -> None:
                     )
                 )
 
-            # Read atomic_units to discover which sub_entity types this
-            # file needs. We capture full payload here so we can promote
-            # each row to a child extracted_entity in Phase 3 without a
-            # second round-trip.
-            atomic_units_for_file = await read_atomic_units_for_file(
-                conn, file_id=file_id,
+            # Discover sub_entity types from the extracted_entities
+            # children that extract_kv_tables_file_impl already wrote.
+            # This replaces the legacy `read_atomic_units_for_file`
+            # path — same purpose, new source of truth.
+            cur = await conn.execute(
+                "SELECT DISTINCT unit_type FROM extracted_entities "
+                "WHERE file_id = %s AND unit_type IS NOT NULL",
+                (file_id,),
             )
-            unit_types_in_file = sorted({
-                u["unit_type"] for u in atomic_units_for_file
-                if u.get("unit_type")
-            })
-            # unit_type → sub_entity schema_entity_id
+            unit_types_in_file = sorted({r[0] for r in await cur.fetchall()})
             sub_entity_type_by_unit: dict[str, str] = {}
             if (
                 doc_root_entity_id is not None
@@ -2392,76 +1943,20 @@ async def extract_schema_entities_file_impl(file_id: str) -> None:
                     inserted.append((eid, schema_entity_id))
                     total_inserted += 1
 
-            # PASS 1.5: promote atomic_units → child extracted_entities.
-            # Each row from the L3 plugin (transaction, clause,
-            # line_item, ...) becomes one extracted_entity row of the
-            # corresponding sub_entity type. `parameters` jsonb maps
-            # directly to `fields` jsonb; the structural unit_type and
-            # rarity_score are stamped on the child for the anomaly /
-            # rarity retrieval channels to pick up. parent_entity_id
-            # is left NULL here — PASS 2 / PASS 3 below resolves it
-            # via schema_relationships(kind='contains'), which Phase
-            # 1.5 just populated.
-            #
-            # The atomic_units rows STAY in place during this transitional
-            # commit so the existing readers (anomaly retrieval channel,
-            # Q-mode catalog, Doc Detail UI) keep working until each is
-            # migrated to read from extracted_entities in subsequent
-            # commits. Migration 0038 drops the table once all readers
-            # have moved over.
-            # Pre-fetch chunks.id → contextual_chunks.id translation so
-            # we can translate atomic_units.source_chunk_id (FK → chunks)
-            # into the contextual_chunks.id that extracted_entities.
-            # source_chunk_id (FK → contextual_chunks) expects.
+            # Pick up children KV+Tables already wrote so the lineage
+            # pass (PASS 2/3) sees them and assigns parent_entity_id +
+            # lineage_path. We do NOT re-insert — those rows are
+            # already in place from extract_kv_tables_file_impl. We
+            # just need their (eid, schema_entity_id) pairs in the
+            # `inserted` list.
             cur = await conn.execute(
-                "SELECT cc.chunk_id::text, cc.id::text "
-                "FROM contextual_chunks cc "
-                "JOIN chunks c ON c.id = cc.chunk_id "
-                "WHERE c.file_id = %s",
+                "SELECT id::text, schema_entity_id::text "
+                "FROM extracted_entities "
+                "WHERE file_id = %s AND unit_type IS NOT NULL",
                 (file_id,),
             )
-            chunk_to_cc: dict[str, str] = {
-                r[0]: r[1] for r in await cur.fetchall()
-            }
-
-            for unit in atomic_units_for_file:
-                unit_type = unit["unit_type"]
-                sub_entity_id = sub_entity_type_by_unit.get(unit_type)
-                if sub_entity_id is None:
-                    # No sub_entity type was bootstrapped — happens
-                    # when inferred_doc_type was 'unknown' so we
-                    # never called ensure_auto_schema_entity. Skip;
-                    # the file still has its atomic_units row as
-                    # before.
-                    continue
-                citations_for_unit: dict[str, str] = {}
-                if unit.get("anchor_chunk_id"):
-                    citations_for_unit["_anchor"] = unit["anchor_chunk_id"]
-                # FK translation: atomic_units.source_chunk_id → chunks(id);
-                # extracted_entities.source_chunk_id → contextual_chunks(id).
-                # Look up the cc.id wrapping each chunk; fall back to NULL if
-                # no contextual_chunk exists for that chunks row (rare).
-                raw_src = unit.get("source_chunk_id")
-                ee_src_chunk_id = chunk_to_cc.get(raw_src) if raw_src else None
-
-                eid = await insert_extracted_entity(
-                    conn,
-                    schema_entity_id=sub_entity_id,
-                    file_id=file_id,
-                    workspace_id=workspace_id_str,
-                    fields=unit["parameters"] or {},
-                    citations=citations_for_unit,
-                    model_id=unit.get("model_id") or "l3_plugin",
-                    rarity_score=unit.get("rarity_score"),
-                    unit_type=unit_type,
-                    # Source positions carry through so the citation
-                    # envelope can render verbatim snippets identically
-                    # to the legacy atomic_units → citation_card path.
-                    source_chunk_id=ee_src_chunk_id,
-                    source_char_start=unit.get("source_char_start"),
-                    source_char_end=unit.get("source_char_end"),
-                )
-                inserted.append((eid, sub_entity_id))
+            for eid, se_id in await cur.fetchall():
+                inserted.append((eid, se_id))
                 total_inserted += 1
 
             # PASS 2: topologically sort `inserted` so parents come BEFORE
@@ -3417,55 +2912,28 @@ async def extract_mentions_file(file_id: str) -> None:
     """Wire-level Procrastinate task. Delegates to the testable impl.
 
     Phase 5a: extracts mentions via LLM NER → extracted_mentions rows;
-    chains extract_fields_file. Lifecycle: mentions_extracting →
+    chains extract_kv_tables_file. Lifecycle: mentions_extracting →
     fields_extracting (or failed).
     """
     await extract_mentions_file_impl(file_id)
 
 
-@procrastinate_app.task(name="extract_fields_file", queue="kb", pass_context=False)
-async def extract_fields_file(file_id: str) -> None:
-    """Wire-level Procrastinate task. Delegates to the testable impl.
-
-    Phase 5b: classifies doc-type, proposes emergent fields, clusters across
-    workspace+doc_type, auto-promotes if thresholds cross. Chains
-    extract_atomic_units_file. Lifecycle: fields_extracting →
-    units_extracting (or failed).
-
-    NOTE: Superseded by extract_kv_tables_file in the KV+Tables collapse.
-    Retained here for rollback safety until the demo corpus has been
-    re-extracted and verified end-to-end.
-    """
-    await extract_fields_file_impl(file_id)
-
-
 @procrastinate_app.task(name="extract_kv_tables_file", queue="kb", pass_context=False)
 async def extract_kv_tables_file(file_id: str) -> None:
-    """KV+Tables collapse — replaces extract_fields_file + the LLM-driven
-    portion of extract_atomic_units_file.
+    """KV+Tables — the only LLM-driven extraction task in the
+    fields_extracting slot after the legacy extract_fields_file +
+    extract_atomic_units_file pair was dropped.
 
     Single LLM call returns scalars + N typed tables. Scalars feed the
-    existing L2b promotion pipeline (proposed_fields → inferred_schema_
-    fields → schema_fields). Table rows land in atomic_units, where
-    Phase 1.5 bootstrap in extract_schema_entities_file promotes them to
-    extracted_entities under typed sub_entity schemas.
+    L2b promotion pipeline (proposed_fields → inferred_schema_fields →
+    schema_fields). Table rows land DIRECTLY in extracted_entities as
+    sub_entity children with parent_entity_id=NULL — the lineage pass
+    in extract_schema_entities_file_impl walks
+    schema_relationships(kind='contains') to fill in the parent FK.
 
-    Lifecycle: fields_extracting → entities_extracting (skipping
-    'units_extracting' — the legacy plugin slot is now dead code).
+    Lifecycle: fields_extracting → entities_extracting.
     """
     await extract_kv_tables_file_impl(file_id)
-
-
-@procrastinate_app.task(name="extract_atomic_units_file", queue="kb", pass_context=False)
-async def extract_atomic_units_file(file_id: str) -> None:
-    """Wire-level Procrastinate task. Delegates to the testable impl.
-
-    Phase 5c + 6: dispatches a doc-type-aware plugin (clauses / transactions /
-    rows / none) → atomic_units rows with JIT anomaly scoring → chains
-    extract_schema_entities_file. Lifecycle: units_extracting →
-    entities_extracting (or failed).
-    """
-    await extract_atomic_units_file_impl(file_id)
 
 
 @procrastinate_app.task(name="extract_schema_entities_file", queue="kb", pass_context=False)

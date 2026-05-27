@@ -79,6 +79,53 @@ async def update_lineage(
     )
 
 
+async def update_entity_rarity(
+    conn: Connection, *, entity_id: str, rarity_score: float | None,
+) -> None:
+    """UPDATE rarity_score on a sub_entity instance. Used by the per-
+    unit_type JIT anomaly scorer after extracted_entities children get
+    inserted by the KV+Tables collapse path."""
+    await conn.execute(
+        "UPDATE extracted_entities SET rarity_score = %s WHERE id = %s",
+        (rarity_score, entity_id),
+    )
+
+
+async def read_existing_entity_fields_for_unit_type(
+    conn: Connection, *, workspace_id: str, unit_type: str,
+) -> list[dict[str, Any]]:
+    """Read every `fields` jsonb dict for (workspace, unit_type). This is
+    the historical cohort the JIT anomaly scorer needs to compute
+    per-column z-scores when a new batch of typed sub_entity rows lands.
+
+    Replaces `kb.domain.atomic_units.read_existing_unit_parameters` after
+    the KV+Tables collapse drops the atomic_units intermediate table.
+    """
+    cur = await conn.execute(
+        "SELECT fields FROM extracted_entities "
+        "WHERE workspace_id = %s AND unit_type = %s",
+        (workspace_id, unit_type),
+    )
+    rows = await cur.fetchall()
+    return [r[0] for r in rows if isinstance(r[0], dict)]
+
+
+async def delete_extracted_entities_children_for_file(
+    conn: Connection, *, file_id: str,
+) -> int:
+    """Delete only the child sub_entity rows for a file (those with
+    unit_type set). Used by extract_kv_tables_file_impl to clear out
+    a prior extraction before re-writing children — without touching
+    the doc_root parent row (which has unit_type IS NULL) that
+    extract_schema_entities_file_impl is responsible for."""
+    cur = await conn.execute(
+        "DELETE FROM extracted_entities "
+        "WHERE file_id = %s AND unit_type IS NOT NULL",
+        (file_id,),
+    )
+    return cur.rowcount or 0
+
+
 async def read_active_schemas_for_doctype(
     conn: Connection,
     *,

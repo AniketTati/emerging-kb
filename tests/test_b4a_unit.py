@@ -637,7 +637,7 @@ async def test_route_e_mode_boosts_files_that_mention_seed():
     )
     hits = [_hit(id="h1", file_id="f1"), _hit(id="h2", file_id="f2")]
     conn = _FakeConn({
-        "FROM entities": [],  # _resolve_entity_ids_from_seeds skipped (UUID)
+        "FROM canonical_entities": [],  # _resolve_entity_ids_from_seeds skipped (UUID)
         "FROM extracted_mentions": [("f1",)],  # only f1 mentions the seed
     })
     out = await apply_mode(plan, hits, workspace_id="ws", query="x", conn=conn)
@@ -898,7 +898,7 @@ async def test_route_t_mode_resolves_names_to_ids_before_ppr():
     eid2 = "00000000-0000-0000-0000-000000000002"
     conn = _FakeConn({
         # _resolve_names_to_entity_ids
-        "FROM entities": [(eid1,)],
+        "FROM canonical_entities": [(eid1,)],
         # _read_graph_edges
         "FROM graph_edges": [(eid1, eid2, 1.0)],
         # PPR boost lookup

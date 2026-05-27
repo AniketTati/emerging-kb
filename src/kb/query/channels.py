@@ -13,7 +13,7 @@ Channels (decision #1):
   - dense_chunks        — pgvector HNSW over chunk_embeddings.embedding
   - dense_raptor        — pgvector HNSW over raptor_nodes.embedding
   - mentions_exact      — case-insensitive substring over extracted_mentions
-  - atomic_units_rarity — high-rarity atomic_units; unit_type filter when
+  - sub_entities_rarity — high-rarity atomic_units; unit_type filter when
                           query mentions clause/transaction/row (decision #8)
 
 Skipped channels (Wave B/C):
@@ -361,7 +361,7 @@ async def mentions_exact_channel(
 # ---------------------------------------------------------------------------
 
 
-async def atomic_units_rarity_channel(
+async def sub_entities_rarity_channel(
     conn: Any,
     *,
     workspace_id: str,
@@ -389,7 +389,7 @@ async def atomic_units_rarity_channel(
     elif "row" in q_low:
         unit_filter = "AND ee.unit_type = 'row'"
     rows = await _run_channel_query(
-        conn, "ch_atomic_units_rarity",
+        conn, "ch_sub_entities_rarity",
         f"SELECT ee.id::text, ee.fields::text, ee.file_id::text, "
         f"  ee.unit_type, COALESCE(ee.rarity_score, 0) AS rscore, "
         f"  ee.source_chunk_id::text, ee.source_char_start, "
@@ -407,7 +407,7 @@ async def atomic_units_rarity_channel(
     return [
         Hit(
             id=str(r[0]),
-            kind="atomic_unit",  # kind label preserved for back-compat
+            kind="sub_entity",  # kind label preserved for back-compat
                                   # with downstream renderers; underlying
                                   # row is now an extracted_entity.
             score=float(r[4]),
@@ -415,7 +415,7 @@ async def atomic_units_rarity_channel(
             metadata={
                 "file_id": str(r[2]),
                 "unit_type": r[3],
-                "channel": "atomic_units_rarity",
+                "channel": "sub_entities_rarity",
                 # Source positions present when the source-resolver
                 # located the verbatim text in the source chunk at
                 # index time. UI uses these to slice exact snippets.
@@ -465,7 +465,7 @@ async def run_all_channels(
         "bm25_chunks": "bm25_chunks_channel",
         "bm25_raptor": "bm25_raptor_channel",
         "mentions_exact": "mentions_exact_channel",
-        "atomic_units_rarity": "atomic_units_rarity_channel",
+        "sub_entities_rarity": "sub_entities_rarity_channel",
     }
     vec_channels = {
         "dense_chunks": "dense_chunks_channel",
@@ -473,7 +473,7 @@ async def run_all_channels(
     }
 
     # BM25 channels get the (optionally) vocab-expanded query. Other
-    # text channels (mentions_exact, atomic_units_rarity) use the
+    # text channels (mentions_exact, sub_entities_rarity) use the
     # original — they don't benefit from OR-of-synonyms since they
     # match against entity tables, not free-text.
     bm25_text = bm25_query or query

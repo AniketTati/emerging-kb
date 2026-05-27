@@ -275,7 +275,7 @@ async def test_explore_entity_profile_returns_buckets_for_seeded_entity(
             "SELECT set_config('app.workspace_id', %s, true)", (test_workspace,),
         )
         await conn.execute(
-            "INSERT INTO entities "
+            "INSERT INTO canonical_entities "
             "  (id, workspace_id, canonical_name, entity_type, mention_count) "
             "VALUES (%s, %s, 'Acme Corp', 'ORG', 1)",
             (entity_id, test_workspace),

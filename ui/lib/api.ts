@@ -74,7 +74,7 @@ export type FileDetails = {
   n_chunks: number;
   n_contextual_chunks: number;
   n_mentions: number;
-  n_atomic_units: number;
+  n_sub_entities: number;
   n_entities_linked: number;
   n_triples: number;
   chain_id: string | null;
@@ -328,11 +328,11 @@ export const getProposedFields = (id: string) =>
 export const getExtractedEntities = (id: string) =>
   _getJson<ExtractedEntityInstance[]>(`/files/${id}/extracted-entities`);
 
-export const getAtomicUnits = (
+export const getSubEntities = (
   id: string, opts?: { limit?: number; offset?: number },
 ) =>
   _getJson<Paginated<AtomicUnit>>(
-    `/files/${id}/atomic-units?limit=${opts?.limit ?? 50}&offset=${opts?.offset ?? 0}`,
+    `/files/${id}/sub-entities?limit=${opts?.limit ?? 50}&offset=${opts?.offset ?? 0}`,
   );
 
 export const getDocMentions = (
@@ -688,7 +688,7 @@ export async function deleteSessionsBatch(
 export type ExploreKind =
   | "document"
   | "doc_type"
-  | "atomic_unit"
+  | "sub_entity"
   | "entity"
   | "relationship"
   | "topic"
@@ -697,7 +697,7 @@ export type ExploreKind =
 export type ExploreCounts = {
   documents: number;
   doc_types: number;
-  atomic_units: number;
+  sub_entities: number;
   entities: number;
   relationships: number;
   topics: number;

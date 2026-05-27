@@ -43,7 +43,7 @@ CITATION_MODALITIES: tuple[str, ...] = (
     "xlsx_row", "xlsx_cell",
     "image_bbox", "ocr_span",
     "email_message",
-    "raptor_summary", "aggregate", "atomic_unit",
+    "raptor_summary", "aggregate", "sub_entity",
     "entity_ref", "chain_ref",
 )
 
@@ -52,7 +52,7 @@ CITATION_MODALITIES: tuple[str, ...] = (
 # preference. Earlier = more precise. The picker walks this list and returns
 # the first modality whose `applies()` predicate matches.
 _PRECEDENCE: tuple[str, ...] = (
-    "atomic_unit",
+    "sub_entity",
     "xlsx_cell",
     "xlsx_row",
     "ocr_span",
@@ -134,8 +134,8 @@ def _applies(modality: str, hit: Hit, meta: FileMetaForCitation | None) -> bool:
     mime = (meta.mime_type if meta else None) or ""
     doc_type = (meta.inferred_doc_type if meta else None) or ""
 
-    if modality == "atomic_unit":
-        return hit.kind == "atomic_unit"
+    if modality == "sub_entity":
+        return hit.kind == "sub_entity"
 
     if modality == "xlsx_cell":
         # Wave A: we have sheet + row but no explicit cell pointer yet.
@@ -306,7 +306,7 @@ def _aggregate_ref(hit: Hit, meta: FileMetaForCitation | None) -> dict[str, Any]
     }
 
 
-def _atomic_unit_ref(hit: Hit, meta: FileMetaForCitation | None) -> dict[str, Any]:
+def _sub_entity_ref(hit: Hit, meta: FileMetaForCitation | None) -> dict[str, Any]:
     md = hit.metadata or {}
     return {
         "unit_id": hit.id,
@@ -350,7 +350,7 @@ _REF_BUILDERS = {
     "email_message": _email_message_ref,
     "raptor_summary": _raptor_summary_ref,
     "aggregate": _aggregate_ref,
-    "atomic_unit": _atomic_unit_ref,
+    "sub_entity": _sub_entity_ref,
     "entity_ref": _entity_ref,
     "chain_ref": _chain_ref,
 }
@@ -392,7 +392,7 @@ def _format_label(hit: Hit, meta: FileMetaForCitation | None, modality: str) -> 
                 return "Topic cluster summary"
             return f"Corpus summary L{level}"
         return f"{name} · RAPTOR L{level}" if level is not None else f"{name} · summary"
-    if modality == "atomic_unit":
+    if modality == "sub_entity":
         unit_type = md.get("unit_type") or "unit"
         return f"{name} · {unit_type}"
     if modality == "entity_ref":
@@ -430,7 +430,7 @@ def _modality_confidence(
     if modality == "raptor_summary":
         # Geometric mean approximation — we only have the node score today.
         return s
-    if modality == "atomic_unit":
+    if modality == "sub_entity":
         # Should be L3_extraction_confidence × rerank_score. We have rerank.
         return s
     if modality == "ocr_span":

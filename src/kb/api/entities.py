@@ -232,7 +232,7 @@ async def patch_entity_canonical_name(
     # Read first so we can return the previous value (audit-friendly)
     # AND surface 404 cleanly instead of "0 rows updated" silent-no-op.
     cur = await conn.execute(
-        "SELECT canonical_name, entity_type FROM entities WHERE id = %s",
+        "SELECT canonical_name, entity_type FROM canonical_entities WHERE id = %s",
         (entity_id,),
     )
     row = await cur.fetchone()
@@ -254,7 +254,7 @@ async def patch_entity_canonical_name(
         )
 
     await conn.execute(
-        "UPDATE entities SET canonical_name = %s, updated_at = NOW() "
+        "UPDATE canonical_entities SET canonical_name = %s, updated_at = NOW() "
         "WHERE id = %s",
         (body.canonical_name, entity_id),
     )
