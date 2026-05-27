@@ -804,3 +804,109 @@ async def test_route_s_mode_prepends_per_doc_raptor_summaries():
     assert len(raptor_hits) >= 1
     assert raptor_hits[0].metadata["scope"] == "per_doc"
     assert raptor_hits[0].metadata["mode_applied"] == "S"
+
+
+async def test_route_s_mode_falls_back_to_contextual_chunks_when_no_raptor_nodes():
+    """For short docs that produce no per_doc raptor_nodes (single-leaf
+    case), S-mode falls back to surfacing the file's contextual_chunks
+    as `scope='per_doc_fallback'` hits so the user still gets a
+    summary-like surface."""
+    plan = Plan(mode="S", intent="scoped_summarize")
+    hits = [_hit(id="h1", file_id="f1")]
+    conn = _FakeConn({
+        # No raptor_nodes for this file
+        "FROM raptor_nodes": [],
+        # but contextual_chunks exist
+        "FROM contextual_chunks": [
+            ("cc1", "context-prefixed text of the file", "f1"),
+        ],
+    })
+    out = await apply_mode(plan, hits, workspace_id="ws", query="summarize this doc", conn=conn)
+    fallback = [
+        h for h in out
+        if h.metadata.get("scope") == "per_doc_fallback"
+    ]
+    assert len(fallback) >= 1
+    assert fallback[0].metadata["mode_applied"] == "S"
+    assert "context-prefixed" in fallback[0].snippet
+
+
+# ----- Resolver: prefix-with-suffix tolerance -----
+
+async def test_resolve_names_handles_suffix_tolerance():
+    """'Vertex Industries' should resolve when the DB has 'Vertex
+    Industries Ltd.' — the prefix-with-word-boundary clause covers this."""
+    from kb.query.mode_router import _resolve_names_to_entity_ids
+
+    # Stub a conn whose SQL must contain `LIKE` for the prefix clause
+    # to fire. Returning an id confirms the SQL form is right.
+    captured_sql: list[str] = []
+
+    class _Conn:
+        async def execute(self, sql, params):
+            captured_sql.append(sql)
+
+            class _Cur:
+                async def fetchall(_self):
+                    return [("ent-123",)]
+            return _Cur()
+
+    out = await _resolve_names_to_entity_ids(
+        _Conn(), workspace_id="ws", names=["Vertex Industries"],
+    )
+    assert out == ["ent-123"]
+    # Should have BOTH exact-equality and LIKE prefix clauses.
+    assert any("lower(canonical_name) = " in s for s in captured_sql)
+    assert any("LIKE" in s for s in captured_sql)
+
+
+async def test_resolve_names_passes_uuids_through():
+    """UUID-shaped seeds bypass the DB lookup and round-trip as-is."""
+    from kb.query.mode_router import _resolve_names_to_entity_ids
+
+    uid = "11111111-2222-3333-4444-555555555555"
+
+    class _Conn:
+        async def execute(self, sql, params):
+            class _Cur:
+                async def fetchall(_self):
+                    return []
+            return _Cur()
+
+    out = await _resolve_names_to_entity_ids(
+        _Conn(), workspace_id="ws", names=[uid],
+    )
+    assert out == [uid]
+
+
+# ----- T-mode regression: names get resolved before PPR -----
+
+async def test_route_t_mode_resolves_names_to_ids_before_ppr():
+    """Regression: T must NOT pass raw name strings into PPR — they
+    must be translated to entity_ids via the resolver. Without this
+    fix every PPR call returns empty because names don't match
+    adjacency-graph node ids."""
+    plan = Plan(
+        mode="T", intent="multi-hop",
+        seed_entities=("Vertex Industries",),  # name, not id
+    )
+    hits = [_hit(id="h1", file_id="f1"), _hit(id="h2", file_id="f2")]
+
+    # Fake DB: resolver maps the name to entity-uuid-1; graph edges
+    # connect uuid-1 → uuid-2; mention table shows f1 mentions uuid-2.
+    eid1 = "00000000-0000-0000-0000-000000000001"
+    eid2 = "00000000-0000-0000-0000-000000000002"
+    conn = _FakeConn({
+        # _resolve_names_to_entity_ids
+        "FROM entities": [(eid1,)],
+        # _read_graph_edges
+        "FROM graph_edges": [(eid1, eid2, 1.0)],
+        # PPR boost lookup
+        "FROM extracted_mentions": [("f1",)],
+    })
+    out = await apply_mode(
+        plan, hits, workspace_id="ws", query="how is Vertex connected", conn=conn,
+    )
+    boosted = [h for h in out if h.metadata.get("ppr_boost")]
+    assert len(boosted) == 1
+    assert boosted[0].id == "h1"
