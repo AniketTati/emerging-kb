@@ -489,12 +489,21 @@ function CatalogCard({
             >
               <MessageSquare className="w-3 h-3" /> Ask a question
             </button>
-            {card.file_count === 1 && (
+            {card.file_count === 1 && card.file_ids[0] && (
               <a
-                href={`/files`}
+                href={`/files/${card.file_ids[0]}`}
                 className="text-[11px] flex items-center gap-1 px-2.5 py-1 rounded-md border border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50 cursor-pointer"
               >
                 <FileText className="w-3 h-3" /> View file
+              </a>
+            )}
+            {card.file_count > 1 && (
+              <a
+                href={`/upload`}
+                className="text-[11px] flex items-center gap-1 px-2.5 py-1 rounded-md border border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50 cursor-pointer"
+                title={`Browse all ${card.file_count} files of this type in Upload`}
+              >
+                <FileText className="w-3 h-3" /> View {card.file_count} files
               </a>
             )}
             <button

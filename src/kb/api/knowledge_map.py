@@ -64,6 +64,7 @@ class KMSchemaCard(BaseModel):
     description: str | None
     created_at: str         # ISO-8601
     file_count: int         # # files this schema applies to
+    file_ids: list[str]     # up to 5 file UUIDs for "View file" deep-link
     doc_root_fields: list[KMField]
     sub_entity_types: list[KMSubEntityType]
 
@@ -92,7 +93,12 @@ async def get_catalog(
                   FROM extracted_entities ee
                   JOIN schema_entities se ON se.id = ee.schema_entity_id
                  WHERE se.schema_id = s.id
-                   AND ee.unit_type IS NULL) AS file_count
+                   AND ee.unit_type IS NULL) AS file_count,
+               (SELECT array_agg(DISTINCT ee.file_id::text)
+                  FROM extracted_entities ee
+                  JOIN schema_entities se ON se.id = ee.schema_entity_id
+                 WHERE se.schema_id = s.id
+                   AND ee.unit_type IS NULL) AS file_ids
           FROM schemas s
          WHERE s.workspace_id = %s AND s.lifecycle_state = 'active'
          ORDER BY s.created_at DESC, s.name ASC
@@ -175,7 +181,13 @@ async def get_catalog(
     # 5) Assemble cards.
     items: list[KMSchemaCard] = []
     for r in schema_rows:
-        sid, name, desc, created, file_count = r
+        sid, name, desc, created, file_count, file_ids = r
+        # Cap file_ids at 5 — that's enough for the "View file" UI;
+        # full file listing per-schema lives in /upload filtered by
+        # doc-type.
+        file_ids_capped: list[str] = (
+            [str(x) for x in (file_ids or [])][:5]
+        )
         sub_types: list[KMSubEntityType] = []
         for _ent_id, ent_name in subs_by_schema.get(sid, []):
             unit_type = _pascal_to_snake(ent_name)
@@ -194,6 +206,7 @@ async def get_catalog(
             description=desc,
             created_at=created.isoformat() if hasattr(created, "isoformat") else str(created),
             file_count=int(file_count or 0),
+            file_ids=file_ids_capped,
             doc_root_fields=doc_root_fields,
             sub_entity_types=sub_types,
         ))

@@ -31,9 +31,9 @@ const SHIPPED_NOW: { href: string; label: string; desc: string }[] = [
     desc: "Threshold bars + Promote / Rename / Discard. Once promoted, all docs of that type re-project the new field on next extraction.",
   },
   {
-    href: "/files",
+    href: "/upload",
     label: "Inspect a doc's full extraction stack",
-    desc: "L0 source → L1 chunks → L2 mentions → L3 fields + units → L4 entities → relationships. One row, every layer.",
+    desc: "L0 source → L1 chunks → L2 mentions → L3 fields + units → L4 entities → relationships. Open the files table on /upload, then click any row to open Doc Detail.",
   },
 ];
 

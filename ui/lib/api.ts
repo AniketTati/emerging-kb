@@ -1838,6 +1838,9 @@ export type KMSchemaCard = {
   description: string | null;
   created_at: string;
   file_count: number;
+  /** Up to 5 file UUIDs for "View file" deep-link. When file_count===1
+   *  the lone id is the file to open. */
+  file_ids: string[];
   doc_root_fields: KMField[];
   sub_entity_types: KMSubEntityType[];
 };
