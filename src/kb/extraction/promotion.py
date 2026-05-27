@@ -375,15 +375,21 @@ async def ensure_sub_entity_type(
          at the doc's parent extracted_entity.
     """
     sub_name = sub_entity_name_for(unit_type)
-    # Match by (schema_id, name, parent_type_id). Three guards in one:
-    # right schema, right name, right parent. Avoids cross-schema or
-    # cross-parent collisions in workspaces that share unit_type names.
+    # The UNIQUE constraint (schema_entities_schema_name_active_idx) is on
+    # (schema_id, name) WHERE lifecycle_state='active' — NOT on
+    # parent_type_id. The previous SELECT-then-INSERT pattern checked
+    # parent_type_id but the constraint doesn't, so on
+    # retry-after-partial-failure (or concurrent inserts) the SELECT
+    # missed but the INSERT raised UniqueViolation. The fix:
+    #   1. SELECT by (schema_id, name) — same keys as the unique.
+    #   2. INSERT with ON CONFLICT DO NOTHING + re-SELECT to win the
+    #      race deterministically.
     cur = await conn.execute(
         "SELECT id::text FROM schema_entities "
-        "WHERE schema_id = %s AND name = %s AND parent_type_id = %s "
+        "WHERE schema_id = %s AND name = %s "
         "  AND lifecycle_state = 'active' "
         "LIMIT 1",
-        (schema_id, sub_name, parent_type_id),
+        (schema_id, sub_name),
     )
     row = await cur.fetchone()
     if row:
@@ -394,6 +400,7 @@ async def ensure_sub_entity_type(
         "  (schema_id, workspace_id, name, description, "
         "   lifecycle_state, kind, parent_type_id) "
         "VALUES (%s, %s, %s, %s, 'active', 'sub_entity', %s) "
+        "ON CONFLICT DO NOTHING "
         "RETURNING id::text",
         (
             schema_id, workspace_id, sub_name,
@@ -401,7 +408,26 @@ async def ensure_sub_entity_type(
             parent_type_id,
         ),
     )
-    return (await cur.fetchone())[0]
+    row = await cur.fetchone()
+    if row:
+        return row[0]
+    # ON CONFLICT path — another tx won the race; re-SELECT.
+    cur = await conn.execute(
+        "SELECT id::text FROM schema_entities "
+        "WHERE schema_id = %s AND name = %s "
+        "  AND lifecycle_state = 'active' "
+        "LIMIT 1",
+        (schema_id, sub_name),
+    )
+    row = await cur.fetchone()
+    if row is None:
+        # Shouldn't happen — UNIQUE held but row vanished. Surface
+        # the error rather than silently returning something wrong.
+        raise RuntimeError(
+            f"ensure_sub_entity_type: ON CONFLICT but no row found "
+            f"for schema_id={schema_id} name={sub_name}"
+        )
+    return row[0]
 
 
 async def promote_field(

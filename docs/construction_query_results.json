@@ -1,0 +1,1015 @@
+[
+  {
+    "id": "construction-q001",
+    "stratum": "needle",
+    "ok": true,
+    "verdict": "pass",
+    "elapsed_s": 21.9,
+    "answer_preview": "The project name for the Acme Whitefield datacentre is \"Acme Whitefield Datacentre Phase-2\" [5bd72c93-256b-43f5-85ba-58498607627e] [bdd2a8c3-ca26-47b0-9c0d-8750789a8b93] [d558be7d-f7c6-4243-b589-5176f",
+    "n_citations": 10,
+    "citations": [
+      "drawing-003-mep-layout-datacentre.md",
+      "handover-001-mechanical-completion.md \u00b7 RAPTOR L3",
+      "handover-001-mechanical-completion.md \u00b7 RAPTOR L2",
+      "handover-001-mechanical-completion.md",
+      "contract-001-acme-mahalaxmi-epc.md",
+      "boq-001-datacentre.md \u00b7 RAPTOR L3"
+    ],
+    "is_refusal": false,
+    "expected_refusal": false,
+    "expected_citations": [
+      "contract-001-acme-mahalaxmi-epc"
+    ]
+  },
+  {
+    "id": "construction-q002",
+    "stratum": "needle",
+    "ok": true,
+    "verdict": "pass",
+    "elapsed_s": 19.1,
+    "answer_preview": "The architect of record for the Acme datacentre is **Ar. Amit Deshpande** of Deshpande Architects + Engineers LLP [7d0fb8e6-b675-4e92-883c-66dec8ec6557] [02fb84b3-30fe-4604-8cec-70f186301ed5]. Ar. Ami",
+    "n_citations": 5,
+    "citations": [
+      "structural-calc-001-datacentre-loadtable.md \u00b7 RAPTOR L2",
+      "structural-calc-001-datacentre-loadtable.md \u00b7 RAPTOR L3",
+      "drawing-001-arch-datacentre-revA.md",
+      "drawing-001-arch-datacentre-revB.md \u00b7 RAPTOR L2",
+      "drawing-001-arch-datacentre-revC.md \u00b7 RAPTOR L2"
+    ],
+    "is_refusal": false,
+    "expected_refusal": false,
+    "expected_citations": [
+      "drawing-001-arch-datacentre-revC"
+    ]
+  },
+  {
+    "id": "construction-q003",
+    "stratum": "needle",
+    "ok": true,
+    "verdict": "pass",
+    "elapsed_s": 11.0,
+    "answer_preview": "The main contractor for the Acme datacentre project is **Mahalaxmi Infrastructure Pvt Ltd** [29524e19] [c036d217] [aa9813f3] [9c54c52a] [7d0f8a36] [dc7010c2]. This is an Engineering-Procurement-Constr",
+    "n_citations": 7,
+    "citations": [
+      "drawing-001-arch-datacentre-revB.md",
+      "boq-001-datacentre.md",
+      "contract-001-acme-mahalaxmi-epc.md \u00b7 RAPTOR L3",
+      "contract-001-acme-mahalaxmi-epc.md \u00b7 RAPTOR L2",
+      "boq-001-datacentre.md \u00b7 RAPTOR L3",
+      "boq-001-datacentre.md \u00b7 RAPTOR L2"
+    ],
+    "is_refusal": false,
+    "expected_refusal": false,
+    "expected_citations": [
+      "contract-001-acme-mahalaxmi-epc"
+    ]
+  },
+  {
+    "id": "construction-q004",
+    "stratum": "needle",
+    "ok": true,
+    "verdict": "pass",
+    "elapsed_s": 16.4,
+    "answer_preview": "The contract value for the Acme datacentre EPC is **INR 44,10,11,501** [3634d695] [9c54c52a] [7d0f8a36], or approximately **INR 44.10 crore** [7d0f8a36] [aa9813f3]. This is a Lump Sum Turnkey (LSTK) c",
+    "n_citations": 8,
+    "citations": [
+      "contract-001-acme-mahalaxmi-epc.md",
+      "contract-001-acme-mahalaxmi-epc.md \u00b7 RAPTOR L2",
+      "boq-001-datacentre.md \u00b7 RAPTOR L3",
+      "contract-001-acme-mahalaxmi-epc.md \u00b7 RAPTOR L3",
+      "contract-001-acme-mahalaxmi-epc.md",
+      "boq-001-datacentre.md \u00b7 RAPTOR L2"
+    ],
+    "is_refusal": false,
+    "expected_refusal": false,
+    "expected_citations": [
+      "contract-001-acme-mahalaxmi-epc",
+      "handover-001-mechanical-completion"
+    ]
+  },
+  {
+    "id": "construction-q005",
+    "stratum": "needle",
+    "ok": true,
+    "verdict": "fail-empty",
+    "elapsed_s": 5.5,
+    "answer_preview": "",
+    "n_citations": 0,
+    "citations": [],
+    "is_refusal": false,
+    "expected_refusal": false,
+    "expected_citations": [
+      "contract-001-acme-mahalaxmi-epc",
+      "schedule-001-project-master-schedule"
+    ]
+  },
+  {
+    "id": "construction-q006",
+    "stratum": "needle",
+    "ok": true,
+    "verdict": "fail-no-cit-match",
+    "elapsed_s": 16.6,
+    "answer_preview": "The project site location is the **Acme Whitefield Datacentre Phase-2** [ee1404d4-fea6-4f97-b233-b9e843026775] [96fee7e7-e9fa-4678-a53b-9b06dace5e18] [ee69e602-7ba2-43c7-9b16-d6a4f02467eb] [e9c43db4-2",
+    "n_citations": 5,
+    "citations": [
+      "daily-001-site-report-08apr2025.md",
+      "daily-002-site-report-22may2025.md",
+      "daily-003-site-report-18jul2025.md",
+      "daily-004-site-report-12oct2025.md",
+      "schedule-001-project-master-schedule.md \u00b7 RAPTOR L2"
+    ],
+    "is_refusal": false,
+    "expected_refusal": false,
+    "expected_citations": [
+      "drawing-001-arch-datacentre-revC"
+    ]
+  },
+  {
+    "id": "construction-q007",
+    "stratum": "needle",
+    "ok": true,
+    "verdict": "pass",
+    "elapsed_s": 11.9,
+    "answer_preview": "Mr. Pradeep Bhargava is identified as the Senior Safety Officer at the Acme Whitefield Datacentre Phase-2 site [2dcebb32-f9e2-4c7f-a40f-ed3413c5eb78] [0de615a9-8d6f-4ee7-af46-0d580e77ef23] [8e9f4380-9",
+    "n_citations": 9,
+    "citations": [
+      "safety-002-monthly-safety-report.md",
+      "safety-003-monthly-safety-report.md",
+      "safety-001-incident-fall-investigation.md",
+      "safety-003-monthly-safety-report.md",
+      "safety-003-monthly-safety-report.md \u00b7 RAPTOR L2",
+      "safety-003-monthly-safety-report.md \u00b7 RAPTOR L3"
+    ],
+    "is_refusal": false,
+    "expected_refusal": false,
+    "expected_citations": [
+      "safety-002-monthly-safety-report"
+    ]
+  },
+  {
+    "id": "construction-q008",
+    "stratum": "needle",
+    "ok": true,
+    "verdict": "pass",
+    "elapsed_s": 11.7,
+    "answer_preview": "Mahalaxmi Infrastructure Pvt Ltd submitted a bid for CIDCO Tender No. CIDCO/INFRA/2025/T-018 with a total bid amount of **INR 176.42 crore (excluding GST)** [8da87ba2-0a51-4221-9b7a-ebea7528986a]. Thi",
+    "n_citations": 5,
+    "citations": [
+      "bid-001-mahalaxmi-cidco-response.md",
+      "tender-001-cidco-road-package.md \u00b7 RAPTOR L2",
+      "bid-001-mahalaxmi-cidco-response.md \u00b7 RAPTOR L2",
+      "bid-001-mahalaxmi-cidco-response.md \u00b7 RAPTOR L3",
+      "bid-001-mahalaxmi-cidco-response.md"
+    ],
+    "is_refusal": false,
+    "expected_refusal": false,
+    "expected_citations": [
+      "bid-001-mahalaxmi-cidco-response"
+    ]
+  },
+  {
+    "id": "construction-q009",
+    "stratum": "needle",
+    "ok": true,
+    "verdict": "fail-empty",
+    "elapsed_s": 7.8,
+    "answer_preview": "",
+    "n_citations": 9,
+    "citations": [
+      "",
+      "",
+      "",
+      "",
+      "",
+      ""
+    ],
+    "is_refusal": false,
+    "expected_refusal": false,
+    "expected_citations": [
+      "drawing-004-structural-foundation-datacentre"
+    ]
+  },
+  {
+    "id": "construction-q010",
+    "stratum": "needle",
+    "ok": true,
+    "verdict": "pass",
+    "elapsed_s": 13.5,
+    "answer_preview": "The injured worker in safety-001 is **Mr. Dinesh Kumar** [ed888267-8afb-4673-98e8-36b0c9280c43] [933e7b42-312b-445b-ae19-dbd59e26f334] [bb88cc62-bb5a-4797-b731-2c3768889f4f] [404d2d18-b45f-491d-97f9-3",
+    "n_citations": 8,
+    "citations": [
+      "safety-001-incident-fall-initial.md",
+      "inspection-001-factory-inspector-q2-2025.md",
+      "safety-001-incident-fall-corrective.md",
+      "safety-001-incident-fall-corrective.md \u00b7 RAPTOR L2",
+      "safety-001-incident-fall-investigation.md \u00b7 RAPTOR L2",
+      "safety-001-incident-fall-corrective.md \u00b7 RAPTOR L3"
+    ],
+    "is_refusal": false,
+    "expected_refusal": false,
+    "expected_citations": [
+      "safety-001-incident-fall-initial"
+    ]
+  },
+  {
+    "id": "construction-q011",
+    "stratum": "needle",
+    "ok": true,
+    "verdict": "fail-no-cit-match",
+    "elapsed_s": 14.6,
+    "answer_preview": "On the Acme datacentre site, the contract clause regarding labor Personal Protective Equipment (PPE) specifies two main responsibilities:\n\n*   **Provision of PPE**: Mahalaxmi Infrastructure is respons",
+    "n_citations": 4,
+    "citations": [
+      "labour-contract-001-sai-marathi-scan.md",
+      "labour-contract-001-sai-marathi-scan.md \u00b7 RAPTOR L3",
+      "labour-contract-001-sai-marathi-scan.md \u00b7 RAPTOR L2",
+      "labour-contract-001-sai-marathi-scan.md"
+    ],
+    "is_refusal": false,
+    "expected_refusal": false,
+    "expected_citations": [
+      "contract-001-acme-mahalaxmi-epc"
+    ]
+  },
+  {
+    "id": "construction-q012",
+    "stratum": "chain-aware",
+    "ok": true,
+    "verdict": "partial-some-cits",
+    "elapsed_s": 15.6,
+    "answer_preview": "The load-bearing wall in the Acme datacentre Phase-2 is mandated to be relocated to **Grid line D (8.1m from the East face)** [7d0fb8e6-b675-4e92-883c-66dec8ec6577] [02fb84b3-30fe-4604-8cec-70f186301e",
+    "n_citations": 4,
+    "citations": [
+      "",
+      "structural-calc-001-datacentre-loadtable.md \u00b7 RAPTOR L3",
+      "structural-calc-001-datacentre-loadtable.md",
+      "structural-calc-001-datacentre-loadtable.md"
+    ],
+    "is_refusal": false,
+    "expected_refusal": false,
+    "expected_citations": [
+      "drawing-001-arch-datacentre-revC",
+      "structural-calc-001-datacentre-loadtable"
+    ]
+  },
+  {
+    "id": "construction-q013",
+    "stratum": "chain-aware",
+    "ok": true,
+    "verdict": "pass",
+    "elapsed_s": 29.9,
+    "answer_preview": "The architectural drawing for the Acme Whitefield Datacentre Phase-2 \u2014 Main Building has undergone several revisions:\n\n## Revision A\n*   **Date:** January 12, 2025 [a8941699-40d4-463f-ae57-f6e401cad22",
+    "n_citations": 7,
+    "citations": [
+      "drawing-001-arch-datacentre-revC.md",
+      "drawing-001-arch-datacentre-revA.md",
+      "drawing-001-arch-datacentre-revB.md \u00b7 RAPTOR L3",
+      "drawing-001-arch-datacentre-revB.md \u00b7 RAPTOR L2",
+      "drawing-001-arch-datacentre-revC.md \u00b7 RAPTOR L2",
+      "drawing-002-apollo-maternity-revA.md \u00b7 RAPTOR L2"
+    ],
+    "is_refusal": false,
+    "expected_refusal": false,
+    "expected_citations": [
+      "drawing-001-arch-datacentre-revA",
+      "drawing-001-arch-datacentre-revB",
+      "drawing-001-arch-datacentre-revC"
+    ]
+  },
+  {
+    "id": "construction-q014",
+    "stratum": "chain-aware",
+    "ok": true,
+    "verdict": "fail-no-cit-match",
+    "elapsed_s": 20.3,
+    "answer_preview": "The safety incident chain, from initial occurrence to corrective actions, can be understood through the example of a fall-from-height incident involving Mr. Dinesh Kumar on May 22nd [cc0c14bc-edd9-4b9",
+    "n_citations": 2,
+    "citations": [
+      "safety-003-monthly-safety-report.md \u00b7 RAPTOR L2",
+      "safety-003-monthly-safety-report.md"
+    ],
+    "is_refusal": false,
+    "expected_refusal": false,
+    "expected_citations": [
+      "safety-001-incident-fall-initial",
+      "safety-001-incident-fall-investigation",
+      "safety-001-incident-fall-corrective"
+    ]
+  },
+  {
+    "id": "construction-q015",
+    "stratum": "chain-aware",
+    "ok": true,
+    "verdict": "pass",
+    "elapsed_s": 22.6,
+    "answer_preview": "The final root cause of the May 2025 worker fall was identified as **PPE non-availability and a supervision gap (system failure)** [6b754519-9ec3-4815-89e9-9542ccb32ca7] [368b8158-696b-410b-9d9b-b9968",
+    "n_citations": 10,
+    "citations": [
+      "safety-001-incident-fall-investigation.md",
+      "safety-001-incident-fall-investigation.md",
+      "safety-003-monthly-safety-report.md",
+      "safety-001-incident-fall-investigation.md \u00b7 RAPTOR L3",
+      "safety-003-monthly-safety-report.md \u00b7 RAPTOR L2",
+      "safety-001-incident-fall-corrective.md \u00b7 RAPTOR L2"
+    ],
+    "is_refusal": false,
+    "expected_refusal": false,
+    "expected_citations": [
+      "safety-001-incident-fall-investigation",
+      "safety-001-incident-fall-corrective"
+    ]
+  },
+  {
+    "id": "construction-q016",
+    "stratum": "chain-aware",
+    "ok": true,
+    "verdict": "fail-empty",
+    "elapsed_s": 33.6,
+    "answer_preview": "",
+    "n_citations": 8,
+    "citations": [
+      "",
+      "",
+      "",
+      "",
+      "",
+      ""
+    ],
+    "is_refusal": false,
+    "expected_refusal": false,
+    "expected_citations": [
+      "drawing-002-apollo-maternity-revA",
+      "drawing-002-apollo-maternity-revB"
+    ]
+  },
+  {
+    "id": "construction-q017",
+    "stratum": "chain-aware",
+    "ok": true,
+    "verdict": "fail-no-cit-match",
+    "elapsed_s": 15.1,
+    "answer_preview": "No, the original drawing-001-arch-datacentre-revA is no longer authoritative for the wall position. A structural calculation report for the Acme Whitefield Datacentre Phase-2 concluded that the archit",
+    "n_citations": 1,
+    "citations": [
+      "structural-calc-001-datacentre-loadtable.md \u00b7 RAPTOR L2"
+    ],
+    "is_refusal": false,
+    "expected_refusal": false,
+    "expected_citations": [
+      "drawing-001-arch-datacentre-revA",
+      "drawing-001-arch-datacentre-revC"
+    ]
+  },
+  {
+    "id": "construction-q018",
+    "stratum": "chain-aware",
+    "ok": true,
+    "verdict": "fail-empty",
+    "elapsed_s": 14.7,
+    "answer_preview": "",
+    "n_citations": 10,
+    "citations": [
+      "",
+      "",
+      "",
+      "",
+      "",
+      ""
+    ],
+    "is_refusal": false,
+    "expected_refusal": false,
+    "expected_citations": [
+      "punchlist-001-pre-handover",
+      "handover-001-mechanical-completion"
+    ]
+  },
+  {
+    "id": "construction-q019",
+    "stratum": "chain-aware",
+    "ok": true,
+    "verdict": "pass",
+    "elapsed_s": 19.8,
+    "answer_preview": "The project's original contract value was **INR 44.10 crore** [dbefb979-1b6a-4957-8e89-970c4e57a273] [aa9813f3-646e-4fdd-9970-42e7cc0a63bb]. The contract allows for variations up to **+/- 15%** of the",
+    "n_citations": 9,
+    "citations": [
+      "meeting-002-quarterly-executive-review.md",
+      "contract-001-acme-mahalaxmi-epc.md \u00b7 RAPTOR L3",
+      "contract-001-acme-mahalaxmi-epc.md",
+      "contract-001-acme-mahalaxmi-epc.md \u00b7 RAPTOR L2",
+      "change-order-001-finishes-upgrade.md \u00b7 RAPTOR L3",
+      "change-order-002-co-018-fire-noc.md"
+    ],
+    "is_refusal": false,
+    "expected_refusal": false,
+    "expected_citations": [
+      "contract-001-acme-mahalaxmi-epc",
+      "change-order-001-finishes-upgrade",
+      "change-order-002-co-018-fire-noc",
+      "handover-001-mechanical-completion"
+    ]
+  },
+  {
+    "id": "construction-q020",
+    "stratum": "chain-aware",
+    "ok": true,
+    "verdict": "partial-some-cits",
+    "elapsed_s": 11.1,
+    "answer_preview": "The EPC contract is not in its original form, as it has been modified by at least one change order. Change Order CO-005, regarding a finishes upgrade for server halls, was formally incorporated into t",
+    "n_citations": 4,
+    "citations": [
+      "change-order-001-finishes-upgrade.md",
+      "change-order-001-finishes-upgrade.md \u00b7 RAPTOR L3",
+      "change-order-001-finishes-upgrade.md \u00b7 RAPTOR L2",
+      "handover-001-mechanical-completion.md \u00b7 RAPTOR L2"
+    ],
+    "is_refusal": false,
+    "expected_refusal": false,
+    "expected_citations": [
+      "contract-001-acme-mahalaxmi-epc",
+      "handover-001-mechanical-completion"
+    ]
+  },
+  {
+    "id": "construction-q021",
+    "stratum": "conflict-resolution",
+    "ok": true,
+    "verdict": "partial-some-cits",
+    "elapsed_s": 12.2,
+    "answer_preview": "Revision A of the architectural drawing indicated the load-bearing wall at **Grid line C (5.4m from the East face)** [c67d36d5-c51e-4b50-a389-38b7cfdcd06f] [b97383ca-dfac-4a9b-8440-c7722e8e376a]. Howe",
+    "n_citations": 6,
+    "citations": [
+      "drawing-001-arch-datacentre-revB.md",
+      "structural-calc-001-datacentre-loadtable.md",
+      "drawing-001-arch-datacentre-revB.md",
+      "structural-calc-001-datacentre-loadtable.md",
+      "structural-calc-001-datacentre-loadtable.md \u00b7 RAPTOR L3",
+      "drawing-001-arch-datacentre-revB.md \u00b7 RAPTOR L2"
+    ],
+    "is_refusal": false,
+    "expected_refusal": false,
+    "expected_citations": [
+      "structural-calc-001-datacentre-loadtable",
+      "drawing-001-arch-datacentre-revC"
+    ]
+  },
+  {
+    "id": "construction-q022",
+    "stratum": "conflict-resolution",
+    "ok": true,
+    "verdict": "pass",
+    "elapsed_s": 13.8,
+    "answer_preview": "The initial incident report, filed on **May 22, 2025**, at **18:42 IST**, preliminarily attributed the cause to **worker error**, specifically the failure to clip a safety harness [5a1503f1-b2d9-42f2-",
+    "n_citations": 10,
+    "citations": [
+      "safety-001-incident-fall-initial.md",
+      "safety-001-incident-fall-initial.md \u00b7 RAPTOR L2",
+      "safety-001-incident-fall-initial.md \u00b7 RAPTOR L2",
+      "safety-001-incident-fall-investigation.md",
+      "safety-001-incident-fall-investigation.md",
+      "safety-001-incident-fall-corrective.md"
+    ],
+    "is_refusal": false,
+    "expected_refusal": false,
+    "expected_citations": [
+      "safety-001-incident-fall-initial",
+      "safety-001-incident-fall-investigation"
+    ]
+  },
+  {
+    "id": "construction-q023",
+    "stratum": "conflict-resolution",
+    "ok": true,
+    "verdict": "pass",
+    "elapsed_s": 11.5,
+    "answer_preview": "Two purchase orders show different unit rates for steel:\n\n*   **Purchase Order MAH-PO-2025-04-184**: This order from Mahalaxmi Infrastructure Pvt Ltd to JSW Steel Ltd, dated **April 22, 2025**, specif",
+    "n_citations": 2,
+    "citations": [
+      "purchase-order-001-jsw-steel.md",
+      "boq-001-datacentre.md \u00b7 RAPTOR L2"
+    ],
+    "is_refusal": false,
+    "expected_refusal": false,
+    "expected_citations": [
+      "purchase-order-001-jsw-steel"
+    ]
+  },
+  {
+    "id": "construction-q024",
+    "stratum": "conflict-resolution",
+    "ok": true,
+    "verdict": "fail-empty",
+    "elapsed_s": 5.9,
+    "answer_preview": "",
+    "n_citations": 0,
+    "citations": [],
+    "is_refusal": false,
+    "expected_refusal": false,
+    "expected_citations": [
+      "tender-001-cidco-road-package",
+      "bid-001-mahalaxmi-cidco-response"
+    ]
+  },
+  {
+    "id": "construction-q025",
+    "stratum": "conflict-resolution",
+    "ok": true,
+    "verdict": "fail-empty",
+    "elapsed_s": 8.2,
+    "answer_preview": "",
+    "n_citations": 8,
+    "citations": [
+      "",
+      "",
+      "",
+      "",
+      "",
+      ""
+    ],
+    "is_refusal": false,
+    "expected_refusal": false,
+    "expected_citations": [
+      "rfi-002-mep-electrical-routing"
+    ]
+  },
+  {
+    "id": "construction-q026",
+    "stratum": "conflict-resolution",
+    "ok": true,
+    "verdict": "fail-empty",
+    "elapsed_s": 6.4,
+    "answer_preview": "",
+    "n_citations": 0,
+    "citations": [],
+    "is_refusal": false,
+    "expected_refusal": false,
+    "expected_citations": [
+      "change-order-001-finishes-upgrade"
+    ]
+  },
+  {
+    "id": "construction-q027",
+    "stratum": "rare-clause",
+    "ok": true,
+    "verdict": "partial-some-cits",
+    "elapsed_s": 11.4,
+    "answer_preview": "Yes, drawings indicate fire-rating for components within the clean-agent suppression zones. Specifically, the Server hall doors (D2) are rated for **1-hour fire resistance**, and Emergency exits (D6) ",
+    "n_citations": 5,
+    "citations": [
+      "",
+      "drawing-003-mep-layout-datacentre.md",
+      "inspection-002-mep-walkdown.md",
+      "inspection-002-mep-walkdown.md",
+      "inspection-002-mep-walkdown.md \u00b7 RAPTOR L2"
+    ],
+    "is_refusal": false,
+    "expected_refusal": false,
+    "expected_citations": [
+      "drawing-003-mep-layout-datacentre",
+      "commissioning-001-dg-test-report"
+    ]
+  },
+  {
+    "id": "construction-q028",
+    "stratum": "rare-clause",
+    "ok": true,
+    "verdict": "pass",
+    "elapsed_s": 18.7,
+    "answer_preview": "Yes, there was at least one incident with an investigation period longer than one month. The fall-from-height incident involving Mr. Dinesh Kumar on **May 22, 2025** [ce5135ba-2b95-426c-a00f-5e302ee3c",
+    "n_citations": 5,
+    "citations": [
+      "safety-003-monthly-safety-report.md",
+      "safety-001-incident-fall-investigation.md",
+      "safety-001-incident-fall-investigation.md \u00b7 RAPTOR L2",
+      "safety-001-incident-fall-initial.md",
+      "safety-001-incident-fall-corrective.md"
+    ],
+    "is_refusal": false,
+    "expected_refusal": false,
+    "expected_citations": [
+      "safety-001-incident-fall-corrective"
+    ]
+  },
+  {
+    "id": "construction-q029",
+    "stratum": "rare-clause",
+    "ok": true,
+    "verdict": "pass",
+    "elapsed_s": 14.3,
+    "answer_preview": "Yes, there are at least two change orders greater than INR 20 lakh:\n\n*   **CO-001 (Finishes Upgrade)**: This change order had a total cost premium of **INR 22,00,000** (22 lakh), which was approximate",
+    "n_citations": 6,
+    "citations": [
+      "change-order-001-finishes-upgrade.md",
+      "change-order-002-co-018-fire-noc.md \u00b7 RAPTOR L2",
+      "change-order-002-co-018-fire-noc.md \u00b7 RAPTOR L2",
+      "rfi-003-fire-noc-clarification.eml \u00b7 RAPTOR L2",
+      "rfi-003-fire-noc-clarification.eml \u00b7 email",
+      "handover-001-mechanical-completion.md"
+    ],
+    "is_refusal": false,
+    "expected_refusal": false,
+    "expected_citations": [
+      "change-order-001-finishes-upgrade",
+      "change-order-002-co-018-fire-noc"
+    ]
+  },
+  {
+    "id": "construction-q030",
+    "stratum": "rare-clause",
+    "ok": true,
+    "verdict": "pass",
+    "elapsed_s": 28.4,
+    "answer_preview": "Two RFIs directly address hard rock encountered during excavation:\n\n*   **RFI-001**: This RFI was logged regarding foundation excavation in the case of unexpected rock outcrop. The engineering team wa",
+    "n_citations": 6,
+    "citations": [
+      "daily-001-site-report-08apr2025.md",
+      "daily-001-site-report-08apr2025.md \u00b7 RAPTOR L2",
+      "rfi-001-foundation-rock.eml \u00b7 email",
+      "rfi-001-foundation-rock.eml \u00b7 RAPTOR L2",
+      "drawing-004-structural-foundation-datacentre.md",
+      "drawing-004-structural-foundation-datacentre.md \u00b7 RAPTOR L3"
+    ],
+    "is_refusal": false,
+    "expected_refusal": false,
+    "expected_citations": [
+      "rfi-001-foundation-rock"
+    ]
+  },
+  {
+    "id": "construction-q031",
+    "stratum": "rare-clause",
+    "ok": true,
+    "verdict": "pass",
+    "elapsed_s": 10.3,
+    "answer_preview": "Yes, the labour supply sub-contract document, identified as \"labour-contract-001-sai-marathi-scan,\" contains explicit Marathi and Hindi content [af8ecb04-ab93-403e-be55-e26126ae85d7] [74904243-faff-42",
+    "n_citations": 4,
+    "citations": [
+      "labour-contract-001-sai-marathi-scan.md",
+      "labour-contract-001-sai-marathi-scan.md",
+      "labour-contract-001-sai-marathi-scan.md",
+      "labour-contract-001-sai-marathi-scan.md"
+    ],
+    "is_refusal": false,
+    "expected_refusal": false,
+    "expected_citations": [
+      "labour-contract-001-sai-marathi-scan"
+    ]
+  },
+  {
+    "id": "construction-q032",
+    "stratum": "aggregation",
+    "ok": true,
+    "verdict": "fail-no-cit-match",
+    "elapsed_s": 10.1,
+    "answer_preview": "There were **5 safety incidents** over the project's duration [53bb68a0-6efd-484c-a239-f53650ae18d2].",
+    "n_citations": 1,
+    "citations": [
+      "document"
+    ],
+    "is_refusal": false,
+    "expected_refusal": false,
+    "expected_citations": [
+      "safety-001-incident-fall-initial",
+      "safety-002-monthly-safety-report"
+    ]
+  },
+  {
+    "id": "construction-q033",
+    "stratum": "aggregation",
+    "ok": true,
+    "verdict": "fail-no-cit-match",
+    "elapsed_s": 10.5,
+    "answer_preview": "The total cumulative change-order value is **$80.0** [1ce88edd-87e9-4683-b474-f959fadab885].",
+    "n_citations": 1,
+    "citations": [
+      "document"
+    ],
+    "is_refusal": false,
+    "expected_refusal": false,
+    "expected_citations": [
+      "change-order-001-finishes-upgrade",
+      "change-order-002-co-018-fire-noc",
+      "handover-001-mechanical-completion"
+    ]
+  },
+  {
+    "id": "construction-q034",
+    "stratum": "aggregation",
+    "ok": true,
+    "verdict": "pass",
+    "elapsed_s": 9.9,
+    "answer_preview": "There is **1** distinct sub-contractor on the Acme datacentre project [3bb47f06-1911-4e47-89fe-007be15b7d70].",
+    "n_citations": 1,
+    "citations": [
+      "document"
+    ],
+    "is_refusal": false,
+    "expected_refusal": false,
+    "expected_citations": []
+  },
+  {
+    "id": "construction-q035",
+    "stratum": "aggregation",
+    "ok": true,
+    "verdict": "fail-empty",
+    "elapsed_s": 10.6,
+    "answer_preview": "",
+    "n_citations": 1,
+    "citations": [
+      ""
+    ],
+    "is_refusal": false,
+    "expected_refusal": false,
+    "expected_citations": [
+      "contract-001-acme-mahalaxmi-epc",
+      "handover-001-mechanical-completion"
+    ]
+  },
+  {
+    "id": "construction-q036",
+    "stratum": "aggregation",
+    "ok": true,
+    "verdict": "fail-empty",
+    "elapsed_s": 10.5,
+    "answer_preview": "",
+    "n_citations": 1,
+    "citations": [
+      ""
+    ],
+    "is_refusal": false,
+    "expected_refusal": false,
+    "expected_citations": [
+      "daily-004-site-report-12oct2025",
+      "progress-001-monthly-progress-aug2025"
+    ]
+  },
+  {
+    "id": "construction-q037",
+    "stratum": "long-form",
+    "ok": true,
+    "verdict": "pass",
+    "elapsed_s": 26.2,
+    "answer_preview": "The Acme Whitefield Datacentre Phase-2 project was an Engineering-Procurement-Construction (EPC) contract between Acme Corp Pvt Ltd (Employer) and Mahalaxmi Infrastructure Pvt Ltd (Contractor) [9c54c5",
+    "n_citations": 11,
+    "citations": [
+      "contract-001-acme-mahalaxmi-epc.md \u00b7 RAPTOR L2",
+      "contract-001-acme-mahalaxmi-epc.md \u00b7 RAPTOR L3",
+      "contract-001-acme-mahalaxmi-epc.md",
+      "",
+      "contract-001-acme-mahalaxmi-epc.md",
+      "contract-001-acme-mahalaxmi-epc.md"
+    ],
+    "is_refusal": false,
+    "expected_refusal": false,
+    "expected_citations": [
+      "contract-001-acme-mahalaxmi-epc",
+      "handover-001-mechanical-completion"
+    ]
+  },
+  {
+    "id": "construction-q038",
+    "stratum": "long-form",
+    "ok": true,
+    "verdict": "fail-no-cit-match",
+    "elapsed_s": 26.7,
+    "answer_preview": "On **May 22, 2025**, Mr. Dinesh Kumar sustained a **lost-time injury (LTI)** from a fall-from-height at the Acme Whitefield Datacentre Phase-2, resulting in a **wrist fracture and concussion** [cc0c14",
+    "n_citations": 4,
+    "citations": [
+      "safety-003-monthly-safety-report.md \u00b7 RAPTOR L2",
+      "safety-003-monthly-safety-report.md \u00b7 RAPTOR L3",
+      "safety-003-monthly-safety-report.md",
+      "safety-003-monthly-safety-report.md"
+    ],
+    "is_refusal": false,
+    "expected_refusal": false,
+    "expected_citations": [
+      "safety-001-incident-fall-initial",
+      "safety-001-incident-fall-investigation",
+      "safety-001-incident-fall-corrective"
+    ]
+  },
+  {
+    "id": "construction-q039",
+    "ok": false,
+    "verdict": "error",
+    "elapsed_s": 120.01960333401803,
+    "error": ""
+  },
+  {
+    "id": "construction-q040",
+    "stratum": "long-form",
+    "ok": true,
+    "verdict": "pass",
+    "elapsed_s": 28.4,
+    "answer_preview": "This is a summary of the labour supply sub-contract (Sai-Contract-2025-0184) between Mahalaxmi Infrastructure Pvt Ltd and Sai Labour Agency Pvt Ltd, effective **April 1, 2025** [2641306a-d104-4390-899",
+    "n_citations": 10,
+    "citations": [
+      "labour-contract-001-sai-marathi-scan.md \u00b7 RAPTOR L3",
+      "labour-contract-001-sai-marathi-scan.md \u00b7 RAPTOR L2",
+      "contract-001-acme-mahalaxmi-epc.md \u00b7 RAPTOR L3",
+      "contract-001-acme-mahalaxmi-epc.md \u00b7 RAPTOR L2",
+      "",
+      "labour-contract-001-sai-marathi-scan.md \u00b7 RAPTOR L2"
+    ],
+    "is_refusal": false,
+    "expected_refusal": false,
+    "expected_citations": [
+      "labour-contract-001-sai-marathi-scan"
+    ]
+  },
+  {
+    "id": "construction-q041",
+    "stratum": "ambiguous",
+    "ok": true,
+    "verdict": "fail-no-cit-match",
+    "elapsed_s": 36.7,
+    "answer_preview": "Mahalaxmi Infrastructure Pvt Ltd is a main contractor [f7851b61] with a CIN U45200MH2002PTC184118. The company has an average annual turnover of **INR 282 crore** and a net worth of **INR 84.2 crore**",
+    "n_citations": 12,
+    "citations": [
+      "labour-contract-001-sai-marathi-scan.md",
+      "bid-001-mahalaxmi-cidco-response.md \u00b7 RAPTOR L2",
+      "contract-001-acme-mahalaxmi-epc.md \u00b7 RAPTOR L2",
+      "handover-001-mechanical-completion.md \u00b7 RAPTOR L2",
+      "handover-001-mechanical-completion.md",
+      "safety-001-incident-fall-corrective.md \u00b7 RAPTOR L3"
+    ],
+    "is_refusal": true,
+    "expected_refusal": false,
+    "expected_citations": [
+      "mahalaxmi-cross-domain"
+    ]
+  },
+  {
+    "id": "construction-q042",
+    "stratum": "ambiguous",
+    "ok": true,
+    "verdict": "pass",
+    "elapsed_s": 15.0,
+    "answer_preview": "Architect Amit Deshpande, from Deshpande Architects + Engineers LLP, was instructed to reposition a load-bearing wall from Grid line C (5.4m from the East face) to Grid line D (8.1m from the East face",
+    "n_citations": 9,
+    "citations": [
+      "structural-calc-001-datacentre-loadtable.md",
+      "structural-calc-001-datacentre-loadtable.md",
+      "structural-calc-001-datacentre-loadtable.md \u00b7 RAPTOR L2",
+      "structural-calc-001-datacentre-loadtable.md \u00b7 RAPTOR L3",
+      "structural-calc-001-datacentre-loadtable.md",
+      "structural-calc-001-datacentre-loadtable.md"
+    ],
+    "is_refusal": false,
+    "expected_refusal": false,
+    "expected_citations": []
+  },
+  {
+    "id": "construction-q043",
+    "stratum": "ambiguous",
+    "ok": true,
+    "verdict": "pass",
+    "elapsed_s": 42.1,
+    "answer_preview": "The Project Master Schedule for the Acme Whitefield Datacentre Phase-2 is version Baseline 1.0, effective **March 15, 2025**, with a project duration of **11 months**, from **April 1, 2025, to Februar",
+    "n_citations": 10,
+    "citations": [
+      "schedule-001-project-master-schedule.md",
+      "schedule-001-project-master-schedule.md",
+      "schedule-001-project-master-schedule.md \u00b7 RAPTOR L3",
+      "schedule-001-project-master-schedule.md \u00b7 RAPTOR L2",
+      "subcontract-002-sundar-structural.md",
+      "subcontract-002-sundar-structural.md \u00b7 RAPTOR L2"
+    ],
+    "is_refusal": false,
+    "expected_refusal": false,
+    "expected_citations": []
+  },
+  {
+    "id": "construction-q044",
+    "stratum": "needle",
+    "ok": true,
+    "verdict": "fail-empty",
+    "elapsed_s": 5.5,
+    "answer_preview": "",
+    "n_citations": 0,
+    "citations": [],
+    "is_refusal": false,
+    "expected_refusal": false,
+    "expected_citations": [
+      "structural-calc-001-datacentre-loadtable",
+      "drawing-004-structural-foundation-datacentre"
+    ]
+  },
+  {
+    "id": "construction-q045",
+    "stratum": "negative",
+    "ok": true,
+    "verdict": "pass",
+    "elapsed_s": 19.0,
+    "answer_preview": "The contract value for the BBMP plan approval is not explicitly stated in the provided snippets. However, the overall Lump Sum Turnkey (LSTK) contract value for the entire project, which includes obta",
+    "n_citations": 9,
+    "citations": [
+      "contract-001-acme-mahalaxmi-epc.md",
+      "contract-001-acme-mahalaxmi-epc.md \u00b7 RAPTOR L2",
+      "",
+      "boq-001-datacentre.md \u00b7 RAPTOR L2",
+      "drawing-001-arch-datacentre-revA.md",
+      "drawing-001-arch-datacentre-revA.md \u00b7 RAPTOR L2"
+    ],
+    "is_refusal": false,
+    "expected_refusal": false,
+    "expected_citations": []
+  },
+  {
+    "id": "construction-q046",
+    "stratum": "negative",
+    "ok": true,
+    "verdict": "pass",
+    "elapsed_s": 21.3,
+    "answer_preview": "I apologize, but based on the provided snippets, there is no information about a 1972 Bailadila lease in the construction domain. The snippets discuss recent construction projects, such as the Acme Wh",
+    "n_citations": 3,
+    "citations": [
+      "contract-001-acme-mahalaxmi-epc.md",
+      "drawing-001-arch-datacentre-revC.md \u00b7 RAPTOR L2",
+      "drawing-002-apollo-maternity-revB.md \u00b7 RAPTOR L2"
+    ],
+    "is_refusal": false,
+    "expected_refusal": false,
+    "expected_citations": []
+  },
+  {
+    "id": "construction-q047",
+    "stratum": "adversarial",
+    "ok": true,
+    "verdict": "fail-should-have-refused",
+    "elapsed_s": 7.6,
+    "answer_preview": "",
+    "n_citations": 10,
+    "citations": [
+      "",
+      "",
+      "",
+      "",
+      "",
+      ""
+    ],
+    "is_refusal": false,
+    "expected_refusal": true,
+    "expected_citations": [
+      "safety-001-incident-fall-corrective"
+    ]
+  },
+  {
+    "id": "construction-q048",
+    "stratum": "adversarial",
+    "ok": true,
+    "verdict": "fail-should-have-refused",
+    "elapsed_s": 6.0,
+    "answer_preview": "",
+    "n_citations": 0,
+    "citations": [],
+    "is_refusal": false,
+    "expected_refusal": true,
+    "expected_citations": [
+      "labour-contract-001-sai-marathi-scan"
+    ]
+  },
+  {
+    "id": "construction-q049",
+    "stratum": "adversarial",
+    "ok": true,
+    "verdict": "fail-should-have-refused",
+    "elapsed_s": 8.8,
+    "answer_preview": "",
+    "n_citations": 10,
+    "citations": [
+      "",
+      "",
+      "",
+      "",
+      "",
+      ""
+    ],
+    "is_refusal": false,
+    "expected_refusal": true,
+    "expected_citations": [
+      "safety-001-incident-fall-corrective"
+    ]
+  },
+  {
+    "id": "construction-q050",
+    "stratum": "adversarial",
+    "ok": true,
+    "verdict": "fail-should-have-refused",
+    "elapsed_s": 18.3,
+    "answer_preview": "According to the contract, Acme Corp Pvt Ltd (Owner) is responsible for material price escalation, specifically for steel and cement, capped at +/- 10% from the baseline [e21b385c-121e-4148-90a2-041f7",
+    "n_citations": 6,
+    "citations": [
+      "contract-001-acme-mahalaxmi-epc.md",
+      "contract-001-acme-mahalaxmi-epc.md \u00b7 RAPTOR L2",
+      "contract-001-acme-mahalaxmi-epc.md \u00b7 RAPTOR L3",
+      "boq-001-datacentre.md",
+      "boq-001-datacentre.md \u00b7 RAPTOR L2",
+      "handover-001-mechanical-completion.md"
+    ],
+    "is_refusal": false,
+    "expected_refusal": true,
+    "expected_citations": [
+      "contract-001-acme-mahalaxmi-epc"
+    ]
+  }
+]

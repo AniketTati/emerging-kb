@@ -109,36 +109,48 @@ class GeminiEmbedder:
         self._client = client
         self._model = model or os.environ.get("KB_EMBEDDING_MODEL") or DEFAULT_MODEL
 
+    # Gemini's `embed_content` rejects batches with >100 items
+    # (BatchEmbedContentsRequest hard limit). Callers shouldn't have to
+    # know that — chunk transparently here.
+    _GEMINI_BATCH_LIMIT = 100
+
     async def embed_batch(self, texts: list[str]) -> list[EmbeddingResult]:
         # Re-read env at call time so tests can swap KB_EMBEDDING_MODEL on
         # each call without rebuilding the embedder.
         model = os.environ.get("KB_EMBEDDING_MODEL") or self._model
 
-        try:
-            response = await self._client.aio.models.embed_content(
-                model=model,
-                contents=texts,
-            )
-        except Exception as exc:
-            raise EmbeddingError(f"Gemini embed call failed: {exc}") from exc
+        if not texts:
+            return []
 
-        embeddings = getattr(response, "embeddings", None) or []
-        if len(embeddings) != len(texts):
-            raise EmbeddingError(
-                f"Gemini returned {len(embeddings)} embeddings for "
-                f"{len(texts)} inputs"
-            )
+        all_results: list[EmbeddingResult] = []
+        for start in range(0, len(texts), self._GEMINI_BATCH_LIMIT):
+            chunk = texts[start:start + self._GEMINI_BATCH_LIMIT]
+            try:
+                response = await self._client.aio.models.embed_content(
+                    model=model,
+                    contents=chunk,
+                )
+            except Exception as exc:
+                raise EmbeddingError(
+                    f"Gemini embed call failed: {exc}"
+                ) from exc
 
-        results: list[EmbeddingResult] = []
-        for emb in embeddings:
-            # google-genai's ContentEmbedding has .values: list[float].
-            values = getattr(emb, "values", None) or list(emb)
-            results.append(EmbeddingResult(
-                vector=list(values),
-                model_id=model,
-                dim=len(values),
-            ))
-        return results
+            embeddings = getattr(response, "embeddings", None) or []
+            if len(embeddings) != len(chunk):
+                raise EmbeddingError(
+                    f"Gemini returned {len(embeddings)} embeddings for "
+                    f"{len(chunk)} inputs (chunk {start}-{start+len(chunk)})"
+                )
+
+            for emb in embeddings:
+                # google-genai's ContentEmbedding has .values: list[float].
+                values = getattr(emb, "values", None) or list(emb)
+                all_results.append(EmbeddingResult(
+                    vector=list(values),
+                    model_id=model,
+                    dim=len(values),
+                ))
+        return all_results
 
 
 # ---------------------------------------------------------------------------

@@ -70,6 +70,66 @@ from kb.storage.files import get_file_bytes
 from kb.workers.app import app as procrastinate_app
 
 
+def _parse_yaml_frontmatter(text: str) -> dict[str, str]:
+    """Extract YAML frontmatter at the start of a markdown doc.
+
+    Returns a flat dict of key → str. Lists become comma-joined strings;
+    nested dicts become JSON. Never raises — returns {} on any parse
+    failure or absent frontmatter.
+
+    Recognizes the canonical pattern:
+        ---
+        key: value
+        key2: value2
+        ---
+        # rest of doc
+
+    Per Bug K (construction batch 2 safety-corrective): the kv_tables
+    LLM sometimes misses frontmatter when the body has dominant
+    content. This deterministic parser is the guard rail.
+    """
+    if not text:
+        return {}
+    stripped = text.lstrip()
+    if not stripped.startswith("---"):
+        return {}
+    # Find the closing --- on its own line. Allow either '---' or
+    # '...' as the YAML end marker for broader compat.
+    body = stripped[3:]
+    # Skip the line break after the opening ---
+    nl = body.find("\n")
+    if nl < 0:
+        return {}
+    body = body[nl + 1:]
+    end_idx = -1
+    for marker in ("\n---\n", "\n---\r\n", "\n...\n"):
+        i = body.find(marker)
+        if i >= 0 and (end_idx < 0 or i < end_idx):
+            end_idx = i
+    if end_idx < 0:
+        return {}
+    fm_text = body[:end_idx]
+    try:
+        import yaml  # PyYAML — already a transitive dep
+        data = yaml.safe_load(fm_text)
+    except Exception:  # noqa: BLE001
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    flat: dict[str, str] = {}
+    for k, v in data.items():
+        if v is None:
+            flat[str(k)] = ""
+        elif isinstance(v, (list, tuple)):
+            flat[str(k)] = ", ".join(str(x) for x in v)
+        elif isinstance(v, dict):
+            import json as _json
+            flat[str(k)] = _json.dumps(v, ensure_ascii=False)
+        else:
+            flat[str(k)] = str(v)
+    return flat
+
+
 def singularize_unit_type(name: str) -> str:
     """Canonicalize a table / sub_entity name to its singular form.
 
@@ -271,16 +331,13 @@ async def parse_file_impl(file_id: str, forced_parser: str | None = None) -> Non
             # Don't fail the parse over a chain defer error; log only.
             traceback.print_exc()
 
-        # WA-3 / Design 3 — additive doc-chain detection runs in parallel
-        # with chunking. Side-effect only: no lifecycle gating. If the
-        # defer fails, file still progresses through the rest of the
-        # pipeline; chains can be re-detected later by an admin trigger.
-        try:
-            await procrastinate_app.configure_task(
-                name="detect_doc_chain_file"
-            ).defer_async(file_id=file_id)
-        except Exception:  # noqa: BLE001 — best-effort chain
-            traceback.print_exc()
+        # WA-3 / Design 3 — doc-chain detection used to run in parallel
+        # with chunking, deferred from parse_file_impl. It now runs from
+        # extract_kv_tables_file_impl instead — that gives the detector
+        # access to L3 proposed_fields (chain_id, parent_doc, chain_role)
+        # so docs that declare an explicit chain in their frontmatter or
+        # contract template are honored as ground truth instead of fuzzy-
+        # matched on title. Defer here is intentionally removed.
 
 
 async def _maybe_escalate_to_ocr(
@@ -1393,7 +1450,11 @@ async def extract_kv_tables_file_impl(file_id: str) -> None:
     Per-stage idempotency: returns if already past fields_extracting.
     """
     from kb.config import get_settings
-    from kb.domain.conflicts import apply_source_authority_from_config
+    from kb.domain.conflicts import (
+        DOC_STATUSES,
+        apply_source_authority_from_config,
+        set_doc_status,
+    )
     from kb.domain.extracted_entities import (
         delete_extracted_entities_children_for_file,
         insert_extracted_entity,
@@ -1568,6 +1629,116 @@ async def extract_kv_tables_file_impl(file_id: str) -> None:
                 )
                 n_proposed += 1
 
+            # ---- Frontmatter guard rail (Bug K) ----
+            # YAML frontmatter (`--- ... ---` at file top) is explicit,
+            # structured metadata — but the LLM sometimes misses it
+            # (especially when the body has rich content that dominates
+            # attention, like the safety-incident-corrective doc). Parse
+            # the first raw page's text directly + ensure any frontmatter
+            # key/value pair lands in proposed_fields. This is a no-op for
+            # PDFs / emails / .xlsx (no frontmatter delimiter). The
+            # frontmatter values are authoritative — overwrite (delete +
+            # re-insert) any LLM-extracted scalar of the same name so
+            # downstream consumers (chain detection, doc_status) see the
+            # ground-truth value.
+            cur = await conn.execute(
+                "SELECT text FROM raw_pages WHERE file_id = %s "
+                "ORDER BY page_number ASC LIMIT 1",
+                (file_id,),
+            )
+            first_page_row = await cur.fetchone()
+            first_page_text = first_page_row[0] if first_page_row else ""
+            fm = _parse_yaml_frontmatter(first_page_text or "")
+            if fm:
+                existing_names = {sc.name.lower() for sc in payload.scalars}
+                # Resolve a chunk id for source attribution — first chunk
+                # is the safest source for frontmatter content.
+                fm_chunk_id = chunks[0][0] if chunks else None
+                for key, value in fm.items():
+                    if not key or value is None:
+                        continue
+                    val_str = str(value).strip()
+                    if not val_str:
+                        continue
+                    # If the LLM already wrote this field, overwrite it
+                    # with the frontmatter value (frontmatter wins).
+                    if key.lower() in existing_names:
+                        await conn.execute(
+                            "DELETE FROM proposed_fields "
+                            "WHERE file_id = %s AND lower(field_name) = %s",
+                            (file_id, key.lower()),
+                        )
+                    # Decide the value_type. Status enum gets enum;
+                    # dates get date; everything else text.
+                    if key.lower() in ("status", "doc_status") and \
+                            val_str.lower() in (
+                                "live", "superseded", "draft",
+                                "archived", "retracted",
+                            ):
+                        v_type = "enum"
+                        val_str = val_str.lower()
+                    elif key.lower().endswith("date"):
+                        v_type = "date"
+                    else:
+                        v_type = "text"
+                    await insert_proposed_field(
+                        conn,
+                        file_id=file_id,
+                        workspace_id=workspace_id_str,
+                        inferred_doc_type=doc_type,
+                        field_name=key,
+                        field_description=(
+                            f"Extracted from YAML frontmatter "
+                            f"({key})"
+                        ),
+                        value_text=val_str,
+                        value_type=v_type,
+                        is_pii=False,
+                        model_id="frontmatter:auto",
+                        source_chunk_id=fm_chunk_id,
+                        source_char_start=None,
+                        source_char_end=None,
+                    )
+                    n_proposed += 1
+                    # Make this visible to the doc_status projection
+                    # loop below (it reads from payload.scalars). Inject
+                    # a lightweight stand-in so the canonical-status
+                    # branch fires for frontmatter-only docs.
+                    if key.lower() in ("status", "doc_status") and v_type == "enum":
+                        # Append a fake scalar mirroring the schema. The
+                        # downstream `for sc in payload.scalars` loop
+                        # only checks .name / .value / .value_type which
+                        # match our shape.
+                        class _FmScalar:  # noqa: SLF001
+                            name = key
+                            value = val_str
+                            value_type = v_type
+                        payload.scalars.append(_FmScalar())  # type: ignore[arg-type]
+
+            # ---- Project canonical scalars onto file columns ----
+            # `status` / `doc_status` scalars whose value matches a known
+            # doc-status enum (live / superseded / draft / archived /
+            # retracted) should reflect on files.doc_status. Without this
+            # bridge the column stays at the DB default 'live', which
+            # breaks chain-aware queries that need to know Rev A is
+            # superseded, draft contracts shouldn't be authoritative, etc.
+            # We trust the extractor's enum-typed values; non-canonical
+            # free-text status (e.g. "Issued for Coordination") is
+            # ignored — it stays in proposed_fields for review.
+            for sc in payload.scalars:
+                if sc.name.strip().lower() not in ("status", "doc_status"):
+                    continue
+                v = (sc.value or "").strip().lower()
+                if v not in DOC_STATUSES:
+                    continue
+                try:
+                    await set_doc_status(
+                        conn, file_id=file_id, new_status=v,
+                    )
+                except Exception:  # noqa: BLE001
+                    traceback.print_exc()
+                break  # first canonical status wins
+
             # ---- Cluster + vocabulary + promote (unchanged from L2b) ----
             proposed_per_doc = await read_proposed_fields_for_doctype(
                 conn, workspace_id=workspace_id_str, inferred_doc_type=doc_type,
@@ -1593,8 +1764,15 @@ async def extract_kv_tables_file_impl(file_id: str) -> None:
                     embeddings = await embedder.embed_batch(
                         cluster_names_for_embed,
                     )
+                    # Bug E: EmbeddingResult is a Pydantic model; iterating
+                    # it yields (field_name, value) tuples — `list(e)`
+                    # silently returns garbage, and _cosine then raises
+                    # TypeError ("can't multiply sequence by non-int of
+                    # type 'tuple'"). The outer try swallowed it so vocab
+                    # discovery was effectively a no-op across all
+                    # batches. Use the explicit .vector attribute.
                     name_embed_map = {
-                        n: list(e) for n, e in zip(
+                        n: list(e.vector) for n, e in zip(
                             cluster_names_for_embed, embeddings,
                         )
                     }
@@ -1809,6 +1987,20 @@ async def extract_kv_tables_file_impl(file_id: str) -> None:
     try:
         await procrastinate_app.configure_task(
             name="extract_triples_file"
+        ).defer_async(file_id=file_id)
+    except Exception:  # noqa: BLE001
+        traceback.print_exc()
+
+    # WA-3 / Design 3 — doc-chain detection moved here from
+    # parse_file_impl so the detector can read this file's L3
+    # proposed_fields (chain_id, parent_doc, chain_role, chain_version)
+    # and form ground-truth chains for docs that declare them
+    # explicitly. Heuristic fallback (title-similarity, email
+    # references, drawing-rev filename regex) still fires for docs
+    # without explicit fields.
+    try:
+        await procrastinate_app.configure_task(
+            name="detect_doc_chain_file"
         ).defer_async(file_id=file_id)
     except Exception:  # noqa: BLE001
         traceback.print_exc()
@@ -2070,13 +2262,43 @@ async def extract_schema_entities_file_impl(file_id: str) -> None:
             }
 
             def _depth(seid: str, memo: dict[str, int]) -> int:
-                if seid in memo:
-                    return memo[seid]
-                if seid not in parent_se_map:
-                    memo[seid] = 0
-                    return 0
-                memo[seid] = 1 + _depth(parent_se_map[seid], memo)
-                return memo[seid]
+                # Iterative walk + cycle guard. The original recursive
+                # form blew the stack when a schema_entity pointed at
+                # itself (e.g. an LLM-extracted unit_type whose
+                # snake_to_pascal name collided with the doc_root
+                # name → ensure_sub_entity_type returned the doc_root
+                # id, which the contains-relationship then references
+                # as both parent and child). Cap depth at 64 too, so
+                # pathological chains can't OOM us either.
+                stack: list[str] = []
+                cursor = seid
+                while True:
+                    if cursor in memo:
+                        # Known depth; assign chain back-walking up.
+                        d = memo[cursor]
+                        for s in reversed(stack):
+                            d += 1
+                            memo[s] = d
+                        return memo[seid]
+                    if cursor in stack or len(stack) > 64:
+                        # Cycle or runaway — mark every node in the
+                        # cycle / chain at depth 0 and bail. Sort
+                        # stability isn't load-bearing here; what
+                        # matters is "never recurse infinitely".
+                        for s in stack:
+                            memo[s] = 0
+                        memo[cursor] = 0
+                        return memo[seid]
+                    parent = parent_se_map.get(cursor)
+                    if parent is None:
+                        memo[cursor] = 0
+                        d = 0
+                        for s in reversed(stack):
+                            d += 1
+                            memo[s] = d
+                        return memo[seid]
+                    stack.append(cursor)
+                    cursor = parent
 
             depth_memo: dict[str, int] = {}
             inserted.sort(key=lambda t: _depth(t[1], depth_memo))
@@ -2328,16 +2550,16 @@ async def resolve_identities_file_impl(file_id: str) -> None:
 async def detect_doc_chain_file_impl(file_id: str) -> None:
     """Per-file doc-chain detection (Design 3 §"Pipeline integration").
 
-    Runs as an **additive** post-parse task — does NOT gate the existing
-    parse → chunk → … chain. parse_file_impl defers BOTH chunk_file and
-    detect_doc_chain_file; they run in parallel, doc-chain writes are
-    side-effects on doc_chains / doc_chain_members. No lifecycle state
-    transition (the new `doc_chaining` state is in the CHECK constraint
-    for forward-compat if Wave B switches to a gating model).
+    Runs as an **additive** post-extraction task. Deferred from
+    extract_kv_tables_file_impl (after L3 fields exist) so the
+    "explicit chain via proposed_fields.chain_id" path can run; falls
+    back to the heuristic detect_chain() for docs that don't declare
+    an explicit chain_id.
 
     Idempotency: if a chain membership row already exists for this file,
-    skip. Otherwise run detect_chain() over the workspace's prior files
-    and upsert chain + member rows.
+    skip. Otherwise check for an explicit chain_id in proposed_fields
+    first (deterministic + 100% precision for docs that declare it);
+    on no explicit chain, fall through to heuristic detection.
     """
     from kb.config import get_settings
     from kb.domain.doc_chains import (
@@ -2384,6 +2606,195 @@ async def detect_doc_chain_file_impl(file_id: str) -> None:
             # Idempotency: already a chain member.
             existing_membership = await find_chain_for_doc(conn, doc_id=file_id)
             if existing_membership is not None:
+                return
+
+            # ---- Explicit chain via proposed_fields (100% precision) ----
+            # When the source doc declares chain_id / parent_doc explicitly
+            # (e.g. markdown frontmatter, structured contract templates),
+            # honor that as ground truth and skip the heuristic detector.
+            # This task is deferred from extract_kv_tables_file_impl, so
+            # proposed_fields are guaranteed to exist at this point for
+            # docs whose L3 layer ran successfully.
+            cur = await conn.execute(
+                "SELECT lower(field_name), value_text FROM proposed_fields "
+                "WHERE file_id = %s AND lower(field_name) IN "
+                "('chain_id','parent_doc','doc_id','chain_role','chain_version')",
+                (file_id,),
+            )
+            own_pf_rows = await cur.fetchall()
+            own_pf: dict[str, str] = {
+                k: (v or "").strip() for k, v in own_pf_rows
+            }
+            own_chain_id = own_pf.get("chain_id") or ""
+            own_parent_doc_ref = own_pf.get("parent_doc") or ""
+            own_doc_id_ref = own_pf.get("doc_id") or ""
+            own_chain_role = own_pf.get("chain_role") or ""
+            own_chain_version_raw = own_pf.get("chain_version") or ""
+
+            if own_chain_id:
+                # Pull sibling proposed_fields for chain_id / doc_id /
+                # parent_doc / chain_role / chain_version so we can attach
+                # this file to the right chain + resolve parent references.
+                cur = await conn.execute(
+                    "SELECT pf.file_id::text, lower(pf.field_name), pf.value_text "
+                    "FROM proposed_fields pf "
+                    "JOIN files f ON f.id = pf.file_id "
+                    "WHERE f.workspace_id = %s AND pf.file_id <> %s "
+                    "AND lower(pf.field_name) IN "
+                    "('chain_id','doc_id','parent_doc','chain_role','chain_version') "
+                    "AND pf.value_text IS NOT NULL",
+                    (workspace_id, file_id),
+                )
+                sib_pf: dict[str, dict[str, str]] = {}
+                for sib_id, fname, val in await cur.fetchall():
+                    sib_pf.setdefault(sib_id, {})[fname] = (val or "").strip()
+
+                co_member_ids = [
+                    sib_id for sib_id, pf in sib_pf.items()
+                    if pf.get("chain_id") == own_chain_id
+                ]
+                # Resolve own parent_doc reference → sibling file_id by
+                # matching against siblings' doc_id field.
+                own_parent_file_id: str | None = None
+                if own_parent_doc_ref:
+                    for sib_id, pf in sib_pf.items():
+                        if pf.get("doc_id") == own_parent_doc_ref:
+                            own_parent_file_id = sib_id
+                            break
+
+                # chain_type by inferred_doc_type + chain_id signal.
+                # CHAIN_TYPES is fixed (email_thread / contract_chain /
+                # drawing_revisions / circular_chain / patient_chart /
+                # other) — pick the best fit; fall back to "other" rather
+                # than mis-tagging incident/safety/inspection chains as
+                # contracts.
+                dt_lc = (inferred_doc_type or "").lower()
+                ck_lc = own_chain_id.lower()
+                if "drawing" in dt_lc or "drawing" in ck_lc:
+                    ch_type = "drawing_revisions"
+                elif any(t in dt_lc for t in (
+                    "contract", "agreement", "amendment", "addendum",
+                    "msa", "sow", "nda", "lease", "subcontract",
+                    "subscription", "license",
+                )):
+                    ch_type = "contract_chain"
+                elif "circular" in dt_lc or "circular" in ck_lc \
+                        or "gr_" in dt_lc or "circular" in (own_chain_id or ""):
+                    ch_type = "circular_chain"
+                elif any(t in dt_lc for t in (
+                    "patient", "discharge", "encounter", "chart",
+                )):
+                    ch_type = "patient_chart"
+                else:
+                    # safety / incident / inspection / quality / progress /
+                    # meeting / commissioning / labour / etc. fall here.
+                    ch_type = "other"
+
+                role_map = {
+                    "original": "original",
+                    "amendment": "amendment",
+                    "revision": "revision",
+                    "side_letter": "side_letter",
+                    "corrigendum": "corrigendum",
+                    "superseded": "amendment",
+                }
+                explicit_role = role_map.get(own_chain_role.lower(), "")
+                if not explicit_role:
+                    explicit_role = (
+                        "amendment" if own_parent_doc_ref else "original"
+                    )
+                try:
+                    explicit_version = int(own_chain_version_raw)
+                except (ValueError, TypeError):
+                    explicit_version = 0 if explicit_role == "original" else 1
+
+                # Find-or-create the chain via explicit chain_key. The
+                # chain_key namespace prefix `explicit:` keeps these
+                # ground-truth chains distinguishable from heuristic ones.
+                chain_id_db = await upsert_chain(
+                    conn,
+                    workspace_id=workspace_id_str,
+                    chain_type=ch_type,
+                    title=own_chain_id,
+                    chain_key=f"explicit:{own_chain_id}",
+                    detection_confidence=1.0,
+                    current_version_id=(
+                        file_id if explicit_role != "original" else None
+                    ),
+                )
+                inserted = await add_member(
+                    conn,
+                    chain_id=chain_id_db,
+                    doc_id=file_id,
+                    workspace_id=workspace_id_str,
+                    version_index=explicit_version,
+                    role=explicit_role,
+                    parent_doc_id=own_parent_file_id,
+                )
+                # Attach any co-members that aren't in the chain yet.
+                for sib_id in co_member_ids:
+                    cur = await conn.execute(
+                        "SELECT 1 FROM doc_chain_members "
+                        "WHERE chain_id = %s AND doc_id = %s LIMIT 1",
+                        (chain_id_db, sib_id),
+                    )
+                    if (await cur.fetchone()) is not None:
+                        continue
+                    sib_role_raw = sib_pf.get(sib_id, {}).get("chain_role", "")
+                    sib_role = role_map.get(sib_role_raw.lower(), "")
+                    sib_parent_ref = sib_pf.get(sib_id, {}).get("parent_doc", "")
+                    if not sib_role:
+                        sib_role = "amendment" if sib_parent_ref else "original"
+                    sib_ver_raw = sib_pf.get(sib_id, {}).get("chain_version", "")
+                    try:
+                        sib_version = int(sib_ver_raw)
+                    except (ValueError, TypeError):
+                        sib_version = 0 if sib_role == "original" else 1
+                    # Resolve sibling's parent_doc ref → file_id (could be
+                    # in sib_pf or this file's own doc_id_ref).
+                    sib_parent_file_id: str | None = None
+                    if sib_parent_ref:
+                        if own_doc_id_ref and sib_parent_ref == own_doc_id_ref:
+                            sib_parent_file_id = file_id
+                        else:
+                            for cand_id, cand_pf in sib_pf.items():
+                                if cand_pf.get("doc_id") == sib_parent_ref:
+                                    sib_parent_file_id = cand_id
+                                    break
+                    await add_member(
+                        conn,
+                        chain_id=chain_id_db,
+                        doc_id=sib_id,
+                        workspace_id=workspace_id_str,
+                        version_index=sib_version,
+                        role=sib_role,
+                        parent_doc_id=sib_parent_file_id,
+                    )
+                if explicit_role in (
+                    "amendment", "revision", "side_letter", "corrigendum",
+                ):
+                    await set_current_version(
+                        conn,
+                        chain_id=chain_id_db,
+                        current_version_id=file_id,
+                    )
+                await record_lifecycle_event(
+                    conn,
+                    workspace_id=workspace_id_str,
+                    file_id=file_id,
+                    from_state=str(lifecycle_state),
+                    to_state=str(lifecycle_state),
+                    event="doc_chain_detected",
+                    payload={
+                        "matched": True,
+                        "chain_id": chain_id_db,
+                        "chain_type": ch_type,
+                        "role": explicit_role,
+                        "confidence": 1.0,
+                        "inserted_member": inserted,
+                        "source": "explicit_proposed_field",
+                    },
+                )
                 return
 
             # Build DetectionInput from raw_pages. First page text is the
