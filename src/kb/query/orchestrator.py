@@ -244,6 +244,7 @@ class Orchestrator:
         intent = await self._intent_classifier.classify(query)
         plan = await self._planner.plan(
             query, intent, requested_mode=requested_mode,
+            conn=conn, workspace_id=workspace_id,
         )
 
         rewrites = await self._rewriter.rewrite(query)
@@ -381,6 +382,7 @@ class Orchestrator:
         })
         plan = await self._planner.plan(
             effective_query, intent, requested_mode=requested_mode,
+            conn=conn, workspace_id=workspace_id,
         )
         await emit("planned", {"mode": plan.mode, "intent": intent.label})
 

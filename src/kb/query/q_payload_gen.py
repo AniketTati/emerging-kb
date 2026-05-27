@@ -38,6 +38,7 @@ import json
 import logging
 from typing import Any
 
+from kb.db.pool import Connection
 from kb.q_planner.catalog import ALLOWED_COLUMNS, ALLOWED_TABLES
 from kb.q_planner.grammar import (
     ALLOWED_AGGREGATIONS, ALLOWED_OPERATORS, parse_plan, QPlanParseError,
@@ -117,6 +118,14 @@ def _build_system_prompt() -> str:
         "max 63 chars).\n"
         "3. For 'how many' / 'count' questions, use COUNT with field='*'.\n"
         "4. For 'total' / 'sum of' questions, use SUM on the relevant numeric column.\n"
+        "4a. When the user says 'sum/total of <thing>' WITHOUT naming a "
+        "specific numeric column, AND the schema hints show no obvious "
+        "single numeric column to sum (e.g. 'sum of transactions' when the "
+        "transaction row has both 'debit' and 'credit'), interpret it as "
+        "COUNT(*) rather than guessing a column — \"how many transactions\". "
+        "NEVER hallucinate a column name like 'amount' or 'value' that "
+        "isn't in the workspace schema hints; aggregating a missing key "
+        "silently returns NULL.\n"
         "5. For 'breakdown by X' / 'per X' / 'grouped by X', set group_by=['X'] and "
         "include the grouping column in the SELECT via an aggregation alias.\n"
         "6. Always include an aggregation — bare row dumps are not Q-mode.\n"
@@ -191,10 +200,106 @@ def _coerce_plan_shape(raw: dict[str, Any]) -> dict[str, Any]:
     return raw
 
 
+async def discover_unit_type_schema(
+    conn: Connection | None,
+    *,
+    workspace_id: str | None,
+    limit_keys_per_type: int = 20,
+) -> dict[str, list[str]]:
+    """Return `{unit_type: [field_key, …]}` listing the jsonb keys that
+    actually appear in `extracted_entities.fields` for each unit_type
+    in this workspace.
+
+    The Q-mode planner LLM has no inherent knowledge of which jsonb
+    keys exist per (workspace, unit_type) — the keys are corpus-
+    discovered. Without this hint the LLM tends to hallucinate generic
+    column names (e.g. `fields.amount` on a transactions table that
+    actually carries `debit`/`credit`/`balance`) and the resulting
+    aggregate returns NULL silently.
+
+    Returns `{}` when the lookup can't run (no conn / no workspace_id);
+    caller falls back to the catalog-only prompt.
+    """
+    if conn is None or not workspace_id:
+        return {}
+    cur = await conn.execute(
+        "SELECT unit_type, jsonb_object_keys(fields) AS k, count(*) AS n "
+        "FROM extracted_entities "
+        "WHERE workspace_id = %s "
+        "  AND unit_type IS NOT NULL "
+        "  AND fields IS NOT NULL "
+        "GROUP BY unit_type, k "
+        "ORDER BY unit_type, n DESC",
+        (workspace_id,),
+    )
+    rows = await cur.fetchall()
+    out: dict[str, list[str]] = {}
+    for unit_type, key, _n in rows:
+        bucket = out.setdefault(str(unit_type), [])
+        if len(bucket) < limit_keys_per_type:
+            bucket.append(str(key))
+    return out
+
+
+def _format_schema_hints(schema: dict[str, list[str]]) -> str:
+    """Render the discovered jsonb-key map as a per-call hint block
+    prepended to the LLM user message. Kept terse because the system
+    prompt is already large.
+
+    Stored unit_types are SINGULAR (`transaction`, `expense`,
+    `line_item`) — see `singularize_unit_type` in the extraction
+    worker. We tell the LLM explicitly to stem the user's plural to
+    the singular form before matching against this list.
+    """
+    if not schema:
+        return ""
+    lines = [
+        "## WORKSPACE DATA (authoritative — overrides the catalog "
+        "examples in the system prompt)",
+        "",
+        "The data in this workspace has these unit_types in "
+        "`extracted_entities.unit_type` and these jsonb keys in "
+        "`extracted_entities.fields`. Use ONLY these values — do NOT "
+        "invent unit_type values or column names. Stored unit_types "
+        "are SINGULAR.",
+        "",
+        "Plural-to-singular stemming is YOUR job. Examples:",
+        "  user says 'transactions' → filter value 'transaction'",
+        "  user says 'expenses'     → filter value 'expense'",
+        "  user says 'line items'   → filter value 'line_item'",
+        "  user says 'attendees'    → filter value 'attendee'",
+        "  user says 'quotes'       → filter value 'quote'",
+        "",
+        "When exactly one unit_type below matches the user's stemmed "
+        "term, pick it. Do NOT refuse with 'ambiguous' when the "
+        "match is unique.",
+        "",
+        "unit_type → available jsonb keys (column names you may use "
+        "in `fields.<key>::cast` aggregations + filters):",
+    ]
+    # Stable order; cap line count so the prompt doesn't explode on
+    # corpora with hundreds of unit_types. 200 keeps us under typical
+    # context windows even with 20-key rows.
+    all_unit_types = sorted(schema.keys())
+    truncated = all_unit_types[200:]
+    for unit_type in all_unit_types[:200]:
+        keys = schema[unit_type]
+        lines.append(f"  {unit_type}: [{', '.join(keys)}]")
+    if truncated:
+        lines.append(
+            f"  …and {len(truncated)} more unit_types not shown "
+            f"(workspace has {len(all_unit_types)} total). If the user's "
+            f"term doesn't match any unit_type above, refuse rather "
+            f"than guess."
+        )
+    return "\n".join(lines)
+
+
 async def generate_q_payload(
     query: str,
     *,
     llm: JsonLLMClient | None,
+    schema_hints: dict[str, list[str]] | None = None,
 ) -> tuple[dict[str, Any] | None, str | None]:
     """Run the LLM-to-QPlan path. Returns ``(payload, reason)``:
 
@@ -222,9 +327,14 @@ async def generate_q_payload(
             "or anthropic with the matching API key)"
         )
 
+    hint_block = _format_schema_hints(schema_hints or {})
+    user_msg = (
+        f"{hint_block}\n\nUser question: {query}" if hint_block
+        else f"User question: {query}"
+    )
     try:
         raw_text = await llm.generate_json(
-            user=f"User question: {query}",
+            user=user_msg,
             system=_get_system_prompt(),
             max_tokens=800,
         )

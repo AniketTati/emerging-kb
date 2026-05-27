@@ -126,6 +126,13 @@ class Planner(Protocol):
         intent: IntentResult,
         *,
         requested_mode: str | None = None,
+        # Optional workspace context — when provided, the Q-mode second-
+        # pass planner uses them to discover the actual jsonb keys
+        # available per unit_type in this workspace and inject them as
+        # a hint so the LLM doesn't hallucinate column names. Older
+        # planners ignore both kwargs.
+        conn: Any = None,
+        workspace_id: str | None = None,
     ) -> Plan: ...
 
 
@@ -241,7 +248,12 @@ class IdentityPlanner:
         intent: IntentResult,
         *,
         requested_mode: str | None = None,
+        conn: Any = None,
+        workspace_id: str | None = None,
     ) -> Plan:
+        # IdentityPlanner ignores conn/workspace_id — it doesn't make an
+        # LLM call for Q-mode payload generation.
+        _ = conn, workspace_id
         # Request override wins when it's a valid mode (and not 'H' which
         # is the explicit "let the planner decide" default for legacy
         # clients).
@@ -425,6 +437,8 @@ class LLMPlanner:
         intent: IntentResult,
         *,
         requested_mode: str | None = None,
+        conn: Any = None,
+        workspace_id: str | None = None,
     ) -> Plan:
         # Honor an explicit valid request override without an LLM call.
         if requested_mode and requested_mode in QUERY_MODES and requested_mode != "H":
@@ -435,7 +449,9 @@ class LLMPlanner:
                 notes="explicit_mode_override",
                 model_id=self._model,
             )
-            return await self._maybe_augment_q(query, plan_override)
+            return await self._maybe_augment_q(
+                query, plan_override, conn=conn, workspace_id=workspace_id,
+            )
 
         # Inventory intent → mode I, no LLM call. The routing prompt
         # doesn't enumerate mode I (we'd have to retrain it on every
@@ -481,11 +497,29 @@ class LLMPlanner:
             q_payload=plan.q_payload, notes=plan.notes,
             model_id=self._model,
         )
-        return await self._maybe_augment_q(query, plan)
+        return await self._maybe_augment_q(
+            query, plan, conn=conn, workspace_id=workspace_id,
+        )
 
-    async def _maybe_augment_q(self, query: str, plan: Plan) -> Plan:
+    async def _maybe_augment_q(
+        self,
+        query: str,
+        plan: Plan,
+        *,
+        conn: Any = None,
+        workspace_id: str | None = None,
+    ) -> Plan:
         """Second LLM call to fill `plan.q_payload` when mode='Q'. The
         same provider client is reused — no extra config.
+
+        Before the LLM call we discover the actual jsonb keys per
+        unit_type in this workspace (via `discover_unit_type_schema`)
+        and pass them as a hint so the LLM doesn't hallucinate column
+        names that don't exist in `extracted_entities.fields`. Without
+        this hint, "sum of all transactions" tends to emit
+        `SUM(fields.amount::numeric)` against a transactions table that
+        actually carries `debit` / `credit` / `balance` — yielding a
+        silent NULL aggregate.
 
         When the second call fails (refuse / parse_error / validation /
         llm_error), we stash the reason on `notes` prefixed with
@@ -494,8 +528,15 @@ class LLMPlanner:
         """
         if plan.mode != "Q" or plan.q_payload is not None:
             return plan
-        from kb.query.q_payload_gen import generate_q_payload
-        payload, reason = await generate_q_payload(query, llm=self._llm)
+        from kb.query.q_payload_gen import (
+            discover_unit_type_schema, generate_q_payload,
+        )
+        schema_hints = await discover_unit_type_schema(
+            conn, workspace_id=workspace_id,
+        )
+        payload, reason = await generate_q_payload(
+            query, llm=self._llm, schema_hints=schema_hints,
+        )
         if payload is not None:
             return Plan(
                 mode=plan.mode, intent=plan.intent,
