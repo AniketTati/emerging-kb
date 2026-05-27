@@ -59,3 +59,12 @@ prototype/node_modules/
 prototype/package-lock.json
 prototype/qa/screens/
 prototype/qa/reports/
+
+# Local demo-corpus testing artifacts — scratch generated during
+# ingest/validation runs, not part of the canonical corpus. The actual
+# demo docs + build.py/ingest.py loaders ARE tracked; only these
+# workspace artifacts get ignored.
+demo-corpus/domains/
+demo-corpus/workspaces/
+demo-corpus/entities.yaml
+demo-corpus/validate.py
