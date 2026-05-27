@@ -1984,3 +1984,41 @@ export async function getKnowledgeMapSchemaSample(
   );
   return _handle<KMSchemaSample>(resp);
 }
+
+
+// Cohort context for one anomaly — drives the "this row vs typical
+// rows" side-by-side comparison in the Needs Review side panel.
+export type KMCohortField = {
+  name: string;
+  value: unknown;
+  is_outlier: boolean;
+  cohort_summary: string | null;
+};
+
+export type KMCohortResponse = {
+  anomaly_id: string;
+  unit_type: string;
+  rarity_score: number;
+  rarity_label: string;
+  file_id: string | null;
+  file_name: string | null;
+  cohort_size: number;
+  columns: string[];
+  anomaly_row: Record<string, unknown>;
+  anomaly_field_stats: KMCohortField[];
+  typical_rows: Record<string, unknown>[];
+};
+
+export async function getKnowledgeMapAnomalyCohort(
+  entityId: string,
+  opts?: { typicalCount?: number },
+): Promise<KMCohortResponse> {
+  const params = new URLSearchParams();
+  if (opts?.typicalCount) params.set("typical_count", String(opts.typicalCount));
+  const qs = params.toString();
+  const resp = await fetch(
+    `${KB_API_URL}/knowledge-map/anomaly/${entityId}/cohort${qs ? `?${qs}` : ""}`,
+    { headers: workspaceHeaders(), cache: "no-store" },
+  );
+  return _handle<KMCohortResponse>(resp);
+}

@@ -708,3 +708,162 @@ async def get_schema_sample(
         doc_root_fields=doc_root_fields,
         sub_entity_samples=sub_samples,
     )
+
+
+# ===========================================================================
+# Anomaly cohort — what's THIS row vs what's TYPICAL.
+# Powers the comparison-table view in the Needs Review side panel
+# so a non-engineer can SEE why something was flagged.
+# ===========================================================================
+
+
+class KMCohortField(BaseModel):
+    """One field's value on the anomaly row, plus a tiny stat
+    describing how it compares to the cohort. `is_outlier` is True
+    when the value sits outside the cohort's typical range for that
+    field — gives the UI a flag to highlight."""
+
+    name: str
+    value: Any
+    is_outlier: bool = False
+    cohort_summary: str | None = None   # e.g. "typical: 1-2"
+
+
+class KMCohortResponse(BaseModel):
+    anomaly_id: str
+    unit_type: str
+    rarity_score: float
+    rarity_label: str       # plain-English description for the UI
+    file_id: str | None
+    file_name: str | None
+    cohort_size: int        # total rows of this unit_type (including the anomaly)
+    columns: list[str]      # ordered union of column names
+    anomaly_row: dict[str, Any]
+    anomaly_field_stats: list[KMCohortField]   # parallel to columns; carries outlier flags
+    typical_rows: list[dict[str, Any]]
+
+
+def _summarize_numeric(values: list[float]) -> str:
+    """Compact "typical: X-Y" or "typical: X" range string."""
+    if not values: return ""
+    lo, hi = min(values), max(values)
+    if lo == hi:
+        return f"typical: {_fmt_num(lo)}"
+    return f"typical: {_fmt_num(lo)}-{_fmt_num(hi)}"
+
+
+def _fmt_num(n: float) -> str:
+    if n == int(n): return str(int(n))
+    return f"{n:.2f}"
+
+
+@router.get(
+    "/anomaly/{entity_id}/cohort",
+    response_model=KMCohortResponse,
+    summary="Anomaly row + 3-5 typical rows of the same unit_type for "
+            "side-by-side comparison. Lets a non-engineer SEE what "
+            "stood out instead of reading 'rarity 1.00'.",
+)
+async def get_anomaly_cohort(
+    entity_id: str,
+    workspace_id: Annotated[str, Depends(current_workspace_id)],
+    conn: Annotated[Connection, Depends(kb_app_connection)],
+    typical_count: int = Query(default=3, ge=1, le=10),
+) -> KMCohortResponse:
+    from fastapi import HTTPException
+
+    # 1) The anomaly row itself.
+    cur = await conn.execute(
+        """
+        SELECT ee.id::text, ee.unit_type, ee.rarity_score, ee.fields,
+               ee.file_id::text, f.name
+          FROM extracted_entities ee
+          LEFT JOIN files f ON f.id = ee.file_id
+         WHERE ee.workspace_id = %s AND ee.id = %s
+        """,
+        (workspace_id, entity_id),
+    )
+    row = await cur.fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="anomaly not found")
+    a_id, a_unit_type, a_rarity, a_fields, a_file_id, a_file_name = row
+    if a_unit_type is None:
+        raise HTTPException(status_code=400, detail="not a sub-entity row")
+    a_fields_dict: dict[str, Any] = dict(a_fields) if isinstance(a_fields, dict) else {}
+
+    # 2) Cohort — all OTHER rows of the same unit_type. Sorted by
+    #    rarity ASC so the "typical" sample is the LEAST anomalous.
+    cur = await conn.execute(
+        """
+        SELECT id::text, fields, rarity_score
+          FROM extracted_entities
+         WHERE workspace_id = %s AND unit_type = %s AND id <> %s
+         ORDER BY rarity_score ASC NULLS FIRST, id
+        """,
+        (workspace_id, a_unit_type, entity_id),
+    )
+    cohort_rows = await cur.fetchall()
+    cohort_size = len(cohort_rows) + 1   # include the anomaly itself
+    typical: list[dict[str, Any]] = []
+    cohort_field_values: dict[str, list[Any]] = {}
+    for cr in cohort_rows:
+        cfields = dict(cr[1]) if isinstance(cr[1], dict) else {}
+        if len(typical) < typical_count:
+            typical.append(cfields)
+        for k, v in cfields.items():
+            cohort_field_values.setdefault(k, []).append(v)
+
+    # 3) Union of columns — anomaly fields first (so the user reads
+    #    the anomaly columns left-to-right), then any cohort-only ones.
+    cols: list[str] = list(a_fields_dict.keys())
+    for k in cohort_field_values.keys():
+        if k not in cols:
+            cols.append(k)
+
+    # 4) Per-field outlier flags. Numeric: outside [min, max] of the
+    #    cohort. Categorical: anomaly value not in the cohort set.
+    field_stats: list[KMCohortField] = []
+    for name in cols:
+        val = a_fields_dict.get(name)
+        cvals = [v for v in cohort_field_values.get(name, []) if v is not None]
+        is_outlier = False
+        summary: str | None = None
+        if val is not None and cvals:
+            if isinstance(val, (int, float)) and all(isinstance(v, (int, float)) for v in cvals):
+                summary = _summarize_numeric([float(v) for v in cvals])
+                lo, hi = min(cvals), max(cvals)
+                if float(val) < float(lo) or float(val) > float(hi):
+                    is_outlier = True
+            else:
+                # Categorical / textual — outlier if the exact value
+                # never appears in the cohort.
+                if str(val) not in {str(v) for v in cvals}:
+                    is_outlier = True
+                    unique_cohort = sorted({str(v)[:30] for v in cvals})[:5]
+                    summary = f"typical: {', '.join(unique_cohort)}" if unique_cohort else None
+        field_stats.append(KMCohortField(
+            name=name, value=val,
+            is_outlier=is_outlier, cohort_summary=summary,
+        ))
+
+    # 5) Rarity → plain-English label.
+    r = float(a_rarity or 0.0)
+    if r >= 2.0:    rarity_label = f"Very unusual · {r:.2f} (1 of {cohort_size})"
+    elif r >= 1.5: rarity_label = f"Quite unusual · {r:.2f}"
+    elif r >= 1.0: rarity_label = f"Mildly unusual · {r:.2f}"
+    elif r >= 0.8: rarity_label = f"Slightly unusual · {r:.2f}"
+    else:          rarity_label = f"Within normal range · {r:.2f}"
+
+    return KMCohortResponse(
+        anomaly_id=str(a_id),
+        unit_type=str(a_unit_type),
+        rarity_score=r,
+        rarity_label=rarity_label,
+        file_id=(str(a_file_id) if a_file_id is not None else None),
+        file_name=(str(a_file_name) if a_file_name is not None else None),
+        cohort_size=cohort_size,
+        columns=cols,
+        anomaly_row=a_fields_dict,
+        anomaly_field_stats=field_stats,
+        typical_rows=typical,
+    )

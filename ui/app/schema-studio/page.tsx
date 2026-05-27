@@ -32,11 +32,11 @@ import { Sidebar } from "@/components/Sidebar";
 import {
   getKnowledgeMapStats, getKnowledgeMapCatalog,
   getKnowledgeMapNeedsReview, getKnowledgeMapHistory,
-  getKnowledgeMapSchemaSample,
+  getKnowledgeMapSchemaSample, getKnowledgeMapAnomalyCohort,
   downloadSchemaExportYaml,
   type KMStats, type KMSchemaCard, type KMNeedsReview, type KMHistoryResp,
   type KMHistoryEvent, type KMAnomaly, type KMConflict,
-  type KMSchemaSample, type KMSubEntitySample,
+  type KMSchemaSample, type KMSubEntitySample, type KMCohortResponse,
 } from "@/lib/api";
 import {
   humanizeSchemaName, categorizeSchema, DOMAINS, VISIBLE_DOMAINS,
@@ -950,40 +950,136 @@ function ConflictList({ rows, total, onOpen, onLoadMore, hasMore }: {
 
 function AnomalyDetail({ a }: { a: KMAnomaly }) {
   const router = useRouter();
+  const [cohort, setCohort] = useState<KMCohortResponse | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setCohort(null);
+    setErr(null);
+    getKnowledgeMapAnomalyCohort(a.id, { typicalCount: 3 })
+      .then((r) => !cancelled && setCohort(r))
+      .catch((e) => !cancelled && setErr(String(e)));
+    return () => { cancelled = true; };
+  }, [a.id]);
+
   return (
-    <div className="p-5 space-y-4">
-      <div>
-        <div className="text-[10px] uppercase tracking-wider text-zinc-400 mb-1.5">Why flagged</div>
-        <div className="text-[13px] text-zinc-700 leading-relaxed">
-          This <span className="mono">{a.unit_type}</span> row scored a rarity of{" "}
-          <span className="mono">{a.rarity_score.toFixed(2)}</span> against the cohort
-          (≥ 0.8 is the anomaly threshold). The values below stood out as outliers
-          relative to other rows of the same type in this workspace.
+    <div className="p-5 space-y-5">
+      {/* Plain-English headline */}
+      <div className="rounded-md bg-rose-50 border border-rose-100 px-3 py-2">
+        <div className="text-[12px] font-medium text-rose-900">
+          {cohort?.rarity_label ?? `Rarity ${a.rarity_score.toFixed(2)}`}
+        </div>
+        <div className="text-[11px] text-rose-700 mt-0.5">
+          Flagged because this row's values fall outside the typical range
+          for other <span className="mono">{a.unit_type}</span> rows in this
+          workspace. Compare with the typical rows below to decide whether
+          it's a real outlier or a false alarm.
         </div>
       </div>
-      <div>
-        <div className="text-[10px] uppercase tracking-wider text-zinc-400 mb-1.5">Fields</div>
-        <ul className="space-y-0.5">
-          {Object.entries(a.fields).map(([k, v]) => (
-            <li key={k} className="text-[12px] grid grid-cols-[150px_1fr] gap-3 py-1 border-b border-zinc-100 last:border-b-0">
-              <span className="mono text-zinc-500">{k}</span>
-              <span className="mono text-zinc-800 break-all">{typeof v === "string" ? v : JSON.stringify(v)}</span>
-            </li>
-          ))}
-        </ul>
-      </div>
-      <div className="flex gap-2">
+
+      {err && <ErrorBanner msg={err} />}
+
+      {cohort === null ? (
+        <SkeletonLines count={6} />
+      ) : (
+        <>
+          {/* THIS ROW with per-field outlier flags */}
+          <section>
+            <div className="text-[10px] uppercase tracking-wider text-zinc-400 mb-1.5">
+              This row · the values flagged
+            </div>
+            <table className="w-full text-[11px] border border-zinc-200 rounded-md overflow-hidden">
+              <thead className="bg-zinc-50 text-[10px] uppercase tracking-wider text-zinc-500">
+                <tr>
+                  <th className="text-left px-2.5 py-1.5 font-medium">Field</th>
+                  <th className="text-left px-2.5 py-1.5 font-medium">Value</th>
+                  <th className="text-left px-2.5 py-1.5 font-medium">Cohort</th>
+                </tr>
+              </thead>
+              <tbody>
+                {cohort.anomaly_field_stats.map((f) => (
+                  <tr
+                    key={f.name}
+                    className={`border-t border-zinc-100 ${f.is_outlier ? "bg-rose-50/40" : ""}`}
+                  >
+                    <td className="px-2.5 py-1.5 mono text-zinc-700 align-top">{f.name}</td>
+                    <td className="px-2.5 py-1.5 mono align-top break-all">
+                      <span className={f.is_outlier ? "text-rose-900 font-medium" : "text-zinc-800"}>
+                        {formatCellValue(f.value)}
+                      </span>
+                      {f.is_outlier && (
+                        <span className="ml-1.5 text-[9px] uppercase tracking-wider px-1 py-0.5 rounded bg-rose-100 text-rose-700 font-medium">
+                          outlier
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-2.5 py-1.5 align-top text-zinc-500 text-[10px]">
+                      {f.cohort_summary ?? "—"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </section>
+
+          {/* TYPICAL ROWS for visual diff */}
+          {cohort.typical_rows.length > 0 && (
+            <section>
+              <div className="text-[10px] uppercase tracking-wider text-zinc-400 mb-1.5">
+                Typical rows · {cohort.typical_rows.length} of {cohort.cohort_size - 1} others
+              </div>
+              <div className="overflow-x-auto border border-zinc-200 rounded-md">
+                <table className="w-full text-[11px]">
+                  <thead className="bg-zinc-50 text-[10px] uppercase tracking-wider text-zinc-500">
+                    <tr>
+                      {cohort.columns.map((col) => (
+                        <th key={col} className="text-left px-2.5 py-1.5 font-medium whitespace-nowrap">
+                          {col}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {cohort.typical_rows.map((row, i) => (
+                      <tr key={i} className="border-t border-zinc-100">
+                        {cohort.columns.map((col) => (
+                          <td
+                            key={col}
+                            className="px-2.5 py-1.5 mono text-zinc-700 align-top max-w-[200px] truncate"
+                            title={formatCellValue(row[col])}
+                          >
+                            {formatCellValue(row[col])}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          )}
+          {cohort.typical_rows.length === 0 && (
+            <div className="text-[12px] text-zinc-500 italic">
+              No other <span className="mono">{a.unit_type}</span> rows to compare against — this is the only one in the workspace.
+            </div>
+          )}
+        </>
+      )}
+
+      {/* Decision affordances */}
+      <div className="flex flex-wrap gap-2 pt-2 border-t border-zinc-100">
         {a.file_id && (
           <a
             href={`/files/${a.file_id}`}
             className="text-[12px] flex items-center gap-1.5 px-2.5 py-1 rounded-md border border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50 cursor-pointer"
           >
-            <FileText className="w-3.5 h-3.5" /> Open file
+            <FileText className="w-3.5 h-3.5" /> Open source file
           </a>
         )}
         <button
           type="button"
-          onClick={() => router.push(`/chat?q=${encodeURIComponent(`why is this ${a.unit_type} flagged as anomalous?`)}`)}
+          onClick={() => router.push(`/chat?q=${encodeURIComponent(`Why is this ${a.unit_type} row flagged as anomalous? id=${a.id}`)}`)}
           className="text-[12px] flex items-center gap-1.5 px-2.5 py-1 rounded-md border border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50 cursor-pointer"
         >
           <MessageSquare className="w-3.5 h-3.5" /> Ask why
