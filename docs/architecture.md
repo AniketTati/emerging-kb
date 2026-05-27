@@ -350,23 +350,21 @@ The catalog layer is what catches vague queries. The chunks are what citations p
 
 ---
 
-## 4. The Atomic-Units and Anomaly Layer (generalised from "clauses")
+## 4. The Typed Sub-Entities and Anomaly Layer (generalised from "clauses")
 
-For any doc that has *internally typed structured units* — clauses in a contract, transactions in a bank statement, components in a drawing, rows in a spreadsheet — L3 extracts those units as first-class typed records.
+For any doc that has *internally typed structured units* — clauses in a contract, transactions in a bank statement, components in a drawing, rows in a spreadsheet — the extractor produces those units as first-class typed records and persists them as `extracted_entities` children (`unit_type` set, `parent_entity_id` linked to the doc-root parent).
 
-### The plug-in shape
+### How the layer is produced (post-KV+Tables collapse)
 
-Each doc type registers an L3 extractor:
-```
-(
-  type_classifier,        // is this a Contract? a BankStatement? a LandRecord?
-  atomic_unit_extractor,  // LLM/heuristic that yields typed units
-  parameter_schema,       // jsonb shape per unit-type
-  rarity_definition       // how to compute rarity vs corpus
-)
-```
+Originally this layer was a separate L3 phase with per-doc-type plug-in extractors registered against a `(type_classifier, atomic_unit_extractor, parameter_schema, rarity_definition)` shape, writing to a dedicated `atomic_units` staging table. As of PR #42 (KV+Tables collapse) + PR #45 (`atomic_units` table removed), this is one structured-output LLM call (`extract_kv_tables_file_impl`) returning `{doc_type, scalars[], tables[]}` — and the worker writes table rows directly to `extracted_entities` with `unit_type` set to the (singularized) table name. No plug-in registry; the LLM names the unit types itself from the document.
 
-This means adding a new doc type — say, *court_filing* with atomic unit *holding* — requires writing 4 plug-ins, no core changes.
+What the plug-in shape used to spell out, the runtime now does inline:
+- `type_classifier` → LLM emits `doc_type` in the same call
+- `atomic_unit_extractor` → LLM emits `tables[]` in the same call
+- `parameter_schema` → emerges per-doc-type from clustered `proposed_fields` (the existing field-promotion pipeline still runs over the scalars)
+- `rarity_definition` → JIT centroid scoring over `extracted_entities WHERE workspace_id=X AND unit_type=Y` (read at write time per file)
+
+Adding a new doc type now requires zero code changes; the LLM names a new `unit_type` and the same downstream machinery handles it.
 
 ### Examples
 
@@ -433,7 +431,20 @@ References:
        LLM-judge on borderline cases. Insert doc_chain_members rows;
        update parent chain's current_version_id when amendment detected.
        ↓
-6.  Late chunking (BGE-M3 / Gemini Embedding 001) → chunks (~2–4K tokens, layout-aware)
+6.  Hierarchical chunking via LlamaIndex `HierarchicalNodeParser`
+       (sizes `[2048, 512, 128]` — three levels) → chunks rows with
+       `node_level ∈ {0,1,2}` + self-FK `parent_chunk_id`. Doc-type router
+       picks the chunker kind at write time via the runtime
+       `chunker_configs` table:
+         — `hierarchical`      (default — prose, contracts, reports)
+         — `row_per_leaf`      (xlsx / tabular — one leaf per row)
+         — `message_per_leaf`  (email threads — one leaf per message)
+       Retrieval-time `AutoMergingRetriever` swaps a parent in when
+       ≥ `merge_threshold` (default 0.5) of its leaves appear in the same
+       hit list — surfaces the right granularity per query without
+       re-chunking. Lands as PR #46 (replaced custom token-bounded
+       chunker); chunker config table = company-scale routing without a
+       code deploy.
        ↓
 7.  Anthropic Contextual Retrieval prefix
        (LLM generates 50–100 token "this is from X about Y" header per chunk;
@@ -467,8 +478,15 @@ References:
          — doc_type   → files.inferred_doc_type
          — scalars[]  → proposed_fields (doc-level structured fields, with
                         PII flags for SSN/Aadhaar/PAN/DOB/phone/email/etc.)
-         — tables[].rows[] → atomic_units (one row per typed unit:
-                        transaction / clause / line_item / message / row)
+         — tables[].rows[] → extracted_entities (one row per typed
+                        sub-entity instance; `unit_type` = the table
+                        name passed through `singularize_unit_type()` —
+                        transaction / clause / line_item / message / row;
+                        `parent_entity_id` left NULL here and assigned in
+                        step 18 lineage pass). The legacy `atomic_units`
+                        staging table is gone (PR #45) — the KV+Tables
+                        worker writes the canonical storage shape
+                        directly.
        Then deterministic post-processing (no LLM):
          — Cross-doc clustering of proposed_fields → inferred_schema_fields
            (name+description embedding blocking, value-type induction).
@@ -478,7 +496,9 @@ References:
          — Vocabulary discovery (Design 6) emits candidate synonym entries
            into `domain_vocabulary` when sibling clusters land at
            name-embedding similarity ≥ 0.85 across ≥ 5 docs.
-         — Anomaly/rarity scoring on atomic_units (per-unit_type cohort).
+         — Anomaly/rarity scoring on the newly-written child rows
+           (per-`unit_type` cohort; JIT centroid read from
+           `extracted_entities WHERE workspace_id=X AND unit_type=Y`).
        At render time, fields with is_pii=true display as "[PII: <type>]"
        placeholder unless workspace policy explicitly allows full display
        (full encryption + permissions-gated decryption is Wave C).
@@ -497,21 +517,31 @@ References:
        entity + relation graph with PPR-ready edge weights
        ↓
 18. Schema-driven entity instantiation + nested-entity promotion (Design 7)
-       — Phase 1.5 BOOTSTRAP: for each (doc_type) seen, ensure a doc_root
-         schema_entity (e.g. BankStatement) exists, plus a sub_entity type
-         per distinct atomic_units.unit_type for the file (Transaction,
-         Clause, LineItem, …) with parent_type_id set + a
-         schema_relationships(kind='contains') edge linking root → child.
+       — Phase 1.5 BOOTSTRAP: runs INSIDE the KV+Tables worker (step 12)
+         before any child rows land. For each (doc_type) seen, ensure a
+         doc_root schema_entity (e.g. BankStatement) exists, plus a
+         sub_entity type per distinct `unit_type` emitted by the KV+Tables
+         response for the file (Transaction, Clause, LineItem, …) — each
+         with `parent_type_id` set and a schema_relationships(kind=
+         'contains') edge linking root → child. This guarantees the
+         schema_entity_id FK exists by the time step 12 inserts the
+         children.
        — PASS 1: for every active doc_root schema_entity matching the
          file's inferred_doc_type, run a Gemini structured-output extract
          per entity using its promoted schema_fields. Produces parent
          extracted_entities (rows where parent_entity_id IS NULL) with
-         per-field citations to contextual_chunks.
-       — PASS 1.5: promote every atomic_units row for the file to a
-         child extracted_entity under the matching sub_entity type.
-         `parameters` jsonb becomes `fields`; rarity_score + unit_type +
-         source positions copy over (chunks.id → contextual_chunks.id
-         translation handles the differing FK targets).
+         per-field citations to contextual_chunks. The CLEAN-BEFORE-WRITE
+         here deletes only `WHERE unit_type IS NULL` so the children
+         written by step 12 are preserved (this guard landed in PR #48
+         after a wipe+reprocess discovered the prior unconditional DELETE
+         was wiping the children).
+       — PASS 1.5 — REMOVED (PR #45): the children are already in
+         `extracted_entities` after step 12; no promotion step needed.
+         What this used to do — copy `atomic_units.parameters` jsonb into
+         `extracted_entities.fields` + carry `rarity_score`, `unit_type`,
+         source positions through a `chunks.id → contextual_chunks.id`
+         FK translation — is now redundant because step 12 writes the
+         canonical storage shape directly.
        — PASS 2/3: topologically sort by depth, then assign each
          entity its `lineage_path` (ltree) and `parent_entity_id` by
          walking schema_relationships(kind='contains'). The full ancestor
@@ -1165,8 +1195,11 @@ Phase 1   ┃ Schema service: CRUD, versioning, NL field descriptions, hierarchy
 Phase 2   ┃ Parse layer: Docling + Mistral OCR + xlsx + email → raw_pages
 Phase 3   ┃ Chunking + Contextual Retrieval + RAPTOR tree build
 Phase 4   ┃ Indexing: pgvector HNSW + pg_search BM25 on all RAPTOR levels
-Phase 5   ┃ Open extraction → mentions; clause split + typing + anomaly score
-Phase 6   ┃ Schema-driven extraction (Gemini structured outputs)
+Phase 5   ┃ Open extraction — mentions + KV+Tables collapse (single Gemini
+          ┃ structured-output call returning scalars[] + tables[]; rows
+          ┃ persist as `extracted_entities` children with `unit_type`).
+Phase 6   ┃ Schema-driven extraction (parent doc_root rows + lineage_path
+          ┃ ltree assignment over the children written upstream by P5).
 Phase 7   ┃ Identity resolution (deterministic→embedding→LLM judge→union-find)
 Phase 8   ┃ Query planner + rewriting (Step-Back + HyDE + Query2Doc)
           ┃ + parallel retrieval + RRF + rerank + CRAG gate + Astute generation
