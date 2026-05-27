@@ -292,26 +292,72 @@ def _candidate_mentions_from_query(query: str) -> list[str]:
 async def _resolve_seed_entities(
     conn: Any, *, workspace_id: str, query: str,
 ) -> list[str]:
-    """Return seed entity_ids from the query via mention table lookup.
+    """Return seed entity_ids from the query via entities-table lookup.
 
-    Wave A: case-insensitive substring match on entities.canonical_name +
-    extracted_mentions.mention_text. We return ≤ 5 unique entity ids."""
+    Wave A: case-insensitive lookup with prefix tolerance — so a query
+    that says 'Vertex Industries' matches 'Vertex Industries Ltd.' in
+    the entities table. We return ≤ 5 unique entity ids."""
     candidates = _candidate_mentions_from_query(query) or [query.strip()]
-    if not candidates or conn is None:
+    return await _resolve_names_to_entity_ids(
+        conn, workspace_id=workspace_id, names=candidates,
+    )
+
+
+async def _resolve_names_to_entity_ids(
+    conn: Any, *, workspace_id: str, names: list[str],
+) -> list[str]:
+    """Look up entity_ids for a list of name surface forms. Tolerant of
+    suffix variation ('Vertex Industries' matches 'Vertex Industries
+    Ltd.') via a prefix-or-equality predicate. Returns ≤ 5 unique ids.
+
+    Inputs that already look like UUIDs are kept as-is (they were
+    likely supplied by an upstream planner that already resolved them).
+    """
+    if not names or conn is None:
         return []
-    try:
-        cur = await conn.execute(
-            "SELECT DISTINCT e.id::text "
-            "FROM entities e "
-            "WHERE e.workspace_id = %s "
-            "AND lower(e.canonical_name) = ANY(%s) "
-            "LIMIT 5",
-            (workspace_id, [c.lower() for c in candidates]),
-        )
-        rows = await cur.fetchall()
-    except Exception:
-        return []
-    return [str(r[0]) for r in rows]
+
+    uuid_re = re.compile(
+        r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+        r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+    )
+    ids: set[str] = set()
+    name_candidates: list[str] = []
+    for n in names:
+        n = (n or "").strip()
+        if not n:
+            continue
+        if uuid_re.match(n):
+            ids.add(n)
+        else:
+            name_candidates.append(n.lower())
+
+    if name_candidates:
+        # ILIKE with both exact-equality AND prefix-match handles the
+        # common case where extraction kept a trailing suffix
+        # ('Ltd.', 'Inc.', 'LLC') that the user's query elided.
+        clauses = []
+        params: list[Any] = [workspace_id]
+        for c in name_candidates:
+            clauses.append(
+                "lower(canonical_name) = %s "
+                "OR lower(canonical_name) LIKE %s"
+            )
+            params.append(c)
+            params.append(c + " %")  # prefix-with-word-boundary
+        try:
+            cur = await conn.execute(
+                "SELECT DISTINCT id::text FROM entities "
+                "WHERE workspace_id = %s "
+                "AND (" + " OR ".join(clauses) + ") LIMIT 10",
+                params,
+            )
+            for r in await cur.fetchall():
+                ids.add(str(r[0]))
+        except Exception:
+            pass
+
+    # Cap at 5 — PPR has diminishing returns past a handful of seeds.
+    return sorted(ids)[:5]
 
 
 async def _read_graph_edges(
@@ -349,10 +395,20 @@ async def _route_t_mode(
     pass-through path so the user still gets an answer."""
     from kb.query.ppr import build_adjacency_from_edges, personalized_pagerank
 
-    # Seeds: prefer planner-supplied, else infer from query.
-    seeds = list(plan.seed_entities) or await _resolve_seed_entities(
-        conn, workspace_id=workspace_id, query=query,
-    )
+    # Seeds may arrive as raw names (from planner.seed_entities) OR as
+    # entity_ids (UUIDs). Always run them through the resolver so PPR
+    # gets actual entity_ids — names alone would miss every adjacency
+    # entry and yield zero PPR hits (the bug that made T silently
+    # degrade in practice despite the graph being populated).
+    raw_seeds = list(plan.seed_entities)
+    if raw_seeds:
+        seeds = await _resolve_names_to_entity_ids(
+            conn, workspace_id=workspace_id, names=raw_seeds,
+        )
+    else:
+        seeds = await _resolve_seed_entities(
+            conn, workspace_id=workspace_id, query=query,
+        )
     if not seeds:
         return _tag_mode(hits, "T")
 
@@ -805,36 +861,12 @@ async def _resolve_entity_ids_from_seeds(
     conn: Any, *, workspace_id: str, seeds: list[str],
 ) -> list[str]:
     """Translate a list of seeds (which may be entity names OR ids) into
-    canonical entity_ids. Names are matched case-insensitively against
-    `entities.canonical_name`."""
-    if not seeds or conn is None:
-        return []
-    # Heuristic: if a seed looks like a UUID, treat it as an id; otherwise
-    # treat as a name and resolve.
-    uuid_re = re.compile(
-        r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
-        r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+    canonical entity_ids. Delegates to `_resolve_names_to_entity_ids`
+    which handles UUIDs, exact match, and prefix-with-word-boundary
+    suffix tolerance."""
+    return await _resolve_names_to_entity_ids(
+        conn, workspace_id=workspace_id, names=seeds,
     )
-    ids: set[str] = set()
-    names: list[str] = []
-    for s in seeds:
-        if uuid_re.match(s):
-            ids.add(s)
-        else:
-            names.append(s.lower())
-    if names:
-        try:
-            cur = await conn.execute(
-                "SELECT id::text FROM entities "
-                "WHERE workspace_id = %s "
-                "AND lower(canonical_name) = ANY(%s) LIMIT 20",
-                (workspace_id, names),
-            )
-            for r in await cur.fetchall():
-                ids.add(str(r[0]))
-        except Exception:
-            pass
-    return sorted(ids)
 
 
 # ---------------------------------------------------------------------------
@@ -978,7 +1010,17 @@ async def _route_s_mode(
         conn, workspace_id=workspace_id, file_ids=target_file_ids,
     )
     if not raptor_hits:
-        return _tag_mode(hits, "S")
+        # Fallback: for short docs that produce only one contextual_chunk
+        # the per-doc RAPTOR builder has nothing to cluster and emits no
+        # nodes. Surface the contextual_chunks themselves — they carry
+        # Anthropic-style context prefixes, so they're partially
+        # summary-like and serve as a useful S-mode surface until the
+        # raptor builder is taught to emit level=0 leaves.
+        raptor_hits = await _fetch_per_doc_contextual_chunks(
+            conn, workspace_id=workspace_id, file_ids=target_file_ids,
+        )
+        if not raptor_hits:
+            return _tag_mode(hits, "S")
 
     chunk_tail = _tag_mode(hits[:_G_MODE_CHUNK_TAIL], "S")
     raptor_tagged = _tag_mode(raptor_hits, "S")
@@ -1019,6 +1061,52 @@ async def _fetch_per_doc_raptor_hits(
                 "scope": "per_doc",
                 "file_id": file_id,
                 "channel": "s_mode_boost",
+            },
+        ))
+    return out
+
+
+async def _fetch_per_doc_contextual_chunks(
+    conn: Any, *, workspace_id: str, file_ids: list[str],
+) -> list[Hit]:
+    """Fallback for S-mode when no per_doc raptor_nodes exist.
+
+    Materializes each file's `contextual_chunks` rows as Hits. The
+    contextual_text already carries a context prefix generated by the
+    contextualization phase, so it reads like a partial summary even
+    without RAPTOR clustering on top.
+    """
+    if conn is None or not file_ids:
+        return []
+    try:
+        cur = await conn.execute(
+            """
+            SELECT cc.id::text, cc.contextual_text, cc.file_id::text
+              FROM contextual_chunks cc
+              JOIN chunks c ON c.id = cc.chunk_id
+             WHERE cc.workspace_id = %s
+               AND cc.file_id::text = ANY(%s)
+             ORDER BY c.chunk_index ASC
+            """,
+            (workspace_id, file_ids),
+        )
+        rows = await cur.fetchall()
+    except Exception:
+        return []
+    out: list[Hit] = []
+    for cc_id, text, file_id in rows:
+        out.append(Hit(
+            id=str(cc_id),
+            kind="raptor_node",  # share modality so the citation
+                                 # builder / generator prompt treat it
+                                 # the same as a real raptor summary
+            score=1.0,
+            snippet=text or "",
+            metadata={
+                "level": 0,
+                "scope": "per_doc_fallback",
+                "file_id": file_id,
+                "channel": "s_mode_fallback_contextual_chunk",
             },
         ))
     return out
