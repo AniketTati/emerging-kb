@@ -108,7 +108,7 @@ async def test_increment_mention_count_updates_in_place(db_url_superuser):
         await increment_mention_count(conn, entity_id=eid, by=3)
         await conn.commit()
         cur = await conn.execute(
-            "SELECT mention_count FROM entities WHERE id = %s", (eid,),
+            "SELECT mention_count FROM canonical_entities WHERE id = %s", (eid,),
         )
         assert (await cur.fetchone())[0] == 4  # 1 (default) + 3
 

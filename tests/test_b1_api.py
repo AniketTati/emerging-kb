@@ -85,7 +85,7 @@ async def _seed_entity(db_url: str, workspace: str, *, name: str, entity_type: s
             "SELECT set_config('app.workspace_id', %s, true)", (workspace,),
         )
         await conn.execute(
-            "INSERT INTO entities (id, workspace_id, canonical_name, entity_type, "
+            "INSERT INTO canonical_entities (id, workspace_id, canonical_name, entity_type, "
             "mention_count) VALUES (%s, %s, %s, %s, 0)",
             (entity_id, workspace, name, entity_type),
         )
@@ -666,7 +666,7 @@ async def test_rename_entity_persists_new_name_and_returns_previous(
     # DB reflects the rename.
     async with await psycopg.AsyncConnection.connect(db_url_superuser) as conn:
         cur = await conn.execute(
-            "SELECT canonical_name FROM entities WHERE id = %s", (eid,),
+            "SELECT canonical_name FROM canonical_entities WHERE id = %s", (eid,),
         )
         assert (await cur.fetchone())[0] == "Acme Corp"
 

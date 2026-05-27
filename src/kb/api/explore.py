@@ -211,7 +211,7 @@ async def get_explore_counts(
     )
     out.atomic_units = int((await cur.fetchone())[0])
 
-    cur = await conn.execute("SELECT count(*)::int FROM entities")
+    cur = await conn.execute("SELECT count(*)::int FROM canonical_entities")
     out.entities = int((await cur.fetchone())[0])
 
     cur = await conn.execute("SELECT count(*)::int FROM relationships")
@@ -485,7 +485,7 @@ async def get_entity_profile(
     # ---- Base entity row ----
     cur = await conn.execute(
         "SELECT id::text, canonical_name, entity_type, mention_count "
-        "  FROM entities WHERE id = %s",
+        "  FROM canonical_entities WHERE id = %s",
         (entity_id,),
     )
     row = await cur.fetchone()
@@ -586,7 +586,7 @@ async def get_entity_profile(
           JOIN extracted_mentions em2 ON em2.file_id = em1.file_id
                                      AND em2.id <> em1.id
           JOIN mention_to_entity me2 ON me2.mention_id = em2.id
-          JOIN entities e2 ON e2.id = me2.entity_id
+          JOIN canonical_entities e2 ON e2.id = me2.entity_id
          WHERE me1.entity_id = %s
            AND e2.entity_type = 'PERSON'
            AND e2.id <> %s
@@ -621,7 +621,7 @@ async def get_entity_profile(
           JOIN extracted_mentions em2 ON em2.file_id = em1.file_id
                                      AND em2.id <> em1.id
           JOIN mention_to_entity me2 ON me2.mention_id = em2.id
-          JOIN entities e2 ON e2.id = me2.entity_id
+          JOIN canonical_entities e2 ON e2.id = me2.entity_id
          WHERE me1.entity_id = %s
            AND e2.entity_type = 'ORG'
            AND e2.id <> %s
@@ -998,7 +998,7 @@ async def _search_entities(
                    JOIN mention_to_entity me ON me.mention_id = em.id
                   WHERE me.entity_id = e.id
                ) AS n_docs
-          FROM entities e
+          FROM canonical_entities e
          WHERE 1=1 {where_q}
          ORDER BY {order_by}
          LIMIT %s OFFSET %s
@@ -1009,7 +1009,7 @@ async def _search_entities(
 
     count_params: tuple = (like,) if has_query else ()
     cur = await conn.execute(
-        f"SELECT count(*)::int FROM entities e WHERE 1=1 {where_q}",
+        f"SELECT count(*)::int FROM canonical_entities e WHERE 1=1 {where_q}",
         count_params,
     )
     total = int((await cur.fetchone())[0])
@@ -1047,8 +1047,8 @@ async def _search_relationships(
         SELECT r.id::text, r.predicate, r.confidence, r.n_evidence,
                e_src.canonical_name, e_dst.canonical_name
           FROM relationships r
-          LEFT JOIN entities e_src ON e_src.id = r.subject_entity_id
-          LEFT JOIN entities e_dst ON e_dst.id = r.object_entity_id
+          LEFT JOIN canonical_entities e_src ON e_src.id = r.subject_entity_id
+          LEFT JOIN canonical_entities e_dst ON e_dst.id = r.object_entity_id
          WHERE 1=1 {where_q}
          ORDER BY r.confidence DESC NULLS LAST
          LIMIT %s OFFSET %s

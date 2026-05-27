@@ -346,7 +346,7 @@ async def _resolve_names_to_entity_ids(
             params.append(c + " %")  # prefix-with-word-boundary
         try:
             cur = await conn.execute(
-                "SELECT DISTINCT id::text FROM entities "
+                "SELECT DISTINCT id::text FROM canonical_entities "
                 "WHERE workspace_id = %s "
                 "AND (" + " OR ".join(clauses) + ") LIMIT 10",
                 params,

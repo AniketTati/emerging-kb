@@ -125,7 +125,7 @@ async def _seed_entity(
             "SELECT set_config('app.workspace_id', %s, true)", (workspace,),
         )
         await conn.execute(
-            "INSERT INTO entities (id, workspace_id, canonical_name, entity_type, "
+            "INSERT INTO canonical_entities (id, workspace_id, canonical_name, entity_type, "
             "mention_count) VALUES (%s, %s, %s, %s, 0)",
             (entity_id, workspace, name, entity_type),
         )

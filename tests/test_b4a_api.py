@@ -456,7 +456,7 @@ async def test_t_mode_boosts_files_with_ppr_connected_entities(
         # Entities
         for eid, name in [(e_alpha, "Alpha"), (e_beta, "Beta")]:
             await conn.execute(
-                "INSERT INTO entities (id, workspace_id, canonical_name, "
+                "INSERT INTO canonical_entities (id, workspace_id, canonical_name, "
                 "entity_type, mention_count) VALUES (%s, %s, %s, 'ORG', 0)",
                 (eid, test_workspace, name),
             )
