@@ -1631,6 +1631,29 @@ async def extract_kv_tables_file_impl(file_id: str) -> None:
             # schema_relationships(kind='contains') to find each child's
             # parent doc_root instance for this file and UPDATEs the FK.
 
+            # Normalize table names to singular (the LLM tends to emit
+            # plurals: "transactions", "clauses", "line_items"). Q-mode
+            # prompt examples + retrieval-channel keyword filters expect
+            # the singular form, so we canonicalize here at the
+            # storage boundary.
+            def _singularize(name: str) -> str:
+                # Common simple rule: drop trailing 's' if the word ends in
+                # consonant+'s' OR vowel+'s' that isn't 'ss'. Skip when
+                # already singular (no trailing s, or 'ss', 'is', 'us').
+                if not name or len(name) < 3:
+                    return name
+                lo = name.lower()
+                if lo.endswith(("ss", "is", "us", "as", "es")):
+                    return name
+                if lo.endswith("ies") and len(name) > 4:
+                    return name[:-3] + "y"
+                if lo.endswith("s"):
+                    return name[:-1]
+                return name
+
+            for tbl in payload.tables:
+                tbl.name = _singularize(tbl.name)
+
             # Bootstrap schema_entities types FIRST (the children need
             # their schema_entity_id FK to point at a real sub_entity
             # type row). doc_root_entity_type_id is the BankStatement /
@@ -1781,7 +1804,7 @@ async def extract_schema_entities_file_impl(file_id: str) -> None:
     from kb.config import get_settings
     from kb.domain.extracted_entities import (
         count_extracted_entities_for_file,
-        delete_extracted_entities_for_file,
+        delete_extracted_entities_parents_for_file,
         insert_extracted_entity,
         read_active_schemas_for_doctype,
         read_contextual_chunks_for_extraction,
@@ -1944,7 +1967,15 @@ async def extract_schema_entities_file_impl(file_id: str) -> None:
                 "SELECT set_config('app.workspace_id', %s, true)",
                 (workspace_id_str,),
             )
-            await delete_extracted_entities_for_file(conn, file_id=file_id)
+            # Only delete PARENT (doc_root) rows here — children were
+            # written upstream by extract_kv_tables_file_impl in the
+            # same pipeline run; the legacy delete-all wiped them
+            # because the legacy PASS 1.5 immediately re-inserted from
+            # atomic_units. Post-collapse, the children are the source
+            # of truth and must survive this re-run.
+            await delete_extracted_entities_parents_for_file(
+                conn, file_id=file_id,
+            )
 
             # PASS 1: insert LLM-extracted parent (doc_root) entities.
             # The LLM only runs against schema_entities that have

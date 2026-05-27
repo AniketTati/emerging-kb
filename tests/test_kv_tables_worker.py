@@ -283,7 +283,9 @@ async def test_extract_kv_tables_writes_scalars_and_tables(
         )
         units = await cur.fetchall()
         assert len(units) == 2
-        assert all(u[0] == "transactions" for u in units)
+        # Plural table name "transactions" → singularized to "transaction"
+        # at write time so Q-mode + retrieval channels stay aligned.
+        assert all(u[0] == "transaction" for u in units)
         assert units[0][1] == {"date": "2024-01-15", "amount": "4.50"}
         assert units[0][2] == cc_ids[0]
         assert units[1][1] == {"date": "2024-01-16", "amount": "1245.50"}

@@ -17,6 +17,22 @@ async def delete_extracted_entities_for_file(
     return cur.rowcount or 0
 
 
+async def delete_extracted_entities_parents_for_file(
+    conn: Connection, *, file_id: str,
+) -> int:
+    """Delete only doc_root (parent) rows — those with unit_type IS NULL.
+    Used by extract_schema_entities_file_impl before re-running its LLM
+    extraction. We MUST NOT delete the children, because they're
+    written upstream by extract_kv_tables_file_impl in the same
+    pipeline run and we'd lose them."""
+    cur = await conn.execute(
+        "DELETE FROM extracted_entities "
+        "WHERE file_id = %s AND unit_type IS NULL",
+        (file_id,),
+    )
+    return cur.rowcount or 0
+
+
 async def insert_extracted_entity(
     conn: Connection,
     *,
