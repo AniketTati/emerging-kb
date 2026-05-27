@@ -60,9 +60,17 @@ _INTENT_TO_MODE: dict[str, str] = {
     "set_operation":    "Q",
     "temporal_history": "K",   # doc-chain aware
     "chain_aware":      "K",
-    "inventory":        "I",   # SQL metadata listing — orchestrator
-                               # short-circuits retrieval / LLM
-                               # (added with the inventory intent fix)
+    "inventory":        "I",   # SQL metadata listing
+    # The 7 dedicated modes — each routes to its eponymous handler in
+    # mode_router.py. Each handler degrades to H if its specific signal
+    # can't be resolved (no entity match for E, no rows for C, etc.).
+    "entity_lookup":    "E",
+    "field_filter":     "F",
+    "scoped_summarize": "S",
+    "doc_metadata":     "D",
+    "mention_search":   "M",
+    "unit_filter":      "C",
+    "anomaly":          "A",
 }
 
 
@@ -132,13 +140,22 @@ def default_mode_for_intent(intent_label: str) -> str:
 
 
 # Cheap regex for extracting unit-type keywords from the query.
-_UNIT_KEYWORDS = ("clause", "transaction", "row", "line_item", "decision",
-                  "component", "invoice", "amendment")
+_UNIT_KEYWORDS = (
+    "clause", "transaction", "row", "line_item", "decision",
+    "component", "invoice", "amendment", "message", "lab_result",
+    "analyte_result", "payment_milestone", "deliverable",
+    "action", "work_experience", "education", "qualification",
+)
 
 
 def _extract_unit_types(query: str) -> tuple[str, ...]:
     q = (query or "").lower()
-    return tuple(kw for kw in _UNIT_KEYWORDS if kw in q)
+    hits = []
+    for kw in _UNIT_KEYWORDS:
+        # Match singular OR plural (clauses, transactions, line_items, …)
+        if kw in q or (kw + "s") in q:
+            hits.append(kw)
+    return tuple(hits)
 
 
 # Chain-view cues for K-mode.
@@ -154,6 +171,56 @@ def _infer_chain_view(query: str) -> str:
         return "history_only"
     # Default: current_version
     return "current_version"
+
+
+# Doc-type cues for D-mode — surface keywords the LLM or user typed
+# referring to file-type / doc-type / mime. We're conservative: only
+# emit doc_types when the user spelled out a recognizable type.
+_DOC_TYPE_KEYWORDS = (
+    "bank_statement", "bank statement", "invoice", "contract",
+    "msa", "master_services_agreement", "master services agreement",
+    "email", "email_thread", "lab_report", "lab report",
+    "incident_report", "postmortem", "resume", "performance_review",
+    "performance review", "side_letter", "side letter", "sow",
+    "statement of work", "nda", "subscription_agreement",
+    "subscription agreement", "case_study", "case study",
+)
+
+
+def _extract_doc_types(query: str) -> tuple[str, ...]:
+    q = (query or "").lower()
+    hits = []
+    for kw in _DOC_TYPE_KEYWORDS:
+        if kw in q:
+            # Normalize "bank statement" → "bank_statement" etc.
+            hits.append(kw.replace(" ", "_"))
+    # Deduplicate while preserving order.
+    seen = set()
+    out = []
+    for h in hits:
+        if h not in seen:
+            seen.add(h)
+            out.append(h)
+    return tuple(out)
+
+
+# Seed-entity extraction — capitalized multi-word sequences are likely
+# entity surface forms ("John Doe", "Acme Corp"). Used by E/T modes.
+_CAPITALIZED_TOKEN = re.compile(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3})\b")
+
+
+def _extract_seed_entity_surface_forms(query: str) -> tuple[str, ...]:
+    if not query:
+        return ()
+    hits = [m.group(1) for m in _CAPITALIZED_TOKEN.finditer(query)]
+    # Deduplicate, cap at 5 to keep downstream resolution cheap.
+    seen = set()
+    out = []
+    for h in hits:
+        if h not in seen:
+            seen.add(h)
+            out.append(h)
+    return tuple(out[:5])
 
 
 # ---------------------------------------------------------------------------
@@ -183,8 +250,22 @@ class IdentityPlanner:
         else:
             mode = default_mode_for_intent(intent.label)
 
-        unit_types = _extract_unit_types(query) if mode in ("C", "A") else ()
+        unit_types = (
+            _extract_unit_types(query) if mode in ("C", "A") else ()
+        )
         chain_view = _infer_chain_view(query) if mode == "K" else None
+        # Doc-type hints feed D mode (file-metadata filter) and also
+        # surface on M/C/F as best-effort context for downstream
+        # filters / boosts.
+        doc_types = (
+            _extract_doc_types(query) if mode in ("D", "F", "M", "C") else ()
+        )
+        # Surface entity name candidates for E/T modes. The mode handler
+        # resolves these against the `entities` table before applying.
+        seed_entities = (
+            _extract_seed_entity_surface_forms(query)
+            if mode in ("E", "T", "M") else ()
+        )
 
         notes = (
             f"intent={intent.label} (conf={intent.confidence:.2f}) → mode={mode}"
@@ -194,6 +275,8 @@ class IdentityPlanner:
             mode=mode,
             intent=intent.label,
             intent_confidence=intent.confidence,
+            seed_entities=seed_entities,
+            doc_types=doc_types,
             unit_types=unit_types,
             chain_view=chain_view,
             notes=notes,
@@ -212,16 +295,49 @@ class IdentityPlanner:
 # `response_mime_type=application/json`; Anthropic appends a "JSON
 # only" reminder + we strip stray code fences).
 _ROUTING_SYSTEM_PROMPT = (
-    "You are a query planner for a knowledge base. Given the user's query, "
-    "the intent label, and the available modes, return STRICTLY a JSON "
-    "object: {\"mode\": one of "
+    "You are a query planner for a knowledge base. Given the user's query "
+    "and the intent label, return STRICTLY a JSON object: "
+    "{\"mode\": one of "
     f"{list(QUERY_MODES)}, "
     "\"unit_types\": list[str], \"chain_view\": str|null, "
-    "\"doc_types\": list[str], \"notes\": str|null}. "
-    "Default to 'H' when uncertain. Choose 'Q' only for aggregation / "
-    "set-op queries. Choose 'K' for chain-aware / temporal-history. "
-    "Choose 'T' for multi-hop entity questions. Choose 'G' for "
-    "corpus-level summary requests."
+    "\"doc_types\": list[str], \"seed_entities\": list[str], "
+    "\"notes\": str|null}.\n\n"
+    "Pick the mode based on what the user is really asking for:\n"
+    "  H — default hybrid; pick this when no other mode clearly fits.\n"
+    "  Q — SQL aggregation (SUM/COUNT/AVG/MIN/MAX). Use for 'how many', \n"
+    "      'total of', 'average across all'. Q-payload generated separately.\n"
+    "  K — doc-chain aware (amendments / current version / supersedes).\n"
+    "  T — multi-hop graph traversal between entities.\n"
+    "  G — corpus-level synthesis ('summarize the workspace').\n"
+    "  I — inventory metadata listing ('list my files', 'what doc types').\n"
+    "  E — single-entity profile ('tell me about Acme Corp'). Carry the\n"
+    "      entity name in seed_entities.\n"
+    "  F — generic 'X where Y=Z' field-predicate filter, when the user\n"
+    "      doesn't name a typed sub-entity. Carry filters in field_filters.\n"
+    "  S — scoped summarize a SPECIFIC document/contract/file (not corpus).\n"
+    "      Carry the target in file_ids when you can resolve it.\n"
+    "  D — doc-metadata filter (file-level: doc_type, date, source).\n"
+    "      Carry the targeted doc_types.\n"
+    "  M — mention search ('where is X mentioned'). Carry the term in\n"
+    "      seed_entities so the handler can lookup extracted_mentions.\n"
+    "  C — atomic-unit filter: surface typed sub-entity rows (transactions,\n"
+    "      clauses, line items, messages) matching the query. Carry the\n"
+    "      unit_type(s) in unit_types.\n"
+    "  A — anomaly: surface rare/unusual extracted_entities rows by\n"
+    "      rarity_score. Carry unit_types when the query names a type\n"
+    "      ('unusual transactions' → unit_types=['transaction']).\n\n"
+    "Examples:\n"
+    "  'sum all debits' → Q\n"
+    "  'how is Acme connected to Vertex?' → T (seed_entities=['Acme','Vertex'])\n"
+    "  'summarize the workspace' → G\n"
+    "  'list my contracts' → I\n"
+    "  'tell me about Acme Corp' → E (seed_entities=['Acme Corp'])\n"
+    "  'find transactions over 1000 in Feb' → C (unit_types=['transaction'])\n"
+    "  'anything unusual in the bank statement?' → A (unit_types=['transaction'])\n"
+    "  'summarize this contract' → S\n"
+    "  'where is Vertex mentioned?' → M (seed_entities=['Vertex'])\n"
+    "  'PDFs from 2024' → D (doc_types=[…])\n\n"
+    "Default to 'H' when uncertain. Be concise in notes."
 )
 
 # Legacy alias kept until call-sites are renamed.
@@ -274,6 +390,7 @@ def _parse_plan_json(raw: str, intent: IntentResult) -> Plan:
         mode=mode,
         intent=intent.label,
         intent_confidence=intent.confidence,
+        seed_entities=_str_list("seed_entities"),
         unit_types=_str_list("unit_types"),
         doc_types=_str_list("doc_types"),
         chain_view=chain_view,
