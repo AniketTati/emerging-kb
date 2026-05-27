@@ -40,15 +40,20 @@ def _env(**kwargs):
 
 async def _seed_file_at_fields_extracting(
     db_url: str, workspace_id: str, *, label: str = "f",
-) -> tuple[str, list[str]]:
+) -> tuple[str, list[str], list[str]]:
     """Seed a file at `fields_extracting` with 2 chunks + their contextual
-    counterparts. Returns (file_id, [chunks.id, ...]) in chunk_index
-    order — the worker uses chunks.id for the proposed_fields/
-    atomic_units source_chunk_id FK (those tables predate contextual
-    chunking)."""
+    counterparts. Returns (file_id, [chunks.id, ...], [contextual_chunks.id, ...])
+    in chunk_index order.
+
+    After the atomic_units drop, KV+Tables writes:
+      - proposed_fields.source_chunk_id → chunks.id (chunk_ids)
+      - extracted_entities.source_chunk_id → contextual_chunks.id (cc_ids)
+    Tests can assert against whichever FK target the row points at.
+    """
     file_id = str(uuid.uuid4())
     sha = hashlib.sha256(f"kvt-{workspace_id}-{label}".encode()).hexdigest()
     chunk_ids: list[str] = []
+    cc_ids: list[str] = []
 
     async with await psycopg.AsyncConnection.connect(db_url) as conn:
         await conn.execute(
@@ -91,8 +96,9 @@ async def _seed_file_at_fields_extracting(
                  f"chunk{i}: bank statement excerpt"),
             )
             chunk_ids.append(chunk_id)
+            cc_ids.append(cc_id)
         await conn.commit()
-    return file_id, chunk_ids
+    return file_id, chunk_ids, cc_ids
 
 
 def _fake_kv_extractor(*, doc_type, scalars, tables, model_id="fake-kv"):
@@ -144,7 +150,7 @@ async def test_extract_kv_tables_identity_advances_lifecycle(
     from kb.workers.tasks import extract_kv_tables_file_impl
 
     workspace = str(uuid.uuid4())
-    file_id, _ = await _seed_file_at_fields_extracting(
+    file_id, _, _ = await _seed_file_at_fields_extracting(
         db_url_superuser, workspace,
     )
 
@@ -178,7 +184,7 @@ async def test_extract_kv_tables_identity_advances_lifecycle(
         assert (await cur.fetchone())[0] == 0
 
         cur = await conn.execute(
-            "SELECT count(*) FROM atomic_units WHERE file_id = %s",
+            "SELECT count(*) FROM extracted_entities WHERE file_id = %s",
             (file_id,),
         )
         assert (await cur.fetchone())[0] == 0
@@ -193,7 +199,7 @@ async def test_extract_kv_tables_writes_scalars_and_tables(
     from kb.workers.tasks import extract_kv_tables_file_impl
 
     workspace = str(uuid.uuid4())
-    file_id, chunk_ids = await _seed_file_at_fields_extracting(
+    file_id, chunk_ids, cc_ids = await _seed_file_at_fields_extracting(
         db_url_superuser, workspace, label="bs",
     )
 
@@ -264,20 +270,40 @@ async def test_extract_kv_tables_writes_scalars_and_tables(
         assert by_name["account_holder"][4] == chunk_ids[0]
         assert by_name["total_debits"][4] == chunk_ids[1]
 
-        # Tables → atomic_units
+        # Tables → extracted_entities children. The atomic_units
+        # staging table is gone; KV+Tables now writes the canonical
+        # storage shape directly. source_chunk_id is a
+        # contextual_chunks.id (FK from migration 0037).
         cur = await conn.execute(
-            "SELECT unit_type, parameters, source_chunk_id::text "
-            "FROM atomic_units WHERE file_id = %s "
-            "ORDER BY (parameters->>'date')",
+            "SELECT unit_type, fields, source_chunk_id::text "
+            "FROM extracted_entities WHERE file_id = %s "
+            "AND unit_type IS NOT NULL "
+            "ORDER BY (fields->>'date')",
             (file_id,),
         )
         units = await cur.fetchall()
         assert len(units) == 2
         assert all(u[0] == "transactions" for u in units)
         assert units[0][1] == {"date": "2024-01-15", "amount": "4.50"}
-        assert units[0][2] == chunk_ids[0]
+        assert units[0][2] == cc_ids[0]
         assert units[1][1] == {"date": "2024-01-16", "amount": "1245.50"}
-        assert units[1][2] == chunk_ids[1]
+        assert units[1][2] == cc_ids[1]
+
+        # Schema layer: bootstrap should have created BankStatement
+        # (doc_root) + Transactions (sub_entity) types with a
+        # contains relationship.
+        cur = await conn.execute(
+            "SELECT name, kind FROM schema_entities "
+            "WHERE workspace_id = %s AND lifecycle_state = 'active' "
+            "ORDER BY kind, name",
+            (workspace,),
+        )
+        type_rows = await cur.fetchall()
+        type_names = {r[0]: r[1] for r in type_rows}
+        # The doc_root carries the PascalCase doc_type name.
+        assert any(k == "doc_root" for k in type_names.values())
+        # And a sub_entity exists per table.
+        assert any(k == "sub_entity" for k in type_names.values())
 
         # Inferred schema fields written (cluster + promote happens too)
         cur = await conn.execute(
@@ -298,7 +324,7 @@ async def test_extract_kv_tables_state_guard_skips_post_fields_state(
     from kb.workers.tasks import extract_kv_tables_file_impl
 
     workspace = str(uuid.uuid4())
-    file_id, _ = await _seed_file_at_fields_extracting(
+    file_id, _, _ = await _seed_file_at_fields_extracting(
         db_url_superuser, workspace, label="advance",
     )
 
@@ -335,7 +361,7 @@ async def test_extract_kv_tables_state_guard_skips_post_fields_state(
         )
         assert (await cur.fetchone())[0] == 0
         cur = await conn.execute(
-            "SELECT count(*) FROM atomic_units WHERE file_id = %s",
+            "SELECT count(*) FROM extracted_entities WHERE file_id = %s",
             (file_id,),
         )
         assert (await cur.fetchone())[0] == 0
