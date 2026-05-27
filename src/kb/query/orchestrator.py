@@ -1018,11 +1018,40 @@ class Orchestrator:
             })
 
         if faithfulness.verdict == "refused" and not generation.refused:
-            # Out of retries — abstain (architecture §6 step 9 final branch).
-            generation = generation.model_copy(update={
-                "refused": True,
-                "refusal_reason": "faithfulness_gate_refused",
-            })
+            # Out of retries. Two behaviors depending on whether the
+            # retrieval was confident:
+            #   - CRAG was HIGH + generator returned an answer: the
+            #     faithfulness gate is likely a false-positive on
+            #     paraphrased prose (construction eval showed this on
+            #     factoids like "mechanical completion date" where the
+            #     answer is grounded but token-overlap drops below the
+            #     heuristic threshold). Keep the answer visible, mark
+            #     verdict="low_confidence" so the UI can badge it.
+            #   - CRAG was LOW or answer is empty: genuine abstain
+            #     (architecture §6 step 9 final branch).
+            answer_has_content = bool((generation.answer or "").strip())
+            if crag_score >= 0.7 and answer_has_content:
+                # Downgrade verdict — don't propagate refused=True.
+                # The UI sees faithfulness_verdict="low_confidence"
+                # and can render a "low confidence" warning beside
+                # the otherwise-correct answer.
+                faithfulness = FaithfulnessResult(
+                    verdict="low_confidence",
+                    score=faithfulness.score,
+                    per_claim_scores=faithfulness.per_claim_scores,
+                    notes=(
+                        (faithfulness.notes or "")
+                        + " [softened: CRAG was confident, "
+                        "answer kept visible with low-confidence "
+                        "badge instead of hidden refusal]"
+                    ),
+                    model_id=faithfulness.model_id,
+                )
+            else:
+                generation = generation.model_copy(update={
+                    "refused": True,
+                    "refusal_reason": "faithfulness_gate_refused",
+                })
 
         # Wave A close-up — sentence-level HHEM exposure (architecture
         # §6 step 8). The HHEM gate already computes per-claim scores;

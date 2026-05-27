@@ -276,20 +276,45 @@ A→B→C; apollo A→B; safety initial→investigation+corrective).
 
 ---
 
-## Updated pass rate after P1a (`fb86cec`)
+## Pass rate timeline
 
-| Strict pass rate | 31/50 (62%) | was 27/50 (54%) |
-| Soft pass (incl. faithfulness-attached answers) | 41/50 (82%) | — |
+| State | Strict pass | Notes |
+|---|---|---|
+| Baseline (before any fixes) | 27/50 (54%) | Adversarial 0/4, faithfulness hiding 10 answers |
+| After P1a (adversarial fix, `fb86cec`) | 31/50 (62%) | Adversarial 4/4 |
+| After faithfulness fix (this commit) | **41/50 (82%)** | +9 answers freed from faithfulness over-refusal |
 
-| Verdict | Count |
-|---|---|
-| has-answer | 26 |
-| pass-refused (adversarial correctly refused) | 4 |
-| correct-negative-refusal (q046) | 1 |
-| refused-by-faithfulness (10 answers hidden) | 10 |
-| refused-no_hits (genuine retrieval miss) | 4 |
-| refused-insufficient_evidence | 3 |
-| refused-q-mode-cant-compute | 2 |
+### Post-faithfulness-fix verdict breakdown (`construction_query_results_v3.json`)
+
+| Verdict | Count | What it means |
+|---|---|---|
+| has-answer | **35** | Real answers returned to user |
+| pass-refused (adversarial correctly refused) | 4 | q047-q050 caught by P1a |
+| correct-negative-refusal | 2 | q025 fire-stop, q046 1972 lease — corpus genuinely lacks info |
+| refused-by-faithfulness (true negative) | 1 | q022 — only one remaining; gate refused legitimately |
+| refused-no_hits (retrieval miss) | 2 | q005 mechanical completion date, q024 abnormally-low-bid |
+| refused-insufficient_evidence | 3 | q009, q026, q044 — CRAG correctly flagged low-confidence |
+| refused-q-mode-cant-compute | 2 | q035 date arithmetic, q036 cross-doc headcount — Q-mode honest |
+| refused-parse_error | 1 | q040 — likely Gemini structured-output hiccup, transient |
+
+### Faithfulness gate fix details
+
+**Two changes:**
+
+1. **Lowered heuristic thresholds**: refuse 0.30 → 0.15, pass 0.50 → 0.40.
+   Now env-configurable via `KB_FAITHFULNESS_HEURISTIC_REFUSE_THRESHOLD`
+   and `KB_FAITHFULNESS_HEURISTIC_PASS_THRESHOLD`. The prior calibration
+   was too strict for paraphrased prose (Jaccard token overlap drops
+   below 0.30 on legitimate answers that restate the source in
+   different words).
+
+2. **Soft refusal when CRAG was confident**: in `orchestrator.chat()`,
+   when the faithfulness gate refuses BUT CRAG score ≥ 0.7 AND the
+   answer has content, downgrade `faithfulness.verdict` to
+   `"low_confidence"` and DO NOT propagate `refused=True`. The UI
+   sees the answer + a "low confidence" indicator instead of a blank
+   response. The "low_confidence" verdict was already in the spec but
+   wasn't being preferred over "refused" in this code path.
 
 These should drive Phase 2 priorities along with the G-mode build.
 

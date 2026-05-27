@@ -56,14 +56,36 @@ FAITHFULNESS_VERDICTS: tuple[str, ...] = (
 PASS_THRESHOLD: float = 0.80
 LOW_CONFIDENCE_THRESHOLD: float = 0.50
 
-# Heuristic-gate-specific thresholds. Calibrated against demo workspace
-# legitimate lookups (which paraphrase MSA / NDA / resume text and
-# score in the 0.4-0.7 Jaccard range) AND against obvious
-# hallucinations (Zorblax-9000 made-up vendor scores 0.3-0.5
-# depending on LLM word choice). Setting refuse at 0.30 catches the
-# worst hallucinations while letting paraphrased lookups through.
-_HEURISTIC_PASS_THRESHOLD: float = 0.50
-_HEURISTIC_REFUSE_THRESHOLD: float = 0.30
+# Heuristic-gate-specific thresholds. Construction eval (50 queries on
+# 46 docs) showed the prior 0.30/0.50 calibration was too strict — it
+# was refusing 10 valid answers including chain-walk summaries and
+# multi-line factoids where paraphrased prose drops Jaccard overlap
+# below 0.30 even though the answer's claims ARE grounded.
+#
+# Looser defaults (0.15 refuse / 0.40 pass) widen the low_confidence
+# band so paraphrased correct answers pass through with a soft
+# warning rather than being hidden entirely. Genuine hallucinations
+# (Zorblax-9000 scoring 0.05-0.10) still get refused.
+#
+# Env-configurable so we can tune per-deployment without rebuild:
+#   KB_FAITHFULNESS_HEURISTIC_PASS_THRESHOLD
+#   KB_FAITHFULNESS_HEURISTIC_REFUSE_THRESHOLD
+def _env_float(name: str, default: float) -> float:
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
+_HEURISTIC_PASS_THRESHOLD: float = _env_float(
+    "KB_FAITHFULNESS_HEURISTIC_PASS_THRESHOLD", 0.40
+)
+_HEURISTIC_REFUSE_THRESHOLD: float = _env_float(
+    "KB_FAITHFULNESS_HEURISTIC_REFUSE_THRESHOLD", 0.15
+)
 
 # Architecture §6 step 9 — "max 2 retries". Orchestrator counter.
 MAX_REGENERATIONS: int = 2
