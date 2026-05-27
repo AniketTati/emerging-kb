@@ -509,6 +509,84 @@ class LLMPlanner:
         conn: Any = None,
         workspace_id: str | None = None,
     ) -> Plan:
+        # ---- Validate planner-extracted unit_types against the
+        # workspace's actual unit_type catalog. If the LLM (or the
+        # heuristic) extracted a unit_type that doesn't exist in this
+        # workspace, drop it. If a C/A/M-mode plan ends up with ZERO
+        # valid unit_types, downgrade to H-mode — otherwise the mode
+        # filter strips all hits and the user gets a "no_hits" refusal
+        # for what is actually a perfectly answerable factoid.
+        #
+        # Construction eval found:
+        #   q005 "project's target Mechanical Completion date" → LLM
+        #     extracted unit_types=['project'] (from the apostrophe-s),
+        #     which doesn't exist as a unit_type in the workspace →
+        #     C-mode returned 0 hits despite chunks clearly containing
+        #     the answer. After validation, drops 'project', downgrades
+        #     to H-mode, returns the right answer.
+        if (
+            conn is not None and workspace_id is not None
+            and plan.unit_types and plan.mode in ("C", "A", "M")
+        ):
+            try:
+                cur = await conn.execute(
+                    "SELECT DISTINCT unit_type FROM extracted_entities "
+                    "WHERE workspace_id = %s AND unit_type IS NOT NULL",
+                    (workspace_id,),
+                )
+                known = {r[0] for r in await cur.fetchall()}
+                kept = tuple(
+                    ut for ut in plan.unit_types if ut in known
+                )
+                if not kept:
+                    # Drop unit_types + downgrade to H (preserve other
+                    # plan fields). Annotate notes for observability.
+                    plan = Plan(
+                        mode="H",
+                        intent=plan.intent,
+                        intent_confidence=plan.intent_confidence,
+                        seed_entities=plan.seed_entities,
+                        file_ids=plan.file_ids,
+                        doc_types=plan.doc_types,
+                        unit_types=(),
+                        chain_view=plan.chain_view,
+                        field_filters=plan.field_filters,
+                        q_payload=plan.q_payload,
+                        notes=(
+                            (plan.notes + " · " if plan.notes else "")
+                            + f"unit_types_downgrade: dropped "
+                            + f"{list(plan.unit_types)} (none in "
+                            + f"workspace), downgraded {plan.mode}→H"
+                        ),
+                        model_id=plan.model_id,
+                    )
+                elif kept != plan.unit_types:
+                    # Some were valid — keep just those.
+                    dropped = tuple(
+                        ut for ut in plan.unit_types if ut not in known
+                    )
+                    plan = Plan(
+                        mode=plan.mode,
+                        intent=plan.intent,
+                        intent_confidence=plan.intent_confidence,
+                        seed_entities=plan.seed_entities,
+                        file_ids=plan.file_ids,
+                        doc_types=plan.doc_types,
+                        unit_types=kept,
+                        chain_view=plan.chain_view,
+                        field_filters=plan.field_filters,
+                        q_payload=plan.q_payload,
+                        notes=(
+                            (plan.notes + " · " if plan.notes else "")
+                            + f"unit_types_validated: dropped "
+                            + f"{list(dropped)} not in workspace"
+                        ),
+                        model_id=plan.model_id,
+                    )
+            except Exception:  # noqa: BLE001
+                # Validation is best-effort; never fail the request
+                # because the catalog probe hiccupped.
+                pass
         """Second LLM call to fill `plan.q_payload` when mode='Q'. The
         same provider client is reused — no extra config.
 

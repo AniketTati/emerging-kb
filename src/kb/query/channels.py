@@ -107,6 +107,33 @@ async def _run_channel_query(
 # ---------------------------------------------------------------------------
 
 
+# paradedb's @@@ query parser rejects bare apostrophes, question marks,
+# and a few other punctuation chars — `project's` raises:
+#   could not parse query string 'contextual_text:(project's target …)'
+# Worse, the parse failure aborts the surrounding txn savepoint, which
+# silently kills the OTHER channels (dense, etc.) that run in the same
+# scope. We get a global no_hits. Strip the problem chars before
+# handing the query to pg_search. Keep tokens that BM25 cares about
+# (letters, digits, spaces, hyphens, underscores, periods between
+# numbers); convert everything else to a space.
+import re as _re
+_BM25_SAFE_RE = _re.compile(r"[^A-Za-z0-9 _.\-]")
+_BM25_RUNS_RE = _re.compile(r"\s+")
+
+
+def _sanitize_bm25_query(q: str) -> str:
+    """Make `q` safe for paradedb's @@@ operator.
+
+    Replaces apostrophes, question marks, colons, commas, etc with
+    spaces. Collapses runs of whitespace. Returns "" for queries that
+    end up empty (caller should short-circuit then)."""
+    if not q:
+        return ""
+    cleaned = _BM25_SAFE_RE.sub(" ", q)
+    cleaned = _BM25_RUNS_RE.sub(" ", cleaned).strip()
+    return cleaned
+
+
 async def bm25_chunks_channel(
     conn: Any,
     *,
@@ -115,7 +142,8 @@ async def bm25_chunks_channel(
     limit: int = TOP_K_PER_CHANNEL,
 ) -> list[Hit]:
     """BM25 over contextual_chunks via pg_search `@@@` operator."""
-    if not query.strip():
+    safe_query = _sanitize_bm25_query(query)
+    if not safe_query:
         return []
     # Filter out chunks belonging to soft-deleted files. Otherwise re-
     # uploads (which dedupe by content_sha and soft-delete the loser)
@@ -130,7 +158,7 @@ async def bm25_chunks_channel(
         "JOIN files f ON f.id = c.file_id AND f.lifecycle_state <> 'deleted' "
         "WHERE cc.workspace_id = %s AND cc.contextual_text @@@ %s "
         "ORDER BY sc DESC LIMIT %s",
-        (workspace_id, query, limit),
+        (workspace_id, safe_query, limit),
     )
     if rows is None:
         return []
@@ -158,7 +186,8 @@ async def bm25_raptor_channel(
     limit: int = TOP_K_PER_CHANNEL,
 ) -> list[Hit]:
     """BM25 over raptor_nodes.text — covers per_doc + corpus summaries."""
-    if not query.strip():
+    safe_query = _sanitize_bm25_query(query)
+    if not safe_query:
         return []
     # Live-files-only filter. raptor_nodes.file_id is nullable for
     # corpus-level summary rows (no per-file scope) — keep those by
@@ -173,7 +202,7 @@ async def bm25_raptor_channel(
         "    SELECT 1 FROM files f "
         "     WHERE f.id = rn.file_id AND f.lifecycle_state = 'deleted')) "
         "ORDER BY sc DESC LIMIT %s",
-        (workspace_id, query, limit),
+        (workspace_id, safe_query, limit),
     )
     if rows is None:
         return []

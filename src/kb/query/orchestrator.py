@@ -740,6 +740,14 @@ class Orchestrator:
                 "merges_by_level": auto_merge_stats_chat.merges_by_level,
             })
 
+        # Stash pre-mode hits so we can fall back if the mode router
+        # filters everything out. Construction eval found that C-mode
+        # (unit_filter) and A-mode (anomaly) were filtering legitimate
+        # H-mode-quality hits down to 0 — the user got a "no_hits"
+        # refusal even though the hybrid retrieval had found relevant
+        # chunks. Falling back to the pre-mode hits is strictly better
+        # than refusing.
+        pre_mode_hits = hits[:]
         try:
             hits = await apply_mode(
                 plan, hits,
@@ -755,6 +763,25 @@ class Orchestrator:
                 latency_ms=int((time.monotonic() - t0) * 1000),
                 reason=str(exc),
             )
+
+        # Mode-filter fallback: if the specialized mode produced 0 hits
+        # but the pre-mode (hybrid) retrieval found something, use the
+        # hybrid results. Don't apply when mode was already H (no
+        # filtering happened) or Q (which has its own SQL path that
+        # legitimately produces 0 result-set rows). Construction q005
+        # (mech-completion date routed to C-mode) and q024 (abnormally-
+        # low-bid routed to A-mode) both hit this fallback.
+        if (
+            not hits
+            and pre_mode_hits
+            and plan.mode not in ("H", "Q", "I")
+        ):
+            hits = pre_mode_hits
+            await emit("mode_filter_fallback", {
+                "mode": plan.mode,
+                "restored": len(hits),
+                "reason": "specialized_mode_filtered_to_zero",
+            })
 
         crag_score = await self._crag.assess(effective_query, hits)
         await emit("crag_assessed", {
