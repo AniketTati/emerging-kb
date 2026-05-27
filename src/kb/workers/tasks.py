@@ -3340,16 +3340,56 @@ async def build_graph_file_impl(file_id: str) -> None:
                 lineage_pairs=lineage_pairs,
             )
 
-            for edge in edges:
-                await upsert_edge(
-                    conn,
-                    workspace_id=workspace_id_str,
-                    src_entity_id=edge.src_entity_id,
-                    dst_entity_id=edge.dst_entity_id,
-                    edge_kind=edge.edge_kind,
-                    weight_delta=edge.weight_delta,
-                    source_ref=edge.source_ref,
-                )
+            # Bug G: graph_edges.{src,dst}_entity_id FK to
+            # canonical_entities(id), but lineage_pairs carry
+            # extracted_entities.id pairs (parent_entity_id is the
+            # extracted-entity parent, not a canonical_entity). Inserting
+            # those edges raises a FK violation on EVERY ingest. The
+            # information they encode (parent-child between extracted
+            # entities) is already first-class in
+            # extracted_entities.parent_entity_id, so the graph query
+            # layer can JOIN that directly when it needs lineage —
+            # graph_edges only needs to carry cross-doc entity-level
+            # edges (relationships + co-mentions).
+            #
+            # Filter lineage edges out before upserting. Wrapped each
+            # upsert in a per-edge savepoint so one bad edge (e.g. an
+            # entity wasn't canonicalized yet) doesn't fail the whole
+            # graph build.
+            filtered_edges = [e for e in edges if e.edge_kind != "lineage"]
+            n_skipped_lineage = len(edges) - len(filtered_edges)
+            n_inserted = 0
+            n_failed_fk = 0
+            for edge in filtered_edges:
+                sp = "build_graph_edge"
+                await conn.execute(f"SAVEPOINT {sp}")
+                try:
+                    await upsert_edge(
+                        conn,
+                        workspace_id=workspace_id_str,
+                        src_entity_id=edge.src_entity_id,
+                        dst_entity_id=edge.dst_entity_id,
+                        edge_kind=edge.edge_kind,
+                        weight_delta=edge.weight_delta,
+                        source_ref=edge.source_ref,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    msg = str(exc)
+                    if (
+                        "graph_edges_src_entity_id_fkey" in msg
+                        or "graph_edges_dst_entity_id_fkey" in msg
+                    ):
+                        n_failed_fk += 1
+                        await conn.execute(f"ROLLBACK TO SAVEPOINT {sp}")
+                        await conn.execute(f"RELEASE SAVEPOINT {sp}")
+                        continue
+                    # Unknown failure — let it bubble.
+                    await conn.execute(f"ROLLBACK TO SAVEPOINT {sp}")
+                    await conn.execute(f"RELEASE SAVEPOINT {sp}")
+                    raise
+                else:
+                    await conn.execute(f"RELEASE SAVEPOINT {sp}")
+                    n_inserted += 1
 
             await record_lifecycle_event(
                 conn,
@@ -3359,7 +3399,10 @@ async def build_graph_file_impl(file_id: str) -> None:
                 to_state=str(lifecycle_state),
                 event="graph_built",
                 payload={
-                    "edges_upserted": len(edges),
+                    "edges_upserted": n_inserted,
+                    "edges_attempted": len(filtered_edges),
+                    "edges_failed_fk": n_failed_fk,
+                    "edges_skipped_lineage": n_skipped_lineage,
                     "n_relationships": len(relationships),
                     "n_mention_pairs": len(mentions_in_units),
                     "n_lineage_pairs": len(lineage_pairs),
