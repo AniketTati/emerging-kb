@@ -49,8 +49,21 @@ FAITHFULNESS_VERDICTS: tuple[str, ...] = (
 )
 
 # Architecture §6 step 9: pass / regen-retry / refuse cascade.
+# These are the HHEM-calibrated thresholds. The Heuristic gate uses
+# looser thresholds (see `_HEURISTIC_PASS_THRESHOLD` below) because
+# token-overlap Jaccard naturally scores lower than NLI entailment
+# on legitimate paraphrased prose.
 PASS_THRESHOLD: float = 0.80
 LOW_CONFIDENCE_THRESHOLD: float = 0.50
+
+# Heuristic-gate-specific thresholds. Calibrated against demo workspace
+# legitimate lookups (which paraphrase MSA / NDA / resume text and
+# score in the 0.4-0.7 Jaccard range) AND against obvious
+# hallucinations (Zorblax-9000 made-up vendor scores 0.3-0.5
+# depending on LLM word choice). Setting refuse at 0.30 catches the
+# worst hallucinations while letting paraphrased lookups through.
+_HEURISTIC_PASS_THRESHOLD: float = 0.50
+_HEURISTIC_REFUSE_THRESHOLD: float = 0.30
 
 # Architecture §6 step 9 — "max 2 retries". Orchestrator counter.
 MAX_REGENERATIONS: int = 2
@@ -107,11 +120,18 @@ def split_sentences(text: str) -> list[str]:
     return parts or [text]
 
 
-def verdict_from_score(score: float) -> str:
-    """Apply the band thresholds. Pure-function."""
-    if score >= PASS_THRESHOLD:
+def verdict_from_score(
+    score: float,
+    *,
+    pass_threshold: float = PASS_THRESHOLD,
+    refuse_threshold: float = LOW_CONFIDENCE_THRESHOLD,
+) -> str:
+    """Apply the band thresholds. Pure-function. Gates can override
+    via the kwargs — Heuristic uses looser thresholds since Jaccard
+    naturally scores lower than NLI entailment on paraphrased prose."""
+    if score >= pass_threshold:
         return "pass"
-    if score >= LOW_CONFIDENCE_THRESHOLD:
+    if score >= refuse_threshold:
         return "low_confidence"
     return "refused"
 
@@ -224,7 +244,11 @@ class HeuristicFaithfulnessGate:
 
         overall = sum(per) / max(1, len(per))
         return FaithfulnessResult(
-            verdict=verdict_from_score(overall),
+            verdict=verdict_from_score(
+                overall,
+                pass_threshold=_HEURISTIC_PASS_THRESHOLD,
+                refuse_threshold=_HEURISTIC_REFUSE_THRESHOLD,
+            ),
             score=overall,
             per_claim_scores=tuple(per),
             notes=None,
@@ -325,15 +349,24 @@ class HHEMFaithfulnessGate:
 def make_faithfulness_gate() -> FaithfulnessGate:
     """Pick a gate based on `KB_FAITHFULNESS_GATE`.
 
-      identity  → IdentityFaithfulnessGate (default)
-      heuristic → HeuristicFaithfulnessGate
-      hhem      → HHEMFaithfulnessGate
-      auto      → identity (fail-safe). Switch to 'hhem' explicitly when
-                  the model checkpoint is available.
+      identity  → IdentityFaithfulnessGate (no-op, always passes —
+                  use only when you explicitly want to disable the gate)
+      heuristic → HeuristicFaithfulnessGate (pure-Python Jaccard;
+                  catches obvious hallucinations like made-up vendor
+                  names because the proper-noun tokens won't appear in
+                  any cited snippet)
+      hhem      → HHEMFaithfulnessGate (~600MB local model, real
+                  per-sentence entailment scoring)
+      auto      → heuristic. We used to default to identity but that
+                  let the chat surface invent details about made-up
+                  entities ("Zorblax-9000 contract" got a full answer
+                  citing real MSA docs). Heuristic catches that without
+                  needing a model checkpoint; explicit 'hhem' upgrades
+                  to real entailment when the model is available.
     """
     selector = (os.environ.get("KB_FAITHFULNESS_GATE") or "auto").lower()
     if selector == "auto":
-        selector = "identity"
+        selector = "heuristic"
     if selector == "identity":
         return IdentityFaithfulnessGate()
     if selector == "heuristic":

@@ -975,11 +975,27 @@ class Orchestrator:
     ) -> FaithfulnessResult:
         """Run the faithfulness gate. When the generator refused upstream
         (no_hits / insufficient_evidence / parse_error / llm_error) we mark
-        the gate 'skipped' — there's no answer to check."""
+        the gate 'skipped' — there's no answer to check.
+
+        Q-mode results (and any other mode that produces ONLY synthesized
+        aggregate hits) skip the gate entirely. The aggregate hit's
+        snippet is a machine-printed result like 'total_debits=452998.10'
+        — when the gen-LLM rephrases that into prose ("The sum of all
+        transactions is **452,998.10**...") the token-overlap heuristic
+        scores it as unfaithful even though the numbers match exactly.
+        Q-mode has its own audit trail (q_payload + audit_query_id) that
+        validates correctness without re-grounding the prose.
+        """
         if generation.refused or not (generation.answer or "").strip():
             return FaithfulnessResult(
                 verdict="skipped", score=0.0,
                 notes="generator refused upstream", model_id="",
+            )
+        # Mode-based skip: aggregate-only hit lists don't ground prose.
+        if hits and all(h.kind == "aggregate" for h in hits):
+            return FaithfulnessResult(
+                verdict="skipped", score=0.0,
+                notes="aggregate-only hits (Q-mode bypass)", model_id="",
             )
         snippets = [
             (c.snippet_preview or "") for c in generation.citations

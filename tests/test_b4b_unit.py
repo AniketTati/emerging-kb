@@ -417,7 +417,46 @@ def test_validator_accepts_group_by_query():
         "aggregations": [{"op": "COUNT", "field": "*", "alias": "n"}],
     })
     validated = validate(plan)
-    assert validated.plan.group_by == ("doc_status",)
+    # Post-PR for jsonb group_by support: group_by is now a tuple of
+    # GroupByCol objects (not raw strings) so jsonb-path entries can
+    # carry their parsed (col, key, cast) tuple alongside plain idents.
+    assert len(validated.plan.group_by) == 1
+    assert validated.plan.group_by[0].field == "doc_status"
+    assert validated.plan.group_by[0].jsonb_path is None
+
+
+def test_grammar_parses_jsonb_group_by():
+    """`group_by` accepts the same 'col.key::cast' jsonb-path syntax
+    as Filter/Aggregation — enables 'expenses by category' Q-plans."""
+    plan = parse_plan({
+        "from": "extracted_entities",
+        "filters": [{"field": "unit_type", "op": "eq", "value": "expense"}],
+        "group_by": ["fields.category::text"],
+        "aggregations": [{"op": "SUM", "field": "fields.amount_usd::numeric",
+                          "alias": "total"}],
+    })
+    assert len(plan.group_by) == 1
+    assert plan.group_by[0].field == "fields.category::text"
+    assert plan.group_by[0].jsonb_path == ("fields", "category", "text")
+
+
+def test_compiler_emits_jsonb_group_by():
+    """Compiled SQL renders the jsonb extract in BOTH SELECT and
+    GROUP BY clauses + projects the key as a friendly alias."""
+    from kb.q_planner.compiler import compile_plan
+    plan = parse_plan({
+        "from": "extracted_entities",
+        "filters": [{"field": "unit_type", "op": "eq", "value": "expense"}],
+        "group_by": ["fields.category::text"],
+        "aggregations": [{"op": "SUM", "field": "fields.amount_usd::numeric",
+                          "alias": "total"}],
+    })
+    sql, _params = compile_plan(
+        validate(plan), workspace_id="00000000-0000-0000-0000-000000000001",
+        row_cap=100,
+    )
+    assert '("extracted_entities"."fields"->>\'category\')::text AS "category"' in sql
+    assert 'GROUP BY ("extracted_entities"."fields"->>\'category\')::text' in sql
 
 
 # ===========================================================================

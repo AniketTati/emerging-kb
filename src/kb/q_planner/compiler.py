@@ -137,6 +137,31 @@ def _agg_projection(table: str, a: Aggregation) -> str:
     return f"{body} AS {_quote_ident(a.alias)}"
 
 
+def _group_by_expr(table: str, g) -> str:
+    """SQL fragment for ONE entry in the GROUP BY clause. Plain
+    identifiers render as `t."col"`; jsonb-path forms render as
+    `(t."fields"->>'key')::cast` via `_jsonb_extract_sql`."""
+    if g.jsonb_path is not None:
+        jsonb_col, jsonb_key, cast = g.jsonb_path
+        return _jsonb_extract_sql(table, jsonb_col, jsonb_key, cast)
+    return f"{_quote_ident(table)}.{_quote_ident(g.field)}"
+
+
+def _group_by_projection(table: str, g) -> str:
+    """SELECT-list projection for ONE group_by entry. We add an AS
+    alias so the result row has a stable column name — for plain
+    identifiers the alias is the column name; for jsonb paths we
+    derive it from the jsonb key (e.g. `fields.category::text` →
+    alias `category`)."""
+    expr = _group_by_expr(table, g)
+    if g.jsonb_path is not None:
+        _jsonb_col, jsonb_key, _cast = g.jsonb_path
+        alias = jsonb_key
+    else:
+        alias = g.field
+    return f"{expr} AS {_quote_ident(alias)}"
+
+
 def compile_plan(
     validated: ValidatedQPlan,
     *,
@@ -156,10 +181,8 @@ def compile_plan(
     # --- SELECT list ---------------------------------------------------
     select_parts: list[str] = []
     if plan.group_by:
-        for col in plan.group_by:
-            select_parts.append(
-                f"{table_sql}.{_quote_ident(col)} AS {_quote_ident(col)}"
-            )
+        for g in plan.group_by:
+            select_parts.append(_group_by_projection(table, g))
     for agg in plan.aggregations:
         select_parts.append(_agg_projection(table, agg))
 
@@ -190,7 +213,7 @@ def compile_plan(
     group_clause = ""
     if plan.group_by:
         group_clause = " GROUP BY " + ", ".join(
-            f"{table_sql}.{_quote_ident(g)}" for g in plan.group_by
+            _group_by_expr(table, g) for g in plan.group_by
         )
 
     # --- ORDER BY ------------------------------------------------------

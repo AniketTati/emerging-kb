@@ -209,14 +209,30 @@ def validate(plan: QPlan) -> ValidatedQPlan:
         key = _validate_filter(plan.from_table, f)
         column_types[key] = column_type(*key) or "text"
 
-    # group_by columns — every group_by must be in the catalog, AND must
-    # also appear as a SELECT projection (i.e. either in group_by output
-    # or there are no aggregations and it's a plain projection). The
-    # compiler handles projection assembly; here we just validate
-    # existence.
+    # group_by columns — plain identifiers must be in the catalog;
+    # jsonb-path forms ('fields.<key>::<cast>') must reference a
+    # whitelisted (table, jsonb_col) pair (same allowlist used for
+    # jsonb aggregations).
     for g in plan.group_by:
-        t = _check_column(plan.from_table, g)
-        column_types[(plan.from_table, g)] = t
+        if g.jsonb_path is not None:
+            from kb.q_planner.catalog import is_jsonb_agg_allowed
+            jsonb_col, _jsonb_key, _cast_type = g.jsonb_path
+            col_type = column_type(plan.from_table, jsonb_col)
+            if col_type != "jsonb":
+                raise QPlanValidationError(
+                    f"group_by jsonb path {g.field!r}: {jsonb_col!r} on "
+                    f"{plan.from_table!r} is not a jsonb column"
+                )
+            if not is_jsonb_agg_allowed(plan.from_table, jsonb_col):
+                raise QPlanValidationError(
+                    f"group_by on jsonb ({plan.from_table!r}, "
+                    f"{jsonb_col!r}) is not in the Q-mode allowlist"
+                )
+            # No further column_types entry — the SELECT projection +
+            # GROUP BY clause both render via _jsonb_extract_sql below.
+            continue
+        t = _check_column(plan.from_table, g.field)
+        column_types[(plan.from_table, g.field)] = t
 
     # Aggregations
     for a in plan.aggregations:

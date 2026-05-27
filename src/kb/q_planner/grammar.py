@@ -101,12 +101,24 @@ class Aggregation:
 
 
 @dataclass(frozen=True)
+class GroupByCol:
+    """One entry in a `group_by` list. Mirrors Filter/Aggregation:
+    `field` is the raw text from the LLM (plain identifier OR jsonb
+    path like 'fields.category::text'); `jsonb_path` is the parsed
+    (col, key, cast) tuple set by the grammar parser when the field
+    used the jsonb-path syntax. None for plain identifier group_bys.
+    """
+    field: str
+    jsonb_path: tuple[str, str, str] | None = None
+
+
+@dataclass(frozen=True)
 class QPlan:
     """Typed Q-plan. The validator widens this into ValidatedQPlan with
     a resolved table + column types attached."""
     from_table: str
     filters: tuple[Filter, ...] = field(default_factory=tuple)
-    group_by: tuple[str, ...] = field(default_factory=tuple)
+    group_by: tuple[GroupByCol, ...] = field(default_factory=tuple)
     aggregations: tuple[Aggregation, ...] = field(default_factory=tuple)
     order_by: tuple[tuple[str, str], ...] = field(default_factory=tuple)
     # User-requested limit; the executor clamps to DEFAULT_ROW_CAP.
@@ -314,10 +326,28 @@ def parse_plan(raw: Any) -> QPlan:
         raise QPlanParseError("group_by must be a list of column names")
     if len(raw_group) > 10:
         raise QPlanParseError("group_by list exceeds max length 10")
+    group_by_cols: list[GroupByCol] = []
     for g in raw_group:
-        if not isinstance(g, str) or not _is_valid_ident(g):
-            raise QPlanParseError(f"group_by entry {g!r} is not a valid identifier")
-    group_by = tuple(raw_group)
+        if not isinstance(g, str):
+            raise QPlanParseError(
+                f"group_by entry {g!r} must be a string (plain column "
+                f"name or jsonb path 'fields.<key>::<cast>')"
+            )
+        # Plain identifier (e.g. 'unit_type', 'file_id') → no jsonb path
+        if _is_valid_ident(g):
+            group_by_cols.append(GroupByCol(field=g))
+            continue
+        # jsonb-path form (e.g. 'fields.category::text') — same syntax
+        # accepted by Filter.field and Aggregation.field. Validator
+        # later checks the (table, jsonb_col) is in the allowlist.
+        jsonb_path = _parse_jsonb_path(g)
+        if jsonb_path is None:
+            raise QPlanParseError(
+                f"group_by entry {g!r} is not a valid identifier or "
+                f"jsonb path (expected 'col' or 'col.key::cast')"
+            )
+        group_by_cols.append(GroupByCol(field=g, jsonb_path=jsonb_path))
+    group_by = tuple(group_by_cols)
 
     order_by = _parse_order_by(raw.get("order_by"))
 
