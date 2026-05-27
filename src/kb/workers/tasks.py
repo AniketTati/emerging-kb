@@ -70,6 +70,47 @@ from kb.storage.files import get_file_bytes
 from kb.workers.app import app as procrastinate_app
 
 
+def singularize_unit_type(name: str) -> str:
+    """Canonicalize a table / sub_entity name to its singular form.
+
+    Used by `extract_kv_tables_file_impl` to normalize LLM-emitted
+    table names at the storage boundary before writing
+    `extracted_entities.unit_type`. Keeping the column singular keeps
+    Q-mode prompt examples + retrieval-channel keyword filters
+    aligned with what's actually stored.
+
+    Rules apply in priority order:
+      1. 'ies' → 'y' (responsibilities → responsibility)
+         — must run BEFORE the 'es' early-return below so it isn't
+         masked by the broader 'es' suffix.
+      2. Latin/Greek 'ss' / 'is' / 'us' / 'as' endings are already
+         singular (address, basis, status, gas); return as-is.
+      3. English plurals where 'es' was added without dropping the
+         preceding char (boxes, processes, dishes, matches): drop 'es'.
+         Detected by 'sses' / 'xes' / 'zzes' / 'shes' / 'ches'.
+         Note: 'zes' alone is excluded because 'sizes' / 'breezes' /
+         'phrases' have a silent 'e' in the singular root — they
+         should fall through to the simple 'drop trailing s' rule.
+      4. Otherwise, any trailing 's' (services → service, expenses →
+         expense, attendees → attendee, quotes → quote): drop 's'.
+
+    No-op when `name` is empty, fewer than 3 chars, or doesn't end
+    in 's'.
+    """
+    if not name or len(name) < 3:
+        return name
+    lo = name.lower()
+    if lo.endswith("ies") and len(name) > 4:
+        return name[:-3] + "y"
+    if lo.endswith(("ss", "is", "us", "as")):
+        return name
+    if lo.endswith(("sses", "xes", "zzes", "shes", "ches")):
+        return name[:-2]
+    if lo.endswith("s"):
+        return name[:-1]
+    return name
+
+
 async def parse_file_impl(file_id: str, forced_parser: str | None = None) -> None:
     """Pure async core. Reads the file row, sets workspace context, fetches
     bytes from MinIO, dispatches to a parser, writes raw_pages + lifecycle.
@@ -1631,28 +1672,15 @@ async def extract_kv_tables_file_impl(file_id: str) -> None:
             # schema_relationships(kind='contains') to find each child's
             # parent doc_root instance for this file and UPDATEs the FK.
 
-            # Normalize table names to singular (the LLM tends to emit
-            # plurals: "transactions", "clauses", "line_items"). Q-mode
-            # prompt examples + retrieval-channel keyword filters expect
-            # the singular form, so we canonicalize here at the
-            # storage boundary.
-            def _singularize(name: str) -> str:
-                # Common simple rule: drop trailing 's' if the word ends in
-                # consonant+'s' OR vowel+'s' that isn't 'ss'. Skip when
-                # already singular (no trailing s, or 'ss', 'is', 'us').
-                if not name or len(name) < 3:
-                    return name
-                lo = name.lower()
-                if lo.endswith(("ss", "is", "us", "as", "es")):
-                    return name
-                if lo.endswith("ies") and len(name) > 4:
-                    return name[:-3] + "y"
-                if lo.endswith("s"):
-                    return name[:-1]
-                return name
-
+            # Normalize table names to singular (LLM tends to emit
+            # plurals like "transactions", "clauses", "line_items").
+            # Q-mode prompt examples + retrieval-channel keyword filters
+            # expect the singular form, so we canonicalize here at the
+            # storage boundary. Function is hoisted to module scope
+            # (`singularize_unit_type`) so tests can exercise the
+            # edge-case matrix directly.
             for tbl in payload.tables:
-                tbl.name = _singularize(tbl.name)
+                tbl.name = singularize_unit_type(tbl.name)
 
             # Bootstrap schema_entities types FIRST (the children need
             # their schema_entity_id FK to point at a real sub_entity

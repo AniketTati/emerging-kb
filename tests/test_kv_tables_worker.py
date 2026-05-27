@@ -367,3 +367,57 @@ async def test_extract_kv_tables_state_guard_skips_post_fields_state(
             (file_id,),
         )
         assert (await cur.fetchone())[0] == 0
+
+
+# ===========================================================================
+# singularize_unit_type — exhaustive edge-case matrix
+# ===========================================================================
+
+
+@pytest.mark.parametrize(
+    "plural, expected",
+    [
+        # Simple drop-trailing-s
+        ("transactions", "transaction"),
+        ("clauses", "clause"),
+        ("line_items", "line_item"),
+        # 'ies' → 'y'  (the bug that motivated this matrix —
+        # 'responsibilities' ends in BOTH 'ies' and 'es', and the
+        # 'es' rule used to fire first.)
+        ("responsibilities", "responsibility"),
+        ("cities", "city"),
+        ("dependencies", "dependency"),
+        # 'es' suffix on words where dropping 's' is the correct
+        # singularization. The pre-fix code mistakenly returned all
+        # of these unchanged.
+        ("services", "service"),
+        ("expenses", "expense"),
+        ("quotes", "quote"),
+        ("attendees", "attendee"),
+        ("considered_alternatives", "considered_alternative"),
+        ("work_experiences", "work_experience"),
+        # 'sses'/'xes'/'zzes'/'shes'/'ches' — drop 'es', NOT just 's'
+        ("processes", "process"),
+        ("boxes", "box"),
+        ("buzzes", "buzz"),
+        ("dishes", "dish"),
+        ("matches", "match"),
+        # 'zes' alone falls through to the drop-'s' rule so
+        # 'sizes' → 'size' (the singular root carries a silent 'e').
+        ("sizes", "size"),
+        ("phrases", "phrase"),
+        # Already-singular Latin/Greek endings — leave alone.
+        ("address", "address"),
+        ("basis", "basis"),
+        ("status", "status"),
+        ("gas", "gas"),
+        # Short / empty / no-trailing-s edge cases
+        ("", ""),
+        ("ab", "ab"),
+        ("entity", "entity"),
+        ("data", "data"),
+    ],
+)
+def test_singularize_unit_type(plural, expected):
+    from kb.workers.tasks import singularize_unit_type
+    assert singularize_unit_type(plural) == expected
