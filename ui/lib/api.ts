@@ -1806,3 +1806,139 @@ export async function getEvalRunResults(
   );
   return _handle(resp);
 }
+
+
+// ===========================================================================
+// Knowledge Map — backs the redesigned /schema-studio UI.
+//
+// Four endpoints power 3 tabs:
+//   /knowledge-map/stats         → 4-stat header
+//   /knowledge-map/catalog       → Tab 1 cards
+//   /knowledge-map/needs-review  → Tab 2 sections
+//   /knowledge-map/history       → Tab 3 timeline
+// ===========================================================================
+
+export type KMField = {
+  name: string;
+  type?: string | null;
+  prevalence?: number | null;
+  description?: string | null;
+};
+
+export type KMSubEntityType = {
+  name: string;
+  unit_type: string;
+  row_count: number;
+  fields: KMField[];
+};
+
+export type KMSchemaCard = {
+  id: string;
+  name: string;
+  description: string | null;
+  created_at: string;
+  file_count: number;
+  doc_root_fields: KMField[];
+  sub_entity_types: KMSubEntityType[];
+};
+
+export type KMStats = {
+  doc_types: number;
+  files_ingested: number;
+  sub_entities: number;
+  pending_review: number;
+};
+
+export type KMAnomaly = {
+  id: string;
+  unit_type: string;
+  file_id: string;
+  file_name: string | null;
+  rarity_score: number;
+  fields: Record<string, unknown>;
+};
+
+export type KMConflict = {
+  id: string;
+  entity_id: string | null;
+  predicate: string;
+  observed_at: string;
+  evidence_count: number;
+  evidence_preview: Array<Record<string, unknown>>;
+  resolution: string;
+  notes: string | null;
+};
+
+export type KMNeedsReview = {
+  anomalies: KMAnomaly[];
+  anomalies_total: number;
+  conflicts: KMConflict[];
+  conflicts_total: number;
+  emerging_fields_total: number;
+  synonym_proposals_total: number;
+};
+
+export type KMHistoryEvent = {
+  id: string;
+  file_id: string;
+  file_name: string | null;
+  event: string;
+  to_state: string | null;
+  payload: Record<string, unknown>;
+  created_at: string;
+};
+
+export type KMHistoryResp = {
+  items: KMHistoryEvent[];
+  next_cursor: string | null;
+  total: number;
+};
+
+export async function getKnowledgeMapStats(): Promise<KMStats> {
+  const resp = await fetch(
+    `${KB_API_URL}/knowledge-map/stats`,
+    { headers: workspaceHeaders(), cache: "no-store" },
+  );
+  return _handle<KMStats>(resp);
+}
+
+export async function getKnowledgeMapCatalog(): Promise<KMSchemaCard[]> {
+  const resp = await fetch(
+    `${KB_API_URL}/knowledge-map/catalog`,
+    { headers: workspaceHeaders(), cache: "no-store" },
+  );
+  const body = await _handle<{ items: KMSchemaCard[] }>(resp);
+  return body.items ?? [];
+}
+
+export async function getKnowledgeMapNeedsReview(opts?: {
+  anomalyLimit?: number;
+  conflictLimit?: number;
+}): Promise<KMNeedsReview> {
+  const params = new URLSearchParams();
+  if (opts?.anomalyLimit) params.set("anomaly_limit", String(opts.anomalyLimit));
+  if (opts?.conflictLimit) params.set("conflict_limit", String(opts.conflictLimit));
+  const qs = params.toString();
+  const resp = await fetch(
+    `${KB_API_URL}/knowledge-map/needs-review${qs ? `?${qs}` : ""}`,
+    { headers: workspaceHeaders(), cache: "no-store" },
+  );
+  return _handle<KMNeedsReview>(resp);
+}
+
+export async function getKnowledgeMapHistory(opts?: {
+  limit?: number;
+  cursor?: string;
+  eventFilter?: string;
+}): Promise<KMHistoryResp> {
+  const params = new URLSearchParams();
+  if (opts?.limit) params.set("limit", String(opts.limit));
+  if (opts?.cursor) params.set("cursor", opts.cursor);
+  if (opts?.eventFilter) params.set("event_filter", opts.eventFilter);
+  const qs = params.toString();
+  const resp = await fetch(
+    `${KB_API_URL}/knowledge-map/history${qs ? `?${qs}` : ""}`,
+    { headers: workspaceHeaders(), cache: "no-store" },
+  );
+  return _handle<KMHistoryResp>(resp);
+}

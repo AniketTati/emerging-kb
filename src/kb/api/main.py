@@ -42,6 +42,7 @@ from kb.api.eval import router as eval_router
 from kb.api.explore import router as explore_router
 from kb.api.files import _chunks_router as chunks_router
 from kb.api.files import router as files_router
+from kb.api.knowledge_map import router as knowledge_map_router
 from kb.api.query import router as query_router
 from kb.api.readiness import router as ready_router
 from kb.api.settings import router as settings_router
@@ -131,6 +132,7 @@ def build_app() -> FastAPI:
     app.include_router(schemas_router)
     app.include_router(schema_versions_router)
     app.include_router(schema_hierarchy_router)
+    app.include_router(knowledge_map_router)
     app.include_router(files_router)
     app.include_router(chunks_router)
     app.include_router(corpus_router)

@@ -1,293 +1,188 @@
 "use client";
 
 /**
- * Schema Studio — the workspace's data-model surface.
+ * /schema-studio — Knowledge Map.
  *
- * 6 tabs: Typed · Inferred · Collisions · Vocabulary · Lineage · Versions.
+ * Redesigned from the original 6-tab Schema Studio to be
+ * layman-readable. The route stays `/schema-studio` for inbound link
+ * compatibility but the page title is "Knowledge Map" and the IA is:
  *
- * The Inferred tab matches the prototype layout (prototype/schema-studio.html):
- *   - DOC TYPES rail on the left with per-doc-type counts (n_inferred · n_ready)
- *     and "new" badges for types we haven't seen before today.
- *   - Auto-promote thresholds card below the rail (prevalence ≥ 0.80,
- *     stability ≥ 0.90, vt-conf ≥ 0.90, min docs).
- *   - Header strip: counts in tab labels (Typed 47 · Inferred 12 · …),
- *     subtitle ("X fields emerging across Y docs · Z ready to promote ·
- *     N promoted in the last 5 min"), Export YAML.
- *   - Row content: status dot (typed-promoted / approaching / emerging),
- *     a progress bar with a threshold-marker on the right end,
- *     expandable detail with THRESHOLDS · SAMPLE VALUES · INFERRED TYPE ·
- *     FIRST PROPOSED, action buttons (Promote now · Rename · Discard).
+ *   📚 Catalog        — every doc-type the system has learned, grouped
+ *                      by domain (Legal / Finance / HR / …) with
+ *                      inline-expand to fields + sub-entity column shapes.
+ *   🔍 Needs Review   — anomalies (rarity > 0.8), unresolved
+ *                      fact_conflicts, and empty-states for emerging
+ *                      fields + synonym proposals.
+ *   🕓 History        — workspace-wide file_lifecycle timeline,
+ *                      grouped by day with filter chips.
  *
- * Scale: client-paginates fields at 1000 per fetch. Per-tab fetches keep
- * initial render cheap. Vocabulary + Lineage lazy-load on tab activation.
+ * Data flow: one API call per tab against /knowledge-map/{stats,
+ * catalog, needs-review, history}. No N+1 from the browser.
  */
 
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
-import { useVirtualizer } from "@tanstack/react-virtual";
 import {
-  Layers, GitBranch, AlertOctagon, BookOpen, Network, History,
-  Loader2, Download, Filter as FilterIcon, Pencil, Trash2,
-  Sparkles, ChevronRight,
+  Download, Library, AlertTriangle, Clock, ChevronRight, ChevronDown,
+  Loader2, FileText, Sparkles, FileQuestion, MessageSquare, ExternalLink,
 } from "lucide-react";
-import {
-  listSchemas, listSchemaEntities, listSchemaEntityFields,
-  listInferredFields, listVocabulary, listDocChains, listSchemaVersions,
-  promoteInferredField, renameInferredField, discardInferredField,
-  getInferredFieldSampleValues, downloadSchemaExportYaml,
-  type SchemaSummary, type SchemaEntity, type SchemaField,
-  type InferredField, type VocabEntry, type DocChainSummary,
-  type SchemaVersionRow,
-  type InferredFieldSampleValue,
-} from "@/lib/api";
+
 import { Sidebar } from "@/components/Sidebar";
+import {
+  getKnowledgeMapStats, getKnowledgeMapCatalog,
+  getKnowledgeMapNeedsReview, getKnowledgeMapHistory,
+  downloadSchemaExportYaml,
+  type KMStats, type KMSchemaCard, type KMNeedsReview, type KMHistoryResp,
+  type KMSubEntityType, type KMHistoryEvent,
+} from "@/lib/api";
+import {
+  humanizeSchemaName, categorizeSchema, DOMAINS, VISIBLE_DOMAINS,
+  relativeTime, type SchemaDomain,
+} from "@/lib/schema-helpers";
 
 
-// ---------------------------------------------------------------------------
-// Auto-promote thresholds (kept in sync with kb.extraction.promotion
-// defaults). Surfacing them in the UI gives curators a visible answer to
-// "what does the system need to see before it promotes this on its own?".
-// ---------------------------------------------------------------------------
-
-const THRESHOLDS = {
-  prevalence: 0.80,
-  stability:  0.90,
-  vt_conf:    0.90,
-  min_docs_prod: 20,
-  min_docs_demo: 5,
-};
-
-
-type TabKey = "typed" | "inferred" | "collisions" | "vocabulary" | "lineage" | "versions";
-
-
-function getWorkspaceId(): string {
-  if (typeof window === "undefined") return "00000000-0000-0000-0000-000000000001";
-  return (
-    (window as unknown as { __KB_WORKSPACE__?: string }).__KB_WORKSPACE__
-    ?? "00000000-0000-0000-0000-000000000001"
-  );
-}
-
-
-// Status the row sits in given its prevalence + promotion state. Drives
-// the colored dot + the inline badge. "approaching" = within 0.05 of the
-// promotion threshold; tweak as needed.
-type RowStatus = "typed-promoted" | "approaching" | "emerging";
-
-function statusOf(f: InferredField): RowStatus {
-  if (f.is_promoted) return "typed-promoted";
-  const distance = THRESHOLDS.prevalence - f.prevalence;
-  if (distance <= 0.05) return "approaching";
-  return "emerging";
-}
-
-
-const TAB_KEYS: TabKey[] = [
-  "typed", "inferred", "collisions", "vocabulary", "lineage", "versions",
-];
-
+type TabKey = "catalog" | "review" | "history";
+const TAB_KEYS: TabKey[] = ["catalog", "review", "history"];
 
 function parseTab(v: string | null): TabKey {
   return (TAB_KEYS as readonly string[]).includes(v ?? "")
     ? (v as TabKey)
-    : "inferred";
+    : "catalog";
 }
 
 
 export default function SchemaStudioPage() {
   return (
-    <Suspense fallback={null}>
-      <SchemaStudioShell />
+    <Suspense fallback={<PageSkeleton />}>
+      <KnowledgeMapShell />
     </Suspense>
   );
 }
 
 
-function SchemaStudioShell() {
+function PageSkeleton() {
+  return (
+    <div className="flex h-full">
+      <Sidebar current="schema" />
+      <main className="flex-1 flex items-center justify-center">
+        <Loader2 className="w-5 h-5 animate-spin text-zinc-400" />
+      </main>
+    </div>
+  );
+}
+
+
+function KnowledgeMapShell() {
   const router = useRouter();
   const pathname = usePathname();
-  const sp = useSearchParams();
+  const searchParams = useSearchParams();
+  const tab = parseTab(searchParams.get("tab"));
 
-  // URL-backed state — tab + selected doc-type on the Inferred tab +
-  // selected schema on the Typed/Versions tabs all live on ?.
-  const tab = parseTab(sp.get("tab"));
-  const urlDocType = sp.get("dt");      // null = "auto-pick the busiest"
-  const urlSchemaId = sp.get("sid");    // null = "auto-pick the first"
-
-  function update(patch: { tab?: TabKey; dt?: string | null; sid?: string | null }) {
-    const params = new URLSearchParams(sp.toString());
-    if (patch.tab !== undefined) {
-      if (patch.tab === "inferred") params.delete("tab");
-      else params.set("tab", patch.tab);
-    }
-    if (patch.dt !== undefined) {
-      if (patch.dt) params.set("dt", patch.dt);
-      else params.delete("dt");
-    }
-    if (patch.sid !== undefined) {
-      if (patch.sid) params.set("sid", patch.sid);
-      else params.delete("sid");
-    }
-    const qs = params.toString();
-    router.replace(`${pathname}${qs ? `?${qs}` : ""}`, { scroll: false });
+  function setTab(next: TabKey) {
+    const sp = new URLSearchParams(searchParams.toString());
+    if (next === "catalog") sp.delete("tab"); else sp.set("tab", next);
+    const qs = sp.toString();
+    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
   }
 
-  function setTab(t: TabKey) { update({ tab: t }); }
-
-  // Aggregate counts for the tab strip header. Loaded once.
-  const [allInferred, setAllInferred] = useState<InferredField[]>([]);
-  const [typedSchemas, setTypedSchemas] = useState<SchemaSummary[]>([]);
-  const [vocabCount, setVocabCount] = useState(0);
-  const [chainCount, setChainCount] = useState(0);
-  const [topbarLoading, setTopbarLoading] = useState(true);
-
-  const refreshAggregates = useCallback(async () => {
-    setTopbarLoading(true);
-    try {
-      const [inferred, schemas, vocab, chains] = await Promise.all([
-        listInferredFields({ limit: 1000 }),
-        listSchemas(),
-        listVocabulary(`workspace:${getWorkspaceId()}`, 500),
-        listDocChains(200),
-      ]);
-      setAllInferred(inferred);
-      setTypedSchemas(schemas);
-      setVocabCount(vocab.length);
-      setChainCount(chains.length);
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setTopbarLoading(false);
-    }
+  const [stats, setStats] = useState<KMStats | null>(null);
+  const [statsErr, setStatsErr] = useState<string | null>(null);
+  useEffect(() => {
+    getKnowledgeMapStats()
+      .then(setStats)
+      .catch((e) => setStatsErr(String(e)));
   }, []);
 
-  useEffect(() => { refreshAggregates(); }, [refreshAggregates]);
-
-  // Tab counts shown in the strip (prototype showed
-  // "Typed 47 · Inferred 12 · Collisions 3 · Vocabulary 847").
-  const counts = useMemo(() => ({
-    typed: typedSchemas.length,
-    inferred: allInferred.filter((f) => !f.is_promoted).length,
-    collisions: 0,  // Wave B
-    vocabulary: vocabCount,
-    lineage: chainCount,
-    versions: typedSchemas.length, // one version row per schema picker entry
-  }), [typedSchemas.length, allInferred, vocabCount, chainCount]);
-
-  // Subtitle stats (prototype: "12 fields emerging across 24 contracts · 3 ready to promote · 1 promoted in the last 5 minutes")
-  const subtitleStats = useMemo(() => {
-    const emerging = allInferred.filter((f) => !f.is_promoted).length;
-    const distinctDocTypes = new Set(allInferred.map((f) => f.inferred_doc_type)).size;
-    const ready = allInferred.filter(
-      (f) => !f.is_promoted
-        && f.prevalence >= THRESHOLDS.prevalence
-        && f.stability >= THRESHOLDS.stability,
-    ).length;
-    const fiveMinAgo = Date.now() - 5 * 60_000;
-    const promotedRecent = allInferred.filter(
-      (f) => f.is_promoted && f.created_at
-        && new Date(f.created_at).getTime() >= fiveMinAgo,
-    ).length;
-    return { emerging, distinctDocTypes, ready, promotedRecent };
-  }, [allInferred]);
-
-  const TABS: { key: TabKey; label: string; icon: typeof Layers; count: number }[] = [
-    { key: "typed",      label: "Typed",      icon: Layers,        count: counts.typed },
-    { key: "inferred",   label: "Inferred",   icon: GitBranch,     count: counts.inferred },
-    { key: "collisions", label: "Collisions", icon: AlertOctagon,  count: counts.collisions },
-    { key: "vocabulary", label: "Vocabulary", icon: BookOpen,      count: counts.vocabulary },
-    { key: "lineage",    label: "Lineage",    icon: Network,       count: counts.lineage },
-    { key: "versions",   label: "Versions",   icon: History,       count: counts.versions },
+  const TABS: Array<{ key: TabKey; label: string; icon: typeof Library; count: number | null }> = [
+    { key: "catalog", label: "Catalog",      icon: Library,         count: stats?.doc_types ?? null },
+    { key: "review",  label: "Needs Review", icon: AlertTriangle,   count: stats?.pending_review ?? null },
+    { key: "history", label: "History",      icon: Clock,           count: null },
   ];
 
   return (
     <div className="flex h-full">
       <Sidebar current="schema" />
-
       <main className="flex-1 flex flex-col min-w-0 bg-white">
-        {/* Header strip — prototype: Studio › Schema · v1.4.2 · auto-saved · counts · Export YAML */}
-        <header className="h-12 flex-shrink-0 border-b border-zinc-200 flex items-center px-5 gap-4">
+        {/* Top breadcrumb + Export */}
+        <header className="h-12 flex-shrink-0 border-b border-zinc-200 flex items-center px-5 gap-3">
           <span className="text-sm text-zinc-500">Studio</span>
           <ChevronRight className="w-3 h-3 text-zinc-300" />
-          <span className="text-sm font-medium text-zinc-900">Schema</span>
-          {!topbarLoading && (
-            <span className="text-[11px] text-zinc-400 mono">
-              {counts.typed} typed · {counts.inferred} inferred ·{" "}
-              {counts.collisions} collisions
-            </span>
-          )}
+          <span className="text-sm font-medium text-zinc-900">Knowledge Map</span>
           <button
             type="button"
-            className="ml-auto flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md text-zinc-600 hover:text-zinc-900 hover:bg-zinc-100 cursor-pointer"
-            data-testid="schema-export-yaml"
             onClick={() => {
               downloadSchemaExportYaml().catch((err) => {
                 console.error("export.yaml failed", err);
                 alert("Failed to export YAML — see console.");
               });
             }}
-            title="Download all active typed schemas as a YAML file"
+            className="ml-auto flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md text-zinc-600 hover:text-zinc-900 hover:bg-zinc-100 cursor-pointer"
+            title="Download all active schemas as YAML"
+            data-testid="schema-export-yaml"
           >
             <Download className="w-3.5 h-3.5" strokeWidth={1.75} />
             Export YAML
           </button>
         </header>
 
-        {/* Tab strip with counts */}
-        <div className="border-b border-zinc-200 px-6 flex items-end gap-6 text-sm">
-          {TABS.map((t) => {
-            const Icon = t.icon;
-            const active = t.key === tab;
-            return (
-              <button
-                key={t.key}
-                type="button"
-                onClick={() => setTab(t.key)}
-                className={`py-2.5 flex items-center gap-2 cursor-pointer border-b-2 -mb-px ${
-                  active
-                    ? "text-zinc-900 font-medium border-zinc-900"
-                    : "text-zinc-500 hover:text-zinc-900 border-transparent"
-                }`}
-                data-testid={`schema-tab-${t.key}`}
-              >
-                <Icon className="w-3.5 h-3.5" strokeWidth={1.75} />
-                {t.label}
-                <span className={`text-[11px] mono ${active ? "text-zinc-400" : "text-zinc-400"}`}>
-                  {t.count}
-                </span>
-              </button>
-            );
-          })}
-        </div>
+        <div className="flex-1 overflow-y-auto bg-zinc-50/40">
+          {/* Page title + subtitle + intro */}
+          <div className="max-w-6xl mx-auto px-8 pt-8">
+            <h1 className="text-2xl font-semibold text-zinc-900">Knowledge Map</h1>
+            <p className="mt-1 text-sm text-zinc-600">
+              What the system has learned from your documents.
+            </p>
 
-        <div className="flex-1 overflow-hidden bg-zinc-50/40">
-          {tab === "typed"      && (
-            <TypedTab
-              schemas={typedSchemas}
-              activeSchemaId={urlSchemaId}
-              onSelectSchema={(sid) => update({ sid })}
-            />
-          )}
-          {tab === "inferred"   && (
-            <InferredTabRich
-              fields={allInferred}
-              subtitle={subtitleStats}
-              onMutated={refreshAggregates}
-              selectedDocType={urlDocType}
-              onSelectDocType={(dt) => update({ dt })}
-            />
-          )}
-          {tab === "collisions" && <CollisionsTab />}
-          {tab === "vocabulary" && <VocabularyTab />}
-          {tab === "lineage"    && <LineageTab />}
-          {tab === "versions"   && (
-            <VersionsTab
-              schemas={typedSchemas}
-              activeSchemaId={urlSchemaId}
-              onSelectSchema={(sid) => update({ sid })}
-            />
-          )}
+            <div className="mt-4 rounded-lg border border-zinc-200 bg-white px-4 py-3 text-[13px] text-zinc-600 leading-relaxed">
+              Every uploaded document gets classified into a type, and the
+              system pulls structured fields out automatically. This page
+              shows what it found. <span className="text-zinc-900 font-medium">You don't need
+              to design anything</span> — come here only to inspect what was
+              learned or fix something the system isn't sure about.
+            </div>
+
+            {/* Stat cards */}
+            <StatStrip stats={stats} err={statsErr} />
+
+            {/* Tab strip */}
+            <div className="mt-6 border-b border-zinc-200 flex items-end gap-6 text-sm">
+              {TABS.map((t) => {
+                const Icon = t.icon;
+                const active = t.key === tab;
+                return (
+                  <button
+                    key={t.key}
+                    type="button"
+                    onClick={() => setTab(t.key)}
+                    className={`py-2.5 flex items-center gap-2 cursor-pointer border-b-2 -mb-px transition-colors ${
+                      active
+                        ? "text-zinc-900 font-medium border-zinc-900"
+                        : "text-zinc-500 hover:text-zinc-900 border-transparent"
+                    }`}
+                    data-testid={`km-tab-${t.key}`}
+                  >
+                    <Icon className="w-4 h-4" strokeWidth={1.75} />
+                    {t.label}
+                    {t.count !== null && (
+                      <span className={`text-[11px] mono ${
+                        t.key === "review" && t.count > 0
+                          ? "text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded"
+                          : "text-zinc-400"
+                      }`}>
+                        {t.count}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="max-w-6xl mx-auto px-8 py-6">
+            {tab === "catalog" && <CatalogTab />}
+            {tab === "review"  && <NeedsReviewTab />}
+            {tab === "history" && <HistoryTab />}
+          </div>
         </div>
       </main>
     </div>
@@ -295,833 +190,324 @@ function SchemaStudioShell() {
 }
 
 
-// ===========================================================================
-// Tab: Inferred — the rich prototype layout
-// ===========================================================================
+// ---------------------------------------------------------------------------
+// Shared
+// ---------------------------------------------------------------------------
 
 
-// Above this row count the Inferred table switches to virtualization
-// (windowed rendering via @tanstack/react-virtual) so DOM stays sane
-// at 10k+ field clusters. Below this threshold we render flat — the
-// DOM is small and we want every row layout-accurate (the threshold
-// progress bar's per-row Tooltip alignment behaves better without
-// the virtualizer's absolute-positioned wrapper).
-const INFERRED_VIRTUALIZE_THRESHOLD = 80;
-
-
-function InferredTabRich({
-  fields, subtitle, onMutated, selectedDocType: urlDocType, onSelectDocType,
-}: {
-  fields: InferredField[];
-  subtitle: { emerging: number; distinctDocTypes: number; ready: number; promotedRecent: number };
-  onMutated: () => Promise<void>;
-  /** URL-controlled selected doc_type (null = auto-pick busiest). */
-  selectedDocType: string | null;
-  onSelectDocType: (dt: string | null) => void;
-}) {
-  const [statusFilter, setStatusFilter] = useState<"all" | RowStatus>("all");
-  const [sortKey, setSortKey] = useState<"prevalence" | "stability" | "docs" | "name">("prevalence");
-
-  // Per-doc-type counts for the rail. "new" badge if the type has any
-  // row created within the last 24h.
-  const byDocType = useMemo(() => {
-    const m: Record<string, { all: number; ready: number; newish: boolean }> = {};
-    const day = Date.now() - 24 * 60 * 60_000;
-    for (const f of fields) {
-      const k = f.inferred_doc_type;
-      const slot = m[k] ?? { all: 0, ready: 0, newish: false };
-      slot.all += 1;
-      if (!f.is_promoted
-          && f.prevalence >= THRESHOLDS.prevalence
-          && f.stability >= THRESHOLDS.stability) {
-        slot.ready += 1;
-      }
-      if (f.created_at && new Date(f.created_at).getTime() >= day) {
-        slot.newish = true;
-      }
-      m[k] = slot;
-    }
-    return m;
-  }, [fields]);
-
-  const docTypesSorted = useMemo(
-    () => Object.entries(byDocType)
-      .sort((a, b) => b[1].all - a[1].all)
-      .map(([k, v]) => ({ doc_type: k, ...v })),
-    [byDocType],
-  );
-
-  // Resolve "the selected doc type" — URL override, else first by row count.
-  const effectiveDocType =
-    urlDocType
-    ?? (docTypesSorted.length > 0 ? docTypesSorted[0].doc_type : null);
-
-  // Filtered + sorted rows for the right pane.
-  const filteredRows = useMemo(() => {
-    let rows = fields.filter((f) => f.inferred_doc_type === effectiveDocType);
-    if (statusFilter !== "all") {
-      rows = rows.filter((f) => statusOf(f) === statusFilter);
-    }
-    rows = [...rows];
-    rows.sort((a, b) => {
-      if (sortKey === "prevalence") return b.prevalence - a.prevalence;
-      if (sortKey === "stability") return b.stability - a.stability;
-      if (sortKey === "docs") return b.n_docs_observed - a.n_docs_observed;
-      return a.canonical_name.localeCompare(b.canonical_name);
-    });
-    return rows;
-  }, [fields, effectiveDocType, statusFilter, sortKey]);
-
+function StatStrip({ stats, err }: { stats: KMStats | null; err: string | null }) {
+  if (err) {
+    return (
+      <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-[13px] text-red-700">
+        Failed to load stats: <span className="mono">{err}</span>
+      </div>
+    );
+  }
+  const cards: Array<{ label: string; value: number | null; hint: string }> = [
+    { label: "doc types",         value: stats?.doc_types ?? null,
+      hint: "Distinct document types the system recognizes." },
+    { label: "files ingested",    value: stats?.files_ingested ?? null,
+      hint: "Files that reached `ready` lifecycle." },
+    { label: "sub-entities",      value: stats?.sub_entities ?? null,
+      hint: "Structured records extracted (transactions, line items, …)." },
+    { label: "pending review",    value: stats?.pending_review ?? null,
+      hint: "Anomalies, conflicts, or emerging fields awaiting decision." },
+  ];
   return (
-    <div className="flex h-full overflow-hidden">
-      {/* Inner left rail — DOC TYPES + thresholds */}
-      <aside
-        className="w-[260px] flex-shrink-0 border-r border-zinc-200 bg-white overflow-y-auto"
-        data-testid="schema-doctypes-rail"
-      >
-        <div className="p-4 border-b border-zinc-200">
-          <div className="text-[10px] uppercase tracking-wider text-zinc-400 mb-2">
-            Doc types
-          </div>
-          <ul className="space-y-px">
-            {docTypesSorted.map((d) => {
-              const active = d.doc_type === effectiveDocType;
-              return (
-                <li key={d.doc_type}>
-                  <button
-                    type="button"
-                    onClick={() => onSelectDocType(d.doc_type)}
-                    className={`w-full flex items-center gap-2 px-2 py-1.5 rounded text-xs cursor-pointer ${
-                      active
-                        ? "bg-zinc-100 text-zinc-900"
-                        : "text-zinc-700 hover:bg-zinc-50"
-                    }`}
-                    data-testid="schema-doctype-row"
-                    data-doctype={d.doc_type}
-                  >
-                    <span className="font-medium truncate flex-1 text-left mono">
-                      {d.doc_type}
-                    </span>
-                    {d.newish && (
-                      <span className="text-[9px] mono px-1 py-0.5 rounded bg-blue-100 text-blue-800">
-                        new
-                      </span>
-                    )}
-                    <span className="text-[10px] mono text-zinc-500 tabular-nums">
-                      {d.all} · {d.ready}
-                    </span>
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
-          <div className="text-[10px] text-zinc-400 mt-2 leading-relaxed">
-            <span className="mono">N total</span> ·{" "}
-            <span className="mono">N ready-to-promote</span>
-          </div>
-        </div>
-
-        {/* Auto-promote thresholds card */}
-        <div className="p-4">
-          <div className="text-[10px] uppercase tracking-wider text-zinc-400 mb-2 flex items-center gap-1.5">
-            <Sparkles className="w-3 h-3" strokeWidth={1.75} />
-            Auto-promote thresholds
-          </div>
-          <ul className="space-y-1 text-xs text-zinc-600 mono">
-            <li>prevalence ≥ <span className="text-zinc-900">{THRESHOLDS.prevalence.toFixed(2)}</span></li>
-            <li>stability ≥ <span className="text-zinc-900">{THRESHOLDS.stability.toFixed(2)}</span></li>
-            <li>vt-conf ≥ <span className="text-zinc-900">{THRESHOLDS.vt_conf.toFixed(2)}</span></li>
-            <li>min docs = <span className="text-zinc-900">{THRESHOLDS.min_docs_prod}</span> (prod) / <span className="text-zinc-900">{THRESHOLDS.min_docs_demo}</span> (demo)</li>
-          </ul>
-        </div>
-      </aside>
-
-      {/* Right pane — header + rows */}
-      <section className="flex-1 overflow-y-auto">
-        <div className="max-w-4xl mx-auto px-8 py-6">
-          <div className="flex items-start justify-between mb-1">
-            <h1 className="text-lg font-semibold text-zinc-900">
-              Inferred fields {effectiveDocType && (
-                <>
-                  · <span className="mono">{effectiveDocType}</span>
-                </>
-              )}
-            </h1>
-            <div className="flex items-center gap-2">
-              <select
-                value={statusFilter}
-                onChange={(e) => setStatusFilter(e.target.value as "all" | RowStatus)}
-                className="text-xs px-2 py-1 rounded border border-zinc-200 bg-white cursor-pointer"
-                data-testid="schema-filter-status"
-              >
-                <option value="all">All statuses</option>
-                <option value="typed-promoted">Typed (promoted)</option>
-                <option value="approaching">Approaching</option>
-                <option value="emerging">Emerging</option>
-              </select>
-              <select
-                value={sortKey}
-                onChange={(e) => setSortKey(e.target.value as typeof sortKey)}
-                className="text-xs px-2 py-1 rounded border border-zinc-200 bg-white cursor-pointer"
-                data-testid="schema-sort"
-              >
-                <option value="prevalence">Sort: prevalence</option>
-                <option value="stability">Sort: stability</option>
-                <option value="docs">Sort: docs</option>
-                <option value="name">Sort: name</option>
-              </select>
+    <div className="mt-4 grid grid-cols-2 md:grid-cols-4 gap-3">
+      {cards.map((c) => {
+        const isPending = c.label === "pending review";
+        const tone = isPending && (c.value ?? 0) > 0
+          ? "bg-amber-50 border-amber-200"
+          : "bg-white border-zinc-200";
+        return (
+          <div
+            key={c.label}
+            className={`rounded-lg border ${tone} px-4 py-3`}
+            title={c.hint}
+          >
+            <div className="text-2xl font-semibold text-zinc-900 mono">
+              {c.value !== null ? c.value.toLocaleString() : "—"}
             </div>
+            <div className="text-[11px] text-zinc-500 mt-0.5">{c.label}</div>
           </div>
-          <p className="text-xs text-zinc-500 mb-4">
-            {subtitle.emerging} fields emerging across {subtitle.distinctDocTypes} doc type{subtitle.distinctDocTypes !== 1 ? "s" : ""}
-            {" · "}
-            <span className="text-zinc-700">{subtitle.ready}</span> ready to promote
-            {subtitle.promotedRecent > 0 && (
-              <> · {subtitle.promotedRecent} promoted in the last 5 minutes</>
-            )}
-          </p>
+        );
+      })}
+    </div>
+  );
+}
 
-          {/* Status legend */}
-          <div className="flex items-center gap-4 text-[11px] mb-3 mono">
-            <span className="flex items-center gap-1.5">
-              <span className="w-1.5 h-1.5 rounded-full bg-zinc-900" /> typed (promoted)
-            </span>
-            <span className="flex items-center gap-1.5">
-              <span className="w-1.5 h-1.5 rounded-full bg-blue-500" /> approaching
-            </span>
-            <span className="flex items-center gap-1.5">
-              <span className="w-1.5 h-1.5 rounded-full bg-zinc-300" /> emerging
-            </span>
-            <span className="ml-auto text-zinc-400 flex items-center gap-1">
-              <FilterIcon className="w-3 h-3" strokeWidth={1.75} />
-              threshold markers on each bar
-            </span>
-          </div>
 
-          {filteredRows.length === 0 ? (
-            <div className="rounded-lg border border-zinc-200 bg-white p-8 text-center text-sm text-zinc-500">
-              No inferred fields match the current filter.
-            </div>
-          ) : filteredRows.length < INFERRED_VIRTUALIZE_THRESHOLD ? (
-            <div className="space-y-2">
-              {filteredRows.map((f) => (
-                <InferredRow key={f.id} field={f} onMutated={onMutated} />
-              ))}
-            </div>
-          ) : (
-            <VirtualizedInferredList rows={filteredRows} onMutated={onMutated} />
-          )}
-        </div>
-      </section>
+function ErrorBanner({ msg }: { msg: string }) {
+  return (
+    <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+      Failed to load: <span className="mono">{msg}</span>
+    </div>
+  );
+}
+
+function EmptyState({ title, body }: { title: string; body: string }) {
+  return (
+    <div className="rounded-lg border border-dashed border-zinc-200 bg-white px-6 py-10 text-center">
+      <div className="text-sm font-medium text-zinc-700">{title}</div>
+      <div className="text-[13px] text-zinc-500 mt-1 max-w-md mx-auto">{body}</div>
+    </div>
+  );
+}
+
+function SpinnerInline() {
+  return (
+    <div className="flex items-center gap-2 text-sm text-zinc-500 py-4">
+      <Loader2 className="w-4 h-4 animate-spin" />
+      Loading…
     </div>
   );
 }
 
 
 // ---------------------------------------------------------------------------
-// Virtualized list — used when filteredRows >= INFERRED_VIRTUALIZE_THRESHOLD.
-// react-virtual maintains a fixed-height scroll container that only mounts
-// rows in the viewport (+ a small overscan buffer). Estimated row height
-// is the collapsed-row height; expansion is handled by re-measuring after
-// the row's content height changes.
+// Tab: 📚 Catalog
 // ---------------------------------------------------------------------------
 
 
-function VirtualizedInferredList({
-  rows, onMutated,
+function CatalogTab() {
+  const [cards, setCards] = useState<KMSchemaCard[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [openIds, setOpenIds] = useState<Set<string>>(new Set());
+  const [showDev, setShowDev] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    getKnowledgeMapCatalog()
+      .then((r) => !cancelled && setCards(r))
+      .catch((e) => !cancelled && setErr(String(e)));
+    return () => { cancelled = true; };
+  }, []);
+
+  // Group by domain.
+  const grouped = useMemo(() => {
+    if (!cards) return null;
+    const g: Record<SchemaDomain, KMSchemaCard[]> = {
+      legal: [], finance: [], hr: [], medical: [],
+      engineering: [], communications: [], reports: [], dev: [],
+    };
+    for (const c of cards) {
+      g[categorizeSchema(c.name)].push(c);
+    }
+    // Sort within each group by humanized name.
+    for (const k of Object.keys(g) as SchemaDomain[]) {
+      g[k].sort((a, b) => humanizeSchemaName(a.name).localeCompare(humanizeSchemaName(b.name)));
+    }
+    return g;
+  }, [cards]);
+
+  function toggle(id: string) {
+    setOpenIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
+  if (err) return <ErrorBanner msg={err} />;
+  if (cards === null || grouped === null) return <SpinnerInline />;
+  if (cards.length === 0) {
+    return (
+      <EmptyState
+        title="No schemas yet"
+        body="Upload some documents and the system will start learning their structure here."
+      />
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      {VISIBLE_DOMAINS.map((dom) => {
+        const items = grouped[dom];
+        if (items.length === 0) return null;
+        const meta = DOMAINS[dom];
+        return (
+          <section key={dom} data-testid={`km-domain-${dom}`}>
+            <div className="mb-2 flex items-baseline gap-2">
+              <span className="text-base">{meta.emoji}</span>
+              <h2 className="text-sm font-semibold text-zinc-900">{meta.label}</h2>
+              <span className="text-[11px] mono text-zinc-400">{items.length}</span>
+              <span className="text-[11px] text-zinc-400 ml-1">· {meta.description}</span>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {items.map((c) => (
+                <CatalogCard
+                  key={c.id}
+                  card={c}
+                  open={openIds.has(c.id)}
+                  onToggle={() => toggle(c.id)}
+                />
+              ))}
+            </div>
+          </section>
+        );
+      })}
+
+      {/* Dev artifacts — collapsed footer */}
+      {grouped.dev.length > 0 && (
+        <section className="pt-4 border-t border-zinc-200">
+          <button
+            type="button"
+            onClick={() => setShowDev((v) => !v)}
+            className="text-[12px] text-zinc-500 hover:text-zinc-900 flex items-center gap-1.5 cursor-pointer"
+            data-testid="km-toggle-dev"
+          >
+            {showDev ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+            {DOMAINS.dev.emoji} {DOMAINS.dev.label}
+            <span className="mono">{grouped.dev.length}</span>
+            <span className="text-zinc-400">· hidden by default</span>
+          </button>
+          {showDev && (
+            <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
+              {grouped.dev.map((c) => (
+                <CatalogCard
+                  key={c.id}
+                  card={c}
+                  open={openIds.has(c.id)}
+                  onToggle={() => toggle(c.id)}
+                />
+              ))}
+            </div>
+          )}
+        </section>
+      )}
+    </div>
+  );
+}
+
+
+function CatalogCard({
+  card, open, onToggle,
 }: {
-  rows: InferredField[];
-  onMutated: () => Promise<void>;
+  card: KMSchemaCard;
+  open: boolean;
+  onToggle: () => void;
 }) {
-  const parentRef = useRef<HTMLDivElement | null>(null);
-  const virtualizer = useVirtualizer({
-    count: rows.length,
-    getScrollElement: () => parentRef.current,
-    // Collapsed-row height ~58px; expanded much larger, so we use
-    // `measureElement` to re-measure after open. The estimate keeps
-    // scrollbar size sane during initial render.
-    estimateSize: () => 58,
-    overscan: 8,
-  });
+  const router = useRouter();
+  const title = humanizeSchemaName(card.name);
+  const hasSubs = card.sub_entity_types.length > 0;
+  const totalSubRows = card.sub_entity_types.reduce((acc, s) => acc + s.row_count, 0);
 
   return (
     <div
-      ref={parentRef}
-      className="rounded-lg border border-zinc-200 bg-white"
-      style={{ height: "640px", overflow: "auto" }}
-      data-testid="inferred-virtual-list"
+      className={`rounded-lg border bg-white transition-colors ${
+        open ? "border-zinc-300 shadow-sm" : "border-zinc-200 hover:border-zinc-300"
+      }`}
+      data-testid="km-catalog-card"
     >
-      <div
-        style={{
-          height: `${virtualizer.getTotalSize()}px`,
-          width: "100%",
-          position: "relative",
-        }}
-      >
-        {virtualizer.getVirtualItems().map((vi) => {
-          const f = rows[vi.index];
-          return (
-            <div
-              key={f.id}
-              data-index={vi.index}
-              ref={virtualizer.measureElement}
-              style={{
-                position: "absolute",
-                top: 0,
-                left: 0,
-                width: "100%",
-                transform: `translateY(${vi.start}px)`,
-                padding: "0 8px 8px 8px",
-              }}
-            >
-              <InferredRow field={f} onMutated={onMutated} />
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-
-// ---------------------------------------------------------------------------
-// Inferred row — collapsed header (dot · name · description · bar · badge)
-// + expandable detail (thresholds · sample values · type · first proposed)
-// + action buttons
-// ---------------------------------------------------------------------------
-
-
-function InferredRow({
-  field, onMutated,
-}: {
-  field: InferredField;
-  onMutated: () => Promise<void>;
-}) {
-  const [open, setOpen] = useState(false);
-  const [busy, setBusy] = useState<"promote" | "discard" | "rename" | null>(null);
-  const [renameOpen, setRenameOpen] = useState(false);
-  const [renameVal, setRenameVal] = useState(field.canonical_name);
-  // Sample values lazy-loaded on first expand (Pass B endpoint).
-  const [samples, setSamples] = useState<InferredFieldSampleValue[] | null>(null);
-  const [samplesLoading, setSamplesLoading] = useState(false);
-
-  const status = statusOf(field);
-  const dotClass =
-    status === "typed-promoted" ? "bg-zinc-900"
-    : status === "approaching"   ? "bg-blue-500"
-    : "bg-zinc-300";
-  const statusBadge =
-    status === "typed-promoted" ? "just promoted"
-    : status === "approaching"   ? "approaching"
-    : "emerging";
-  const badgeClass =
-    status === "typed-promoted" ? "bg-zinc-900 text-white"
-    : status === "approaching"   ? "bg-blue-100 text-blue-800"
-    : "bg-zinc-100 text-zinc-600";
-
-  async function doPromote() {
-    setBusy("promote");
-    try { await promoteInferredField(field.id); await onMutated(); }
-    catch (err) { console.error(err); }
-    finally { setBusy(null); }
-  }
-  async function doDiscard() {
-    if (!confirm(`Discard inferred field "${field.canonical_name}"?`)) return;
-    setBusy("discard");
-    try { await discardInferredField(field.id); await onMutated(); }
-    catch (err) { console.error(err); }
-    finally { setBusy(null); }
-  }
-  async function doRename() {
-    if (!renameVal.trim() || renameVal.trim() === field.canonical_name) {
-      setRenameOpen(false);
-      return;
-    }
-    setBusy("rename");
-    try { await renameInferredField(field.id, renameVal.trim()); await onMutated(); setRenameOpen(false); }
-    catch (err) { console.error(err); }
-    finally { setBusy(null); }
-  }
-
-  async function toggleOpen() {
-    const next = !open;
-    setOpen(next);
-    if (next && samples === null) {
-      setSamplesLoading(true);
-      try {
-        const out = await getInferredFieldSampleValues(field.id, 5);
-        setSamples(out);
-      } catch (err) {
-        console.error("getInferredFieldSampleValues failed", err);
-        setSamples([]);
-      } finally {
-        setSamplesLoading(false);
-      }
-    }
-  }
-
-  return (
-    <div className="rounded-lg border border-zinc-200 bg-white" data-testid="inferred-row" data-status={status}>
       <button
         type="button"
-        onClick={toggleOpen}
-        className="w-full flex items-center gap-3 px-4 py-3 hover:bg-zinc-50 cursor-pointer"
+        onClick={onToggle}
+        className="w-full px-4 py-3 text-left cursor-pointer flex items-start gap-2"
+        aria-expanded={open}
       >
-        <ChevronRight
-          className={`w-3.5 h-3.5 text-zinc-400 transition-transform ${open ? "rotate-90" : ""}`}
-        />
-        <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${dotClass}`} aria-hidden />
-        <span className="mono text-sm text-zinc-900 truncate">{field.canonical_name}</span>
-        {field.description && (
-          <span className="text-xs text-zinc-500 truncate hidden md:inline">
-            {field.description}
-          </span>
+        {open ? (
+          <ChevronDown className="w-3.5 h-3.5 text-zinc-500 mt-1 flex-shrink-0" strokeWidth={2} />
+        ) : (
+          <ChevronRight className="w-3.5 h-3.5 text-zinc-500 mt-1 flex-shrink-0" strokeWidth={2} />
         )}
-
-        {/* Threshold bar */}
-        <div className="ml-auto flex items-center gap-2 flex-shrink-0">
-          <ThresholdBar value={field.prevalence} threshold={THRESHOLDS.prevalence} />
-          <span className={`text-[10px] mono px-1.5 py-0.5 rounded ${badgeClass}`}>
-            {statusBadge}
-          </span>
+        <div className="flex-1 min-w-0">
+          <div className="text-[14px] font-medium text-zinc-900 truncate">{title}</div>
+          <div className="text-[11px] text-zinc-500 mt-0.5 flex items-center gap-2 flex-wrap">
+            <span>{card.file_count} file{card.file_count === 1 ? "" : "s"}</span>
+            <span className="text-zinc-300">·</span>
+            <span>{card.doc_root_fields.length} field{card.doc_root_fields.length === 1 ? "" : "s"}</span>
+            {hasSubs && (
+              <>
+                <span className="text-zinc-300">·</span>
+                <span>
+                  {card.sub_entity_types.length} sub-type{card.sub_entity_types.length === 1 ? "" : "s"}
+                  {totalSubRows > 0 && (
+                    <span className="text-zinc-400"> ({totalSubRows} row{totalSubRows === 1 ? "" : "s"})</span>
+                  )}
+                </span>
+              </>
+            )}
+            <span className="text-zinc-300">·</span>
+            <span>Created {relativeTime(card.created_at)}</span>
+          </div>
         </div>
       </button>
 
       {open && (
-        <div className="border-t border-zinc-200 px-4 py-4 bg-zinc-50/40">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-x-6 gap-y-3 text-xs">
-            <div>
-              <div className="text-[10px] uppercase tracking-wider text-zinc-400 mb-1">
-                Thresholds
-              </div>
-              <table className="mono">
-                <tbody>
-                  <tr>
-                    <td className="text-zinc-500 pr-3">prevalence</td>
-                    <td className="text-zinc-900 tabular-nums">{field.prevalence.toFixed(2)}</td>
-                    <td className="text-zinc-400 pl-2 tabular-nums">/ {THRESHOLDS.prevalence.toFixed(2)}</td>
-                  </tr>
-                  <tr>
-                    <td className="text-zinc-500 pr-3">stability</td>
-                    <td className="text-zinc-900 tabular-nums">{field.stability.toFixed(2)}</td>
-                    <td className="text-zinc-400 pl-2 tabular-nums">/ {THRESHOLDS.stability.toFixed(2)}</td>
-                  </tr>
-                  <tr>
-                    <td className="text-zinc-500 pr-3">vt confidence</td>
-                    <td className="text-zinc-900 tabular-nums">{field.value_type_confidence.toFixed(2)}</td>
-                    <td className="text-zinc-400 pl-2 tabular-nums">/ {THRESHOLDS.vt_conf.toFixed(2)}</td>
-                  </tr>
-                  <tr>
-                    <td className="text-zinc-500 pr-3">doc count</td>
-                    <td className="text-zinc-900 tabular-nums">{field.n_docs_observed}</td>
-                    <td className="text-zinc-400 pl-2 tabular-nums">/ {THRESHOLDS.min_docs_demo}</td>
-                  </tr>
-                </tbody>
-              </table>
+        <div className="px-4 pb-4 border-t border-zinc-100 pt-3 space-y-3">
+          {/* Doc-root fields */}
+          <div>
+            <div className="text-[10px] uppercase tracking-wider text-zinc-400 mb-1.5">
+              Doc-level fields ({card.doc_root_fields.length})
             </div>
-
-            <div>
-              <div className="text-[10px] uppercase tracking-wider text-zinc-400 mb-1">
-                Sample values
+            {card.doc_root_fields.length === 0 ? (
+              <div className="text-[12px] text-zinc-400 italic">
+                No doc-level fields detected.
               </div>
-              {samplesLoading ? (
-                <div className="flex items-center gap-2 text-zinc-400 text-[11px]">
-                  <Loader2 className="w-3 h-3 animate-spin" /> loading…
-                </div>
-              ) : !samples || samples.length === 0 ? (
-                <div className="text-zinc-500 italic text-[11px]">
-                  No sample values found.
-                </div>
-              ) : (
-                <ul className="space-y-1 text-[11px]">
-                  {samples.map((s, i) => (
-                    <li key={`${s.file_id}-${i}`} className="text-zinc-700">
-                      <span className="mono">
-                        &ldquo;{s.value_text.length > 60
-                          ? s.value_text.slice(0, 60) + "…"
-                          : s.value_text}&rdquo;
-                      </span>
-                      {s.file_name && (
-                        <span className="text-zinc-400"> — {s.file_name}</span>
-                      )}
-                    </li>
-                  ))}
-                  {samples.length === 5 && (
-                    <li className="text-[10px] mono text-zinc-400">
-                      + more in <span className="text-zinc-500">proposed_fields</span>
-                    </li>
-                  )}
-                </ul>
-              )}
-            </div>
-
-            <div>
-              <div className="text-[10px] uppercase tracking-wider text-zinc-400 mb-1">
-                Inferred type
-              </div>
-              <div className="mono text-zinc-900">{field.value_type ?? "text"}</div>
-              <div className="text-[10px] uppercase tracking-wider text-zinc-400 mt-3 mb-1">
-                First proposed
-              </div>
-              <div className="mono text-zinc-700">
-                {field.created_at ? new Date(field.created_at).toLocaleDateString() : "—"}
-              </div>
-            </div>
+            ) : (
+              <ul className="space-y-1">
+                {card.doc_root_fields.map((f) => (
+                  <li
+                    key={f.name}
+                    className="text-[12px] grid grid-cols-[1fr_auto] gap-3 items-baseline"
+                    title={f.description ?? undefined}
+                  >
+                    <span className="mono text-zinc-700">{f.name}</span>
+                    <span className="text-[11px] text-zinc-400">{f.type ?? "—"}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
 
-          {/* Action footer */}
-          <div className="mt-4 pt-3 border-t border-zinc-200 flex items-center gap-2 text-xs">
-            {!field.is_promoted ? (
-              <button
-                type="button"
-                onClick={doPromote}
-                disabled={busy !== null}
-                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-white bg-zinc-900 hover:bg-zinc-800 cursor-pointer disabled:opacity-50"
-                data-testid="inferred-promote"
-              >
-                {busy === "promote" ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
-                Promote now (override)
-              </button>
-            ) : (
-              <span className="text-[11px] mono text-zinc-500">
-                Already promoted to typed schema.
-              </span>
-            )}
-
-            {renameOpen ? (
-              <form
-                onSubmit={(e) => { e.preventDefault(); doRename(); }}
-                className="flex items-center gap-1"
-              >
-                <input
-                  autoFocus
-                  value={renameVal}
-                  onChange={(e) => setRenameVal(e.target.value)}
-                  className="text-xs mono px-2 py-1 rounded border border-zinc-300 focus:border-zinc-500 focus:outline-none"
-                />
-                <button
-                  type="submit"
-                  disabled={busy !== null}
-                  className="px-2 py-1 rounded bg-zinc-900 text-white cursor-pointer"
-                >save</button>
-                <button
-                  type="button"
-                  onClick={() => { setRenameOpen(false); setRenameVal(field.canonical_name); }}
-                  className="px-2 py-1 rounded text-zinc-500 cursor-pointer"
-                >cancel</button>
-              </form>
-            ) : (
-              <button
-                type="button"
-                onClick={() => setRenameOpen(true)}
-                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-zinc-700 hover:bg-zinc-100 cursor-pointer"
-                data-testid="inferred-rename"
-              >
-                <Pencil className="w-3 h-3" />
-                Rename
-              </button>
-            )}
-
-            <button
-              type="button"
-              onClick={doDiscard}
-              disabled={busy !== null}
-              className="ml-auto flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-red-600 hover:bg-red-50 cursor-pointer disabled:opacity-50"
-              data-testid="inferred-discard"
-            >
-              {busy === "discard" ? <Loader2 className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3 h-3" />}
-              Discard
-            </button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-
-// ---------------------------------------------------------------------------
-// Threshold bar — fills up to `value`, with a small marker line at
-// `threshold`. When value crosses the marker, the bar shifts to the
-// "above threshold" color so it visually pops.
-// ---------------------------------------------------------------------------
-
-
-function ThresholdBar({ value, threshold }: { value: number; threshold: number }) {
-  const valuePct  = Math.max(0, Math.min(1, value)) * 100;
-  const markerPct = Math.max(0, Math.min(1, threshold)) * 100;
-  const above = value >= threshold;
-  return (
-    <div className="relative w-32 h-1.5 rounded bg-zinc-100 flex-shrink-0">
-      <div
-        className={`absolute left-0 top-0 bottom-0 rounded ${above ? "bg-zinc-900" : "bg-zinc-400"}`}
-        style={{ width: `${valuePct}%` }}
-      />
-      <div
-        className="absolute top-[-2px] bottom-[-2px] w-px bg-zinc-700"
-        style={{ left: `${markerPct}%` }}
-        aria-hidden
-        title={`threshold ${threshold.toFixed(2)}`}
-      />
-      <span className="absolute -top-4 right-0 text-[10px] mono text-zinc-500 tabular-nums">
-        {value.toFixed(2)}
-      </span>
-    </div>
-  );
-}
-
-
-// ===========================================================================
-// Tab: Typed
-// ===========================================================================
-
-
-function TypedTab({
-  schemas, activeSchemaId: urlSchemaId, onSelectSchema,
-}: {
-  schemas: SchemaSummary[];
-  activeSchemaId: string | null;
-  onSelectSchema: (sid: string | null) => void;
-}) {
-  // URL `sid` wins; else pick the first schema.
-  const activeSchemaId =
-    urlSchemaId ?? (schemas.length > 0 ? schemas[0].id : null);
-  const [entities, setEntities] = useState<SchemaEntity[]>([]);
-  const [loading, setLoading] = useState(false);
-
-  useEffect(() => {
-    if (!activeSchemaId) return;
-    setLoading(true);
-    (async () => {
-      try {
-        const out = await listSchemaEntities(activeSchemaId);
-        setEntities(out);
-      } finally {
-        setLoading(false);
-      }
-    })();
-  }, [activeSchemaId]);
-
-  if (schemas.length === 0) {
-    return (
-      <div className="max-w-4xl mx-auto px-8 py-6">
-        <EmptyState
-          title="No typed schemas yet"
-          body="Curated schemas appear here once a field clears the auto-promotion threshold or a user creates one explicitly via POST /schemas."
-        />
-      </div>
-    );
-  }
-
-  return (
-    <div className="max-w-4xl mx-auto px-8 py-6 overflow-y-auto h-full">
-      <h1 className="text-lg font-semibold text-zinc-900 mb-4">
-        Typed schemas <span className="mono text-zinc-400 text-sm">{schemas.length}</span>
-      </h1>
-
-      <div className="flex flex-wrap gap-1 mb-5 text-xs">
-        {schemas.map((s) => {
-          const active = s.id === activeSchemaId;
-          return (
-            <button
-              key={s.id}
-              type="button"
-              onClick={() => onSelectSchema(s.id)}
-              className={`px-3 py-1.5 rounded-md cursor-pointer mono ${
-                active
-                  ? "bg-zinc-900 text-white"
-                  : "bg-white border border-zinc-200 text-zinc-700 hover:bg-zinc-100"
-              }`}
-            >
-              {s.name}
-            </button>
-          );
-        })}
-      </div>
-
-      {loading ? (
-        <SpinnerInline />
-      ) : entities.length === 0 ? (
-        <EmptyState title="No entity types defined" body="This schema has no entity types yet." />
-      ) : (
-        <TypedEntityTree
-          schemaId={activeSchemaId!}
-          entities={entities}
-        />
-      )}
-    </div>
-  );
-}
-
-
-/**
- * Hierarchical tree renderer for typed entities — doc_root parents
- * at the top level, each with its sub_entity children indented below.
- *
- * Sub_entities surface as a `contains many` arrow with the cardinality
- * shown. Click anywhere on a card to expand the field list (lazy
- * fetched via `listSchemaEntityFields`).
- *
- * Legacy schemas with only one anonymous "Doc" entity render as a
- * single doc_root with no children — visually identical to the old
- * flat list so the existing UX isn't broken during rollout.
- */
-function TypedEntityTree({
-  schemaId, entities,
-}: {
-  schemaId: string;
-  entities: SchemaEntity[];
-}) {
-  // Partition into doc-roots and the children that hang off each one.
-  // Sub-entities without a known parent fall back to a "Orphaned"
-  // bucket so they're visible (data anomaly — should not happen post-
-  // bootstrap, but defensive).
-  const docRoots = entities.filter(
-    (e) => (e.kind ?? "doc_root") === "doc_root",
-  );
-  const subByParent: Record<string, SchemaEntity[]> = {};
-  const orphans: SchemaEntity[] = [];
-  for (const e of entities) {
-    if ((e.kind ?? "doc_root") !== "sub_entity") continue;
-    if (e.parent_type_id && entities.some((p) => p.id === e.parent_type_id)) {
-      const k = e.parent_type_id;
-      (subByParent[k] = subByParent[k] || []).push(e);
-    } else {
-      orphans.push(e);
-    }
-  }
-
-  return (
-    <div className="space-y-4" data-testid="typed-entity-tree">
-      {docRoots.map((parent) => {
-        const children = subByParent[parent.id] || [];
-        return (
-          <div key={parent.id} className="space-y-2">
-            <TypedEntityCard schemaId={schemaId} entity={parent} />
-            {children.length > 0 && (
-              <div className="ml-6 pl-4 border-l-2 border-zinc-200 space-y-2">
-                <div className="text-[10px] uppercase tracking-wider text-zinc-400 mt-1">
-                  contains many ↓
-                </div>
-                {children.map((c) => (
-                  <TypedEntityCard
-                    key={c.id}
-                    schemaId={schemaId}
-                    entity={c}
-                    nested
-                  />
+          {/* Sub-entity types */}
+          {hasSubs && (
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-zinc-400 mb-1.5">
+                Contains
+              </div>
+              <div className="space-y-2">
+                {card.sub_entity_types.map((s) => (
+                  <SubEntityBlock key={s.unit_type} sub={s} />
                 ))}
               </div>
-            )}
-          </div>
-        );
-      })}
-      {orphans.length > 0 && (
-        <div className="mt-6 pt-4 border-t border-amber-200">
-          <div className="text-[10px] uppercase tracking-wider text-amber-700 mb-2">
-            Orphaned sub-entities (no parent_type_id found in this schema)
-          </div>
-          <div className="space-y-2">
-            {orphans.map((e) => (
-              <TypedEntityCard key={e.id} schemaId={schemaId} entity={e} nested />
-            ))}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-
-function TypedEntityCard({
-  schemaId, entity, nested = false,
-}: {
-  schemaId: string;
-  entity: SchemaEntity;
-  /** When true, render a slightly more compact card (used by the
-   *  TypedEntityTree to indicate this is a child of a doc_root). */
-  nested?: boolean;
-}) {
-  const [open, setOpen] = useState(false);
-  const [fields, setFields] = useState<SchemaField[] | null>(null);
-
-  async function toggle() {
-    if (!open && fields === null) {
-      try {
-        const out = await listSchemaEntityFields(schemaId, entity.id);
-        setFields(out);
-      } catch (err) {
-        console.error(err);
-        setFields([]);
-      }
-    }
-    setOpen(!open);
-  }
-
-  // Sub_entity badge — small purple chip so the user can scan a long
-  // tree and immediately see which rows are repeated children.
-  const kind = entity.kind ?? "doc_root";
-
-  return (
-    <div
-      className={`rounded-lg border bg-white ${
-        nested ? "border-zinc-200" : "border-zinc-300"
-      }`}
-      data-testid="typed-entity-card"
-      data-kind={kind}
-    >
-      <button
-        type="button"
-        onClick={toggle}
-        className="w-full flex items-center gap-3 px-4 py-3 hover:bg-zinc-50 cursor-pointer"
-      >
-        <ChevronRight className={`w-3.5 h-3.5 text-zinc-400 transition-transform ${open ? "rotate-90" : ""}`} />
-        <span className="text-[10px] mono px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-700">
-          {entity.lifecycle_state}
-        </span>
-        {kind === "sub_entity" && (
-          <span className="text-[10px] mono px-1.5 py-0.5 rounded bg-violet-50 text-violet-700 border border-violet-200">
-            contains many
-          </span>
-        )}
-        <span className={`text-sm font-medium text-zinc-900 ${nested ? "" : "font-semibold"}`}>
-          {entity.name}
-        </span>
-        {entity.description && (
-          <span className="text-xs text-zinc-500 truncate ml-2">
-            {entity.description}
-          </span>
-        )}
-        <span className="ml-auto text-[11px] text-zinc-400 mono">
-          {fields ? `${fields.length} fields` : "click to load"}
-        </span>
-      </button>
-      {open && fields !== null && (
-        <div className="border-t border-zinc-200 px-4 py-3 bg-zinc-50/40">
-          {fields.length === 0 ? (
-            <div className="text-xs text-zinc-500">No fields.</div>
-          ) : (
-            <table className="w-full text-xs">
-              <thead className="text-zinc-500">
-                <tr>
-                  <th className="text-left py-1 font-medium">Name</th>
-                  <th className="text-left py-1 font-medium">Type</th>
-                  <th className="text-left py-1 font-medium">Required</th>
-                  <th className="text-left py-1 font-medium">Description</th>
-                </tr>
-              </thead>
-              <tbody>
-                {fields.map((f) => (
-                  <tr key={f.id} className="border-t border-zinc-200">
-                    <td className="py-1.5 mono text-zinc-900">{f.name}</td>
-                    <td className="py-1.5 mono text-zinc-600">{f.type ?? "text"}</td>
-                    <td className="py-1.5 text-zinc-600">{f.is_required ? "yes" : "—"}</td>
-                    <td className="py-1.5 text-zinc-600">{f.nl_description ?? ""}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            </div>
           )}
+
+          {/* Actions */}
+          <div className="flex flex-wrap items-center gap-2 pt-2">
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                const q = `summarize ${title.toLowerCase()}`;
+                router.push(`/chat?q=${encodeURIComponent(q)}`);
+              }}
+              className="text-[11px] flex items-center gap-1 px-2.5 py-1 rounded-md border border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50 cursor-pointer"
+              data-testid="km-card-ask"
+            >
+              <MessageSquare className="w-3 h-3" /> Ask a question
+            </button>
+            {card.file_count === 1 && (
+              <a
+                href={`/files`}
+                className="text-[11px] flex items-center gap-1 px-2.5 py-1 rounded-md border border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50 cursor-pointer"
+              >
+                <FileText className="w-3 h-3" /> View file
+              </a>
+            )}
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                downloadSchemaExportYaml().catch(console.error);
+              }}
+              className="text-[11px] flex items-center gap-1 px-2.5 py-1 rounded-md border border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50 cursor-pointer"
+            >
+              <Download className="w-3 h-3" /> Export YAML
+            </button>
+          </div>
         </div>
       )}
     </div>
@@ -1129,240 +515,344 @@ function TypedEntityCard({
 }
 
 
-// ===========================================================================
-// Tab: Collisions
-// ===========================================================================
-
-
-function CollisionsTab() {
+function SubEntityBlock({ sub }: { sub: KMSubEntityType }) {
   return (
-    <div className="max-w-4xl mx-auto px-8 py-6 overflow-y-auto h-full">
-      <h1 className="text-lg font-semibold text-zinc-900 mb-1">Collisions</h1>
-      <p className="text-xs text-zinc-500 mb-4">
-        Naming overlaps between discovered fields and typed schema fields.
-      </p>
-      <EmptyState
-        title="No collisions detected"
-        body="Semantic-similarity collision detection (when an L2b cluster's name fuzzy-matches a typed schema field) lands in Pass B. Wave A's exact-name check fires zero collisions on the demo corpus."
-      />
+    <div className="rounded-md bg-zinc-50 border border-zinc-100 px-3 py-2">
+      <div className="text-[12px] font-medium text-zinc-800 flex items-center gap-2">
+        <span className="text-zinc-400">↳</span>
+        <span>{humanizeSchemaName(sub.unit_type)}</span>
+        <span className="text-[10px] text-zinc-400 mono">
+          {sub.row_count} row{sub.row_count === 1 ? "" : "s"}
+        </span>
+      </div>
+      {sub.fields.length > 0 && (
+        <div className="mt-1.5 text-[11px] text-zinc-600 flex flex-wrap gap-x-3 gap-y-0.5 mono ml-4">
+          {sub.fields.map((f) => (
+            <span key={f.name}>{f.name}</span>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
 
 
-// ===========================================================================
-// Tab: Vocabulary
-// ===========================================================================
+// ---------------------------------------------------------------------------
+// Tab: 🔍 Needs Review
+// ---------------------------------------------------------------------------
 
 
-function VocabularyTab() {
-  const [entries, setEntries] = useState<VocabEntry[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [search, setSearch] = useState("");
+function NeedsReviewTab() {
+  const [data, setData] = useState<KMNeedsReview | null>(null);
+  const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
-    setLoading(true);
-    (async () => {
-      try {
-        const out = await listVocabulary(`workspace:${getWorkspaceId()}`, 500);
-        setEntries(out);
-      } finally {
-        setLoading(false);
-      }
-    })();
+    let cancelled = false;
+    getKnowledgeMapNeedsReview({ anomalyLimit: 30, conflictLimit: 30 })
+      .then((r) => !cancelled && setData(r))
+      .catch((e) => !cancelled && setErr(String(e)));
+    return () => { cancelled = true; };
   }, []);
 
-  const filtered = useMemo(() => {
-    const s = search.trim().toLowerCase();
-    if (!s) return entries;
-    return entries.filter((e) =>
-      e.canonical_term.toLowerCase().includes(s)
-      || e.synonyms.some((syn) => syn.toLowerCase().includes(s))
-    );
-  }, [entries, search]);
+  if (err) return <ErrorBanner msg={err} />;
+  if (data === null) return <SpinnerInline />;
+
+  const total = data.anomalies_total + data.conflicts_total + data.emerging_fields_total + data.synonym_proposals_total;
+  if (total === 0) {
+    return <NeedsReviewAllClear />;
+  }
 
   return (
-    <div className="max-w-4xl mx-auto px-8 py-6 overflow-y-auto h-full">
-      <h1 className="text-lg font-semibold text-zinc-900 mb-1">
-        Vocabulary <span className="mono text-zinc-400 text-sm">{entries.length}</span>
-      </h1>
-      <p className="text-xs text-zinc-500 mb-4">
-        Synonym + acronym clusters discovered by Design 6 field clustering. BM25 retrieval expands queries via these mappings.
-      </p>
-      <input
-        type="text"
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-        placeholder="Filter by term or synonym"
-        className="w-full text-xs px-3 py-2 mb-4 rounded border border-zinc-200 focus:outline-none focus:border-zinc-400"
-      />
-      {loading ? <SpinnerInline />
-      : filtered.length === 0 ? (
-        <EmptyState
-          title={entries.length === 0 ? "No vocabulary entries yet" : "No matches"}
-          body={entries.length === 0
-            ? "Synonym clusters auto-populate as the field-clustering worker runs over your corpus. Manually-added terms also show here."
-            : "No vocabulary term matches that search."}
-        />
-      ) : filtered.length < 200 ? (
-        <VocabTableFlat rows={filtered} />
-      ) : (
-        <VocabTableVirtual rows={filtered} />
-      )}
+    <div className="space-y-6">
+      <AnomaliesSection data={data} />
+      <ConflictsSection data={data} />
+      <EmergingFieldsSection total={data.emerging_fields_total} />
+      <SynonymProposalsSection total={data.synonym_proposals_total} />
     </div>
   );
 }
 
 
-// Vocab table — flat render below 200 rows, virtualized otherwise.
-
-function VocabRow({ e }: { e: VocabEntry }) {
+function NeedsReviewAllClear() {
   return (
-    <div className="grid grid-cols-[1.5fr_2fr_0.8fr_0.8fr_0.6fr] gap-2 px-4 py-1.5 text-xs border-t border-zinc-200">
-      <span className="mono text-zinc-900 truncate">{e.canonical_term}</span>
-      <span className="text-zinc-700 truncate">
-        {e.synonyms.length === 0 ? (
-          <span className="text-zinc-400">—</span>
-        ) : (
-          <span className="mono text-[11px]">{e.synonyms.join(" · ")}</span>
-        )}
-      </span>
-      <span>
-        <span className="text-[10px] mono px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-700">
-          {e.source}
-        </span>
-      </span>
-      <span className="mono text-zinc-600">{(e.confidence * 100).toFixed(0)}%</span>
-      <span className="text-zinc-600">{e.n_docs_observed}</span>
-    </div>
-  );
-}
-
-function VocabHeader() {
-  return (
-    <div className="grid grid-cols-[1.5fr_2fr_0.8fr_0.8fr_0.6fr] gap-2 px-4 py-2 text-xs font-medium text-zinc-500 bg-zinc-50/40">
-      <span>Term</span>
-      <span>Synonyms</span>
-      <span>Source</span>
-      <span>Confidence</span>
-      <span>Docs</span>
-    </div>
-  );
-}
-
-function VocabTableFlat({ rows }: { rows: VocabEntry[] }) {
-  return (
-    <div className="rounded-lg border border-zinc-200 bg-white">
-      <VocabHeader />
-      {rows.map((e) => <VocabRow key={e.id} e={e} />)}
-    </div>
-  );
-}
-
-function VocabTableVirtual({ rows }: { rows: VocabEntry[] }) {
-  const parentRef = useRef<HTMLDivElement | null>(null);
-  const virtualizer = useVirtualizer({
-    count: rows.length,
-    getScrollElement: () => parentRef.current,
-    estimateSize: () => 28,
-    overscan: 12,
-  });
-  return (
-    <div
-      className="rounded-lg border border-zinc-200 bg-white"
-      data-testid="vocab-virtual-list"
-    >
-      <VocabHeader />
-      <div
-        ref={parentRef}
-        style={{ height: "560px", overflow: "auto" }}
-      >
-        <div
-          style={{
-            height: `${virtualizer.getTotalSize()}px`,
-            width: "100%",
-            position: "relative",
-          }}
-        >
-          {virtualizer.getVirtualItems().map((vi) => {
-            const e = rows[vi.index];
-            return (
-              <div
-                key={e.id}
-                style={{
-                  position: "absolute",
-                  top: 0,
-                  left: 0,
-                  width: "100%",
-                  transform: `translateY(${vi.start}px)`,
-                }}
-              >
-                <VocabRow e={e} />
-              </div>
-            );
-          })}
+    <div className="rounded-lg border border-zinc-200 bg-white px-6 py-10">
+      <div className="text-center">
+        <Sparkles className="w-6 h-6 text-zinc-400 mx-auto mb-2" strokeWidth={1.75} />
+        <div className="text-sm font-medium text-zinc-700">
+          Nothing needs your attention right now.
         </div>
+      </div>
+      <div className="mt-5 max-w-2xl mx-auto text-[12px] text-zinc-500 leading-relaxed">
+        <div className="mb-1">When the system encounters one of these, it'll show up here:</div>
+        <ul className="list-disc pl-5 space-y-0.5">
+          <li><strong>Anomalies</strong> — a value that's an outlier relative to the cohort (e.g. a $196k transaction in a corpus where most transactions are under $5k).</li>
+          <li><strong>Conflicts</strong> — two sources disagree on the same fact (e.g. one doc says net-30, another says net-45 for the same vendor).</li>
+          <li><strong>Emerging fields</strong> — a new field appearing across multiple docs that hasn't been promoted yet.</li>
+          <li><strong>Synonym proposals</strong> — two field names that look like the same concept (e.g. `monthly_uptime` and `sla_uptime`).</li>
+        </ul>
       </div>
     </div>
   );
 }
 
 
-// ===========================================================================
-// Tab: Lineage
-// ===========================================================================
+function AnomaliesSection({ data }: { data: KMNeedsReview }) {
+  if (data.anomalies_total === 0) return null;
+  return (
+    <section data-testid="km-anomalies-section">
+      <SectionHeader emoji="🔥" title="Anomalies"
+        count={data.anomalies_total} shown={data.anomalies.length}
+        blurb="Sub-entities the system flagged as outliers (rarity ≥ 0.8) — worth a human glance to confirm they're real."
+      />
+      <div className="space-y-2">
+        {data.anomalies.map((a) => (
+          <div key={a.id} className="rounded-md border border-zinc-200 bg-white px-3 py-2.5"
+               data-testid="km-anomaly-row">
+            <div className="flex items-center gap-2 text-[11px]">
+              <span className="px-1.5 py-0.5 rounded bg-rose-50 text-rose-700 mono">
+                rarity {a.rarity_score.toFixed(2)}
+              </span>
+              <span className="mono text-zinc-500">{a.unit_type}</span>
+              <span className="text-zinc-300">·</span>
+              <span className="text-zinc-600 truncate">{a.file_name ?? "(unknown file)"}</span>
+            </div>
+            <div className="mt-1.5 text-[12px] text-zinc-700 mono break-all">
+              {summarizeFields(a.fields)}
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
 
 
-function LineageTab() {
-  const [chains, setChains] = useState<DocChainSummary[]>([]);
-  const [loading, setLoading] = useState(true);
+function ConflictsSection({ data }: { data: KMNeedsReview }) {
+  if (data.conflicts_total === 0) return null;
+  return (
+    <section data-testid="km-conflicts-section">
+      <SectionHeader emoji="⚠️" title="Conflicts"
+        count={data.conflicts_total} shown={data.conflicts.length}
+        blurb="Two or more sources disagree on the same predicate. The orchestrator's chain/authority/recency rules will pick one at query time — but a human decision is more reliable."
+      />
+      <div className="space-y-2">
+        {data.conflicts.map((c) => (
+          <div key={c.id} className="rounded-md border border-zinc-200 bg-white px-3 py-2.5"
+               data-testid="km-conflict-row">
+            <div className="flex items-center gap-2 text-[11px]">
+              <span className="px-1.5 py-0.5 rounded bg-amber-50 text-amber-800 mono">
+                {c.evidence_count} sources
+              </span>
+              <span className="mono text-zinc-700">{c.predicate}</span>
+              <span className="text-zinc-300">·</span>
+              <span className="text-zinc-500">{relativeTime(c.observed_at)}</span>
+            </div>
+            <div className="mt-1.5 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1.5">
+              {c.evidence_preview.map((e, i) => (
+                <div key={i} className="text-[11px] mono bg-zinc-50 border border-zinc-100 rounded px-2 py-1 truncate">
+                  <span className="text-zinc-900">{String((e as Record<string, unknown>).value ?? "—")}</span>
+                  <span className="text-zinc-400 ml-1">
+                    via {String((e as Record<string, unknown>).hit_id ?? "?").slice(0, 8)}
+                  </span>
+                </div>
+              ))}
+            </div>
+            {c.notes && (
+              <div className="mt-1.5 text-[11px] text-zinc-500 italic">{c.notes}</div>
+            )}
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+
+function EmergingFieldsSection({ total }: { total: number }) {
+  return (
+    <section>
+      <SectionHeader emoji="🌿" title="Emerging fields"
+        count={total} shown={0}
+        blurb="New fields that haven't yet crossed the auto-promotion threshold (prevalence ≥ 80% · stability ≥ 90% · value-type confidence ≥ 90% · min 5 docs)."
+      />
+      {total === 0 && (
+        <div className="rounded-md border border-zinc-100 bg-white px-3 py-3 text-[12px] text-zinc-500">
+          ✓ All fields the system has discovered are stable and already in production.
+        </div>
+      )}
+    </section>
+  );
+}
+
+
+function SynonymProposalsSection({ total }: { total: number }) {
+  return (
+    <section>
+      <SectionHeader emoji="📖" title="Synonym proposals"
+        count={total} shown={0}
+        blurb="Two field names that look semantically similar (e.g. `monthly_uptime` ≈ `sla_uptime`) — merge to one canonical name for better query expansion."
+      />
+      {total === 0 && (
+        <div className="rounded-md border border-zinc-100 bg-white px-3 py-3 text-[12px] text-zinc-500">
+          No synonym proposals pending right now.
+        </div>
+      )}
+    </section>
+  );
+}
+
+
+function SectionHeader({
+  emoji, title, count, shown, blurb,
+}: {
+  emoji: string;
+  title: string;
+  count: number;
+  shown: number;
+  blurb: string;
+}) {
+  return (
+    <div className="mb-2">
+      <div className="flex items-baseline gap-2">
+        <span className="text-base">{emoji}</span>
+        <h2 className="text-sm font-semibold text-zinc-900">{title}</h2>
+        <span className="text-[11px] mono text-zinc-400">
+          {count > 0 && shown < count
+            ? `${shown} of ${count}`
+            : count}
+        </span>
+      </div>
+      <p className="text-[11px] text-zinc-500 mt-0.5 ml-7 max-w-3xl">{blurb}</p>
+    </div>
+  );
+}
+
+
+function summarizeFields(fields: Record<string, unknown>): string {
+  // Show the most informative subset — prefer fields that look
+  // numeric or date-ish since those tend to drive anomaly scores.
+  const entries = Object.entries(fields).slice(0, 5);
+  return entries
+    .map(([k, v]) => `${k}=${typeof v === "string" ? v : JSON.stringify(v)}`)
+    .join(" · ");
+}
+
+
+// ---------------------------------------------------------------------------
+// Tab: 🕓 History
+// ---------------------------------------------------------------------------
+
+
+type HistoryFilter = "all" | "schema" | "extraction" | "identity" | "errors";
+
+const FILTER_PREFIX: Record<HistoryFilter, string | undefined> = {
+  all: undefined,
+  schema: "schema_",
+  extraction: undefined,
+  identity: "identit",
+  errors: undefined,
+};
+
+const FILTER_MATCH: Record<HistoryFilter, (event: string) => boolean> = {
+  all: () => true,
+  schema: (e) => e.startsWith("schema_") || e === "doc_chain_detected",
+  extraction: (e) => /^(parse|chunk|contextualization|embedding|raptor|mentions|fields|atomic|kv_tables)/.test(e),
+  identity: (e) => e.startsWith("identit"),
+  errors: (e) => e.includes("failed") || e.includes("error"),
+};
+
+function HistoryTab() {
+  const [filter, setFilter] = useState<HistoryFilter>("all");
+  const [resp, setResp] = useState<KMHistoryResp | null>(null);
+  const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
-    (async () => {
-      try { setChains(await listDocChains(200)); }
-      finally { setLoading(false); }
-    })();
+    let cancelled = false;
+    setResp(null);
+    getKnowledgeMapHistory({ limit: 200 })
+      .then((r) => !cancelled && setResp(r))
+      .catch((e) => !cancelled && setErr(String(e)));
+    return () => { cancelled = true; };
   }, []);
 
+  if (err) return <ErrorBanner msg={err} />;
+  if (resp === null) return <SpinnerInline />;
+  if (resp.items.length === 0) {
+    return (
+      <EmptyState
+        title="No history yet"
+        body="Once you upload documents, every step the pipeline takes is recorded here."
+      />
+    );
+  }
+
+  // Client-side filter (we asked for everything since the volume is
+  // small enough for the demo). At scale we'd push the filter
+  // server-side via event_filter.
+  const matchFn = FILTER_MATCH[filter];
+  const filtered = resp.items.filter((e) => matchFn(e.event));
+
+  // Group by date for readability.
+  const groups: Array<{ date: string; events: KMHistoryEvent[] }> = [];
+  for (const e of filtered) {
+    const date = e.created_at.slice(0, 10);
+    const last = groups[groups.length - 1];
+    if (last && last.date === date) last.events.push(e);
+    else groups.push({ date, events: [e] });
+  }
+
   return (
-    <div className="max-w-4xl mx-auto px-8 py-6 overflow-y-auto h-full">
-      <h1 className="text-lg font-semibold text-zinc-900 mb-1">
-        Lineage <span className="mono text-zinc-400 text-sm">{chains.length}</span>
-      </h1>
-      <p className="text-xs text-zinc-500 mb-4">
-        Doc chains: amendments, email threads, drawing revisions, circulars.
-        Latest member is current_version; older members are superseded.
-      </p>
-      {loading ? <SpinnerInline />
-      : chains.length === 0 ? (
-        <EmptyState
-          title="No doc chains detected"
-          body="Chains form when the worker detects amendment / supersession language across docs, or matching In-Reply-To headers on emails."
-        />
+    <div className="space-y-4">
+      <div className="flex items-center gap-2 text-[12px]">
+        <span className="text-zinc-500">Filter:</span>
+        {(["all","schema","extraction","identity","errors"] as HistoryFilter[]).map((f) => (
+          <button
+            key={f}
+            type="button"
+            onClick={() => setFilter(f)}
+            className={`px-2.5 py-1 rounded-full border cursor-pointer ${
+              filter === f
+                ? "bg-zinc-900 text-white border-zinc-900"
+                : "bg-white text-zinc-700 border-zinc-200 hover:border-zinc-300"
+            }`}
+            data-testid={`km-history-filter-${f}`}
+          >
+            {f}
+          </button>
+        ))}
+        <span className="ml-auto text-zinc-400 mono text-[11px]">
+          {filtered.length} of {resp.items.length} events shown · {resp.total} total in workspace
+        </span>
+      </div>
+
+      {groups.length === 0 ? (
+        <div className="text-[12px] text-zinc-500 italic">
+          No events match this filter.
+        </div>
       ) : (
-        <div className="space-y-2">
-          {chains.map((c) => (
-            <div
-              key={c.id}
-              className="rounded-lg border border-zinc-200 bg-white px-4 py-3"
-            >
-              <div className="flex items-center gap-3">
-                <span className="text-[10px] mono px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-700">
-                  {c.type}
-                </span>
-                <span className="text-sm text-zinc-900">
-                  {c.member_count} member{c.member_count !== 1 ? "s" : ""}
-                </span>
-                {c.detection_confidence != null && (
-                  <span className="text-[11px] mono text-zinc-500">
-                    confidence {(c.detection_confidence * 100).toFixed(0)}%
-                  </span>
-                )}
-                <span className="ml-auto text-[11px] mono text-zinc-400">
-                  chain {c.id.slice(0, 8)}…
-                </span>
+        <div className="space-y-5">
+          {groups.map((g) => (
+            <div key={g.date}>
+              <div className="text-[11px] uppercase tracking-wider text-zinc-400 mb-2">
+                {formatDayHeader(g.date)} · {g.events.length} event{g.events.length === 1 ? "" : "s"}
               </div>
-              {c.title && <div className="text-xs text-zinc-500 mt-1 truncate">{c.title}</div>}
+              <ul className="space-y-1">
+                {g.events.map((e) => (
+                  <li
+                    key={e.id}
+                    className="text-[12px] grid grid-cols-[80px_180px_1fr] gap-3 items-start py-1.5 border-b border-zinc-100 last:border-b-0"
+                  >
+                    <span className="mono text-zinc-400">{e.created_at.slice(11, 19)}</span>
+                    <span className="mono text-zinc-700">{e.event}</span>
+                    <span className="text-zinc-700 truncate" title={e.file_name ?? ""}>
+                      {e.file_name ?? <span className="text-zinc-400 italic">(no file)</span>}
+                      {e.to_state && (
+                        <span className="ml-2 text-[10px] text-zinc-400">→ {e.to_state}</span>
+                      )}
+                    </span>
+                  </li>
+                ))}
+              </ul>
             </div>
           ))}
         </div>
@@ -1372,123 +862,16 @@ function LineageTab() {
 }
 
 
-// ===========================================================================
-// Tab: Versions
-// ===========================================================================
-
-
-function VersionsTab({
-  schemas, activeSchemaId: urlSchemaId, onSelectSchema,
-}: {
-  schemas: SchemaSummary[];
-  activeSchemaId: string | null;
-  onSelectSchema: (sid: string | null) => void;
-}) {
-  const activeSchemaId =
-    urlSchemaId ?? (schemas.length > 0 ? schemas[0].id : null);
-  const [versions, setVersions] = useState<SchemaVersionRow[]>([]);
-  const [loading, setLoading] = useState(false);
-
-  useEffect(() => {
-    if (!activeSchemaId) return;
-    setLoading(true);
-    (async () => {
-      try { setVersions(await listSchemaVersions(activeSchemaId, 50)); }
-      finally { setLoading(false); }
-    })();
-  }, [activeSchemaId]);
-
-  if (schemas.length === 0) {
-    return (
-      <div className="max-w-4xl mx-auto px-8 py-6">
-        <EmptyState
-          title="No schemas, no versions"
-          body="Versions show schema evolution over time. They appear once any schema has been edited."
-        />
-      </div>
-    );
-  }
-
-  return (
-    <div className="max-w-4xl mx-auto px-8 py-6 overflow-y-auto h-full">
-      <h1 className="text-lg font-semibold text-zinc-900 mb-4">Schema versions</h1>
-      <div className="flex flex-wrap gap-1 mb-5 text-xs">
-        {schemas.map((s) => {
-          const active = s.id === activeSchemaId;
-          return (
-            <button
-              key={s.id}
-              type="button"
-              onClick={() => onSelectSchema(s.id)}
-              className={`px-3 py-1.5 rounded-md cursor-pointer mono ${
-                active
-                  ? "bg-zinc-900 text-white"
-                  : "bg-white border border-zinc-200 text-zinc-700 hover:bg-zinc-100"
-              }`}
-            >
-              {s.name}
-            </button>
-          );
-        })}
-      </div>
-      {loading ? <SpinnerInline />
-      : versions.length === 0 ? (
-        <EmptyState
-          title="No versions yet"
-          body="The initial version is created on schema creation. Subsequent edits mint new versions."
-        />
-      ) : (
-        <div className="rounded-lg border border-zinc-200 bg-white">
-          <table className="w-full text-xs">
-            <thead className="text-zinc-500 bg-zinc-50/40">
-              <tr>
-                <th className="text-left px-4 py-2 font-medium">Version</th>
-                <th className="text-left px-4 py-2 font-medium">Created</th>
-                <th className="text-left px-4 py-2 font-medium">By</th>
-                <th className="text-left px-4 py-2 font-medium">Description</th>
-              </tr>
-            </thead>
-            <tbody>
-              {versions.map((v) => (
-                <tr key={`${activeSchemaId}-${v.version}`} className="border-t border-zinc-200">
-                  <td className="px-4 py-1.5 mono text-zinc-900">v{v.version}</td>
-                  <td className="px-4 py-1.5 mono text-zinc-600">
-                    {v.created_at ? new Date(v.created_at).toLocaleString() : "—"}
-                  </td>
-                  <td className="px-4 py-1.5 text-zinc-600">{v.created_by ?? "—"}</td>
-                  <td className="px-4 py-1.5 text-zinc-600">
-                    {v.description ?? (v.kind ? `kind: ${v.kind}` : "")}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </div>
-  );
-}
-
-
-// ===========================================================================
-// Shared helpers
-// ===========================================================================
-
-
-function EmptyState({ title, body }: { title: string; body: string }) {
-  return (
-    <div className="rounded-lg border border-zinc-200 bg-white p-8 text-center">
-      <div className="text-sm font-medium text-zinc-900 mb-1">{title}</div>
-      <div className="text-xs text-zinc-500 max-w-md mx-auto leading-relaxed">{body}</div>
-    </div>
-  );
-}
-
-
-function SpinnerInline() {
-  return (
-    <div className="flex items-center justify-center py-12 text-zinc-400">
-      <Loader2 className="w-5 h-5 animate-spin" />
-    </div>
-  );
+function formatDayHeader(yyyymmdd: string): string {
+  // Compare to today/yesterday for a friendly label.
+  const today = new Date();
+  const todayStr = today.toISOString().slice(0, 10);
+  const yesterday = new Date(today);
+  yesterday.setDate(today.getDate() - 1);
+  const yesterdayStr = yesterday.toISOString().slice(0, 10);
+  if (yyyymmdd === todayStr) return "Today";
+  if (yyyymmdd === yesterdayStr) return "Yesterday";
+  return new Date(yyyymmdd).toLocaleDateString(undefined, {
+    weekday: "long", year: "numeric", month: "short", day: "numeric",
+  });
 }
