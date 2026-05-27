@@ -44,6 +44,12 @@ dependencies = [
     # overlays). Already pulled transitively but pinning so a cleanup
     # doesn't accidentally drop it.
     "omegaconf>=2.3.0",
+    # Hierarchical chunking. We use only HierarchicalNodeParser +
+    # IndexNode from llama-index-core (no retrievers, no LLM glue —
+    # we keep our own retrieval pipeline). The library is a thin
+    # token-aware splitter built on the same recursive-paragraph-
+    # backoff pattern we'd otherwise hand-roll, but battle-tested.
+    "llama-index-core>=0.12.0",
 ]
 
 [dependency-groups]

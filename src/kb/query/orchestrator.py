@@ -85,6 +85,7 @@ from kb.query.context_resolver import (
     make_context_resolver,
 )
 from kb.query.intent import IntentClassifier, IntentResult, make_intent_classifier
+from kb.query.auto_merging import auto_merge_hits
 from kb.query.mode_router import QModeNotImplementedError, apply_mode
 from kb.query.planner import Plan, Planner, make_planner
 from kb.query.rerank import Reranker, make_reranker
@@ -252,6 +253,14 @@ class Orchestrator:
             workspace_id=workspace_id,
             conn=conn,
         )
+        # AutoMerging — when ≥½ of a parent's leaf children get hit,
+        # swap them for the parent so the generator sees the full
+        # subsection (Step 3 / LlamaIndex AutoMergingRetriever
+        # pattern). Runs BEFORE apply_mode so mode handlers see the
+        # merged hit list.
+        hits, auto_merge_stats = await auto_merge_hits(
+            hits, conn=conn, workspace_id=workspace_id,
+        )
         # B4a — apply mode-conditional routing. Q-mode raises until B4b.
         hits = await apply_mode(
             plan, hits,
@@ -260,6 +269,15 @@ class Orchestrator:
         crag_score = await self._crag.assess(query, hits)
 
         latency_ms = int((time.monotonic() - t0) * 1000)
+
+        # Surface AutoMerging stats on the plan for the Plan Inspector.
+        plan_dict = plan.to_dict()
+        plan_dict["auto_merge"] = {
+            "initial_leaf_hits": auto_merge_stats.initial_leaf_hits,
+            "final_hit_count": auto_merge_stats.final_hit_count,
+            "merges_by_level": auto_merge_stats.merges_by_level,
+            "leaves_replaced": auto_merge_stats.leaves_replaced,
+        }
 
         return SearchResult(
             query_id=query_id,
@@ -271,7 +289,7 @@ class Orchestrator:
             intent=intent.label,
             intent_confidence=intent.confidence,
             mode=plan.mode,
-            plan=plan.to_dict(),
+            plan=plan_dict,
         )
 
     async def chat(
@@ -506,6 +524,18 @@ class Orchestrator:
             await emit("doc_filter_applied", {
                 "scope_size": len(scope),
                 "kept": len(hits), "dropped": before - len(hits),
+            })
+
+        # AutoMerging — swap leaf clusters for their parent so the
+        # generator gets the right amount of context per question.
+        # See kb/query/auto_merging.py.
+        hits, auto_merge_stats_chat = await auto_merge_hits(
+            hits, conn=conn, workspace_id=workspace_id,
+        )
+        if auto_merge_stats_chat.leaves_replaced:
+            await emit("auto_merged", {
+                "leaves_replaced": auto_merge_stats_chat.leaves_replaced,
+                "merges_by_level": auto_merge_stats_chat.merges_by_level,
             })
 
         try:

@@ -49,10 +49,19 @@ async def insert_contextual_chunk(
 async def read_chunks_for_contextualization(
     conn: Connection, *, file_id: str
 ) -> list[tuple[str, str]]:
-    """Return [(chunk_id, text), ...] for the file, ordered by chunk_index."""
+    """Return [(chunk_id, text), ...] for the file's LEAF chunks (the
+    rows that get indexed for BM25 + dense retrieval), ordered by
+    chunk_index.
+
+    Post-hierarchical-chunking (migration 0040): only `node_level=0`
+    rows need contextualization — parents are looked up by FK at
+    AutoMerging time, not retrieved by similarity, so they don't need
+    a contextual prefix or an embedding.
+    """
     cur = await conn.execute(
         "SELECT id::text, text FROM chunks "
-        "WHERE file_id = %s ORDER BY chunk_index ASC",
+        "WHERE file_id = %s AND node_level = 0 "
+        "ORDER BY chunk_index ASC",
         (file_id,),
     )
     rows = await cur.fetchall()
