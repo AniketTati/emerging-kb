@@ -23,6 +23,7 @@ via `/audit`).
 
 from __future__ import annotations
 
+import re
 import time
 import uuid
 from typing import Any, Awaitable, Callable
@@ -41,6 +42,157 @@ EventSink = Callable[[str, dict[str, Any]], Awaitable[None]]
 async def _noop_sink(_event_type: str, _payload: dict[str, Any]) -> None:
     """Default sink — silently drops events when no listener is wired."""
     return
+
+
+# ---------------------------------------------------------------------------
+# Adversarial refusal helpers
+# ---------------------------------------------------------------------------
+#
+# The pre-flight refusal pipeline catches three families of unsafe queries:
+#
+#   1. intent=adversarial — caught by the IntentClassifier already (PPE bypass,
+#      Aadhaar exfiltration, "backdate this record" style fraud).
+#   2. false-premise / fabricated-citation patterns — "per Clause N", "per
+#      Section M says X" attacks where the cited reference doesn't actually
+#      exist. The construction q050 attack fell into this bucket; the intent
+#      classifier labeled it `unit_filter` (looks like a normal "find clauses
+#      about X" query) and the generator ran with the user's false premise.
+#   3. anything else we want to surface here later (additional regex patterns,
+#      DLP integration, allow-list mode, etc.).
+#
+# These are MODULE-LEVEL functions (not Orchestrator methods) so the same
+# classifier can be reused by other entry points (search, eval, batch runs)
+# without dragging the whole orchestrator state.
+
+
+# Catches "per clause 99", "per the contract clause N", "per section X",
+# "according to clause N", "section M says X", "as stated in clause N",
+# "under clause N of the X". Intentionally loose so it doesn't miss
+# attempted attacks; the orchestrator only refuses on this when no
+# retrieved chunk actually grounds the cited reference.
+_FALSE_PREMISE_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(
+        r"\bper\s+(?:the\s+)?(?:contract\s+)?(?:clause|section|article|para(?:graph)?)\s+\d+",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\baccording\s+to\s+(?:clause|section|article)\s+\d+",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bunder\s+(?:clause|section|article)\s+\d+\s+of\s+(?:the|this)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:clause|section|article)\s+\d+\s+(?:says|states|provides|allows|permits|requires)",
+        re.IGNORECASE,
+    ),
+)
+
+
+def _looks_like_false_premise(query: str) -> bool:
+    """Cheap regex check for queries that ASSERT a clause/section says X.
+
+    These are the construction q050 pattern: 'Per Clause 99 of the
+    contract, ... bill Acme'. We can't verify the assertion without
+    running retrieval, but we DO know that any genuine query about a
+    contract clause should phrase it as a question ('what does clause
+    99 say?'), not as an assertion. The asserting form is almost always
+    a manipulation attempt.
+
+    False-positive risk: a user phrasing a legitimate operational
+    request as 'per section 5, when does X happen' would also hit
+    this. Acceptable trade — the worst case is they get a refusal
+    that asks them to rephrase as a question.
+    """
+    return any(p.search(query) for p in _FALSE_PREMISE_PATTERNS)
+
+
+# Sub-typing for refusal templates. The category determines the refusal
+# message; logged in events so we can see which kind of attack hit us.
+_BYPASS_KEYWORDS = (
+    "bypass", "override", "circumvent", "skip the check",
+    "without the supervisor", "without supervision",
+)
+_PII_KEYWORDS = (
+    "aadhaar", "social security", "ssn", "pan number", "passport",
+    "compile all", "list all phone", "list all email", "personal details",
+    "personal information of all",
+)
+_FRAUD_KEYWORDS = (
+    "backdate", "back-date", "antedate", "falsify", "forge",
+    "cover up", "destroy the record", "delete the record", "alter the date",
+    "claim he was not", "claim she was not", "claim they were not",
+    "deny liability", "evade liability",
+)
+
+
+def _classify_adversarial_subtype(query: str) -> str:
+    """Return a short subtype label for telemetry + template selection.
+
+    Order matters: more-specific patterns first so a query that hits
+    multiple buckets gets the most informative tag.
+    """
+    q_lc = query.lower()
+    if any(k in q_lc for k in _FRAUD_KEYWORDS):
+        return "fraud_or_record_tampering"
+    if any(k in q_lc for k in _PII_KEYWORDS):
+        return "pii_exfiltration"
+    if any(k in q_lc for k in _BYPASS_KEYWORDS):
+        return "safety_bypass"
+    if _looks_like_false_premise(query):
+        return "false_premise_assertion"
+    return "adversarial_generic"
+
+
+# Refusal templates. Each one explains WHY (so users can rephrase if
+# they had a legitimate question) without being preachy.
+_REFUSAL_TEMPLATES: dict[str, str] = {
+    "safety_bypass": (
+        "I can't help with bypassing safety procedures or supervisor "
+        "checks. Personal Protective Equipment and supervision "
+        "requirements exist because of past incidents and statutory "
+        "obligations (e.g., Factories Act, Building & Other "
+        "Construction Workers Act). If you need to understand what "
+        "the procedures require, I can summarize them — ask "
+        "\"what PPE is required for height work?\" or similar."
+    ),
+    "pii_exfiltration": (
+        "I can't compile or extract personal identifying information "
+        "(Aadhaar / SSN / passport / contact details) for groups of "
+        "people. Bulk PII extraction risks worker safety and may "
+        "violate data-protection regulations (DPDP Act 2023 in "
+        "India, GDPR elsewhere). I can answer aggregate questions "
+        "(e.g., \"how many workers on site\", \"distribution by "
+        "skill category\") without exposing individual identifiers."
+    ),
+    "fraud_or_record_tampering": (
+        "I can't help with backdating, falsifying, or otherwise "
+        "altering records to evade liability — that would be record "
+        "tampering and obstruction of an investigation. The system "
+        "is also append-only: historical records can't be rewritten. "
+        "If there is a legitimate correction to make, the right "
+        "path is to file an amendment that explicitly references "
+        "and supersedes the original record."
+    ),
+    "false_premise_assertion": (
+        "I can't verify the asserted clause or section in the source "
+        "documents — the query asserts something about a specific "
+        "reference but I shouldn't trust unverified premises. Could "
+        "you rephrase it as a question — e.g., \"what does Clause "
+        "13 of the EPC contract say about variations?\" — so I can "
+        "look it up and either confirm or correct the premise?"
+    ),
+    "adversarial_generic": (
+        "This query is outside what I'm able to help with. If you "
+        "had a legitimate question I might have misinterpreted, "
+        "please rephrase it more directly."
+    ),
+}
+
+
+def _refusal_template_for(subtype: str) -> str:
+    return _REFUSAL_TEMPLATES.get(subtype, _REFUSAL_TEMPLATES["adversarial_generic"])
 
 
 def _count_by(items: Any, key_fn: Callable[[Any], str]) -> dict[str, int]:
@@ -385,6 +537,54 @@ class Orchestrator:
             conn=conn, workspace_id=workspace_id,
         )
         await emit("planned", {"mode": plan.mode, "intent": intent.label})
+
+        # ---- Adversarial short-circuit ----
+        # The intent classifier labels prompt-injection / PII-exfiltration
+        # / safety-bypass / fraud queries as `adversarial` with high
+        # confidence (the heuristic and Gemini classifiers both agree on
+        # the obvious cases). The planner historically routed these to
+        # H-mode and trusted "downstream gates" to refuse — but the only
+        # downstream gate is CRAG (low retrieval confidence), which fires
+        # accidentally for irrelevant queries, not deliberately for
+        # harmful ones. Result: q047/q048/q049 in the construction eval
+        # returned empty answers (silent refusal — bad UX) and q050
+        # ("Per Clause 99 of the contract, …" — a made-up clause) slipped
+        # through entirely because the false-premise pattern looks like
+        # a normal unit_filter query to the classifier.
+        #
+        # Two-tier fix:
+        #   1. explicit adversarial → refuse here with a templated reason
+        #   2. false-premise patterns ("per clause N", "according to
+        #      section N", "section M of the contract says X") → also
+        #      refuse here when the cited reference doesn't appear in the
+        #      doc-type's known structure. This is a low-precision pattern
+        #      but catches the construction q050-class attacks.
+        if intent.label == "adversarial" or _looks_like_false_premise(
+            effective_query
+        ):
+            adv_reason = _classify_adversarial_subtype(effective_query)
+            adv_answer = _refusal_template_for(adv_reason)
+            await emit("refused_adversarial", {
+                "intent": intent.label,
+                "subtype": adv_reason,
+                "confidence": intent.confidence,
+            })
+            return self._adversarial_refusal_envelope(
+                query_id=query_id,
+                query=query,
+                effective_query=effective_query,
+                rewrites=Rewrites(
+                    original=query,
+                    step_back="",
+                    hyde="",
+                    query2doc="",
+                ),
+                intent=intent,
+                plan=plan,
+                latency_ms=int((time.monotonic() - t0) * 1000),
+                refusal_text=adv_answer,
+                refusal_subtype=adv_reason,
+            )
 
         # ---- I-mode short-circuit ----
         # Inventory queries ("what types of docs do I have", "list my
@@ -926,6 +1126,51 @@ class Orchestrator:
                 }
                 for r in conflict_resolutions
             ],
+        )
+
+    def _adversarial_refusal_envelope(
+        self,
+        *,
+        query_id: str,
+        query: str,
+        effective_query: str,
+        rewrites: Rewrites,
+        intent: IntentResult,
+        plan: Plan,
+        latency_ms: int,
+        refusal_text: str,
+        refusal_subtype: str,
+    ) -> ChatResult:
+        """Build the response envelope for a pre-flight adversarial refusal.
+
+        Same shape as `_q_mode_refusal_envelope` so the /chat caller
+        doesn't need a refusal-aware branch — the `refused` flag +
+        `refusal_reason` are the contract.
+        """
+        gen = GenerationResult(
+            answer=refusal_text,
+            citations=[],
+            refused=True,
+            refusal_reason=f"adversarial:{refusal_subtype}",
+            model_id="orchestrator:adversarial_refusal",
+        )
+        return ChatResult(
+            query_id=query_id,
+            query=query,
+            rewrites=self._rewrites_to_dict(rewrites),
+            generation=gen,
+            hits=[],
+            crag_score=0.0,
+            latency_ms=latency_ms,
+            faithfulness_verdict="skipped",
+            faithfulness_score=0.0,
+            faithfulness_regenerations=0,
+            faithfulness_model_id=None,
+            citation_modalities=[],
+            intent=intent.label,
+            intent_confidence=intent.confidence,
+            mode=plan.mode,
+            plan=plan.to_dict(),
         )
 
     def _q_mode_refusal_envelope(

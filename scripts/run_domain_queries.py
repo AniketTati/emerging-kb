@@ -53,9 +53,13 @@ async def run_one(client: httpx.AsyncClient, workspace_id: str, q: dict) -> dict
         }
 
     body = r.json()
-    # Actual /chat shape: {query, query_id, rewrites, generation: {answer, citations: [{label, file_id, ...}]}}
+    # Actual /chat shape: {query, query_id, rewrites, generation: {answer, citations: [{label, file_id, ...}], refused, refusal_reason}}
     gen = body.get("generation") or {}
     answer = gen.get("answer") or body.get("answer") or ""
+    # Explicit refused flag from the API beats keyword sniffing — the
+    # orchestrator's new adversarial short-circuit always sets this.
+    api_refused = bool(gen.get("refused"))
+    api_refusal_reason = gen.get("refusal_reason") or ""
     raw_cits = gen.get("citations") or body.get("citations") or body.get("hits") or []
     cit_names = []
     for c in raw_cits:
@@ -65,10 +69,16 @@ async def run_one(client: httpx.AsyncClient, workspace_id: str, q: dict) -> dict
             cit_names.append(c)
 
     # Score
-    is_refusal = ("refuse" in answer.lower() or "cannot" in answer.lower()
-                  or "i'm not able" in answer.lower()
-                  or "i am not able" in answer.lower()
-                  or "i can't" in answer.lower())
+    # api_refused (explicit flag from /chat) is the truth; fall back to
+    # keyword sniffing only when the API didn't tell us either way
+    # (e.g. faithfulness gate set refused=True with a real answer body
+    # — count that as a refusal too, since the gate refused to ship).
+    is_refusal = api_refused or (
+        "refuse" in answer.lower() or "cannot" in answer.lower()
+        or "i'm not able" in answer.lower()
+        or "i am not able" in answer.lower()
+        or "i can't" in answer.lower()
+    )
     expected_refusal = bool(q.get("expected_refusal"))
     expected_cits = q.get("expected_citations") or []
 
@@ -99,6 +109,8 @@ async def run_one(client: httpx.AsyncClient, workspace_id: str, q: dict) -> dict
         "n_citations": len(cit_names),
         "citations": cit_names[:6],
         "is_refusal": is_refusal,
+        "api_refused": api_refused,
+        "api_refusal_reason": api_refusal_reason,
         "expected_refusal": expected_refusal,
         "expected_citations": expected_cits,
     }
