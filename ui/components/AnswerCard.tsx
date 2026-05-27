@@ -150,6 +150,7 @@ export function AnswerCard({ response, events, onFollowUp }: Props) {
                 bm25_chunks · bm25_raptor · dense_chunks · dense_raptor ·
                 mentions_exact · atomic_units_rarity (6)
               </div>
+              <AutoMergeRow response={response} />
               <div className="text-zinc-400">CRAG</div>
               <div className="text-zinc-700">
                 {response.crag_score.toFixed(2)}
@@ -177,6 +178,42 @@ export function AnswerCard({ response, events, onFollowUp }: Props) {
         </div>
       </details>
     </div>
+  );
+}
+
+/** Inspector row showing the AutoMergingRetriever swap-to-parent stat.
+ *  Populated by the orchestrator on every chat response since PR #46
+ *  (the LlamaIndex hierarchical-chunking refactor). When the leaf hits
+ *  cluster densely under a single parent (≥ merge_threshold, default
+ *  0.5), the retriever swaps them for the parent so the generator sees
+ *  the full subsection.
+ *
+ *  Hidden when `auto_merge` is absent (older /chat clients without the
+ *  refactor) or when nothing got merged (`leaves_replaced === 0`) — no
+ *  point cluttering the inspector with a zero. */
+function AutoMergeRow({ response }: { response: ChatResponse }) {
+  const am = response.plan?.auto_merge;
+  if (!am) return null;
+  if (am.leaves_replaced === 0 && am.initial_leaf_hits === 0) return null;
+  const merges = Object.entries(am.merges_by_level)
+    .map(([level, count]) => `L${level}: ${count}`)
+    .join(" · ");
+  return (
+    <>
+      <div className="text-zinc-400">Auto-merge</div>
+      <div className="text-zinc-700">
+        {am.leaves_replaced > 0 ? (
+          <>
+            {am.leaves_replaced} leaves → {merges || "0 parents"}
+            <span className="text-zinc-400"> · {am.initial_leaf_hits}→{am.final_hit_count} hits</span>
+          </>
+        ) : (
+          <span className="text-zinc-400">
+            no merges ({am.initial_leaf_hits} leaf hits, none clustered)
+          </span>
+        )}
+      </div>
+    </>
   );
 }
 

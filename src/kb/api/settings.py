@@ -259,3 +259,68 @@ async def get_overrides(
         )
         for r in rows
     ])
+
+
+# ---------------------------------------------------------------------------
+# Chunker configs — read-only listing for the Settings → Chunking tab.
+#
+# Runtime routing table introduced by PR #46. Each row maps (workspace_id,
+# doc_type) → chunker_kind + chunk_sizes + overlap_tokens + free-form extra
+# knobs. The chunker worker reads it at the start of every chunk_file run
+# and falls back to a built-in default when no row matches.
+# ---------------------------------------------------------------------------
+
+
+class ChunkerConfigOut(BaseModel):
+    """One row from `chunker_configs`. `doc_type='*'` is the workspace-wide
+    default; specific doc_types coexist with wildcard."""
+
+    id: str
+    doc_type: str
+    chunker_kind: str            # hierarchical / row_per_leaf / message_per_leaf / clause_per_leaf
+    chunk_sizes: list[int] | None
+    overlap_tokens: int | None
+    extra: dict[str, Any]
+    description: str
+    created_at: str
+    updated_at: str
+
+
+class ChunkerConfigsListResponse(BaseModel):
+    items: list[ChunkerConfigOut] = Field(default_factory=list)
+
+
+@router.get(
+    "/chunker-configs",
+    response_model=ChunkerConfigsListResponse,
+    summary="List chunker configs for this workspace (runtime doc-type → "
+            "chunker_kind routing; PR #46 introduced the table).",
+)
+async def get_chunker_configs(
+    workspace_id: Annotated[str, Depends(current_workspace_id)],
+    conn: Annotated[Connection, Depends(kb_app_connection)],
+) -> ChunkerConfigsListResponse:
+    cur = await conn.execute(
+        "SELECT id::text, doc_type, chunker_kind, chunk_sizes, "
+        "       overlap_tokens, extra, description, created_at, updated_at "
+        "FROM chunker_configs "
+        "WHERE workspace_id = %s "
+        # Wildcard last so the UI shows specific doc-types first.
+        "ORDER BY (doc_type = '*') ASC, doc_type ASC",
+        (workspace_id,),
+    )
+    rows = await cur.fetchall()
+    return ChunkerConfigsListResponse(items=[
+        ChunkerConfigOut(
+            id=str(r[0]),
+            doc_type=str(r[1]),
+            chunker_kind=str(r[2]),
+            chunk_sizes=list(r[3]) if r[3] is not None else None,
+            overlap_tokens=int(r[4]) if r[4] is not None else None,
+            extra=dict(r[5]) if isinstance(r[5], dict) else {},
+            description=str(r[6] or ""),
+            created_at=r[7].isoformat() if hasattr(r[7], "isoformat") else str(r[7]),
+            updated_at=r[8].isoformat() if hasattr(r[8], "isoformat") else str(r[8]),
+        )
+        for r in rows
+    ])

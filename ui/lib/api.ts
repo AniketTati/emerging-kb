@@ -261,6 +261,25 @@ export type ChunkBody = {
 export const getChunk = (id: string) =>
   _getJson<ChunkBody>(`/chunks/${id}`);
 
+/** Doc-detail tree row — one chunk in the hierarchical structure
+ *  introduced by PR #46 (LlamaIndex `HierarchicalNodeParser`).
+ *  `node_level` 0 = leaf, 1 = mid, 2 = root.  `parent_chunk_id` is
+ *  NULL for roots. Text is truncated server-side to ~200 chars; the
+ *  UI uses `text_length` to decide whether to show a "+N chars" tail. */
+export type ChunkSummary = {
+  id: string;
+  chunk_index: number;
+  node_level: number;
+  parent_chunk_id: string | null;
+  token_count: number;
+  source_page_numbers: number[];
+  text_preview: string;
+  text_length: number;
+};
+
+export const getFileChunks = (fileId: string) =>
+  _getJson<ChunkSummary[]>(`/files/${fileId}/chunks`);
+
 export type ExtractedEntityInstance = {
   id: string;
   schema_entity_id: string;
@@ -602,10 +621,36 @@ export type ChatResponse = {
   // R1 — surfaced conflict resolutions for the chat UI banner. Empty
   // when no chained-doc disagreements were detected for this query.
   conflict_resolutions?: ConflictResolution[];
+  // Planner Plan dict — populated by the orchestrator with mode-routing
+  // + auto_merge stats. The "How I answered" inspector renders the
+  // auto_merge subset; the rest is consumed by Q-mode / E-mode UIs.
+  plan?: PlanDict | null;
   // Auto-created when caller doesn't pass one; the UI uses this to
   // thread subsequent calls into the same session + show history.
   session_id?: string | null;
   turn_index?: number | null;
+};
+
+/** Subset of the orchestrator's plan dict that the inspector consumes.
+ *  Mirrors `kb.query.orchestrator.SearchResult.plan` — Python dict, so
+ *  the TS shape is best-effort and most fields stay `unknown`. */
+export type PlanDict = {
+  /** AutoMergingRetriever audit trail — present on every chat response
+   *  starting with the post-#46 chunking refactor. Counts how many
+   *  leaf-chunk hits got swapped for their parent. */
+  auto_merge?: {
+    /** Leaf-chunk hits in the post-RRF list before auto-merge ran. */
+    initial_leaf_hits: number;
+    /** Hit count after swap-to-parent — typically smaller than initial. */
+    final_hit_count: number;
+    /** Parents synthesized at each `node_level` (1 = mid, 2 = root). */
+    merges_by_level: Record<string, number>;
+    /** Total leaf hits replaced by parent hits. */
+    leaves_replaced: number;
+  } | null;
+  // Other plan fields (mode-specific) intentionally typed as unknown
+  // — the inspector only reads `auto_merge`.
+  [key: string]: unknown;
 };
 
 
@@ -1564,6 +1609,30 @@ export async function listOverrides(): Promise<OverrideOut[]> {
     { headers: workspaceHeaders() },
   );
   const body = await _handle<{ items: OverrideOut[] }>(resp);
+  return body.items ?? [];
+}
+
+/** Runtime chunker-config row for a (workspace, doc_type) pair. PR #46
+ *  introduced this table so chunker routing can change without a code
+ *  deploy — `doc_type='*'` is the workspace-wide default. */
+export type ChunkerConfigOut = {
+  id: string;
+  doc_type: string;
+  chunker_kind: "hierarchical" | "row_per_leaf" | "message_per_leaf" | "clause_per_leaf";
+  chunk_sizes: number[] | null;
+  overlap_tokens: number | null;
+  extra: Record<string, unknown>;
+  description: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export async function listChunkerConfigs(): Promise<ChunkerConfigOut[]> {
+  const resp = await fetch(
+    `${KB_API_URL}/settings/chunker-configs`,
+    { headers: workspaceHeaders() },
+  );
+  const body = await _handle<{ items: ChunkerConfigOut[] }>(resp);
   return body.items ?? [];
 }
 

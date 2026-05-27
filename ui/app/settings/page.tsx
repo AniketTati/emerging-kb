@@ -21,17 +21,18 @@ import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import {
   Brain, Layers, Sliders, Search, Loader2, Trash2,
-  CheckCircle2, AlertCircle,
+  CheckCircle2, AlertCircle, GitBranch,
 } from "lucide-react";
 import {
   getEffectiveConfig, getModelChoices, listOverrides,
-  createOverride, revokeOverride,
+  createOverride, revokeOverride, listChunkerConfigs,
   type EffectiveEntry, type ModelChoicesResponse, type OverrideOut,
+  type ChunkerConfigOut,
 } from "@/lib/api";
 import { Sidebar } from "@/components/Sidebar";
 
 
-type Tab = "models" | "effective" | "overrides";
+type Tab = "models" | "effective" | "overrides" | "chunking";
 
 
 const LAYER_ORDER: Record<string, number> = {
@@ -63,7 +64,7 @@ function SettingsShell() {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const tab = (["models", "effective", "overrides"] as Tab[]).includes(
+  const tab = (["models", "effective", "overrides", "chunking"] as Tab[]).includes(
     (searchParams.get("tab") ?? "models") as Tab,
   )
     ? (searchParams.get("tab") ?? "models") as Tab
@@ -84,7 +85,7 @@ function SettingsShell() {
         <header className="h-12 flex-shrink-0 border-b border-zinc-200 flex items-center px-5 gap-3 bg-white">
           <span className="text-zinc-900 text-sm">Settings</span>
           <span className="text-[11px] text-zinc-400 mono">
-            workspace · models · runtime overrides
+            workspace · models · runtime overrides · chunking
           </span>
         </header>
 
@@ -94,6 +95,7 @@ function SettingsShell() {
             { key: "models",    label: "Models",          icon: Brain },
             { key: "effective", label: "Effective config", icon: Layers },
             { key: "overrides", label: "Overrides",       icon: Sliders },
+            { key: "chunking",  label: "Chunking",        icon: GitBranch },
           ] as { key: Tab; label: string; icon: typeof Brain }[]).map((t) => {
             const Icon = t.icon;
             const active = tab === t.key;
@@ -122,6 +124,7 @@ function SettingsShell() {
             {tab === "models" && <ModelsTab />}
             {tab === "effective" && <EffectiveTab />}
             {tab === "overrides" && <OverridesTab />}
+            {tab === "chunking" && <ChunkingTab />}
           </div>
         </div>
       </main>
@@ -630,6 +633,131 @@ function Field({
       {children}
       <div className="text-[10px] text-zinc-400 mt-0.5">{hint}</div>
     </div>
+  );
+}
+
+
+// ---------------------------------------------------------------------------
+// Chunking tab — read-only listing of chunker_configs rows.
+//
+// Each row maps (workspace, doc_type) → chunker_kind + chunk_sizes +
+// overlap_tokens. PR #46 introduced the table so chunker routing can
+// change without a code deploy. `doc_type='*'` is the workspace-wide
+// default. Editing UI is Wave-B follow-up; this tab is the audit
+// surface so an admin can answer "what chunker actually ran on this
+// workspace's bank_statement files".
+// ---------------------------------------------------------------------------
+
+function ChunkingTab() {
+  const [rows, setRows] = useState<ChunkerConfigOut[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    listChunkerConfigs()
+      .then((r) => !cancelled && setRows(r))
+      .catch((e) => !cancelled && setErr(String(e)));
+    return () => { cancelled = true; };
+  }, []);
+
+  if (err) return <ErrorBanner msg={err} />;
+  if (rows === null) return (
+    <div className="flex items-center gap-2 text-sm text-zinc-500">
+      <Loader2 className="w-4 h-4 animate-spin" />
+      Loading chunker configs…
+    </div>
+  );
+
+  return (
+    <div className="space-y-4">
+      <div className="text-sm text-zinc-700 max-w-3xl">
+        Per-doc-type chunker routing. The chunker worker reads this table
+        at the start of every parse → chunk run; a row with{" "}
+        <span className="mono">doc_type='*'</span> is the workspace-wide
+        default. When no row matches, the built-in defaults
+        (<span className="mono">hierarchical [2048, 512, 128]</span>) apply.
+      </div>
+
+      {rows.length === 0 ? (
+        <div
+          className="rounded-lg border border-zinc-200 bg-white px-4 py-6 text-sm text-zinc-500"
+          data-testid="chunker-configs-empty"
+        >
+          No chunker configs set — every doc-type uses the built-in
+          defaults. Bootstrap rows are created by{" "}
+          <span className="mono">scripts/seed_demo_workspace.py</span>.
+        </div>
+      ) : (
+        <div className="rounded-lg border border-zinc-200 bg-white overflow-hidden" data-testid="chunker-configs-table">
+          <table className="w-full text-[13px]">
+            <thead className="bg-zinc-50 border-b border-zinc-200 text-[11px] uppercase tracking-wider text-zinc-500">
+              <tr>
+                <th className="px-4 py-2 text-left font-medium">Doc type</th>
+                <th className="px-4 py-2 text-left font-medium">Chunker</th>
+                <th className="px-4 py-2 text-left font-medium">Sizes</th>
+                <th className="px-4 py-2 text-left font-medium">Overlap</th>
+                <th className="px-4 py-2 text-left font-medium">Description</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-zinc-100">
+              {rows.map((r) => {
+                const isWildcard = r.doc_type === "*";
+                return (
+                  <tr
+                    key={r.id}
+                    data-testid="chunker-configs-row"
+                    className={isWildcard ? "bg-amber-50/30" : ""}
+                  >
+                    <td className="px-4 py-2.5 mono text-zinc-800">
+                      {isWildcard ? (
+                        <span title="Workspace-wide default — used when no specific doc_type matches">
+                          * <span className="text-zinc-400 text-[11px]">(default)</span>
+                        </span>
+                      ) : (
+                        r.doc_type
+                      )}
+                    </td>
+                    <td className="px-4 py-2.5">
+                      <ChunkerKindChip kind={r.chunker_kind} />
+                    </td>
+                    <td className="px-4 py-2.5 mono text-zinc-700 text-[12px]">
+                      {r.chunk_sizes ? `[${r.chunk_sizes.join(", ")}]` :
+                        <span className="text-zinc-400">default</span>}
+                    </td>
+                    <td className="px-4 py-2.5 mono text-zinc-700 text-[12px]">
+                      {r.overlap_tokens ?? <span className="text-zinc-400">default</span>}
+                    </td>
+                    <td className="px-4 py-2.5 text-zinc-600 max-w-md">
+                      {r.description || <span className="text-zinc-400">—</span>}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <div className="text-[11px] text-zinc-400 max-w-3xl">
+        Editing chunker configs from the UI is a Wave-B follow-up. For
+        now, manage rows via{" "}
+        <span className="mono">INSERT INTO chunker_configs …</span> or
+        the upcoming{" "}
+        <span className="mono">POST /settings/chunker-configs</span>.
+      </div>
+    </div>
+  );
+}
+
+function ChunkerKindChip({ kind }: { kind: ChunkerConfigOut["chunker_kind"] }) {
+  const tone =
+    kind === "hierarchical" ? "bg-indigo-50 text-indigo-800" :
+    kind === "row_per_leaf" ? "bg-emerald-50 text-emerald-800" :
+    kind === "message_per_leaf" ? "bg-sky-50 text-sky-800" :
+    "bg-amber-50 text-amber-800";
+  return (
+    <span className={`text-[11px] mono px-2 py-0.5 rounded ${tone}`}>
+      {kind}
+    </span>
   );
 }
 

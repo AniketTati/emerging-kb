@@ -56,6 +56,7 @@ from kb.domain.files import (
     list_triples_in_doc,
     soft_delete_file,
 )
+from kb.domain.chunks import ChunkSummary, list_chunks_for_file
 from kb.domain.raw_pages import RawPageListResponse, list_raw_pages
 from kb.parsers import PayloadTooLargeError, UnsupportedMediaTypeError
 from kb.storage.files import (
@@ -448,6 +449,22 @@ async def get_file_pages(
 # doc-detail page can lazy-load section-by-section. Lists are paginated
 # so a 500-page doc with thousands of mentions doesn't blow up.
 # ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/{file_id}/chunks",
+    response_model=list[ChunkSummary],
+    summary="All chunks for a file — leaves + mid + root, returned in "
+            "node_level-DESC order so the UI can render the hierarchical "
+            "tree introduced by PR #46 (LlamaIndex HierarchicalNodeParser). "
+            "Text is preview-truncated; ask Doc Detail for full chunk text.",
+)
+async def get_file_chunks(
+    file_id: str,
+    conn: Annotated[Connection, Depends(kb_app_connection)],
+) -> list[ChunkSummary]:
+    await get_file(conn, file_id)
+    return await list_chunks_for_file(conn, file_id=file_id)
 
 
 @router.get(

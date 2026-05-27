@@ -14,6 +14,7 @@ import {
   Table as TableIcon,
   AlertTriangle,
   Sparkles,
+  GitBranch,
 } from "lucide-react";
 import { SourceViewer } from "./SourceViewer";
 import {
@@ -23,6 +24,7 @@ import {
 } from "./DocDetailCitation";
 import {
   type AtomicUnit,
+  type ChunkSummary,
   type CitationByQuery,
   type EntityMentioned,
   type ExtractedEntityInstance,
@@ -42,6 +44,7 @@ import {
   getEntitiesMentioned,
   getExtractedEntities,
   getFile,
+  getFileChunks,
   getFileDetails,
   getProposedFields,
 } from "@/lib/api";
@@ -100,6 +103,7 @@ export function DocDetail({ fileId }: { fileId: string }) {
               <FeaturedClause fileId={fileId} />
               <SectionGroup>
                 <ParsedTextSection fileId={fileId} totalPages={details.n_pages} />
+                <ChunksTreeSection fileId={fileId} total={details.n_chunks} />
                 <ProposedFieldsSection fileId={fileId} />
                 <AtomicUnitsSection fileId={fileId} total={details.n_sub_entities} />
                 <ExtractedEntitiesSection fileId={fileId} />
@@ -416,6 +420,169 @@ function ParsedTextSection({ fileId, totalPages }: { fileId: string; totalPages:
     </Accordion>
   );
 }
+
+/** Hierarchical-chunks accordion — PR #46 introduced 3 chunk levels
+ *  (root / mid / leaf) with parent_chunk_id self-FK. Renders the tree
+ *  so the user can see the structural decomposition the chunker
+ *  produced — useful for debugging "why didn't auto-merge fire on this
+ *  query" type questions, and just generally for understanding what
+ *  retrieval is operating over.
+ *
+ *  Sentinel state when only level-0 chunks exist: the file was chunked
+ *  by `row_per_leaf` / `message_per_leaf` (one logical unit per leaf,
+ *  no mid/root tree) — we render a flat list with a small note
+ *  explaining the structure. */
+function ChunksTreeSection({
+  fileId,
+  total,
+}: {
+  fileId: string;
+  total: number;
+}) {
+  return (
+    <Accordion
+      icon={GitBranch}
+      title="Hierarchical chunks"
+      count={total}
+      testId="doc-detail-chunks"
+    >
+      {(open) => <ChunksTreeLoader fileId={fileId} open={open} />}
+    </Accordion>
+  );
+}
+
+function ChunksTreeLoader({ fileId, open }: { fileId: string; open: boolean }) {
+  const [data, err] = useLazy<ChunkSummary[]>(
+    () => getFileChunks(fileId), open,
+  );
+  if (err) return <ErrorRow message={err} />;
+  if (data === null) return <LoadingRow />;
+  if (data.length === 0) return <EmptyRow message="No chunks yet" />;
+  return <ChunksTree chunks={data} />;
+}
+
+function ChunksTree({ chunks }: { chunks: ChunkSummary[] }) {
+  // Build parent → children map so we can render the tree without
+  // worrying about ordering. The server returned node_level-DESC, so
+  // every parent has been seen before any of its children — but doing
+  // an O(N) pass makes the render order-independent.
+  const childrenByParent = new Map<string | null, ChunkSummary[]>();
+  for (const c of chunks) {
+    const k = c.parent_chunk_id;
+    if (!childrenByParent.has(k)) childrenByParent.set(k, []);
+    childrenByParent.get(k)!.push(c);
+  }
+  for (const arr of childrenByParent.values()) {
+    arr.sort((a, b) => a.chunk_index - b.chunk_index);
+  }
+  const roots = childrenByParent.get(null) ?? [];
+  const maxLevel = chunks.reduce((m, c) => Math.max(m, c.node_level), 0);
+  const flatHint = maxLevel === 0;
+
+  return (
+    <div className="space-y-2">
+      <div className="text-[11px] mono text-zinc-500 flex items-center gap-3">
+        <span>
+          {chunks.length} chunk{chunks.length === 1 ? "" : "s"} ·
+          {" "}
+          {Array.from({ length: maxLevel + 1 }, (_, lvl) => {
+            const n = chunks.filter((c) => c.node_level === lvl).length;
+            return `L${lvl}=${n}`;
+          }).join(" · ")}
+        </span>
+        {flatHint && (
+          <span className="text-zinc-400">
+            (flat — `row_per_leaf` or `message_per_leaf` chunker)
+          </span>
+        )}
+      </div>
+      <ul className="space-y-1">
+        {roots.map((r) => (
+          <ChunksTreeNode
+            key={r.id}
+            chunk={r}
+            childrenByParent={childrenByParent}
+            depth={0}
+          />
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function ChunksTreeNode({
+  chunk,
+  childrenByParent,
+  depth,
+}: {
+  chunk: ChunkSummary;
+  childrenByParent: Map<string | null, ChunkSummary[]>;
+  depth: number;
+}) {
+  const children = childrenByParent.get(chunk.id) ?? [];
+  const hasChildren = children.length > 0;
+  const [open, setOpen] = useState(depth === 0 && chunk.node_level > 0);
+  const levelLabel = chunk.node_level === 0 ? "leaf" : chunk.node_level === 1 ? "mid" : `L${chunk.node_level}`;
+  const levelTone =
+    chunk.node_level === 0
+      ? "bg-zinc-100 text-zinc-700"
+      : chunk.node_level === 1
+        ? "bg-sky-50 text-sky-800"
+        : "bg-indigo-50 text-indigo-800";
+  const truncated = chunk.text_length > chunk.text_preview.length;
+  return (
+    <li className="text-[12px]" style={{ paddingLeft: depth === 0 ? 0 : 12 }}>
+      <div className="flex items-start gap-2">
+        <button
+          type="button"
+          className={`w-4 h-4 flex items-center justify-center text-zinc-400 ${
+            hasChildren ? "hover:text-zinc-700" : "opacity-30"
+          }`}
+          onClick={() => hasChildren && setOpen((o) => !o)}
+          aria-expanded={hasChildren ? open : undefined}
+          aria-label={hasChildren ? "Toggle subtree" : undefined}
+          disabled={!hasChildren}
+        >
+          <ChevronRight
+            className={`w-3 h-3 transition-transform ${open ? "rotate-90" : ""}`}
+            strokeWidth={2}
+          />
+        </button>
+        <span className={`text-[10px] mono px-1.5 py-0.5 rounded ${levelTone}`}>
+          {levelLabel}
+        </span>
+        <span className="mono text-zinc-400 shrink-0">#{chunk.chunk_index}</span>
+        <span className="text-zinc-700 truncate flex-1">
+          {chunk.text_preview}
+          {truncated && (
+            <span className="text-zinc-400">
+              {" "}… +{chunk.text_length - chunk.text_preview.length} chars
+            </span>
+          )}
+        </span>
+        <span className="mono text-zinc-400 shrink-0 text-[10px]">
+          {chunk.token_count} tok
+          {chunk.source_page_numbers.length > 0 && (
+            <> · p{chunk.source_page_numbers.join(",")}</>
+          )}
+        </span>
+      </div>
+      {open && hasChildren && (
+        <ul className="mt-1 ml-3 border-l border-zinc-200 pl-2 space-y-1">
+          {children.map((c) => (
+            <ChunksTreeNode
+              key={c.id}
+              chunk={c}
+              childrenByParent={childrenByParent}
+              depth={depth + 1}
+            />
+          ))}
+        </ul>
+      )}
+    </li>
+  );
+}
+
 
 function SourcePager({
   fileId,
