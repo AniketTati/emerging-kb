@@ -21,7 +21,8 @@ import hashlib
 import os
 import traceback
 
-from kb.chunking import Chunk, ChunkingError, chunk_pages
+from kb.chunking import Chunk, ChunkingError
+from kb.chunking.doc_type_router import run_chunker, select_chunker
 from kb.contextualization import (
     ContextualizationError,
     ContextualizedChunk,
@@ -410,17 +411,22 @@ async def chunk_file_impl(file_id: str) -> None:
     settings = get_settings()
     db_url = settings.database_url  # superuser; worker bypasses RLS to read
 
-    # Phase 1: read file row + check idempotency.
+    # Phase 1: read file row + chunker config + raw_pages.
+    chunker_config = None
+    mime_type: str | None = None
+    inferred_doc_type: str | None = None
     async with open_connection(db_url) as conn:
         async with conn.transaction():
             cur = await conn.execute(
-                "SELECT workspace_id, lifecycle_state FROM files WHERE id = %s",
+                "SELECT workspace_id, lifecycle_state, mime_type, "
+                "       inferred_doc_type "
+                "FROM files WHERE id = %s",
                 (file_id,),
             )
             row = await cur.fetchone()
             if row is None:
                 raise FileNotFoundError(file_id)
-            workspace_id, lifecycle_state = row
+            workspace_id, lifecycle_state, mime_type, inferred_doc_type = row
 
             # Idempotency: already advanced past 'parsed' → no-op.
             if lifecycle_state in ("chunked", "failed", "deleted"):
@@ -433,6 +439,18 @@ async def chunk_file_impl(file_id: str) -> None:
             await conn.execute(
                 "SELECT set_config('app.workspace_id', %s, true)",
                 (str(workspace_id),),
+            )
+
+            # Resolve chunker config from chunker_configs (per-doc-type
+            # runtime config table, migration 0041) with fallback to
+            # built-in defaults. At chunk time `inferred_doc_type` is
+            # usually NULL (the LLM classifies later), so MIME-based
+            # routing carries us until then.
+            chunker_config = await select_chunker(
+                conn,
+                workspace_id=str(workspace_id),
+                doc_type=inferred_doc_type,
+                mime_type=mime_type,
             )
 
             # Read raw_pages for this file.
@@ -448,14 +466,13 @@ async def chunk_file_impl(file_id: str) -> None:
         )
         return
 
-    # Phase 2: run pure-function chunker (no DB).
+    # Phase 2: run hierarchical chunker (no DB). Returns chunks in
+    # topological order — parents before children — so the writer
+    # below can resolve `parent_chunk_id` from a parser_node_id → DB-id
+    # map as it goes.
     pages = [Page(page_number=pn, text=text, layout_json={}) for pn, text in page_rows]
     try:
-        budget = settings.chunk_tokens
-        overlap = settings.chunk_overlap_tokens
-        chunks: list[Chunk] = chunk_pages(
-            pages, budget_tokens=budget, overlap_tokens=overlap,
-        )
+        chunks: list[Chunk] = run_chunker(pages, config=chunker_config)
     except ChunkingError as exc:
         await _mark_failed(
             db_url, file_id, str(workspace_id),
@@ -476,15 +493,23 @@ async def chunk_file_impl(file_id: str) -> None:
         )
         return
 
-    # Phase 3: write chunks + lifecycle event.
+    # Phase 3: write chunks + lifecycle event. Build parser_node_id →
+    # DB id map as we go so child rows can FK into their parents.
     async with open_connection(db_url) as conn:
         async with conn.transaction():
             await conn.execute(
                 "SELECT set_config('app.workspace_id', %s, true)",
                 (str(workspace_id),),
             )
+            parser_id_to_db_id: dict[str, str] = {}
+            n_leaves = 0
             for chunk in chunks:
-                await insert_chunk(
+                parent_db_id: str | None = None
+                if chunk.parent_parser_node_id:
+                    parent_db_id = parser_id_to_db_id.get(
+                        chunk.parent_parser_node_id
+                    )
+                new_db_id = await insert_chunk(
                     conn,
                     file_id=file_id,
                     workspace_id=str(workspace_id),
@@ -493,7 +518,13 @@ async def chunk_file_impl(file_id: str) -> None:
                     source_page_numbers=chunk.source_page_numbers,
                     token_count=chunk.token_count,
                     content_sha=chunk.content_sha,
+                    node_level=chunk.node_level,
+                    parent_chunk_id=parent_db_id,
                 )
+                if new_db_id is not None and chunk.parser_node_id:
+                    parser_id_to_db_id[chunk.parser_node_id] = new_db_id
+                if chunk.node_level == 0:
+                    n_leaves += 1
             total_tokens = sum(c.token_count for c in chunks)
             await transition_lifecycle(
                 conn,
@@ -503,7 +534,11 @@ async def chunk_file_impl(file_id: str) -> None:
                 event="chunking_done",
                 payload={
                     "chunk_count": len(chunks),
+                    "leaf_count": n_leaves,
                     "total_tokens": total_tokens,
+                    "chunker_kind": chunker_config.kind,
+                    "chunker_source": chunker_config.source,
+                    "chunk_sizes": list(chunker_config.chunk_sizes),
                 },
             )
 
