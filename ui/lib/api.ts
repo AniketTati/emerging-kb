@@ -2098,3 +2098,84 @@ export async function getKnowledgeMapEntityDetail(
   );
   return _handle<KMEntityDetailResponse>(resp);
 }
+
+
+// ===========================================================================
+// ✏️ Schema editor (Bug D Phase 3-4) — CRUD on canonical schema_fields
+// ===========================================================================
+
+export type SchemaFieldOut = {
+  id: string;
+  name: string;
+  type: string;             // 'string' | 'number' | 'boolean' | 'date' | 'datetime'
+  nl_description: string;
+  is_required: boolean;
+  auto_promoted: boolean;
+};
+
+export type SchemaFieldsListResponse = {
+  items: SchemaFieldOut[];
+};
+
+export type SchemaFieldPatch = {
+  name?: string;
+  type?: string;
+  nl_description?: string;
+  is_required?: boolean;
+};
+
+export type SchemaFieldCreate = {
+  name: string;
+  type?: string;
+  nl_description?: string;
+  is_required?: boolean;
+};
+
+export async function listSchemaFields(doctype: string): Promise<SchemaFieldsListResponse> {
+  const resp = await fetch(
+    `${KB_API_URL}/knowledge-map/schemas/${encodeURIComponent(doctype)}/fields`,
+    { headers: workspaceHeaders(), cache: "no-store" },
+  );
+  return _handle<SchemaFieldsListResponse>(resp);
+}
+
+export async function patchSchemaField(
+  doctype: string, fieldId: string, body: SchemaFieldPatch,
+): Promise<SchemaFieldOut> {
+  const resp = await fetch(
+    `${KB_API_URL}/knowledge-map/schemas/${encodeURIComponent(doctype)}/fields/${fieldId}`,
+    {
+      method: "PATCH",
+      headers: { ...workspaceHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    },
+  );
+  return _handle<SchemaFieldOut>(resp);
+}
+
+export async function createSchemaField(
+  doctype: string, body: SchemaFieldCreate,
+): Promise<SchemaFieldOut> {
+  const resp = await fetch(
+    `${KB_API_URL}/knowledge-map/schemas/${encodeURIComponent(doctype)}/fields`,
+    {
+      method: "POST",
+      headers: { ...workspaceHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    },
+  );
+  return _handle<SchemaFieldOut>(resp);
+}
+
+export async function deleteSchemaField(
+  doctype: string, fieldId: string,
+): Promise<void> {
+  const resp = await fetch(
+    `${KB_API_URL}/knowledge-map/schemas/${encodeURIComponent(doctype)}/fields/${fieldId}`,
+    { method: "DELETE", headers: workspaceHeaders() },
+  );
+  if (!resp.ok) {
+    const body = await resp.text();
+    throw new Error(`delete failed (${resp.status}): ${body}`);
+  }
+}

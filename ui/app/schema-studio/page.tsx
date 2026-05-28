@@ -26,7 +26,7 @@ import {
   Download, Library, AlertTriangle, Clock, ChevronRight, ChevronDown,
   Loader2, FileText, MessageSquare, X, Search, Flame, AlertOctagon,
   Sprout, BookOpen, Network, ArrowRight, ArrowLeft,
-  Users, Building2, MapPin, Sparkles,
+  Users, Building2, MapPin, Sparkles, Pencil, Trash2, Plus, Check,
 } from "lucide-react";
 
 import { Sidebar } from "@/components/Sidebar";
@@ -35,12 +35,13 @@ import {
   getKnowledgeMapNeedsReview, getKnowledgeMapHistory,
   getKnowledgeMapSchemaSample, getKnowledgeMapAnomalyCohort,
   getKnowledgeMapEntities, getKnowledgeMapEntityDetail,
+  listSchemaFields, patchSchemaField, createSchemaField, deleteSchemaField,
   downloadSchemaExportYaml,
   type KMStats, type KMSchemaCard, type KMNeedsReview, type KMHistoryResp,
   type KMHistoryEvent, type KMAnomaly, type KMConflict,
   type KMSchemaSample, type KMSubEntitySample, type KMCohortResponse,
   type KMEntity, type KMEntityDetailResponse, type KMEntityNeighbor,
-  type KMEntityFile,
+  type KMEntityFile, type SchemaFieldOut,
 } from "@/lib/api";
 import {
   humanizeSchemaName, categorizeSchema, DOMAINS, VISIBLE_DOMAINS,
@@ -580,55 +581,12 @@ function CatalogDetail({ card }: { card: KMSchemaCard }) {
 
       {sampleErr && <ErrorBanner msg={sampleErr} />}
 
-      {/* Doc-level fields — value column ONLY shown when there's a
-          unique source file (otherwise different files have different
-          values; showing one would be misleading). */}
-      <section>
-        <div className="text-[10px] uppercase tracking-wider text-zinc-400 mb-1.5">
-          Doc-level fields ({card.doc_root_fields.length})
-          {card.file_count === 1 && (
-            <span className="ml-1.5 text-zinc-400 normal-case tracking-normal">
-              · values from the only source file
-            </span>
-          )}
-        </div>
-        {card.doc_root_fields.length === 0 ? (
-          <div className="text-[12px] text-zinc-400 italic">No doc-level fields.</div>
-        ) : sample === null ? (
-          <SkeletonLines count={Math.min(8, card.doc_root_fields.length)} />
-        ) : (
-          <table className="w-full text-[12px] border border-zinc-200 rounded-md overflow-hidden">
-            <thead className="bg-zinc-50 text-[10px] uppercase tracking-wider text-zinc-500">
-              <tr>
-                <th className="text-left px-2.5 py-1.5 font-medium">Field</th>
-                {card.file_count === 1 && (
-                  <th className="text-left px-2.5 py-1.5 font-medium">Value</th>
-                )}
-                <th className="text-left px-2.5 py-1.5 font-medium w-16">Type</th>
-              </tr>
-            </thead>
-            <tbody>
-              {sample.doc_root_fields.map((f) => (
-                <tr
-                  key={f.name}
-                  className="border-t border-zinc-100"
-                  title={f.description ?? undefined}
-                >
-                  <td className="px-2.5 py-1.5 mono text-zinc-700 align-top">{f.name}</td>
-                  {card.file_count === 1 && (
-                    <td className="px-2.5 py-1.5 mono text-zinc-800 align-top break-all">
-                      {formatCellValue(f.value)}
-                    </td>
-                  )}
-                  <td className="px-2.5 py-1.5 text-[11px] text-zinc-500 align-top">
-                    {f.type ?? "—"}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </section>
+      {/* Doc-level fields — editable. Loads canonical schema_fields
+          (the layer the extraction prompt now reads from for "reuse
+          these names" hints). Rename / add / delete propagates via
+          PATCH/POST/DELETE; renames backfill across proposed_fields
+          so existing per-file data uses the new canonical name. */}
+      <EditableDocFieldsSection card={card} sample={sample} />
 
       {/* Sub-entity tables — one per type, showing first N rows */}
       {sample && sample.sub_entity_samples.length > 0 && (
@@ -1354,6 +1312,314 @@ function formatDayHeader(yyyymmdd: string): string {
   return new Date(yyyymmdd).toLocaleDateString(undefined, {
     weekday: "long", year: "numeric", month: "short", day: "numeric",
   });
+}
+
+
+// ===========================================================================
+// ✏️ Editable doc-level fields (Bug D Phase 4)
+// ===========================================================================
+//
+// Replaces the read-only doc-level fields table in the Catalog detail
+// panel. Renders the canonical schema_fields for a doctype with inline
+// edit (rename + description), delete, and add. Mutations call the
+// /knowledge-map/schemas/{doctype}/fields/* endpoints (Phase 3); when
+// a rename happens the backend backfills proposed_fields so existing
+// per-file data uses the new canonical name immediately.
+
+const _SCHEMA_FIELD_TYPES = ["string", "number", "boolean", "date", "datetime"] as const;
+type SchemaFieldType = typeof _SCHEMA_FIELD_TYPES[number];
+
+function EditableDocFieldsSection({
+  card,
+  sample,
+}: {
+  card: KMSchemaCard;
+  sample: KMSchemaSample | null;
+}) {
+  const doctype = card.name.replace(/^auto:/, "");
+  const [fields, setFields] = useState<SchemaFieldOut[] | null>(null);
+  const [loadErr, setLoadErr] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [opErr, setOpErr] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    setLoadErr(null);
+    try {
+      const r = await listSchemaFields(doctype);
+      setFields(r.items);
+    } catch (e) {
+      setLoadErr((e as Error).message);
+    }
+  }, [doctype]);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  // Map field_name → value from sample (when card.file_count === 1)
+  const valueByName = useMemo(() => {
+    const m = new Map<string, unknown>();
+    if (sample && card.file_count === 1) {
+      for (const f of sample.doc_root_fields) m.set(f.name, f.value);
+    }
+    return m;
+  }, [sample, card.file_count]);
+
+  const handlePatch = useCallback(async (id: string, patch: Parameters<typeof patchSchemaField>[2]) => {
+    setBusy(true);
+    setOpErr(null);
+    try {
+      await patchSchemaField(doctype, id, patch);
+      await refresh();
+      setEditingId(null);
+    } catch (e) {
+      setOpErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }, [doctype, refresh]);
+
+  const handleDelete = useCallback(async (id: string, name: string) => {
+    if (!confirm(`Delete field "${name}"? This soft-deletes the canonical field. Existing per-file values stay in the database; future extractions will stop looking for this field.`)) return;
+    setBusy(true);
+    setOpErr(null);
+    try {
+      await deleteSchemaField(doctype, id);
+      await refresh();
+    } catch (e) {
+      setOpErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }, [doctype, refresh]);
+
+  const handleCreate = useCallback(async (body: Parameters<typeof createSchemaField>[1]) => {
+    setBusy(true);
+    setOpErr(null);
+    try {
+      await createSchemaField(doctype, body);
+      await refresh();
+      setAdding(false);
+    } catch (e) {
+      setOpErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }, [doctype, refresh]);
+
+  return (
+    <section>
+      <div className="flex items-center justify-between mb-1.5">
+        <div className="text-[10px] uppercase tracking-wider text-zinc-400">
+          Doc-level fields {fields ? `(${fields.length})` : ""}
+          {card.file_count === 1 && (
+            <span className="ml-1.5 text-zinc-400 normal-case tracking-normal">
+              · values from the only source file
+            </span>
+          )}
+        </div>
+        <button
+          type="button"
+          onClick={() => { setAdding(true); setEditingId(null); }}
+          disabled={busy || adding}
+          className="flex items-center gap-1 text-[11px] text-zinc-600 hover:text-zinc-900 px-2 py-0.5 rounded hover:bg-zinc-100 cursor-pointer disabled:opacity-50"
+        >
+          <Plus className="w-3 h-3" strokeWidth={2} /> Add field
+        </button>
+      </div>
+
+      {loadErr && <ErrorBanner msg={`Failed to load fields: ${loadErr}`} />}
+      {opErr && <ErrorBanner msg={opErr} />}
+
+      {fields === null ? (
+        <SkeletonLines count={6} />
+      ) : (
+        <div className="border border-zinc-200 rounded-md overflow-hidden">
+          <table className="w-full text-[12px]">
+            <thead className="bg-zinc-50 text-[10px] uppercase tracking-wider text-zinc-500">
+              <tr>
+                <th className="text-left px-2.5 py-1.5 font-medium w-1/4">Field</th>
+                {card.file_count === 1 && (
+                  <th className="text-left px-2.5 py-1.5 font-medium w-1/4">Value</th>
+                )}
+                <th className="text-left px-2.5 py-1.5 font-medium">Description</th>
+                <th className="text-left px-2.5 py-1.5 font-medium w-16">Type</th>
+                <th className="w-20"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {adding && (
+                <FieldEditRow
+                  mode="create"
+                  initial={{ name: "", type: "string", nl_description: "", is_required: false }}
+                  fileCountIsOne={card.file_count === 1}
+                  onSave={(b) => handleCreate(b)}
+                  onCancel={() => setAdding(false)}
+                  busy={busy}
+                />
+              )}
+              {fields.length === 0 && !adding && (
+                <tr>
+                  <td colSpan={card.file_count === 1 ? 5 : 4} className="px-2.5 py-3 text-[12px] text-zinc-400 italic text-center">
+                    No canonical fields yet. Click "Add field" or wait for auto-promotion.
+                  </td>
+                </tr>
+              )}
+              {fields.map((f) => editingId === f.id ? (
+                <FieldEditRow
+                  key={f.id}
+                  mode="edit"
+                  initial={f}
+                  fileCountIsOne={card.file_count === 1}
+                  onSave={(b) => handlePatch(f.id, b)}
+                  onCancel={() => setEditingId(null)}
+                  busy={busy}
+                />
+              ) : (
+                <tr key={f.id} className="border-t border-zinc-100 group">
+                  <td className="px-2.5 py-1.5 mono text-zinc-700 align-top">
+                    {f.name}
+                    {!f.auto_promoted && (
+                      <span
+                        className="ml-1.5 text-[9px] px-1 py-px rounded bg-emerald-50 text-emerald-700 border border-emerald-200 mono"
+                        title="User-defined (not auto-promoted)"
+                      >
+                        custom
+                      </span>
+                    )}
+                  </td>
+                  {card.file_count === 1 && (
+                    <td className="px-2.5 py-1.5 mono text-zinc-800 align-top break-all">
+                      {formatCellValue(valueByName.get(f.name) ?? null)}
+                    </td>
+                  )}
+                  <td className="px-2.5 py-1.5 text-[11px] text-zinc-500 align-top">
+                    {f.nl_description || <span className="italic text-zinc-400">no description</span>}
+                  </td>
+                  <td className="px-2.5 py-1.5 text-[11px] text-zinc-500 align-top">
+                    {f.type || "—"}
+                  </td>
+                  <td className="px-2.5 py-1.5 align-top">
+                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <button
+                        type="button"
+                        onClick={() => { setEditingId(f.id); setAdding(false); }}
+                        disabled={busy}
+                        className="p-1 rounded hover:bg-zinc-100 text-zinc-500 hover:text-zinc-900 cursor-pointer disabled:opacity-50"
+                        title="Edit field"
+                      >
+                        <Pencil className="w-3 h-3" strokeWidth={2} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDelete(f.id, f.name)}
+                        disabled={busy}
+                        className="p-1 rounded hover:bg-rose-50 text-zinc-500 hover:text-rose-700 cursor-pointer disabled:opacity-50"
+                        title="Delete field"
+                      >
+                        <Trash2 className="w-3 h-3" strokeWidth={2} />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
+
+function FieldEditRow({
+  mode,
+  initial,
+  fileCountIsOne,
+  onSave,
+  onCancel,
+  busy,
+}: {
+  mode: "create" | "edit";
+  initial: { name: string; type: string; nl_description: string; is_required: boolean };
+  fileCountIsOne: boolean;
+  onSave: (body: { name: string; type: string; nl_description: string; is_required: boolean }) => void;
+  onCancel: () => void;
+  busy: boolean;
+}) {
+  const [name, setName] = useState(initial.name);
+  const [type, setType] = useState(initial.type || "string");
+  const [desc, setDesc] = useState(initial.nl_description || "");
+
+  function commit() {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    onSave({ name: trimmed, type, nl_description: desc.trim(), is_required: initial.is_required });
+  }
+
+  return (
+    <tr className="border-t border-zinc-100 bg-amber-50/30">
+      <td className="px-2.5 py-1.5 align-top">
+        <input
+          type="text"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="snake_case_field_name"
+          className="w-full mono text-[12px] px-1.5 py-0.5 border border-zinc-300 rounded bg-white focus:outline-none focus:border-zinc-500"
+          autoFocus
+        />
+      </td>
+      {fileCountIsOne && (
+        <td className="px-2.5 py-1.5 align-top text-[11px] text-zinc-400 italic">
+          {mode === "create" ? "—" : "(value refreshes after save)"}
+        </td>
+      )}
+      <td className="px-2.5 py-1.5 align-top">
+        <input
+          type="text"
+          value={desc}
+          onChange={(e) => setDesc(e.target.value)}
+          placeholder="Brief description; the LLM uses this when extracting"
+          className="w-full text-[12px] px-1.5 py-0.5 border border-zinc-300 rounded bg-white focus:outline-none focus:border-zinc-500"
+        />
+      </td>
+      <td className="px-2.5 py-1.5 align-top">
+        <select
+          value={type}
+          onChange={(e) => setType(e.target.value)}
+          className="text-[11px] px-1 py-0.5 border border-zinc-300 rounded bg-white"
+        >
+          {_SCHEMA_FIELD_TYPES.map((t) => (
+            <option key={t} value={t}>{t}</option>
+          ))}
+        </select>
+      </td>
+      <td className="px-2.5 py-1.5 align-top">
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={commit}
+            disabled={busy || !name.trim()}
+            className="p-1 rounded hover:bg-emerald-50 text-emerald-700 cursor-pointer disabled:opacity-50"
+            title="Save (Enter)"
+          >
+            {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" strokeWidth={2.5} />}
+          </button>
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={busy}
+            className="p-1 rounded hover:bg-zinc-100 text-zinc-500 cursor-pointer disabled:opacity-50"
+            title="Cancel (Esc)"
+          >
+            <X className="w-3 h-3" strokeWidth={2} />
+          </button>
+        </div>
+      </td>
+    </tr>
+  );
 }
 
 
