@@ -306,13 +306,25 @@ async def _run_chat_with_events(
     orchestrator = get_orchestrator()
 
     async def runner() -> None:
+        # Auto-create session up-front (instead of inside
+        # orchestrator.chat) so this runner KNOWS the session_id
+        # even if chat() crashes — that's what lets the error path
+        # below persist the user's turn under the right session.
+        # Guarantees every user message lands in chat_turns, full stop.
+        effective_session_id: str | None = body.session_id
+        if effective_session_id is None:
+            effective_session_id = await orchestrator.ensure_session(
+                workspace_id=workspace_id, conn=conn,
+                fallback_title=(body.query or "").strip()[:120] or None,
+            )
+
         try:
             result = await orchestrator.chat(
                 body.query,
                 workspace_id=workspace_id,
                 conn=conn,
                 requested_mode=body.mode,
-                session_id=body.session_id,
+                session_id=effective_session_id,
                 file_ids=body.file_ids,
                 event_sink=sink,
             )
@@ -321,9 +333,21 @@ async def _run_chat_with_events(
                 "data": json.loads(result.model_dump_json()),
             })
         except Exception as exc:  # noqa: BLE001
+            # Pipeline crashed mid-flight. Synthesize a refused turn,
+            # PERSIST it (fresh-conn persist so the request's outer
+            # txn state can't kill it), and emit it as a normal `done`
+            # event with refused=True. The UI's existing refusal
+            # rendering path handles it — the user sees their query +
+            # an error card in the thread, the row is in chat_turns,
+            # leaving + coming back shows it. Nothing vanishes.
+            err_result = await orchestrator.build_error_chat_result(
+                workspace_id=workspace_id,
+                session_id=effective_session_id,
+                query=body.query, exc=exc,
+            )
             await queue.put({
-                "event": "error",
-                "data": {"type": type(exc).__name__, "detail": str(exc)[:300]},
+                "event": "done",
+                "data": json.loads(err_result.model_dump_json()),
             })
         finally:
             # Sentinel — tells the generator to stop pulling.

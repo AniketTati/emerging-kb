@@ -573,7 +573,7 @@ class Orchestrator:
                 "subtype": adv_reason,
                 "confidence": intent.confidence,
             })
-            return self._adversarial_refusal_envelope(
+            adv_result = self._adversarial_refusal_envelope(
                 query_id=query_id,
                 query=query,
                 effective_query=effective_query,
@@ -589,6 +589,17 @@ class Orchestrator:
                 refusal_text=adv_answer,
                 refusal_subtype=adv_reason,
             )
+            # Persist the refusal too so the chat history shows the user
+            # asked + got refused (vs. the message simply vanishing).
+            adv_turn_index = await self._persist_turn(
+                workspace_id=workspace_id,
+                session_id=session_id, original_query=query,
+                resolved_query=resolved_query, ctx_resolution=ctx_resolution,
+                generation=adv_result.generation, query_log_id=query_id,
+            )
+            adv_result.turn_index = adv_turn_index
+            adv_result.session_id = session_id
+            return adv_result
 
         # ---- I-mode short-circuit ----
         # Inventory queries ("what types of docs do I have", "list my
@@ -614,7 +625,7 @@ class Orchestrator:
             # too — without this, asking "what docs do I have?" is the
             # one chat that never makes it into the recent-chats sidebar.
             inv_turn_index = await self._persist_turn(
-                conn=conn, workspace_id=workspace_id,
+                workspace_id=workspace_id,
                 session_id=session_id, original_query=query,
                 resolved_query=resolved_query, ctx_resolution=ctx_resolution,
                 generation=generation, query_log_id=query_id,
@@ -761,12 +772,22 @@ class Orchestrator:
         except QModeNotImplementedError as exc:
             # Q-mode pipeline ships in B4b; return a refusal envelope so
             # the API stays stable.
-            return self._q_mode_refusal_envelope(
+            q_result = self._q_mode_refusal_envelope(
                 query_id=query_id, query=query,
                 rewrites=rewrites, intent=intent, plan=plan,
                 latency_ms=int((time.monotonic() - t0) * 1000),
                 reason=str(exc),
             )
+            # Persist the refusal so it shows up in chat history.
+            q_turn_index = await self._persist_turn(
+                workspace_id=workspace_id,
+                session_id=session_id, original_query=query,
+                resolved_query=resolved_query, ctx_resolution=ctx_resolution,
+                generation=q_result.generation, query_log_id=query_id,
+            )
+            q_result.turn_index = q_turn_index
+            q_result.session_id = session_id
+            return q_result
 
         # Mode-filter fallback: if the specialized mode produced 0 hits
         # but the pre-mode (hybrid) retrieval found something, use the
@@ -1141,7 +1162,7 @@ class Orchestrator:
 
         # B6a — persist the turn + roll the session's carry-forward state.
         turn_index = await self._persist_turn(
-            conn=conn, workspace_id=workspace_id,
+            workspace_id=workspace_id,
             session_id=session_id, original_query=query,
             resolved_query=resolved_query, ctx_resolution=ctx_resolution,
             generation=generation, query_log_id=query_id,
@@ -1511,10 +1532,133 @@ class Orchestrator:
             return (None, None)
         return (resolution.resolved_query, resolution)
 
+    async def ensure_session(
+        self,
+        *,
+        workspace_id: str,
+        conn: Any,  # kept for signature parity; not used (see below)
+        fallback_title: str | None,
+    ) -> str | None:
+        """Auto-create a chat session and return its id. Used by the
+        chat-stream caller BEFORE invoking `chat()` so the caller
+        always knows the session_id, even if `chat()` later raises —
+        which lets the error path still persist the turn against a
+        real session.
+
+        Uses a FRESH connection (not the caller's `conn`) so the
+        session row COMMITS immediately. Subsequent fresh-conn
+        persist calls (in `_persist_turn`) will then be able to see
+        the session — they otherwise wouldn't, because ACID
+        isolation hides uncommitted writes from the request's outer
+        txn.
+
+        Returns None on failure; the caller's chat will then run
+        without a session (no persistence), which is strictly better
+        than 5xx-ing.
+        """
+        from kb.config import get_settings
+        from kb.db.pool import open_connection
+        from kb.domain.chat_memory import create_session
+
+        settings = get_settings()
+        try:
+            async with open_connection(settings.app_database_url) as fresh:
+                async with fresh.transaction():
+                    await fresh.execute(
+                        "SELECT set_config('app.workspace_id', %s, true)",
+                        (workspace_id,),
+                    )
+                    return await create_session(
+                        fresh, workspace_id=workspace_id, title=fallback_title,
+                    )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "ensure_session failed for workspace=%s: %s",
+                workspace_id, exc, exc_info=True,
+            )
+            return None
+
+    async def build_error_chat_result(
+        self,
+        *,
+        workspace_id: str,
+        session_id: str | None,
+        query: str,
+        exc: BaseException,
+        query_id: str | None = None,
+    ) -> ChatResult:
+        """Build a `refused=True` ChatResult for an unexpected pipeline
+        crash AND persist it as a chat_turn. Used by SSE/REST callers
+        to make sure every user message lands in `chat_turns`, even
+        when the pipeline blew up mid-flight.
+
+        UX contract: the caller can stream this back like any other
+        answer envelope. The UI renders the refusal in the thread
+        instead of throwing a generic "Pipeline error" toast and
+        dropping the message from history.
+        """
+        if query_id is None:
+            query_id = str(uuid.uuid4())
+
+        err_gen = GenerationResult(
+            answer=(
+                "Sorry — something went wrong while answering this. "
+                f"({type(exc).__name__}). Your message has been saved; "
+                "try asking again or rephrase."
+            ),
+            citations=[],
+            refused=True,
+            refusal_reason=f"pipeline_error:{type(exc).__name__}",
+            model_id="orchestrator:error",
+        )
+        result = ChatResult(
+            query_id=query_id,
+            query=query,
+            rewrites={},
+            generation=err_gen,
+            hits=[],
+            crag_score=0.0,
+            latency_ms=0,
+            faithfulness_verdict="skipped",
+            faithfulness_score=0.0,
+            faithfulness_regenerations=0,
+            faithfulness_model_id=None,
+            citation_modalities=[],
+            intent=None,
+            intent_confidence=None,
+            mode=None,
+            plan=None,
+            session_id=session_id,
+            resolved_query=None,
+            context_resolution=None,
+            turn_index=None,
+            conflict_resolutions=[],
+        )
+
+        if session_id:
+            try:
+                turn_index = await self._persist_turn(
+                    workspace_id=workspace_id,
+                    session_id=session_id,
+                    original_query=query,
+                    resolved_query=None,
+                    ctx_resolution=None,
+                    generation=err_gen,
+                    query_log_id=query_id,
+                )
+                if turn_index is not None:
+                    result.turn_index = turn_index
+            except Exception as inner:  # noqa: BLE001
+                logger.warning(
+                    "build_error_chat_result: persist failed too: %s",
+                    inner, exc_info=True,
+                )
+
+        return result
+
     async def _persist_turn(
         self,
         *,
-        conn: Any,
         workspace_id: str,
         session_id: str | None,
         original_query: str,
@@ -1522,220 +1666,195 @@ class Orchestrator:
         ctx_resolution: ContextResolution | None,
         generation: GenerationResult,
         query_log_id: str,
+        # `conn` kept for backward compat but no longer used — see
+        # docstring. New callers should omit it.
+        conn: Any = None,
     ) -> int | None:
-        """B6a — append a chat_turns row and roll the session's
-        carry-forward state. Returns the new turn_index, or None when
-        persistence is impossible (no session_id / no conn).
+        """Append a chat_turns row and roll the session's carry-forward
+        state. Returns the new turn_index, or None when persistence is
+        impossible (no session_id).
 
-        Persistence failures used to swallow `Exception` and return None
-        silently — that produced the "my chat dropped a turn" bug: a
-        retrieve-stage error left the txn aborted, insert_turn raised
-        `InFailedSqlTransaction`, the except clause hid it, the user
-        got their answer over SSE but the row never made it to disk.
-        On the NEXT successful turn, MAX(turn_index)+1 collapsed back
-        to where the lost turn would have lived — looking from the
-        sidebar like the whole conversation was 2 turns when the user
-        knew it was 3+.
+        IMPORTANT: opens its OWN fresh DB connection. The request's
+        outer txn (from `kb_app_connection`) is intentionally NOT used,
+        because:
 
-        Fix:
-          - SAVEPOINT-wrap insert_turn so a poisoned outer txn can be
-            rolled back to a clean point and the insert can succeed
-            on its own.
-          - LOG every failure at WARNING with the exception. Silent
-            persistence failures are unacceptable; if it can't save,
-            the operator needs to know.
-          - Read/update of carry-forward state stays best-effort
-            because it's strictly cosmetic, but it also now logs.
+          - The chat pipeline runs many SELECTs inside the outer txn.
+            If any of them aborts the PG txn (e.g. a `::uuid` cast
+            against an entity name like "aurangabad"), then EVERY
+            subsequent SQL — including the chat_turn INSERT —
+            silently fails with "current transaction is aborted",
+            and at __aexit__ the outer txn ROLLS BACK, taking the
+            chat_turn row with it.
+          - The user side sees the answer streamed via SSE but the
+            row never lands. Indistinguishable from "my chat lost a
+            turn". This was the actual root cause behind every chat-
+            persistence bug between c977b88 and d3d3bbf.
+
+        Fresh-conn persistence breaks the coupling entirely. Whatever
+        the pipeline did to the outer txn, the persist transaction is
+        independent: it BEGINs, INSERTs, COMMITs, and the row is on
+        disk before the request returns.
+
+        Best-effort writes (title backfill, carry-forward update,
+        tier-2 summary) stay inside the SAME fresh txn but are each
+        wrapped in their own SAVEPOINT so a failure in one doesn't
+        roll back the chat_turn INSERT.
+
+        Hard input validation: `carry_forward_entities` is `uuid[]` in
+        the schema. The LLM context resolver may return arbitrary
+        strings — those are filtered out before the UPDATE.
         """
-        if not session_id or conn is None:
+        if not session_id:
             return None
+
+        from kb.config import get_settings
+        from kb.db.pool import open_connection
         from kb.domain.chat_memory import (
             insert_turn,
             read_session,
             update_session_carry_forward,
         )
-        # Confirm the session exists in this workspace (cheap belt-and-braces).
-        try:
-            session = await read_session(conn, session_id=session_id)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "chat_turn persist: read_session(%s) failed: %s",
-                session_id, exc, exc_info=True,
-            )
-            return None
-        if session is None:
-            return None
 
-        citations_payload = [
-            c.model_dump(mode="json") for c in (generation.citations or [])
-        ]
-        context_used = (
-            ctx_resolution.to_dict() if ctx_resolution
-            else {"resolved_query": resolved_query}
-        )
+        settings = get_settings()
 
-        # SAVEPOINT-wrap the insert. If the outer txn is in any kind of
-        # aborted state (e.g. a retrieval channel raised inside the
-        # parallel asyncio.gather), ROLLBACK TO SAVEPOINT clears the
-        # poison so the insert can complete on its own.
-        sp_open = False
         try:
-            await conn.execute("SAVEPOINT persist_turn_insert")
-            sp_open = True
-        except Exception as exc:  # noqa: BLE001
-            # If even SAVEPOINT fails, the conn is so broken that we
-            # can't persist at all — but we still want the user's
-            # answer to surface. Log and bail.
-            logger.warning(
-                "chat_turn persist: SAVEPOINT failed for session=%s: %s",
-                session_id, exc, exc_info=True,
-            )
-            return None
+            async with open_connection(settings.app_database_url) as fresh:
+                async with fresh.transaction():
+                    # Set RLS context for this fresh txn.
+                    await fresh.execute(
+                        "SELECT set_config('app.workspace_id', %s, true)",
+                        (workspace_id,),
+                    )
 
-        turn_index: int | None = None
-        try:
-            _, turn_index = await insert_turn(
-                conn,
-                workspace_id=workspace_id,
-                session_id=session_id,
-                user_query=original_query,
-                resolved_query=resolved_query,
-                answer=generation.answer,
-                citations=citations_payload,
-                context_used=context_used,
-                query_log_id=query_log_id,
-            )
-            await conn.execute("RELEASE SAVEPOINT persist_turn_insert")
-            sp_open = False
-        except Exception as exc:  # noqa: BLE001
+                    # Confirm the session exists in this workspace.
+                    session = await read_session(fresh, session_id=session_id)
+                    if session is None:
+                        logger.warning(
+                            "chat_turn persist: session %s not found in "
+                            "workspace %s (RLS denied or deleted)",
+                            session_id, workspace_id,
+                        )
+                        return None
+
+                    citations_payload = [
+                        c.model_dump(mode="json")
+                        for c in (generation.citations or [])
+                    ]
+                    context_used = (
+                        ctx_resolution.to_dict() if ctx_resolution
+                        else {"resolved_query": resolved_query}
+                    )
+
+                    # Primary write — the chat_turn row. Failures here
+                    # propagate; the outer try/except logs + returns None.
+                    _, turn_index = await insert_turn(
+                        fresh,
+                        workspace_id=workspace_id,
+                        session_id=session_id,
+                        user_query=original_query,
+                        resolved_query=resolved_query,
+                        answer=generation.answer,
+                        citations=citations_payload,
+                        context_used=context_used,
+                        query_log_id=query_log_id,
+                    )
+
+                    # Helper for cosmetic writes — each gets its own
+                    # SAVEPOINT so one failure can't kill the others or
+                    # the chat_turn row above.
+                    async def best_effort_write(label: str, fn) -> None:
+                        sp_name = f"persist_extra_{label}"
+                        sp_active = False
+                        try:
+                            await fresh.execute(f"SAVEPOINT {sp_name}")
+                            sp_active = True
+                            await fn()
+                            await fresh.execute(f"RELEASE SAVEPOINT {sp_name}")
+                            sp_active = False
+                        except Exception as exc:
+                            logger.warning(
+                                "chat_turn persist: %s failed "
+                                "(chat_turn safe via savepoint): %s",
+                                label, exc,
+                            )
+                            if sp_active:
+                                try:
+                                    await fresh.execute(
+                                        f"ROLLBACK TO SAVEPOINT {sp_name}"
+                                    )
+                                    await fresh.execute(
+                                        f"RELEASE SAVEPOINT {sp_name}"
+                                    )
+                                except Exception:
+                                    pass
+
+                    # Title backfill — only the very first turn.
+                    if turn_index == 0 and not session.title:
+                        title = (original_query or "").strip()[:120] or "Untitled chat"
+
+                        async def _backfill_title() -> None:
+                            await fresh.execute(
+                                "UPDATE chat_sessions SET title = %s "
+                                "WHERE id = %s AND title IS NULL",
+                                (title, session_id),
+                            )
+
+                        await best_effort_write("title_backfill", _backfill_title)
+
+                    # Carry-forward — UUIDs only.
+                    if ctx_resolution and (
+                        ctx_resolution.new_entities
+                        or ctx_resolution.new_filters
+                        or ctx_resolution.refinement_of_prior
+                    ):
+                        import re as _re
+                        _UUID_RE = _re.compile(
+                            r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
+                            r"[0-9a-f]{4}-[0-9a-f]{12}$",
+                            _re.IGNORECASE,
+                        )
+                        valid_new = [
+                            e for e in ctx_resolution.new_entities
+                            if isinstance(e, str) and _UUID_RE.match(e)
+                            and e not in session.carry_forward_entities
+                        ]
+                        new_entities_combined = (
+                            list(session.carry_forward_entities) + valid_new
+                        )
+                        merged_filters = {
+                            **(session.carry_forward_filters or {}),
+                            **(ctx_resolution.new_filters or {}),
+                        }
+                        should_update = bool(valid_new) or merged_filters != (
+                            session.carry_forward_filters or {}
+                        )
+                        if should_update:
+                            async def _roll() -> None:
+                                await update_session_carry_forward(
+                                    fresh,
+                                    session_id=session_id,
+                                    carry_forward_entities=new_entities_combined,
+                                    carry_forward_filters=merged_filters,
+                                )
+
+                            await best_effort_write("carry_forward", _roll)
+
+                    # Tier-2 summary refresh.
+                    async def _tier2() -> None:
+                        await self._maybe_refresh_tier2_summary(
+                            conn=fresh, session=session, turn_index=turn_index,
+                        )
+
+                    await best_effort_write("tier2_summary", _tier2)
+
+                    return turn_index
+        except Exception as exc:
             logger.warning(
-                "chat_turn persist: insert_turn failed for session=%s, "
+                "chat_turn persist (fresh conn) failed for session=%s, "
                 "query=%r: %s",
                 session_id, original_query[:80], exc, exc_info=True,
             )
-            if sp_open:
-                try:
-                    await conn.execute("ROLLBACK TO SAVEPOINT persist_turn_insert")
-                    await conn.execute("RELEASE SAVEPOINT persist_turn_insert")
-                except Exception as inner:  # noqa: BLE001
-                    logger.warning(
-                        "chat_turn persist: rollback failed (txn dead): %s", inner,
-                    )
             return None
-
-        # Helper: run a best-effort cosmetic write inside its own
-        # SAVEPOINT so that if it raises (or — worse — silently aborts
-        # the Postgres transaction without raising in Python), the
-        # outer txn stays alive and the chat_turn INSERT still commits.
-        #
-        # This was a real production bug: the carry-forward UPDATE
-        # cast `new_entities` to `uuid[]` but the LLM context resolver
-        # was putting entity NAMES (e.g. "aurangabad") into the list.
-        # The cast failed with "invalid input syntax for type uuid",
-        # PG marked the txn aborted, the Python try/except swallowed
-        # the error so we never knew — and when the dep's outer
-        # `async with conn.transaction()` exited, it ROLLED BACK
-        # everything including the just-inserted chat_turn. From the
-        # outside this looked like "1 of 3 chat turns silently lost".
-        async def best_effort_write(label: str, fn) -> None:
-            sp_name = f"persist_turn_extra_{label}"
-            sp_active = False
-            try:
-                await conn.execute(f"SAVEPOINT {sp_name}")
-                sp_active = True
-                await fn()
-                await conn.execute(f"RELEASE SAVEPOINT {sp_name}")
-                sp_active = False
-            except Exception as exc:
-                logger.warning(
-                    "chat_turn persist: %s failed (txn protected by "
-                    "savepoint, chat_turn safe): %s", label, exc,
-                )
-                if sp_active:
-                    try:
-                        await conn.execute(f"ROLLBACK TO SAVEPOINT {sp_name}")
-                        await conn.execute(f"RELEASE SAVEPOINT {sp_name}")
-                    except Exception as inner:
-                        logger.warning(
-                            "chat_turn persist: %s rollback also failed: %s",
-                            label, inner,
-                        )
-
-        # Backfill the session title from the first user query so the
-        # sidebar's recent-chats list shows something readable instead
-        # of "Untitled" / a raw UUID. Only on the very first turn.
-        if turn_index == 0 and not session.title:
-            title = (original_query or "").strip()[:120] or "Untitled chat"
-
-            async def _backfill_title() -> None:
-                await conn.execute(
-                    "UPDATE chat_sessions SET title = %s WHERE id = %s "
-                    "AND title IS NULL",
-                    (title, session_id),
-                )
-
-            await best_effort_write("title_backfill", _backfill_title)
-
-        # Roll carry-forward state. We append any new entities from
-        # ctx_resolution to the session's existing list.
-        #
-        # Hard input validation: `carry_forward_entities` is `uuid[]`
-        # in the schema but the LLM context resolver returns ARBITRARY
-        # strings (entity names, mentions, sometimes UUIDs). Drop the
-        # non-UUID values — they don't belong in this column. (When the
-        # carry-forward schema grows a "names" channel, this is where
-        # those go.) Skip the whole UPDATE if nothing remains.
-        if ctx_resolution and (
-            ctx_resolution.new_entities
-            or ctx_resolution.new_filters
-            or ctx_resolution.refinement_of_prior
-        ):
-            import re as _re
-            _UUID_RE = _re.compile(
-                r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
-                _re.IGNORECASE,
-            )
-            valid_new = [
-                e for e in ctx_resolution.new_entities
-                if isinstance(e, str) and _UUID_RE.match(e)
-                and e not in session.carry_forward_entities
-            ]
-            new_entities_combined = (
-                list(session.carry_forward_entities) + valid_new
-            )
-            merged_filters = {
-                **(session.carry_forward_filters or {}),
-                **(ctx_resolution.new_filters or {}),
-            }
-            # Only call the UPDATE when something actually changed.
-            should_update = bool(valid_new) or merged_filters != (
-                session.carry_forward_filters or {}
-            )
-            if should_update:
-                async def _roll_carry_forward() -> None:
-                    await update_session_carry_forward(
-                        conn,
-                        session_id=session_id,
-                        carry_forward_entities=new_entities_combined,
-                        carry_forward_filters=merged_filters,
-                    )
-
-                await best_effort_write(
-                    "carry_forward", _roll_carry_forward,
-                )
-
-        # Tier 2 (Design 8) — Mem0-style rolling summary refresh.
-        # Best-effort, same SAVEPOINT protection as the carry-forward
-        # update above so a future failure here can't poison the
-        # outer txn and revert the chat_turn INSERT.
-        async def _tier2_refresh() -> None:
-            await self._maybe_refresh_tier2_summary(
-                conn=conn, session=session, turn_index=turn_index,
-            )
-
-        await best_effort_write("tier2_summary", _tier2_refresh)
-
-        return turn_index
 
     async def _maybe_refresh_tier2_summary(
         self,

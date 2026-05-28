@@ -295,16 +295,33 @@ async def post_chat(
                 )
 
     orchestrator = get_orchestrator()
+    # Auto-create session up-front so the crash-recovery path below
+    # can still persist a turn under a real session_id (matches the
+    # SSE runner's contract — every user message lands in chat_turns).
+    effective_session_id: str | None = body.session_id
+    if effective_session_id is None:
+        effective_session_id = await orchestrator.ensure_session(
+            workspace_id=workspace_id, conn=conn,
+            fallback_title=(body.query or "").strip()[:120] or None,
+        )
     try:
         result = await orchestrator.chat(
             body.query, workspace_id=workspace_id, conn=conn,
             requested_mode=body.mode,
-            session_id=body.session_id,
+            session_id=effective_session_id,
             file_ids=body.file_ids,
         )
     except Exception as exc:  # noqa: BLE001
+        # Pipeline crashed. Return a refused-envelope response (200
+        # with refused=True) instead of 500, AND persist the turn so
+        # the user's question shows up in chat history with a clear
+        # error card. Matches the SSE behavior.
         _LOG.exception("chat pipeline failed: %s", exc)
-        raise QueryPipelineError(str(exc)) from exc
+        result = await orchestrator.build_error_chat_result(
+            workspace_id=workspace_id,
+            session_id=effective_session_id,
+            query=body.query, exc=exc,
+        )
 
     await _write_query_log(
         conn,
