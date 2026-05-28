@@ -1610,6 +1610,56 @@ async def extract_kv_tables_file_impl(file_id: str) -> None:
                 seen_hint.add(key)
                 existing_scalar_hints.setdefault(str(dt), []).append(str(fn))
 
+            # Bug D Phase 5: existing COLUMN names per sub-entity table.
+            # Same idea as scalar hints but for the jsonb columns of
+            # sub-entity tables (e.g. ApprovalsRequired's
+            # `approval_description` column). Without this hint, the
+            # LLM kept inventing fresh column names per doc within the
+            # same table — same concept, different keys, broken
+            # cross-doc aggregation. Discovered from BOTH the
+            # canonical `schema_fields` layer (sub-entity entity_id)
+            # AND the observed `extracted_entities.fields` jsonb keys
+            # (so newer workspaces with nothing promoted still see
+            # SOMETHING to reuse).
+            cur = await conn.execute(
+                """
+                SELECT subentity, col_name FROM (
+                    SELECT se.name AS subentity, sf.name AS col_name,
+                           1000000 AS pri
+                      FROM schema_fields sf
+                      JOIN schema_entities se ON se.id = sf.entity_id
+                                              AND se.kind = 'sub_entity'
+                                              AND se.lifecycle_state = 'active'
+                     WHERE sf.workspace_id = %s
+                       AND sf.lifecycle_state = 'active'
+                  UNION ALL
+                    SELECT se.name AS subentity,
+                           jsonb_object_keys(ee.fields) AS col_name,
+                           count(*)::int AS pri
+                      FROM extracted_entities ee
+                      JOIN schema_entities se ON se.id = ee.schema_entity_id
+                                              AND se.kind = 'sub_entity'
+                                              AND se.lifecycle_state = 'active'
+                     WHERE ee.workspace_id = %s
+                       AND ee.fields IS NOT NULL
+                     GROUP BY se.name, jsonb_object_keys(ee.fields)
+                ) all_cols
+                ORDER BY subentity, pri DESC, col_name
+                """,
+                (workspace_id_str, workspace_id_str),
+            )
+            col_hint_rows = await cur.fetchall()
+            existing_sub_entity_column_hints: dict[str, list[str]] = {}
+            seen_col_hint: set[tuple[str, str]] = set()
+            for table_name, col_name in col_hint_rows:
+                key = (str(table_name), str(col_name))
+                if key in seen_col_hint:
+                    continue
+                seen_col_hint.add(key)
+                existing_sub_entity_column_hints.setdefault(
+                    str(table_name), [],
+                ).append(str(col_name))
+
     chunk_indexed_text = build_chunk_indexed_text(chunks) if chunks else ""
 
     # Phase 2: KV+Tables LLM call (single round-trip).
@@ -1620,6 +1670,9 @@ async def extract_kv_tables_file_impl(file_id: str) -> None:
             doc_type_hint=None,
             existing_sub_entity_hints=existing_hints or None,
             existing_scalar_hints=existing_scalar_hints or None,
+            existing_sub_entity_column_hints=(
+                existing_sub_entity_column_hints or None
+            ),
         )
     except KVTablesExtractionError:
         # Don't block the chain on extractor failure — log + advance

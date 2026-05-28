@@ -128,6 +128,7 @@ def _build_user_prompt(
     doc_type_hint: str | None = None,
     existing_sub_entity_hints: list[str] | None = None,
     existing_scalar_hints: dict[str, list[str]] | None = None,
+    existing_sub_entity_column_hints: dict[str, list[str]] | None = None,
 ) -> str:
     """Build the user-prompt for one extraction call.
 
@@ -172,6 +173,33 @@ def _build_user_prompt(
             line = f"  {dt}: {', '.join(shown)}"
             if len(fns) > len(shown):
                 line += f" (+{len(fns) - len(shown)} more)"
+            lines.append(line)
+        hints.append("\n".join(lines))
+    if existing_sub_entity_column_hints:
+        # Per-table column name catalog. Bug D Phase 5 — the prompt
+        # previously listed existing TABLE names but said nothing
+        # about table COLUMNS, so the LLM kept inventing fresh column
+        # names per doc within the same sub-entity table. Examples
+        # from construction: `ApprovalsRequired.approval_description`
+        # in one doc, `ApprovalsRequired.approval_details` in another
+        # — same concept, different keys, no cross-doc aggregation
+        # possible.
+        lines = [
+            "Existing column names per sub-entity table in this "
+            "workspace. When you extract a TABLE ROW whose column "
+            "MEANING matches one of these, REUSE the exact existing "
+            "column name. Don't paraphrase (e.g. don't write "
+            "`approval_details` if `approval_description` is already "
+            "used in the same workspace's ApprovalsRequired rows).",
+        ]
+        for table_name in sorted(existing_sub_entity_column_hints):
+            cols = existing_sub_entity_column_hints[table_name]
+            if not cols:
+                continue
+            shown = cols[:30]
+            line = f"  {table_name}: {', '.join(shown)}"
+            if len(cols) > len(shown):
+                line += f" (+{len(cols) - len(shown)} more)"
             lines.append(line)
         hints.append("\n".join(lines))
     hint_block = ("\n\n".join(hints) + "\n\n") if hints else ""
@@ -249,6 +277,7 @@ class KVTablesExtractor(Protocol):
         doc_type_hint: str | None = None,
         existing_sub_entity_hints: list[str] | None = None,
         existing_scalar_hints: dict[str, list[str]] | None = None,
+        existing_sub_entity_column_hints: dict[str, list[str]] | None = None,
     ) -> KVTablesPayload: ...
 
 
@@ -267,6 +296,7 @@ class IdentityKVTablesExtractor:
         doc_type_hint: str | None = None,
         existing_sub_entity_hints: list[str] | None = None,
         existing_scalar_hints: dict[str, list[str]] | None = None,
+        existing_sub_entity_column_hints: dict[str, list[str]] | None = None,
     ) -> KVTablesPayload:
         return KVTablesPayload(model_id="identity")
 
@@ -597,6 +627,7 @@ class GeminiKVTablesExtractor:
         doc_type_hint: str | None = None,
         existing_sub_entity_hints: list[str] | None = None,
         existing_scalar_hints: dict[str, list[str]] | None = None,
+        existing_sub_entity_column_hints: dict[str, list[str]] | None = None,
     ) -> KVTablesPayload:
         from google.genai import types
 
@@ -612,6 +643,7 @@ class GeminiKVTablesExtractor:
             doc_type_hint=doc_type_hint,
             existing_sub_entity_hints=existing_sub_entity_hints,
             existing_scalar_hints=existing_scalar_hints,
+            existing_sub_entity_column_hints=existing_sub_entity_column_hints,
         )
         try:
             response = await self._client.aio.models.generate_content(
@@ -688,6 +720,7 @@ class AnthropicKVTablesExtractor:
         doc_type_hint: str | None = None,
         existing_sub_entity_hints: list[str] | None = None,
         existing_scalar_hints: dict[str, list[str]] | None = None,
+        existing_sub_entity_column_hints: dict[str, list[str]] | None = None,
     ) -> KVTablesPayload:
         import anthropic
 
@@ -697,6 +730,7 @@ class AnthropicKVTablesExtractor:
             doc_type_hint=doc_type_hint,
             existing_sub_entity_hints=existing_sub_entity_hints,
             existing_scalar_hints=existing_scalar_hints,
+            existing_sub_entity_column_hints=existing_sub_entity_column_hints,
         )
         try:
             response = await self._client.messages.create(
