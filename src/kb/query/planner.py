@@ -497,9 +497,101 @@ class LLMPlanner:
             q_payload=plan.q_payload, notes=plan.notes,
             model_id=self._model,
         )
+        # Phase 2.4 — K-mode chain-aware override.
+        plan = await self._maybe_route_to_k_mode(
+            query, plan, conn=conn, workspace_id=workspace_id,
+        )
         return await self._maybe_augment_q(
             query, plan, conn=conn, workspace_id=workspace_id,
         )
+
+    async def _maybe_route_to_k_mode(
+        self,
+        query: str,
+        plan: Plan,
+        *,
+        conn: Any = None,
+        workspace_id: str | None = None,
+    ) -> Plan:
+        """Phase 2.4 — override plan.mode to K when the query references
+        a file (or its chain) that's part of an active doc_chain.
+
+        Reproducer (construction q020): query "Is the EPC contract still
+        in original form?" classifies as `factoid` → H-mode → misses the
+        chain awareness even though that EPC contract has multiple
+        amendments tracked in doc_chain_members. The planner's LLM call
+        doesn't see workspace data, so this heuristic is the only way
+        to surface the chain signal.
+
+        Heuristic: tokenize chain titles + member file names + member
+        doc_types. If any distinctive token (>=4 chars, not a stopword)
+        appears in the query, override to K-mode with chain_view
+        defaulting to the LLM-picked value or 'current_version'.
+
+        Only fires when plan.mode == 'H' (default) — explicit non-H
+        picks from the LLM (like S for scoped summarize) stay.
+        """
+        if plan.mode != "H" or conn is None or not workspace_id:
+            return plan
+        # Generic words that would over-trigger if matched alone.
+        _STOPTOKENS = frozenset({
+            "the", "and", "for", "with", "into", "from", "this", "that",
+            "these", "those", "have", "been", "your", "their", "about",
+            "doc", "docs", "file", "files", "document", "documents",
+            "type", "types", "info", "data", "list", "show", "tell",
+            "amendment_to_master_services_agreement",  # too long, exact
+            "master_services_agreement",
+        })
+        try:
+            cur = await conn.execute(
+                """
+                SELECT DISTINCT c.title, f.name, f.inferred_doc_type
+                  FROM doc_chain_members m
+                  JOIN doc_chains c ON c.id = m.chain_id
+                  JOIN files f ON f.id = m.doc_id
+                 WHERE m.workspace_id = %s
+                   AND f.lifecycle_state NOT IN ('failed', 'deleted')
+                """,
+                (workspace_id,),
+            )
+            rows = await cur.fetchall()
+        except Exception:
+            return plan
+        if not rows:
+            return plan
+
+        query_lc = query.lower()
+
+        def _toks(s: str | None) -> list[str]:
+            if not s:
+                return []
+            return [
+                t for t in re.split(r"[\s_\-.]+", s.lower())
+                if len(t) >= 4 and t not in _STOPTOKENS
+            ]
+
+        for title, fname, doctype in rows:
+            # Strip the file extension off fname before tokenizing.
+            name_root = (fname or "").rsplit(".", 1)[0]
+            candidates = _toks(title) + _toks(name_root) + _toks(doctype)
+            for tok in candidates:
+                if tok in query_lc:
+                    return Plan(
+                        mode="K",
+                        intent=plan.intent,
+                        intent_confidence=plan.intent_confidence,
+                        seed_entities=plan.seed_entities,
+                        file_ids=plan.file_ids,
+                        doc_types=plan.doc_types,
+                        unit_types=plan.unit_types,
+                        chain_view=plan.chain_view or "current_version",
+                        field_filters=plan.field_filters,
+                        q_payload=plan.q_payload,
+                        notes=(plan.notes or "")
+                        + f" [k_override: chain token '{tok}']",
+                        model_id=plan.model_id,
+                    )
+        return plan
 
     async def _maybe_augment_q(
         self,

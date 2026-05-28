@@ -384,6 +384,114 @@ async def mentions_exact_channel(
 
 
 # ---------------------------------------------------------------------------
+# Phase 2.5 — field-name exact match channel.
+#
+# When the user's query mentions a specific extracted field name (e.g.
+# "project site location", "indemnification cap", "effective date"),
+# we want to surface the file that HAS that field as a top hit. BM25
+# already does some of this, but it scores by token frequency and
+# misses the "exact field name as semantic anchor" signal — for
+# construction q006 ("project site location"), BM25 was returning
+# files mentioning "project" or "location" generically while the file
+# with a literal `site_location` field went unranked.
+#
+# This channel:
+#  1. Tokenizes the query into >=4-char tokens (skipping stopwords).
+#  2. Finds proposed_fields rows whose `field_name` overlaps any
+#     query token (token may be inside the snake_case field name).
+#  3. Returns a synthetic Hit per matching (file, field) — score
+#     baked at 0.95 (just below mentions_exact's 1.0) so it surfaces
+#     near the top of RRF but doesn't dominate.
+# ---------------------------------------------------------------------------
+
+
+_FIELD_NAME_STOPTOKENS = frozenset({
+    "the", "and", "for", "with", "into", "from", "this", "that",
+    "these", "those", "have", "your", "their", "about", "what",
+    "where", "when", "which", "type", "types", "info", "data",
+    "list", "show", "tell", "name", "file", "files", "doc", "docs",
+    "value", "field", "fields",
+})
+
+
+async def field_name_exact_channel(
+    conn: Any,
+    *,
+    workspace_id: str,
+    query: str,
+    limit: int = TOP_K_PER_CHANNEL,
+) -> list[Hit]:
+    """Surface files whose `proposed_fields.field_name` token-overlaps
+    the user's query. Score 0.95 (high but below mentions_exact's 1.0).
+
+    See module-level note above the channel definition for rationale.
+    """
+    if not query.strip():
+        return []
+    import re as _re
+    # Tokenize: lowercase, split on non-word, drop short + stoptokens.
+    raw_tokens = _re.split(r"[^a-zA-Z0-9_]+", query.lower())
+    tokens = [
+        t for t in raw_tokens
+        if len(t) >= 4 and t not in _FIELD_NAME_STOPTOKENS
+    ]
+    if not tokens:
+        return []
+
+    # Build the SQL pattern set. Match if any field_name CONTAINS the
+    # token (snake_case fields naturally embed the keyword:
+    # `site_location` matches token `location`).
+    patterns = [f"%{t}%" for t in tokens]
+    rows = await _run_channel_query(
+        conn, "ch_field_name_exact",
+        # DISTINCT ON (file_id, field_name) so multi-value fields
+        # (e.g. value_text differs across versions) don't flood the
+        # results with duplicates from the same file.
+        "SELECT DISTINCT ON (pf.file_id, pf.field_name) "
+        "  pf.file_id::text, pf.field_name, pf.value_text, "
+        "  pf.inferred_doc_type, f.name "
+        "FROM proposed_fields pf "
+        "JOIN files f ON f.id = pf.file_id "
+        "  AND f.lifecycle_state NOT IN ('failed', 'deleted') "
+        "WHERE pf.workspace_id = %s "
+        "  AND pf.field_name ILIKE ANY (%s) "
+        "  AND coalesce(pf.value_text, '') <> '' "
+        "ORDER BY pf.file_id, pf.field_name, pf.created_at DESC "
+        "LIMIT %s",
+        (workspace_id, patterns, limit),
+    )
+    if rows is None:
+        return []
+    out: list[Hit] = []
+    for r in rows:
+        file_id = str(r[0])
+        field_name = r[1]
+        value_text = r[2] or ""
+        doc_type = r[3]
+        file_name = r[4]
+        # Synthetic Hit. We use file_id as the Hit id so the citation
+        # path can resolve it (`build_citation` checks
+        # metadata['file_id'] anyway). kind="chunk" so downstream
+        # citation enrichment treats it like any other text hit.
+        snippet = f"**{field_name}**: {value_text}"[:_SNIPPET_MAX]
+        out.append(Hit(
+            id=file_id,
+            kind="chunk",
+            score=0.95,
+            snippet=snippet,
+            metadata={
+                "file_id": file_id,
+                "level": 1,
+                "channel": "field_name_exact",
+                "matched_field_name": field_name,
+                "file_name": file_name,
+                "inferred_doc_type": doc_type,
+            },
+        ))
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Atomic-units rarity channel (decision #8) — now reads from
 # extracted_entities since the nested-entities refactor promoted each
 # atomic_unit row into a typed sub_entity row.
@@ -494,6 +602,8 @@ async def run_all_channels(
         "bm25_chunks": "bm25_chunks_channel",
         "bm25_raptor": "bm25_raptor_channel",
         "mentions_exact": "mentions_exact_channel",
+        # Phase 2.5 — surface files by field-name token match.
+        "field_name_exact": "field_name_exact_channel",
         "sub_entities_rarity": "sub_entities_rarity_channel",
     }
     vec_channels = {

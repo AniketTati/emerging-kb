@@ -596,6 +596,12 @@ def build_conflict_prompt_block(
 
     Returns "" when there's nothing to surface.
     """
+    # Phase 2.3 — render as a structured XML-style block. The generator
+    # system prompt references this tag by name and is instructed to
+    # USE the resolved winners rather than re-derive the resolution
+    # from snippets. Pre-fix the block was inline narrative prose,
+    # which the LLM often skipped past (q020, q023 in construction
+    # v10 were both failures to use a present conflict_block).
     lines: list[str] = []
     for r in resolutions:
         if r.resolution == "consensus":
@@ -606,21 +612,27 @@ def build_conflict_prompt_block(
         )
         if r.resolution == "unresolved":
             lines.append(
-                f"- UNRESOLVED CONFLICT on {r.predicate}: "
-                f"sources disagree ({loser_doc_values}). "
-                f"Surface both values; do not pick one."
+                f'  <conflict predicate="{r.predicate}" status="unresolved">\n'
+                f'    Sources disagree: {loser_doc_values}.\n'
+                f'    Action: surface BOTH values in the answer; do not pick one.\n'
+                f'  </conflict>'
             )
         else:
             lines.append(
-                f"- RESOLVED {r.predicate}: picked '{r.picked_value}' "
-                f"(from doc {picked_doc[:8]}) via {r.resolution}; "
-                f"superseded: {loser_doc_values}. "
-                f"Cite the picked source as authoritative; mention the "
-                f"superseded value only if explanatory."
+                f'  <conflict predicate="{r.predicate}" status="resolved" '
+                f'rule="{r.resolution}">\n'
+                f'    Winner: "{r.picked_value}" (from doc {picked_doc[:8]}).\n'
+                f'    Superseded: {loser_doc_values}.\n'
+                f'    Action: cite the winner as authoritative. Mention\n'
+                f'    superseded values only when they shed light on the\n'
+                f'    disagreement (e.g. "the prior version said X but\n'
+                f'    the latest revision changes it to Y").\n'
+                f'  </conflict>'
             )
     if not lines:
         return ""
     return (
-        "Conflict-resolution context (apply these decisions in your "
-        "answer):\n" + "\n".join(lines)
+        "<conflict_resolution>\n"
+        + "\n".join(lines)
+        + "\n</conflict_resolution>"
     )
