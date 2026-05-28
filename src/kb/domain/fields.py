@@ -35,17 +35,37 @@ async def insert_proposed_field(
     source_char_start: int | None = None,
     source_char_end: int | None = None,
 ) -> str:
+    # Bug D Tier-1 #3: also populate value_numeric + value_currency
+    # so Q-mode aggregations work on rows whose value_text contains
+    # currency symbols / magnitude words / accounting negatives /
+    # Indian comma grouping. The normalizer returns None for
+    # non-numeric inputs (names, dates, free text), and those rows
+    # leave value_numeric NULL — Q-mode SUM/AVG correctly skip them.
+    value_numeric = None
+    value_currency = None
+    try:
+        from kb.extraction.value_normalize import normalize_value
+        nv = normalize_value(value_text)
+        if nv is not None:
+            value_numeric = nv.numeric
+            value_currency = nv.currency
+    except Exception:
+        # Never fail the insert because of a normalizer bug.
+        pass
+
     cur = await conn.execute(
         "INSERT INTO proposed_fields "
         "(file_id, workspace_id, inferred_doc_type, field_name, field_description, "
         "value_text, value_type, is_pii, model_id, "
-        "source_chunk_id, source_char_start, source_char_end) "
-        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+        "source_chunk_id, source_char_start, source_char_end, "
+        "value_numeric, value_currency) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
         "RETURNING id::text",
         (
             file_id, workspace_id, inferred_doc_type, field_name, field_description,
             value_text, value_type, is_pii, model_id,
             source_chunk_id, source_char_start, source_char_end,
+            value_numeric, value_currency,
         ),
     )
     return (await cur.fetchone())[0]

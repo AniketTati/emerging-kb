@@ -116,6 +116,15 @@ ALLOWED_COLUMNS: dict[tuple[str, str], ColumnType] = {
     ("proposed_fields", "field_name"):         "text",
     ("proposed_fields", "value_text"):         "text",
     ("proposed_fields", "value_type"):         "text",
+    # Bug D Tier-1 #3 — normalized numeric form + ISO currency tag.
+    # Populated by kb.extraction.value_normalize during ingest. NULL
+    # for non-numeric fields. Aggregations should SUM/AVG over
+    # value_numeric (a real `numeric` column) instead of casting
+    # value_text — the cast silently NULLs rows formatted with
+    # currency symbols, magnitude words ("22 lakh"), accounting
+    # negatives, or Indian comma grouping.
+    ("proposed_fields", "value_numeric"):      "numeric",
+    ("proposed_fields", "value_currency"):     "text",
     ("proposed_fields", "is_pii"):             "boolean",
     ("proposed_fields", "model_id"):           "text",
     ("proposed_fields", "created_at"):         "timestamptz",
