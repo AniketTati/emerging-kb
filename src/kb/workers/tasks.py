@@ -1576,9 +1576,10 @@ async def extract_kv_tables_file_impl(file_id: str) -> None:
             # the LLM to PREFER the first names listed.
             cur = await conn.execute(
                 """
-                SELECT doctype, field_name FROM (
+                SELECT doctype, field_name, description, pri FROM (
                     SELECT regexp_replace(s.name, '^auto:', '') AS doctype,
                            sf.name AS field_name,
+                           COALESCE(sf.nl_description, '') AS description,
                            1000000 AS pri
                       FROM schema_fields sf
                       JOIN schema_entities se ON se.id = sf.entity_id
@@ -1590,6 +1591,12 @@ async def extract_kv_tables_file_impl(file_id: str) -> None:
                        AND s.name LIKE 'auto:%%'
                   UNION ALL
                     SELECT inferred_doc_type AS doctype, field_name,
+                           COALESCE(
+                               MAX(field_description) FILTER (
+                                   WHERE field_description IS NOT NULL
+                                     AND field_description <> ''
+                               ), ''
+                           ) AS description,
                            count(DISTINCT file_id)::int AS pri
                       FROM proposed_fields
                      WHERE workspace_id = %s
@@ -1601,14 +1608,16 @@ async def extract_kv_tables_file_impl(file_id: str) -> None:
                 (workspace_id_str, workspace_id_str),
             )
             scalar_hint_rows = await cur.fetchall()
-            existing_scalar_hints: dict[str, list[str]] = {}
+            existing_scalar_hints: dict[str, list[tuple[str, str]]] = {}
             seen_hint: set[tuple[str, str]] = set()
-            for dt, fn in scalar_hint_rows:
+            for dt, fn, desc, _pri in scalar_hint_rows:
                 key = (str(dt), str(fn))
                 if key in seen_hint:
                     continue
                 seen_hint.add(key)
-                existing_scalar_hints.setdefault(str(dt), []).append(str(fn))
+                existing_scalar_hints.setdefault(str(dt), []).append(
+                    (str(fn), str(desc or "")),
+                )
 
             # Bug D Phase 5: existing COLUMN names per sub-entity table.
             # Same idea as scalar hints but for the jsonb columns of
@@ -1623,8 +1632,9 @@ async def extract_kv_tables_file_impl(file_id: str) -> None:
             # SOMETHING to reuse).
             cur = await conn.execute(
                 """
-                SELECT subentity, col_name FROM (
+                SELECT subentity, col_name, description, pri FROM (
                     SELECT se.name AS subentity, sf.name AS col_name,
+                           COALESCE(sf.nl_description, '') AS description,
                            1000000 AS pri
                       FROM schema_fields sf
                       JOIN schema_entities se ON se.id = sf.entity_id
@@ -1635,6 +1645,7 @@ async def extract_kv_tables_file_impl(file_id: str) -> None:
                   UNION ALL
                     SELECT se.name AS subentity,
                            jsonb_object_keys(ee.fields) AS col_name,
+                           '' AS description,   -- inferred-only keys have no description
                            count(*)::int AS pri
                       FROM extracted_entities ee
                       JOIN schema_entities se ON se.id = ee.schema_entity_id
@@ -1649,16 +1660,16 @@ async def extract_kv_tables_file_impl(file_id: str) -> None:
                 (workspace_id_str, workspace_id_str),
             )
             col_hint_rows = await cur.fetchall()
-            existing_sub_entity_column_hints: dict[str, list[str]] = {}
+            existing_sub_entity_column_hints: dict[str, list[tuple[str, str]]] = {}
             seen_col_hint: set[tuple[str, str]] = set()
-            for table_name, col_name in col_hint_rows:
+            for table_name, col_name, desc, _pri in col_hint_rows:
                 key = (str(table_name), str(col_name))
                 if key in seen_col_hint:
                     continue
                 seen_col_hint.add(key)
                 existing_sub_entity_column_hints.setdefault(
                     str(table_name), [],
-                ).append(str(col_name))
+                ).append((str(col_name), str(desc or "")))
 
     chunk_indexed_text = build_chunk_indexed_text(chunks) if chunks else ""
 

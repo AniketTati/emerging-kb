@@ -127,8 +127,8 @@ def _build_user_prompt(
     chunk_indexed_text: str,
     doc_type_hint: str | None = None,
     existing_sub_entity_hints: list[str] | None = None,
-    existing_scalar_hints: dict[str, list[str]] | None = None,
-    existing_sub_entity_column_hints: dict[str, list[str]] | None = None,
+    existing_scalar_hints: dict[str, list[tuple[str, str]]] | None = None,
+    existing_sub_entity_column_hints: dict[str, list[tuple[str, str]]] | None = None,
 ) -> str:
     """Build the user-prompt for one extraction call.
 
@@ -152,55 +152,73 @@ def _build_user_prompt(
             + ", ".join(existing_sub_entity_hints)
         )
     if existing_scalar_hints:
-        # Format: per-doctype field name catalog. Capped to keep the
-        # prompt budget reasonable on big workspaces (>20 doctypes,
-        # >50 fields/doctype is uncommon but happens).
+        # Format: per-doctype field name catalog WITH descriptions.
+        # Bug D extension — passing only names told the LLM "reuse
+        # this name" but gave it no guidance on what the field
+        # MEANS. Descriptions edited by users in Schema Studio
+        # (Phase 4) ARE the extraction guidance for that field;
+        # surfacing them in the prompt makes user edits load-bearing.
+        # Format: `field_name [— description]`. Descriptions are
+        # truncated to keep token budget sane.
         lines = [
-            "Existing scalar field names by doc_type in this workspace. "
-            "When you extract a scalar whose MEANING matches one of "
-            "these names, REUSE the exact existing name (snake_case + "
-            "everything). Only invent a new name when the concept is "
-            "genuinely different — never paraphrase an established "
-            "name (e.g. don't write `total_cost_inr` if "
-            "`total_cost_premium` is already established for "
-            "change_order docs).",
+            "Existing scalar field names by doc_type in this workspace, "
+            "with their descriptions when defined. When you extract a "
+            "scalar whose MEANING matches one of these names, REUSE the "
+            "exact existing name (snake_case + everything) AND extract "
+            "the value per the listed description. Only invent a new "
+            "name when the concept is genuinely different — never "
+            "paraphrase an established name (e.g. don't write "
+            "`total_cost_inr` if `total_cost_premium` is already "
+            "established for change_order docs).",
         ]
         for dt in sorted(existing_scalar_hints):
             fns = existing_scalar_hints[dt]
             if not fns:
                 continue
             shown = fns[:50]  # cap per-doctype
-            line = f"  {dt}: {', '.join(shown)}"
+            lines.append(f"  {dt}:")
+            for name, desc in shown:
+                d = (desc or "").strip()
+                if d:
+                    # Truncate description to ~120 chars to keep prompt small
+                    d_short = d if len(d) <= 120 else (d[:117] + "...")
+                    lines.append(f"    {name}  —  {d_short}")
+                else:
+                    lines.append(f"    {name}")
             if len(fns) > len(shown):
-                line += f" (+{len(fns) - len(shown)} more)"
-            lines.append(line)
+                lines.append(f"    …and {len(fns) - len(shown)} more not shown")
         hints.append("\n".join(lines))
     if existing_sub_entity_column_hints:
-        # Per-table column name catalog. Bug D Phase 5 — the prompt
-        # previously listed existing TABLE names but said nothing
-        # about table COLUMNS, so the LLM kept inventing fresh column
-        # names per doc within the same sub-entity table. Examples
-        # from construction: `ApprovalsRequired.approval_description`
-        # in one doc, `ApprovalsRequired.approval_details` in another
-        # — same concept, different keys, no cross-doc aggregation
-        # possible.
+        # Per-table column name catalog WITH descriptions. Bug D
+        # Phase 5 — the prompt previously listed existing TABLE
+        # names but said nothing about table COLUMNS, so the LLM
+        # kept inventing fresh column names per doc within the same
+        # sub-entity table. Now also includes column descriptions
+        # when users have written them.
         lines = [
             "Existing column names per sub-entity table in this "
-            "workspace. When you extract a TABLE ROW whose column "
-            "MEANING matches one of these, REUSE the exact existing "
-            "column name. Don't paraphrase (e.g. don't write "
-            "`approval_details` if `approval_description` is already "
-            "used in the same workspace's ApprovalsRequired rows).",
+            "workspace, with their descriptions when defined. When "
+            "you extract a TABLE ROW whose column MEANING matches one "
+            "of these, REUSE the exact existing column name AND populate "
+            "the value per the listed description. Don't paraphrase "
+            "(e.g. don't write `approval_details` if `approval_description` "
+            "is already used in the same workspace's ApprovalsRequired rows).",
         ]
         for table_name in sorted(existing_sub_entity_column_hints):
             cols = existing_sub_entity_column_hints[table_name]
             if not cols:
                 continue
             shown = cols[:30]
-            line = f"  {table_name}: {', '.join(shown)}"
+            lines.append(f"  {table_name}:")
+            for name, desc in shown:
+                d = (desc or "").strip()
+                if d:
+                    d_short = d if len(d) <= 120 else (d[:117] + "...")
+                    lines.append(f"    {name}  —  {d_short}")
+                else:
+                    lines.append(f"    {name}")
             if len(cols) > len(shown):
-                line += f" (+{len(cols) - len(shown)} more)"
-            lines.append(line)
+                lines.append(f"    …and {len(cols) - len(shown)} more not shown")
         hints.append("\n".join(lines))
     hint_block = ("\n\n".join(hints) + "\n\n") if hints else ""
 
@@ -276,8 +294,8 @@ class KVTablesExtractor(Protocol):
         chunk_indexed_text: str,
         doc_type_hint: str | None = None,
         existing_sub_entity_hints: list[str] | None = None,
-        existing_scalar_hints: dict[str, list[str]] | None = None,
-        existing_sub_entity_column_hints: dict[str, list[str]] | None = None,
+        existing_scalar_hints: dict[str, list[tuple[str, str]]] | None = None,
+        existing_sub_entity_column_hints: dict[str, list[tuple[str, str]]] | None = None,
     ) -> KVTablesPayload: ...
 
 
@@ -295,8 +313,8 @@ class IdentityKVTablesExtractor:
         chunk_indexed_text: str,
         doc_type_hint: str | None = None,
         existing_sub_entity_hints: list[str] | None = None,
-        existing_scalar_hints: dict[str, list[str]] | None = None,
-        existing_sub_entity_column_hints: dict[str, list[str]] | None = None,
+        existing_scalar_hints: dict[str, list[tuple[str, str]]] | None = None,
+        existing_sub_entity_column_hints: dict[str, list[tuple[str, str]]] | None = None,
     ) -> KVTablesPayload:
         return KVTablesPayload(model_id="identity")
 
@@ -626,8 +644,8 @@ class GeminiKVTablesExtractor:
         chunk_indexed_text: str,
         doc_type_hint: str | None = None,
         existing_sub_entity_hints: list[str] | None = None,
-        existing_scalar_hints: dict[str, list[str]] | None = None,
-        existing_sub_entity_column_hints: dict[str, list[str]] | None = None,
+        existing_scalar_hints: dict[str, list[tuple[str, str]]] | None = None,
+        existing_sub_entity_column_hints: dict[str, list[tuple[str, str]]] | None = None,
     ) -> KVTablesPayload:
         from google.genai import types
 
@@ -719,8 +737,8 @@ class AnthropicKVTablesExtractor:
         chunk_indexed_text: str,
         doc_type_hint: str | None = None,
         existing_sub_entity_hints: list[str] | None = None,
-        existing_scalar_hints: dict[str, list[str]] | None = None,
-        existing_sub_entity_column_hints: dict[str, list[str]] | None = None,
+        existing_scalar_hints: dict[str, list[tuple[str, str]]] | None = None,
+        existing_sub_entity_column_hints: dict[str, list[tuple[str, str]]] | None = None,
     ) -> KVTablesPayload:
         import anthropic
 
