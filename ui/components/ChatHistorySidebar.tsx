@@ -63,9 +63,33 @@ export function ChatHistorySidebar() {
     }
   }, []);
 
+  // Refresh triggers — be aggressive, the list is cheap to fetch:
+  //   - Mount (initial load)
+  //   - Turn count changes (a new turn just landed → maybe a new session
+  //     also got auto-created)
+  //   - sessionId changes (user switched sessions, started new chat, or
+  //     localStorage-restored on remount → active highlight needs to move)
+  //   - Window focus + tab visibility (user came back from another tab
+  //     or window — DB may have changes from another instance)
+  // Together these cover: "create new chat", "ask follow-up question",
+  // "leave + come back", and "two windows open at once".
   useEffect(() => {
     refresh();
-  }, [refresh, lastTurnCount]);
+  }, [refresh, lastTurnCount, state.sessionId]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onFocus = () => { void refresh(); };
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void refresh();
+    };
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [refresh]);
 
   async function pick(s: SessionInfo) {
     if (selecting) {

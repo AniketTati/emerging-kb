@@ -251,17 +251,24 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     (async () => {
       try {
         const turns = await getSessionTurns(stored);
-        // Empty array can mean the session was deleted server-side
-        // (e.g. user wiped history elsewhere). Clear the stale key so
-        // we don't keep retrying.
-        if (turns.length === 0) {
-          window.localStorage.removeItem(SESSION_LS_KEY);
-          return;
+        if (turns.length > 0) {
+          dispatch({ type: "load_session", sessionId: stored, turns });
         }
-        dispatch({ type: "load_session", sessionId: stored, turns });
-      } catch {
-        // Network / 404 — drop the stale key so we don't loop on it.
-        window.localStorage.removeItem(SESSION_LS_KEY);
+        // Empty turns: could be a deleted session OR a session that was
+        // auto-created but hasn't had its first message yet (the user
+        // hit "New chat" and reloaded before sending). We intentionally
+        // DON'T clear localStorage here — over-clearing on a transient
+        // state was its own bug. The sidebar will surface the truth on
+        // the next listSessions call; explicit "new_chat" clears the
+        // anchor; a confirmed 404 on the session-info endpoint is the
+        // only other signal the operator can rely on (not currently
+        // wired — TODO if it becomes a real problem).
+      } catch (err) {
+        // Network / transient — KEEP the key. A flaky API call should
+        // not make the user lose their session anchor. Log so the
+        // operator can see something happened.
+        // eslint-disable-next-line no-console
+        console.warn("chat-state restore: fetch failed; keeping anchor", err);
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps

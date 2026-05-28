@@ -23,10 +23,14 @@ via `/audit`).
 
 from __future__ import annotations
 
+import logging
 import re
 import time
 import uuid
 from typing import Any, Awaitable, Callable
+
+
+logger = logging.getLogger(__name__)
 
 from pydantic import BaseModel, Field
 
@@ -1520,8 +1524,29 @@ class Orchestrator:
         query_log_id: str,
     ) -> int | None:
         """B6a — append a chat_turns row and roll the session's
-        carry-forward state. Returns the new turn_index. Silently no-ops
-        when session_id is None / conn is None / writes fail."""
+        carry-forward state. Returns the new turn_index, or None when
+        persistence is impossible (no session_id / no conn).
+
+        Persistence failures used to swallow `Exception` and return None
+        silently — that produced the "my chat dropped a turn" bug: a
+        retrieve-stage error left the txn aborted, insert_turn raised
+        `InFailedSqlTransaction`, the except clause hid it, the user
+        got their answer over SSE but the row never made it to disk.
+        On the NEXT successful turn, MAX(turn_index)+1 collapsed back
+        to where the lost turn would have lived — looking from the
+        sidebar like the whole conversation was 2 turns when the user
+        knew it was 3+.
+
+        Fix:
+          - SAVEPOINT-wrap insert_turn so a poisoned outer txn can be
+            rolled back to a clean point and the insert can succeed
+            on its own.
+          - LOG every failure at WARNING with the exception. Silent
+            persistence failures are unacceptable; if it can't save,
+            the operator needs to know.
+          - Read/update of carry-forward state stays best-effort
+            because it's strictly cosmetic, but it also now logs.
+        """
         if not session_id or conn is None:
             return None
         from kb.domain.chat_memory import (
@@ -1532,7 +1557,11 @@ class Orchestrator:
         # Confirm the session exists in this workspace (cheap belt-and-braces).
         try:
             session = await read_session(conn, session_id=session_id)
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "chat_turn persist: read_session(%s) failed: %s",
+                session_id, exc, exc_info=True,
+            )
             return None
         if session is None:
             return None
@@ -1544,6 +1573,26 @@ class Orchestrator:
             ctx_resolution.to_dict() if ctx_resolution
             else {"resolved_query": resolved_query}
         )
+
+        # SAVEPOINT-wrap the insert. If the outer txn is in any kind of
+        # aborted state (e.g. a retrieval channel raised inside the
+        # parallel asyncio.gather), ROLLBACK TO SAVEPOINT clears the
+        # poison so the insert can complete on its own.
+        sp_open = False
+        try:
+            await conn.execute("SAVEPOINT persist_turn_insert")
+            sp_open = True
+        except Exception as exc:  # noqa: BLE001
+            # If even SAVEPOINT fails, the conn is so broken that we
+            # can't persist at all — but we still want the user's
+            # answer to surface. Log and bail.
+            logger.warning(
+                "chat_turn persist: SAVEPOINT failed for session=%s: %s",
+                session_id, exc, exc_info=True,
+            )
+            return None
+
+        turn_index: int | None = None
         try:
             _, turn_index = await insert_turn(
                 conn,
@@ -1556,7 +1605,22 @@ class Orchestrator:
                 context_used=context_used,
                 query_log_id=query_log_id,
             )
-        except Exception:  # noqa: BLE001
+            await conn.execute("RELEASE SAVEPOINT persist_turn_insert")
+            sp_open = False
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "chat_turn persist: insert_turn failed for session=%s, "
+                "query=%r: %s",
+                session_id, original_query[:80], exc, exc_info=True,
+            )
+            if sp_open:
+                try:
+                    await conn.execute("ROLLBACK TO SAVEPOINT persist_turn_insert")
+                    await conn.execute("RELEASE SAVEPOINT persist_turn_insert")
+                except Exception as inner:  # noqa: BLE001
+                    logger.warning(
+                        "chat_turn persist: rollback failed (txn dead): %s", inner,
+                    )
             return None
 
         # Backfill the session title from the first user query so the
