@@ -1558,6 +1558,29 @@ async def extract_kv_tables_file_impl(file_id: str) -> None:
             )
             existing_hints: list[str] = [r[0] for r in await cur.fetchall()]
 
+            # Bug D fix: existing scalar field names per doctype.
+            # Without this, the LLM kept inventing fresh names per
+            # doc (CO-005 → total_cost_premium, CO-018 →
+            # total_cost_inr) — making cross-doc aggregation
+            # impossible. We cap to fields that appear in 2+ docs OR
+            # match a "stable" pattern, so a one-off invented name
+            # doesn't lock us into bad nomenclature.
+            cur = await conn.execute(
+                """
+                SELECT inferred_doc_type, field_name, count(DISTINCT file_id) AS n_docs
+                  FROM proposed_fields
+                 WHERE workspace_id = %s
+                   AND inferred_doc_type IS NOT NULL
+                 GROUP BY inferred_doc_type, field_name
+                 ORDER BY inferred_doc_type, n_docs DESC, field_name
+                """,
+                (workspace_id_str,),
+            )
+            scalar_hint_rows = await cur.fetchall()
+            existing_scalar_hints: dict[str, list[str]] = {}
+            for dt, fn, _n in scalar_hint_rows:
+                existing_scalar_hints.setdefault(str(dt), []).append(str(fn))
+
     chunk_indexed_text = build_chunk_indexed_text(chunks) if chunks else ""
 
     # Phase 2: KV+Tables LLM call (single round-trip).
@@ -1567,6 +1590,7 @@ async def extract_kv_tables_file_impl(file_id: str) -> None:
             chunk_indexed_text=chunk_indexed_text,
             doc_type_hint=None,
             existing_sub_entity_hints=existing_hints or None,
+            existing_scalar_hints=existing_scalar_hints or None,
         )
     except KVTablesExtractionError:
         # Don't block the chain on extractor failure — log + advance
@@ -1576,6 +1600,25 @@ async def extract_kv_tables_file_impl(file_id: str) -> None:
         payload = KVTablesPayload(model_id="identity")
 
     doc_type = payload.doc_type or "unknown"
+
+    # When the LLM's TOP-LEVEL `doc_type` came back as "unknown" but it
+    # ALSO extracted a scalar named `doc_type` with a real value (this
+    # happens when the LLM gets confused on classification but DOES
+    # capture the doc's self-declared doc_type field — common when the
+    # frontmatter / metadata block names the type explicitly), promote
+    # that scalar to be the inferred_doc_type. Construction CO-018
+    # was sitting in `unknown` for exactly this reason — frontmatter
+    # said `doc_type: change_order` but the LLM's top-level response
+    # was "unknown", leaving CO-018 out of the change_order doctype
+    # bucket and blocking cross-doc aggregations.
+    if doc_type == "unknown":
+        for sc in payload.scalars:
+            if sc.name.strip().lower() != "doc_type":
+                continue
+            candidate = (sc.value or "").strip().lower().replace(" ", "_")
+            if candidate and candidate != "unknown":
+                doc_type = candidate
+                break
 
     # Phase 3: atomic write across files / proposed_fields /
     # inferred_schema_fields / schema_fields / atomic_units.

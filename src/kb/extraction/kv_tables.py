@@ -127,16 +127,54 @@ def _build_user_prompt(
     chunk_indexed_text: str,
     doc_type_hint: str | None = None,
     existing_sub_entity_hints: list[str] | None = None,
+    existing_scalar_hints: dict[str, list[str]] | None = None,
 ) -> str:
+    """Build the user-prompt for one extraction call.
+
+    `existing_scalar_hints` maps {doctype: [field_name, ...]} listing
+    scalar field names ALREADY USED for each doctype in this workspace.
+    Bug D fix: the prior prompt instructed the LLM to reuse table
+    names but said nothing about scalar names — so the LLM kept
+    inventing new names like `total_cost_premium` on one doc and
+    `total_cost_inr` on the next doc of the SAME doctype, making
+    cross-doc aggregations impossible. This hint block tells the
+    LLM to reuse established names when the meaning matches; the
+    LLM still invents new names for genuinely new concepts.
+    """
     hints: list[str] = []
     if doc_type_hint:
         hints.append(f"Likely doc_type: {doc_type_hint}")
     if existing_sub_entity_hints:
         hints.append(
-            "Existing sub-entity table names in this workspace (reuse if applicable): "
+            "Existing sub-entity table names in this workspace "
+            "(reuse if applicable): "
             + ", ".join(existing_sub_entity_hints)
         )
-    hint_block = ("\n".join(hints) + "\n\n") if hints else ""
+    if existing_scalar_hints:
+        # Format: per-doctype field name catalog. Capped to keep the
+        # prompt budget reasonable on big workspaces (>20 doctypes,
+        # >50 fields/doctype is uncommon but happens).
+        lines = [
+            "Existing scalar field names by doc_type in this workspace. "
+            "When you extract a scalar whose MEANING matches one of "
+            "these names, REUSE the exact existing name (snake_case + "
+            "everything). Only invent a new name when the concept is "
+            "genuinely different — never paraphrase an established "
+            "name (e.g. don't write `total_cost_inr` if "
+            "`total_cost_premium` is already established for "
+            "change_order docs).",
+        ]
+        for dt in sorted(existing_scalar_hints):
+            fns = existing_scalar_hints[dt]
+            if not fns:
+                continue
+            shown = fns[:50]  # cap per-doctype
+            line = f"  {dt}: {', '.join(shown)}"
+            if len(fns) > len(shown):
+                line += f" (+{len(fns) - len(shown)} more)"
+            lines.append(line)
+        hints.append("\n".join(lines))
+    hint_block = ("\n\n".join(hints) + "\n\n") if hints else ""
 
     return (
         f"{hint_block}"
@@ -210,6 +248,7 @@ class KVTablesExtractor(Protocol):
         chunk_indexed_text: str,
         doc_type_hint: str | None = None,
         existing_sub_entity_hints: list[str] | None = None,
+        existing_scalar_hints: dict[str, list[str]] | None = None,
     ) -> KVTablesPayload: ...
 
 
@@ -227,6 +266,7 @@ class IdentityKVTablesExtractor:
         chunk_indexed_text: str,
         doc_type_hint: str | None = None,
         existing_sub_entity_hints: list[str] | None = None,
+        existing_scalar_hints: dict[str, list[str]] | None = None,
     ) -> KVTablesPayload:
         return KVTablesPayload(model_id="identity")
 
@@ -556,6 +596,7 @@ class GeminiKVTablesExtractor:
         chunk_indexed_text: str,
         doc_type_hint: str | None = None,
         existing_sub_entity_hints: list[str] | None = None,
+        existing_scalar_hints: dict[str, list[str]] | None = None,
     ) -> KVTablesPayload:
         from google.genai import types
 
@@ -570,6 +611,7 @@ class GeminiKVTablesExtractor:
             chunk_indexed_text=_truncate_doc(chunk_indexed_text),
             doc_type_hint=doc_type_hint,
             existing_sub_entity_hints=existing_sub_entity_hints,
+            existing_scalar_hints=existing_scalar_hints,
         )
         try:
             response = await self._client.aio.models.generate_content(
@@ -645,6 +687,7 @@ class AnthropicKVTablesExtractor:
         chunk_indexed_text: str,
         doc_type_hint: str | None = None,
         existing_sub_entity_hints: list[str] | None = None,
+        existing_scalar_hints: dict[str, list[str]] | None = None,
     ) -> KVTablesPayload:
         import anthropic
 
@@ -653,6 +696,7 @@ class AnthropicKVTablesExtractor:
             chunk_indexed_text=_truncate_doc(chunk_indexed_text),
             doc_type_hint=doc_type_hint,
             existing_sub_entity_hints=existing_sub_entity_hints,
+            existing_scalar_hints=existing_scalar_hints,
         )
         try:
             response = await self._client.messages.create(
