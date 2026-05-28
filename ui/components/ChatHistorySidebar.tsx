@@ -1,28 +1,35 @@
 "use client";
 
 /**
- * Recent-chats rail for /chat. Loads /sessions on mount + refreshes
- * after every turn the user sends (so a freshly auto-created session
- * appears at the top). Clicking a row dispatches `load_session` which
- * replays the saved turns into the thread.
+ * Recent-chats rail for /chat[/...].
  *
- * Two delete affordances:
- *   - Single trash icon on each row (appears on hover).
- *   - Multi-select mode (click "Select"): rows show checkboxes,
- *     a footer bar appears with "Delete N" + "Cancel".
+ * URL-as-truth design (matches /chat/[sessionId] route):
+ *   - Rows are <Link href="/chat/<id>"> — clicking is a navigation,
+ *     not a reducer dispatch. The URL change triggers
+ *     ChatExperience's "load this session" effect, which fetches
+ *     /sessions/<id>/turns and hydrates the thread.
+ *   - Active highlight = `useParams().sessionId === row.id`. No
+ *     state.sessionId to drift out of sync with the URL.
+ *   - "New chat" POSTs /sessions, then router.pushes to /chat/<new-id>
+ *     so the session row appears in the sidebar BEFORE the first
+ *     message (fixes "I clicked New, where is it?" UX gap).
+ *   - Refresh triggers: mount, sessionId change (active highlight),
+ *     turn-count change in the active session (new turn might mean
+ *     new sidebar metadata), window focus, tab visibilitychange.
  *
- * Sticks alongside the message panel; intentionally NOT inside the
- * thin app-wide Sidebar — that rail is icon-only and would lose all
- * legibility with chat titles.
+ * Delete affordances unchanged: per-row trash icon + multi-select
+ * mode. Deleting the active session routes back to /chat (landing).
  */
 
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
+import { useParams, useRouter } from "next/navigation";
 import { Plus, MessageSquare, Loader2, Trash2, Check, X } from "lucide-react";
 import {
-  listSessions,
-  getSessionTurns,
+  createSession,
   deleteSession,
   deleteSessionsBatch,
+  listSessions,
   type SessionInfo,
 } from "@/lib/api";
 import { useChat } from "@/lib/chat-state";
@@ -38,17 +45,23 @@ function formatRelative(iso: string): string {
 }
 
 export function ChatHistorySidebar() {
-  const { state, dispatch } = useChat();
+  const { state, sessionId } = useChat();
+  const router = useRouter();
+  // useParams() returns the dynamic-segment values for the current
+  // route. On /chat (landing) it's empty; on /chat/[sessionId] it
+  // contains `sessionId`. We use this AS WELL AS the prop-driven
+  // `sessionId` from useChat() — they agree, but reading from params
+  // here means the sidebar still works if rendered outside ChatProvider.
+  const params = useParams<{ sessionId?: string }>();
+  const activeId = sessionId ?? params?.sessionId ?? null;
+
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [loading, setLoading] = useState(false);
-  const [loadingId, setLoadingId] = useState<string | null>(null);
-  // Single-delete pending (the row whose trash icon was just clicked,
-  // needs confirmation). Cleared on confirm or cancel.
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
-  // Multi-select mode + which ids are checked.
   const [selecting, setSelecting] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [batchDeleting, setBatchDeleting] = useState(false);
+  const [creating, setCreating] = useState(false);
   const lastTurnCount = state.turns.length;
 
   const refresh = useCallback(async () => {
@@ -63,23 +76,19 @@ export function ChatHistorySidebar() {
     }
   }, []);
 
-  // Refresh triggers — be aggressive, the list is cheap to fetch:
-  //   - Mount (initial load)
-  //   - Turn count changes (a new turn just landed → maybe a new session
-  //     also got auto-created)
-  //   - sessionId changes (user switched sessions, started new chat, or
-  //     localStorage-restored on remount → active highlight needs to move)
-  //   - Window focus + tab visibility (user came back from another tab
-  //     or window — DB may have changes from another instance)
-  // Together these cover: "create new chat", "ask follow-up question",
-  // "leave + come back", and "two windows open at once".
+  // Refresh on: mount, active sessionId change, new turn landed, window
+  // focus, tab visibilitychange. listSessions is cheap; aggressive
+  // refresh is the right call — it covers "another tab made changes"
+  // and "I clicked New, where is it?" without explicit invalidation.
   useEffect(() => {
     refresh();
-  }, [refresh, lastTurnCount, state.sessionId]);
+  }, [refresh, lastTurnCount, activeId]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const onFocus = () => { void refresh(); };
+    const onFocus = () => {
+      void refresh();
+    };
     const onVisible = () => {
       if (document.visibilityState === "visible") void refresh();
     };
@@ -91,21 +100,22 @@ export function ChatHistorySidebar() {
     };
   }, [refresh]);
 
-  async function pick(s: SessionInfo) {
-    if (selecting) {
-      // In multi-select, clicking the row toggles the checkbox.
-      toggleSelected(s.id);
-      return;
-    }
-    if (s.id === state.sessionId) return;
-    setLoadingId(s.id);
+  async function handleNewChat() {
+    if (creating) return;
+    setCreating(true);
     try {
-      const turns = await getSessionTurns(s.id);
-      dispatch({ type: "load_session", sessionId: s.id, turns });
+      const { id } = await createSession();
+      // router.push → adds to history (back button returns to current
+      // chat). The session row will appear in the sidebar on the next
+      // refresh, which fires immediately because `activeId` changes.
+      router.push(`/chat/${id}`);
     } catch (err) {
-      console.error("getSessionTurns failed", err);
+      console.error("createSession failed", err);
+      // Fallback: go to landing; backend will auto-create on first
+      // message (the pre-URL-slug behavior).
+      router.push("/chat");
     } finally {
-      setLoadingId(null);
+      setCreating(false);
     }
   }
 
@@ -131,8 +141,8 @@ export function ChatHistorySidebar() {
   async function handleDeleteOne(id: string) {
     try {
       await deleteSession(id);
-      // If we just deleted the active session, drop the thread.
-      if (id === state.sessionId) dispatch({ type: "new_chat" });
+      // If we just deleted the active session, route back to landing.
+      if (id === activeId) router.push("/chat");
       await refresh();
     } catch (err) {
       console.error("deleteSession failed", err);
@@ -147,9 +157,8 @@ export function ChatHistorySidebar() {
     try {
       const ids = Array.from(selected);
       await deleteSessionsBatch(ids);
-      // If the currently-active session was among them, reset.
-      if (state.sessionId && ids.includes(state.sessionId)) {
-        dispatch({ type: "new_chat" });
+      if (activeId && ids.includes(activeId)) {
+        router.push("/chat");
       }
       await refresh();
       exitSelectMode();
@@ -184,12 +193,17 @@ export function ChatHistorySidebar() {
               </button>
               <button
                 type="button"
-                onClick={() => dispatch({ type: "new_chat" })}
-                className="flex items-center gap-1 px-2 py-1 text-xs text-zinc-600 hover:text-zinc-900 hover:bg-zinc-100 rounded-md cursor-pointer"
+                onClick={handleNewChat}
+                disabled={creating}
+                className="flex items-center gap-1 px-2 py-1 text-xs text-zinc-600 hover:text-zinc-900 hover:bg-zinc-100 rounded-md cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                 data-testid="chat-new-button"
                 title="Start a new chat"
               >
-                <Plus className="w-3.5 h-3.5" strokeWidth={2} />
+                {creating ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" strokeWidth={2} />
+                ) : (
+                  <Plus className="w-3.5 h-3.5" strokeWidth={2} />
+                )}
                 <span>New</span>
               </button>
             </>
@@ -218,60 +232,76 @@ export function ChatHistorySidebar() {
         ) : (
           <ul className="space-y-0.5">
             {sessions.map((s) => {
-              const active = s.id === state.sessionId;
-              const isLoading = loadingId === s.id;
+              const active = s.id === activeId;
               const isChecked = selected.has(s.id);
               const isPending = pendingDelete === s.id;
+              const rowClass = `w-full text-left px-2 py-2 rounded-md transition-colors cursor-pointer block ${
+                active
+                  ? "bg-zinc-200/70 text-zinc-900"
+                  : isChecked
+                    ? "bg-blue-50 text-zinc-900"
+                    : "hover:bg-zinc-100 text-zinc-700"
+              }`;
+
+              const rowInner = (
+                <div className="flex items-start gap-2">
+                  {selecting ? (
+                    <div
+                      className={`w-3.5 h-3.5 mt-0.5 flex-shrink-0 rounded border ${
+                        isChecked
+                          ? "bg-zinc-900 border-zinc-900 flex items-center justify-center"
+                          : "border-zinc-400"
+                      }`}
+                      aria-hidden
+                    >
+                      {isChecked && (
+                        <Check className="w-2.5 h-2.5 text-white" strokeWidth={3} />
+                      )}
+                    </div>
+                  ) : (
+                    <MessageSquare
+                      className="w-3.5 h-3.5 mt-0.5 flex-shrink-0 text-zinc-400"
+                      strokeWidth={1.75}
+                    />
+                  )}
+                  <div className="flex-1 min-w-0 pr-6">
+                    <div className="text-[13px] truncate">
+                      {s.title?.trim() || "Untitled chat"}
+                    </div>
+                    <div className="flex items-center gap-1.5 mt-0.5">
+                      <span className="text-[10px] text-zinc-400">
+                        {formatRelative(s.last_active_at)}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              );
+
               return (
                 <li key={s.id} className="group/row relative">
-                  <button
-                    type="button"
-                    onClick={() => pick(s)}
-                    className={`w-full text-left px-2 py-2 rounded-md transition-colors cursor-pointer ${
-                      active
-                        ? "bg-zinc-200/70 text-zinc-900"
-                        : isChecked
-                          ? "bg-blue-50 text-zinc-900"
-                          : "hover:bg-zinc-100 text-zinc-700"
-                    }`}
-                    data-testid="chat-history-row"
-                    data-session-id={s.id}
-                  >
-                    <div className="flex items-start gap-2">
-                      {selecting ? (
-                        <div
-                          className={`w-3.5 h-3.5 mt-0.5 flex-shrink-0 rounded border ${
-                            isChecked
-                              ? "bg-zinc-900 border-zinc-900 flex items-center justify-center"
-                              : "border-zinc-400"
-                          }`}
-                          aria-hidden
-                        >
-                          {isChecked && (
-                            <Check className="w-2.5 h-2.5 text-white" strokeWidth={3} />
-                          )}
-                        </div>
-                      ) : (
-                        <MessageSquare
-                          className="w-3.5 h-3.5 mt-0.5 flex-shrink-0 text-zinc-400"
-                          strokeWidth={1.75}
-                        />
-                      )}
-                      <div className="flex-1 min-w-0 pr-6">
-                        <div className="text-[13px] truncate">
-                          {s.title?.trim() || "Untitled chat"}
-                        </div>
-                        <div className="flex items-center gap-1.5 mt-0.5">
-                          <span className="text-[10px] text-zinc-400">
-                            {formatRelative(s.last_active_at)}
-                          </span>
-                          {isLoading && (
-                            <Loader2 className="w-2.5 h-2.5 animate-spin text-zinc-400" />
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  </button>
+                  {selecting ? (
+                    <button
+                      type="button"
+                      onClick={() => toggleSelected(s.id)}
+                      className={rowClass}
+                      data-testid="chat-history-row"
+                      data-session-id={s.id}
+                    >
+                      {rowInner}
+                    </button>
+                  ) : (
+                    // <Link> instead of dispatch: the URL becomes the
+                    // active conversation. ChatExperience's effect on
+                    // sessionId picks up the change and loads turns.
+                    <Link
+                      href={`/chat/${s.id}`}
+                      className={rowClass}
+                      data-testid="chat-history-row"
+                      data-session-id={s.id}
+                    >
+                      {rowInner}
+                    </Link>
+                  )}
 
                   {!selecting && (
                     <div className="absolute right-1.5 top-1.5">
@@ -280,6 +310,7 @@ export function ChatHistorySidebar() {
                           <button
                             type="button"
                             onClick={(e) => {
+                              e.preventDefault();
                               e.stopPropagation();
                               handleDeleteOne(s.id);
                             }}
@@ -292,6 +323,7 @@ export function ChatHistorySidebar() {
                           <button
                             type="button"
                             onClick={(e) => {
+                              e.preventDefault();
                               e.stopPropagation();
                               setPendingDelete(null);
                             }}
@@ -306,6 +338,7 @@ export function ChatHistorySidebar() {
                         <button
                           type="button"
                           onClick={(e) => {
+                            e.preventDefault();
                             e.stopPropagation();
                             setPendingDelete(s.id);
                           }}
@@ -328,9 +361,7 @@ export function ChatHistorySidebar() {
       {/* Multi-select footer */}
       {selecting && (
         <div className="border-t border-zinc-200 px-3 py-2.5 flex items-center gap-2 bg-white">
-          <div className="text-xs text-zinc-600">
-            {selected.size} selected
-          </div>
+          <div className="text-xs text-zinc-600">{selected.size} selected</div>
           <button
             type="button"
             onClick={handleDeleteSelected}

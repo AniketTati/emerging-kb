@@ -703,6 +703,24 @@ export async function listSessions(limit = 50): Promise<SessionInfo[]> {
   return body.items ?? [];
 }
 
+/** Eagerly create an empty chat session and return its id. Used by the
+ *  "New chat" button so the new session appears in the sidebar + becomes
+ *  a real URL (/chat/<id>) BEFORE the user sends their first message —
+ *  pre-existing flow lazily created the session on first POST /chat,
+ *  which left the URL unanchored and the sidebar empty between the
+ *  click and the first message. Title is left null; the backend
+ *  back-fills it from the first user query when the first turn is
+ *  persisted. */
+export async function createSession(opts: { title?: string } = {}): Promise<{ id: string }> {
+  const resp = await fetch(`${KB_API_URL}/sessions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...workspaceHeaders() },
+    body: JSON.stringify({ title: opts.title ?? null }),
+  });
+  const body = await _handle<{ id: string }>(resp);
+  return { id: body.id };
+}
+
 export async function getSessionTurns(sessionId: string): Promise<SessionTurn[]> {
   // Backend returns ALL turns chronologically — display is unbounded
   // by design (the user sees every chat they've had). The orchestrator's
