@@ -1,82 +1,38 @@
 workspace_id: c0000000-0000-0000-0000-000000000001
 doctypes:
   architectural_drawing:
-    groups:
-    - canonical: date
-      variants:
-      - date
-      - issue_date
-      - effective_date
-      reason: These fields all represent the date the drawing was issued or became
-        effective.
-    - canonical: approved_by
-      variants:
-      - approved_by
-      - approved_by_1
-      - approved_by_2
-      - approved_by_signoff
-      reason: These fields all refer to the person or persons who approved the architectural
-        plan, often with a sign-off.
-    - canonical: checked_by
-      variants:
-      - checked_by
-      - checked_by_signoff
-      reason: These fields both refer to the person who checked the architectural
-        drawing, including sign-off.
-    - canonical: drawn_by
-      variants:
-      - drawn_by
-      - drawn_by_signoff
-      reason: These fields both refer to the person who drew the architectural plan,
-        including sign-off.
-    - canonical: status
-      variants:
-      - status
-      - final_status
-      - current_document_status
-      - issued_for_status
-      reason: These fields all describe the overall status of the drawing document,
-        whether current, final, or for what purpose it was issued.
-    - canonical: project_name
-      variants:
-      - project_name
-      - project
-      reason: These fields both refer to the name of the project associated with the
-        drawing.
-    - canonical: client
-      variants:
-      - client
-      - client_cfo_name
-      - client_medical_name
-      reason: These fields all refer to the client or different representatives of
-        the client.
-    - canonical: first_floor_area_sqm
-      variants:
-      - first_floor_area_sq_m
-      - first_floor_area_sqm
-      reason: These fields both represent the area of the first floor in square meters.
-    - canonical: ground_floor_area_sqm
-      variants:
-      - ground_floor_area_sq_m
-      - ground_floor_area_sqm
-      - ground_floor_built_up_area
-      reason: These fields all refer to the area of the ground floor, in square meters
-        or as a built-up area.
-    - canonical: main_load_bearing_wall_position
-      variants:
-      - main_load_bearing_wall_position
-      - wall_position_confirmation
-      reason: These fields both describe the position of the main internal load-bearing
-        wall, with one offering a confirmation.
-  change_order:
     groups: []
+  change_order:
+    groups:
+    - canonical: change_order_date
+      variants:
+      - change_order_date
+      - date_of_change
+      reason: Both fields refer to the date when the change order was issued.
+    - canonical: change_order_type
+      variants:
+      - change_order_type
+      - type_of_change
+      reason: Both fields describe the category or nature of the change order.
+    - canonical: cumulative_variations_percentage
+      variants:
+      - cumulative_variations_percentage
+      - cumulative_variations_to_date_percentage
+      reason: Both fields represent the cumulative percentage of variations to date.
+    - canonical: total_cost_inr
+      variants:
+      - total_cost_inr
+      - total_cost_premium
+      reason: Both fields represent the total monetary cost associated with the change
+        order.
   daily_site_report:
     groups:
     - canonical: project_day
       variants:
       - project_day
+      - project_total_days
       - total_project_days
-      reason: Both fields refer to the current day number of the project.
+      reason: These fields all refer to the total number of planned days for the project.
     - canonical: site
       variants:
       - site
@@ -87,7 +43,7 @@ doctypes:
       - weather
       - weather_conditions
       - weather_description
-      reason: All three fields describe the weather conditions reported for the day.
+      reason: These fields all describe the weather conditions for the day.
     - canonical: project_manager_signed
       variants:
       - project_manager_signed
@@ -104,8 +60,7 @@ doctypes:
       variants:
       - inspection_date
       - walk_down_date
-      reason: Both fields refer to the date when the inspection or walk-down took
-        place.
+      reason: Both fields refer to the date when the inspection or walk-down was conducted.
     - canonical: project
       variants:
       - project
@@ -117,25 +72,53 @@ doctypes:
       variants:
       - date
       - meeting_date
-      reason: Both 'date' and 'meeting_date' refer to the date when the meeting took
-        place.
+      reason: Both 'date' and 'meeting_date' refer to the date the meeting took place.
   progress_report:
-    groups: []
+    groups:
+    - canonical: overall_status
+      variants:
+      - overall_status
+      - project_status
+      reason: Both fields describe the overall status of the project.
+    - canonical: prepared_by
+      variants:
+      - prepared_by
+      - report_prepared_by
+      reason: Both fields indicate the person who prepared the report.
+    - canonical: report_date
+      variants:
+      - report_date
+      - effective_date
+      reason: Both fields refer to the date the report was prepared or became effective.
+    - canonical: safety_near_misses_captured
+      variants:
+      - safety_near_misses_captured
+      - near_misses_captured_in_august
+      reason: Both fields count the number of near-misses captured.
+    - canonical: reporting_period_end
+      variants:
+      - reporting_period_end
+      - effective_date
+      reason: Both fields refer to the end date of the reporting period.
   purchase_order:
     groups:
     - canonical: po_date
       variants:
       - po_date
       - buyer_authoriser_date
-      reason: These fields both refer to the date the purchase order was issued or
-        authorized by the buyer.
+      reason: Both fields refer to the date the purchase order was issued or authorized
+        by the buyer.
     - canonical: total_inr
       variants:
       - total_inr
       - sub_total_inr
-      reason: These fields both represent the grand total or sub-total monetary amount
-        of the purchase order in INR, and are semantically very close in the context
-        of a purchase order.
+      reason: Both fields represent the grand total amount of the purchase order,
+        with 'sub_total_inr' likely being the total before taxes.
+    - canonical: gst_amount_inr
+      variants:
+      - gst_amount_inr
+      - total_gst_amount
+      reason: Both fields refer to the total amount of GST applied in INR.
     - canonical: accepted_vendor_date
       variants:
       - accepted_vendor_date
@@ -147,63 +130,68 @@ doctypes:
       - accepted_vendor_name
       - vendor_acceptor
       reason: Both fields refer to the name of the person who accepted the purchase
-        order on behalf of the vendor.
-    - canonical: gst_amount_inr
+        order for the vendor.
+    - canonical: buyer
       variants:
-      - gst_amount_inr
-      - total_gst_amount
-      reason: Both fields represent the total amount of GST applied to the purchase
-        order in INR.
+      - buyer
+      - parties
+      reason: Both fields refer to the buyer for this purchase order, with 'parties'
+        being a broader term that includes the buyer.
+    - canonical: vendor
+      variants:
+      - vendor
+      - parties
+      reason: Both fields refer to the vendor for this purchase order, with 'parties'
+        being a broader term that includes the vendor.
   rfi_response:
     groups:
     - canonical: rfi_date
       variants:
       - rfi_date
       - request_date
-      reason: Both fields represent the date when the RFI was initiated.
+      reason: Both fields refer to the date when the RFI was initiated.
     - canonical: response_date
       variants:
       - response_date
       - rfi_response_date
-      reason: Both fields indicate the date when the RFI was responded to.
+      reason: Both fields refer to the date when the RFI was responded to.
     - canonical: requestor_company
       variants:
       - requestor_company
       - rfi_initiator_company
       - rfi_sender_company
-      reason: These fields all refer to the company of the entity that initiated or
+      reason: All three fields refer to the company of the person who initiated or
         sent the RFI.
     - canonical: requestor_name
       variants:
       - requestor_name
       - rfi_initiator_name
       - rfi_sender_name
-      reason: These fields all refer to the name of the individual who initiated or
-        sent the RFI.
-    - canonical: rfi_recipient_name
+      reason: All three fields refer to the name of the person who initiated or sent
+        the RFI.
+    - canonical: respondent_company
       variants:
-      - rfi_recipient_name
-      - rfi_responder_name
-      reason: Both fields refer to the name of the person who received or responded
-        to the RFI.
-    - canonical: rfi_recipient_company
-      variants:
-      - rfi_recipient_company
+      - respondent_company
       - rfi_responder_company
-      reason: Both fields refer to the company of the person who received or responded
-        to the RFI.
+      reason: Both fields refer to the company of the person who responded to the
+        RFI.
+    - canonical: respondent_name
+      variants:
+      - respondent_name
+      - rfi_responder_name
+      reason: Both fields refer to the name of the person who responded to the RFI.
   safety_incident_report:
     groups:
     - canonical: incident_date
       variants:
       - incident_date
       - date_of_incident
-      reason: Both fields represent the date when the incident occurred.
+      reason: These fields both capture the date when the incident occurred.
     - canonical: incident_time
       variants:
       - incident_time
       - time_of_incident
-      reason: Both fields represent the time when the incident occurred.
+      reason: These fields both capture the time when the incident occurred.
   safety_report:
     groups:
     - canonical: period
@@ -211,6 +199,10 @@ doctypes:
       - period
       - report_period_end
       - report_period_start
-      reason: These fields all describe aspects of the reporting period and can be
-        unified under a single 'period' concept, with start and end dates as sub-fields
-        if needed.
+      reason: These fields all describe the reporting period of the document.
+    - canonical: signed_by
+      variants:
+      - signed_by
+      - date_signed
+      reason: These fields both relate to the signing of the report, one for who and
+        one for when.

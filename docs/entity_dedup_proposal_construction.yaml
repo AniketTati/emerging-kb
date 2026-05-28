@@ -1,0 +1,474 @@
+workspace_id: c0000000-0000-0000-0000-000000000001
+entity_types:
+  EVENT:
+    groups:
+    - survivor_id: 8e4f51b2-c4dc-44aa-863f-8a65b76d902c
+      survivor_name: Sample Set 1
+      merge_ids:
+      - 8e4f51b2-c4dc-44aa-863f-8a65b76d902c
+      - 4e2c8daa-be87-4e36-8411-65c7c8a59d3d
+      merge_names:
+      - Sample Set 1
+      - 'Sample Set 1: Foundation casting'
+      total_mentions: 4
+      reason: 'The longer name ''Sample Set 1: Foundation casting'' is a more specific
+        description of ''Sample Set 1'' in the context of cube test results, indicating
+        they refer to the same event or set of data.'
+  FAC:
+    groups:
+    - survivor_id: 1777bcb8-ca1b-474f-8093-97321cb2b1fa
+      survivor_name: Mira Road Metro Station
+      merge_ids:
+      - 1777bcb8-ca1b-474f-8093-97321cb2b1fa
+      - 406637aa-9bba-4a63-93eb-9c5ff6c9d51a
+      merge_names:
+      - Mira Road Metro Station
+      - Mira Road station
+      total_mentions: 5
+      reason: Both entities refer to the same metro station, with one being a slightly
+        abbreviated form of the other.
+  LAW:
+    groups:
+    - survivor_id: a0899456-d799-4530-991d-afcdf0851d1b
+      survivor_name: NBC 2016
+      merge_ids:
+      - a0899456-d799-4530-991d-afcdf0851d1b
+      - e63ab7cb-efc3-4ad5-8cc7-2fbcb7ece40f
+      merge_names:
+      - NBC 2016
+      - NBC
+      total_mentions: 8
+      reason: Both 'NBC 2016' and 'NBC' refer to the National Building Code, with
+        'NBC 2016' being a specific version of the same code.
+    - survivor_id: 69fca00c-1a51-4230-b1e1-0f936c275b95
+      survivor_name: Karnataka Factories Act
+      merge_ids:
+      - 69fca00c-1a51-4230-b1e1-0f936c275b95
+      - 9a6a8efc-88a9-4cdb-b118-eb993e9db8e3
+      merge_names:
+      - Karnataka Factories Act
+      - Karnataka Factories Act 1948
+      total_mentions: 7
+      reason: The two entities refer to the same act, with one including the year
+        of enactment which is a more complete name.
+    - survivor_id: a48ad044-963a-4174-a60b-712b65097ad8
+      survivor_name: BOCW Act
+      merge_ids:
+      - a48ad044-963a-4174-a60b-712b65097ad8
+      - 612ec97a-6eb0-4e74-afab-fe90b18f3c1f
+      merge_names:
+      - BOCW Act
+      - BOCW Act Section 24
+      total_mentions: 6
+      reason: BOCW Act Section 24 is a specific section of the broader BOCW Act, indicating
+        they refer to the same legal act.
+    - survivor_id: 2672cbfd-55cf-43f7-ad48-457ad5f21076
+      survivor_name: Building and Other Construction Workers Act 1996
+      merge_ids:
+      - 2672cbfd-55cf-43f7-ad48-457ad5f21076
+      - 6bf0267a-d778-42e1-864b-a231b49b2704
+      merge_names:
+      - Building and Other Construction Workers Act 1996
+      - Building and Other Construction Workers (Regulation) Act 1996
+      total_mentions: 5
+      reason: The two names refer to the same act, with one including '(Regulation)'
+        which is often part of the full title or a common abbreviation.
+    - survivor_id: cc2e3a85-866f-44c6-b5f2-8ea06050e1ba
+      survivor_name: Water Act
+      merge_ids:
+      - cc2e3a85-866f-44c6-b5f2-8ea06050e1ba
+      - 11d2256a-071f-47ee-8a56-f29d04c2f645
+      merge_names:
+      - Water Act
+      - Water Act 1974
+      total_mentions: 4
+      reason: The 'Water Act' is a shortened reference to the 'Water Act 1974', as
+        both contexts discuss legal frameworks and penalties enforced by KSPCB.
+    - survivor_id: 842397ac-d0ec-40fb-a28c-3a855486b54d
+      survivor_name: Air Act
+      merge_ids:
+      - 842397ac-d0ec-40fb-a28c-3a855486b54d
+      - 6bb26384-ce8b-4b2a-ae54-78c6d68b770f
+      merge_names:
+      - Air Act
+      - Air Act 1981
+      total_mentions: 4
+      reason: '''Air Act'' is a shortened reference to the ''Air Act 1981'', as both
+        contexts discuss legal frameworks and penalties enforced by KSPCB.'
+  LOC:
+    groups:
+    - survivor_id: 98a36525-d948-468c-a218-9114d875ac64
+      survivor_name: Mezzanine Level
+      merge_ids:
+      - 98a36525-d948-468c-a218-9114d875ac64
+      - 89bce742-39e0-4f60-9019-f966f700d6f3
+      merge_names:
+      - Mezzanine Level
+      - Mezzanine
+      total_mentions: 6
+      reason: Both 'Mezzanine Level' and 'Mezzanine' refer to the same architectural
+        floor within a building, as indicated by their contexts discussing functional
+        layouts and electrical distribution by floor.
+  ORG:
+    groups:
+    - survivor_id: d8ad7ebd-5c8d-4f1e-afbc-0220c3f0b554
+      survivor_name: Acme
+      merge_ids:
+      - d8ad7ebd-5c8d-4f1e-afbc-0220c3f0b554
+      - 0c1e01d0-c3e8-4f1a-b2c9-e61be90053ca
+      - b3bd7d98-948a-4d56-bdac-ee15cce0817f
+      merge_names:
+      - Acme
+      - Acme Corp Pvt Ltd
+      - Acme Corp
+      total_mentions: 186
+      reason: Acme, Acme Corp Pvt Ltd, and Acme Corp all refer to the same core company,
+        with 'Pvt Ltd' and 'Corp' being common legal or shortened forms.
+    - survivor_id: a93f4245-69c8-49e2-a77b-ba33cb043608
+      survivor_name: Acme Whitefield Datacentre Phase-2
+      merge_ids:
+      - a93f4245-69c8-49e2-a77b-ba33cb043608
+      - 3becd914-f242-411a-9fd9-fdc764b53a12
+      - f025c410-d0cb-46d1-8088-59b6a866c4d4
+      - 1687dcab-f42c-408c-ac45-d8bdf4c54e8e
+      - 0f93537a-1a88-47e9-9e2e-a36940e6e508
+      - a99a2d0b-210e-47e0-a859-eb9bd8b85faf
+      - d4df37b4-b3b5-48c8-a291-d9c357448289
+      merge_names:
+      - Acme Whitefield Datacentre Phase-2
+      - Acme Whitefield Datacentre
+      - "Acme Whitefield Datacentre Phase-2 \u2014 Main Building"
+      - Acme Whitefield Datacentre Phase-2 project
+      - Acme Whitefield Datacentre Phase-2 Main Building project
+      - Acme Datacentre
+      - Acme Whitefield Datacentre Phase-2 EPC
+      total_mentions: 84
+      reason: These entities all refer to the 'Acme Whitefield Datacentre' and its
+        'Phase-2', including variations like 'Main Building', 'project', and 'EPC',
+        which are specific aspects or phases of the same facility.
+    - survivor_id: 331af0d8-b421-48a4-8a86-b04b44d758f3
+      survivor_name: Mahalaxmi
+      merge_ids:
+      - e7b646ee-53f6-4901-aab9-e6b203fafceb
+      - 023ce4fd-a7e8-4a5d-b2fd-1f11c5baac5e
+      - 84b212d3-d49e-43c0-9fc8-8d6e96f9f2f2
+      - 331af0d8-b421-48a4-8a86-b04b44d758f3
+      merge_names:
+      - Mahalaxmi Infrastructure Pvt Ltd
+      - Mahalaxmi Infrastructure
+      - Mahalaxmi Infra
+      - Mahalaxmi
+      total_mentions: 241
+      reason: These entities all refer to the same company, 'Mahalaxmi Infrastructure
+        Pvt Ltd', with variations being abbreviations or shorter forms of the full
+        name, and contexts consistently pointing to a single corporate entity.
+    - survivor_id: 3bb60c7e-6115-4e30-bbb0-5aceedb0ed6d
+      survivor_name: Sai Labour Agency
+      merge_ids:
+      - 3bb60c7e-6115-4e30-bbb0-5aceedb0ed6d
+      - 4b2adf65-a763-4852-885e-5c2561df6508
+      merge_names:
+      - Sai Labour Agency
+      - Sai Labour Agency Pvt Ltd
+      total_mentions: 45
+      reason: The contexts indicate that 'Sai Labour Agency' is a shorter form of
+        'Sai Labour Agency Pvt Ltd', with both referring to the same labor supply
+        entity.
+    - survivor_id: ca262ccf-3aaa-467b-9bbb-fd19bb925b02
+      survivor_name: Phoenix MEP
+      merge_ids:
+      - ca262ccf-3aaa-467b-9bbb-fd19bb925b02
+      - 554002c4-79e4-4194-a2f6-78bd7db062f6
+      - b4bbcb23-93ab-47cf-9842-95b8b6fce3a6
+      - 2e6697aa-c9bb-40be-9fee-973682a7349a
+      merge_names:
+      - Phoenix MEP
+      - Phoenix
+      - Phoenix MEP Services Pvt Ltd
+      - Phoenix MEP Services
+      total_mentions: 92
+      reason: All these entities refer to the same company, 'Phoenix MEP Services
+        Pvt Ltd', with variations being abbreviations or slightly different full names,
+        and context explicitly links 'Phoenix' to 'Phoenix MEP Services Pvt Ltd'.
+    - survivor_id: 976d1626-f3b9-406c-beac-e0dbb5f4229c
+      survivor_name: Schneider
+      merge_ids:
+      - 976d1626-f3b9-406c-beac-e0dbb5f4229c
+      - 01a0ff82-0364-4688-8591-3afe7e2e4f8f
+      merge_names:
+      - Schneider
+      - Schneider India
+      total_mentions: 31
+      reason: Schneider India is a specific regional branch of the broader Schneider
+        entity, and the contexts suggest they refer to the same company.
+    - survivor_id: 659f910e-7f5c-4b85-98ef-c9b8407eac88
+      survivor_name: Sundar Structural Consultants
+      merge_ids:
+      - 659f910e-7f5c-4b85-98ef-c9b8407eac88
+      - c40098fe-99a0-491b-9978-ac85756d6ba6
+      - 8313e4ad-6d3d-4b0e-a58c-175dddee060f
+      - 8e9aca5a-c22b-4cfb-b740-4132ea2d236f
+      merge_names:
+      - Sundar Structural Consultants
+      - Sundar Structural Consultants Pvt Ltd
+      - Sundar Structural
+      - Sundar
+      total_mentions: 36
+      reason: All entities refer to the same company, with 'Sundar Structural Consultants
+        Pvt Ltd' being the most complete name, and the shorter forms 'Sundar Structural'
+        and 'Sundar' appearing in contexts that clearly link them to 'Sundar Structural
+        Consultants' or 'Sundar Structural Consultants Pvt Ltd', including a domain
+        'Sundarstructural.in'.
+    - survivor_id: 46e9fd11-e7c6-4ffa-97a7-7542dba37f05
+      survivor_name: Deshpande Architects + Engineers LLP
+      merge_ids:
+      - 46e9fd11-e7c6-4ffa-97a7-7542dba37f05
+      - 2990218b-ae44-4fd8-a848-1686a8523d41
+      - 0244a909-7241-42cf-ad3d-06b55fe407a7
+      merge_names:
+      - Deshpande Architects + Engineers LLP
+      - Deshpande Architects
+      - Deshpande
+      total_mentions: 16
+      reason: All three entities refer to the same architectural firm, with 'Deshpande
+        Architects' and 'Deshpande' being shorter forms of 'Deshpande Architects +
+        Engineers LLP' as indicated by the shared context of attending meetings and
+        project involvement.
+    - survivor_id: 31e54225-f93e-4598-936c-ea3a8fc40b62
+      survivor_name: Apollo
+      merge_ids:
+      - 94b47b18-126c-46e6-addc-e64c9a4baf85
+      - 31e54225-f93e-4598-936c-ea3a8fc40b62
+      merge_names:
+      - Apollo Hospitals
+      - Apollo
+      total_mentions: 12
+      reason: The contexts for 'Apollo' strongly suggest it refers to 'Apollo Hospitals'
+        as a general entity.
+    - survivor_id: b8b9f042-0b47-4407-b131-99d33ba06660
+      survivor_name: Apollo Hospitals Pune Pvt Ltd
+      merge_ids:
+      - b8b9f042-0b47-4407-b131-99d33ba06660
+      - 33420683-f38f-45c4-8321-bedae86e562c
+      - 6c527a69-82ca-455f-95dd-5d561259c8d6
+      merge_names:
+      - Apollo Hospitals Pune Pvt Ltd
+      - Apollo Hospitals Pune
+      - Apollo Hospitals Pune Maternity Ward
+      total_mentions: 8
+      reason: '''Apollo Hospitals Pune Pvt Ltd'' is the full legal name for ''Apollo
+        Hospitals Pune'' and ''Apollo Hospitals Pune Maternity Ward'' is a specific
+        department within it, all referring to the same core entity.'
+    - survivor_id: 737dfd33-967c-4222-80df-65e31a19409e
+      survivor_name: Karnataka Pollution Control Board
+      merge_ids:
+      - 737dfd33-967c-4222-80df-65e31a19409e
+      - 0ac77cea-eb42-4157-86d3-b262ab097483
+      merge_names:
+      - Karnataka Pollution Control Board
+      - Karnataka State Pollution Control Board
+      total_mentions: 11
+      reason: Both names refer to the same government body responsible for pollution
+        control in Karnataka, with 'State' being an optional descriptor.
+    - survivor_id: 6fcfe3ca-fcff-408e-9a83-ffa38ff3527d
+      survivor_name: Directorate of Factories + Boilers
+      merge_ids:
+      - 6fcfe3ca-fcff-408e-9a83-ffa38ff3527d
+      - b1bf2cb1-5409-44bf-9604-22ce6b78fc21
+      merge_names:
+      - Directorate of Factories + Boilers
+      - Directorate of Factories and Boilers
+      total_mentions: 12
+      reason: The names 'Directorate of Factories + Boilers' and 'Directorate of Factories
+        and Boilers' are semantically identical, with '+' being a common abbreviation
+        for 'and'.
+    - survivor_id: 2d6ab7d9-4c51-42c7-977a-7ba3cd2b8513
+      survivor_name: Tarkett India
+      merge_ids:
+      - 2d6ab7d9-4c51-42c7-977a-7ba3cd2b8513
+      - 5c770fc9-8352-450a-9787-d1d02d1ebe17
+      merge_names:
+      - Tarkett India
+      - Tarkett
+      total_mentions: 11
+      reason: The contexts show 'Tarkett' and 'Tarkett India' are used interchangeably,
+        with 'Tarkett India Private Limited' confirming the full name of the entity.
+    - survivor_id: 2e71f5c3-4f66-4181-b347-40693abbb066
+      survivor_name: Cummins India
+      merge_ids:
+      - 2e71f5c3-4f66-4181-b347-40693abbb066
+      - 51445c26-98bb-405a-a4b7-20605d44a08d
+      merge_names:
+      - Cummins India
+      - Cummins
+      total_mentions: 10
+      reason: The contexts for 'Cummins' consistently refer to the same entity as
+        'Cummins India', indicating 'Cummins' is a shortened reference to the full
+        name.
+    - survivor_id: 463e084a-2299-4634-afc0-6de33dff76ca
+      survivor_name: Karnataka Factories + Boilers Dept
+      merge_ids:
+      - 463e084a-2299-4634-afc0-6de33dff76ca
+      - c9eb9653-02b2-46ed-9203-a88cc30a462c
+      merge_names:
+      - Karnataka Factories + Boilers Dept
+      - Karnataka Directorate of Factories + Boilers
+      total_mentions: 5
+      reason: Both entities refer to the same government department responsible for
+        factories and boilers in Karnataka, with 'Directorate' and 'Dept' being synonymous
+        in this context.
+    - survivor_id: c66e923a-e1b0-4286-b19e-ef45f87ff504
+      survivor_name: Karnataka Labour Department
+      merge_ids:
+      - c66e923a-e1b0-4286-b19e-ef45f87ff504
+      - bd09dbcf-81c0-403d-8783-a861e151e92e
+      merge_names:
+      - Karnataka Labour Department
+      - Karnataka Labour Dept
+      total_mentions: 5
+      reason: Karnataka Labour Department and Karnataka Labour Dept are the same entity,
+        with 'Dept' being an abbreviation for 'Department'.
+    - survivor_id: d934df17-b965-4062-98c3-ec74d75bd2d7
+      survivor_name: Mumbai Metropolitan Region Development Authority
+      merge_ids:
+      - d934df17-b965-4062-98c3-ec74d75bd2d7
+      - 78c28c62-467f-412e-b757-9652b180586d
+      merge_names:
+      - Mumbai Metropolitan Region Development Authority
+      - Mumbai Metropolitan Region Development Authority (MMRDA)
+      total_mentions: 4
+      reason: The two entities are identical, with one including the common acronym
+        MMRDA in parentheses, indicating they refer to the same organization.
+    - survivor_id: c84208c9-7053-4030-8295-d463c37d3abe
+      survivor_name: Whitefield Datacentre Phase-2
+      merge_ids:
+      - c84208c9-7053-4030-8295-d463c37d3abe
+      - 56e4b26c-f663-45cb-9b86-005f1b31f399
+      merge_names:
+      - Whitefield Datacentre Phase-2
+      - Whitefield Datacentre
+      total_mentions: 4
+      reason: Whitefield Datacentre Phase-2 is a specific phase of the broader Whitefield
+        Datacentre, indicating they refer to the same facility.
+    - survivor_id: c1240e4e-948a-4ae5-939f-3815ed37982f
+      survivor_name: Siemens
+      merge_ids:
+      - c1240e4e-948a-4ae5-939f-3815ed37982f
+      - ef065921-4b15-4643-9634-4fa37c10c14c
+      merge_names:
+      - Siemens
+      - Siemens Healthineers
+      total_mentions: 4
+      reason: Siemens Healthineers is a subsidiary of Siemens, and the context suggests
+        they are being referred to interchangeably in the medical equipment context.
+  PERSON:
+    groups:
+    - survivor_id: fe913311-7267-4fc2-9fdd-652565d21b31
+      survivor_name: Sanjay Tripathi
+      merge_ids:
+      - fe913311-7267-4fc2-9fdd-652565d21b31
+      - 66e910fa-34aa-43ed-be80-653697b3a15a
+      merge_names:
+      - Sanjay Tripathi
+      - Sanjay
+      total_mentions: 50
+      reason: The context 'Sanjay Tripathi of Acme approves the ~INR 19 lakh cost
+        for fire NOC compliance, instructing Mahalaxmi to raise a formal Change Order
+        CO-018.' explicitly links 'Sanjay' to 'Sanjay Tripathi'.
+    - survivor_id: 0e526148-adff-4201-aa9d-508ba42f031e
+      survivor_name: Sushil Patil
+      merge_ids:
+      - 0e526148-adff-4201-aa9d-508ba42f031e
+      - 090478c5-9f2a-431c-9062-51c43a5fe661
+      merge_names:
+      - Sushil Patil
+      - Sushil
+      total_mentions: 29
+      reason: One context explicitly links 'Sushil' to 'Sushil Patil (Phoenix MEP)',
+        indicating they are the same person.
+    - survivor_id: bb7d4ab5-ac4d-4246-904f-18a740df129f
+      survivor_name: Murali Sundar
+      merge_ids:
+      - bb7d4ab5-ac4d-4246-904f-18a740df129f
+      - 1dea6c88-2def-4756-89b7-11f917fa32e1
+      merge_names:
+      - Murali Sundar
+      - Murali
+      total_mentions: 27
+      reason: The contexts for 'Murali' refer to 'Sundar Structural' and 'Ravi Iyer
+        from Sundar Structural Consultants responds', strongly suggesting 'Murali'
+        is a shortened form of 'Murali Sundar' who is also a structural engineer.
+    - survivor_id: bfc4067a-423b-4699-8ad6-c0016d62c0c7
+      survivor_name: Mr. Kumar
+      merge_ids:
+      - bfc4067a-423b-4699-8ad6-c0016d62c0c7
+      - f2814314-a857-4452-bd36-732be61b2bd8
+      merge_names:
+      - Mr. Kumar
+      - Mr. Dinesh Kumar
+      total_mentions: 18
+      reason: The contexts for 'Mr. Kumar' consistently refer to an individual involved
+        in an incident, and 'Mr. Dinesh Kumar' is explicitly identified as a worker
+        who fell from a scaffold, making it highly probable that 'Mr. Kumar' is a
+        shortened reference to 'Mr. Dinesh Kumar' in the same incident reports.
+    - survivor_id: 1d90b08f-3820-4bf2-9432-b2f9bfc8984e
+      survivor_name: Rajiv Goyal
+      merge_ids:
+      - 1d90b08f-3820-4bf2-9432-b2f9bfc8984e
+      - f717adff-4eca-4c2b-8b4c-179b72c86119
+      merge_names:
+      - Rajiv Goyal
+      - Rajiv
+      total_mentions: 11
+      reason: The contexts show 'Rajiv' responding to an RFI and 'Rajiv Goyal' from
+        Tarkett responding to the same RFI, indicating they are the same person.
+    - survivor_id: 462dff8d-2469-48ef-b451-0b612a6398c9
+      survivor_name: Dr. Murali Sundar
+      merge_ids:
+      - 462dff8d-2469-48ef-b451-0b612a6398c9
+      - ab888751-3004-4668-8bbe-8bf08c3c0a35
+      merge_names:
+      - Dr. Murali Sundar
+      - Dr. Sundar
+      total_mentions: 9
+      reason: Both entities refer to 'Dr. Sundar' and the contexts suggest 'Dr. Murali
+        Sundar' is the full name, with 'Dr. Sundar' being a shortened form, especially
+        given the association with 'Sundar Structural Consultants'.
+  PRODUCT:
+    groups:
+    - survivor_id: e5c46c5a-63d1-412f-a1b6-2c4815e122ea
+      survivor_name: Honeywell Niagara N4
+      merge_ids:
+      - e5c46c5a-63d1-412f-a1b6-2c4815e122ea
+      - b09defc6-e233-4cc0-be76-f2c78bb425dc
+      merge_names:
+      - Honeywell Niagara N4
+      - Honeywell N4
+      total_mentions: 4
+      reason: Both entities refer to the same product, 'Honeywell Niagara N4', with
+        one being a slightly abbreviated form.
+  WORK_OF_ART:
+    groups:
+    - survivor_id: 5fa11f48-88e3-4d19-9577-4a0d83e3ab90
+      survivor_name: Monthly Safety Performance Report
+      merge_ids:
+      - 5fa11f48-88e3-4d19-9577-4a0d83e3ab90
+      - efca1d59-8934-481b-97c3-c775846de180
+      merge_names:
+      - Monthly Safety Performance Report
+      - "MONTHLY SAFETY PERFORMANCE REPORT \u2014 APRIL 2025"
+      total_mentions: 7
+      reason: The report with the specific date 'APRIL 2025' is an instance of the
+        general 'Monthly Safety Performance Report'.
+    - survivor_id: 95464790-a56c-4cac-92ab-42b6a63ff650
+      survivor_name: Finishes Schedule
+      merge_ids:
+      - 95464790-a56c-4cac-92ab-42b6a63ff650
+      - 0bbcea6a-beb4-43cc-87a9-fe8d14afb439
+      merge_names:
+      - Finishes Schedule
+      - Finishes Schedule (Summary)
+      total_mentions: 4
+      reason: Both entities refer to a 'Finishes Schedule', with one being a summary
+        of the other, indicating they are the same work of art or closely related
+        parts of it.
