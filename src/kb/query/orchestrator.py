@@ -1623,62 +1623,117 @@ class Orchestrator:
                     )
             return None
 
+        # Helper: run a best-effort cosmetic write inside its own
+        # SAVEPOINT so that if it raises (or — worse — silently aborts
+        # the Postgres transaction without raising in Python), the
+        # outer txn stays alive and the chat_turn INSERT still commits.
+        #
+        # This was a real production bug: the carry-forward UPDATE
+        # cast `new_entities` to `uuid[]` but the LLM context resolver
+        # was putting entity NAMES (e.g. "aurangabad") into the list.
+        # The cast failed with "invalid input syntax for type uuid",
+        # PG marked the txn aborted, the Python try/except swallowed
+        # the error so we never knew — and when the dep's outer
+        # `async with conn.transaction()` exited, it ROLLED BACK
+        # everything including the just-inserted chat_turn. From the
+        # outside this looked like "1 of 3 chat turns silently lost".
+        async def best_effort_write(label: str, fn) -> None:
+            sp_name = f"persist_turn_extra_{label}"
+            sp_active = False
+            try:
+                await conn.execute(f"SAVEPOINT {sp_name}")
+                sp_active = True
+                await fn()
+                await conn.execute(f"RELEASE SAVEPOINT {sp_name}")
+                sp_active = False
+            except Exception as exc:
+                logger.warning(
+                    "chat_turn persist: %s failed (txn protected by "
+                    "savepoint, chat_turn safe): %s", label, exc,
+                )
+                if sp_active:
+                    try:
+                        await conn.execute(f"ROLLBACK TO SAVEPOINT {sp_name}")
+                        await conn.execute(f"RELEASE SAVEPOINT {sp_name}")
+                    except Exception as inner:
+                        logger.warning(
+                            "chat_turn persist: %s rollback also failed: %s",
+                            label, inner,
+                        )
+
         # Backfill the session title from the first user query so the
         # sidebar's recent-chats list shows something readable instead
-        # of "Untitled" / a raw UUID. Only fires on turn_index == 0
-        # (first turn) when the session was auto-created without a
-        # caller-supplied title. Wrapped in try/except — title backfill
-        # is cosmetic; never fail the chat turn over it.
+        # of "Untitled" / a raw UUID. Only on the very first turn.
         if turn_index == 0 and not session.title:
-            try:
-                title = (original_query or "").strip()[:120] or "Untitled chat"
+            title = (original_query or "").strip()[:120] or "Untitled chat"
+
+            async def _backfill_title() -> None:
                 await conn.execute(
                     "UPDATE chat_sessions SET title = %s WHERE id = %s "
                     "AND title IS NULL",
                     (title, session_id),
                 )
-            except Exception:  # noqa: BLE001
-                pass
+
+            await best_effort_write("title_backfill", _backfill_title)
 
         # Roll carry-forward state. We append any new entities from
         # ctx_resolution to the session's existing list.
+        #
+        # Hard input validation: `carry_forward_entities` is `uuid[]`
+        # in the schema but the LLM context resolver returns ARBITRARY
+        # strings (entity names, mentions, sometimes UUIDs). Drop the
+        # non-UUID values — they don't belong in this column. (When the
+        # carry-forward schema grows a "names" channel, this is where
+        # those go.) Skip the whole UPDATE if nothing remains.
         if ctx_resolution and (
             ctx_resolution.new_entities
             or ctx_resolution.new_filters
             or ctx_resolution.refinement_of_prior
         ):
-            new_entities_combined = list(session.carry_forward_entities) + [
+            import re as _re
+            _UUID_RE = _re.compile(
+                r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+                _re.IGNORECASE,
+            )
+            valid_new = [
                 e for e in ctx_resolution.new_entities
-                if e not in session.carry_forward_entities
+                if isinstance(e, str) and _UUID_RE.match(e)
+                and e not in session.carry_forward_entities
             ]
+            new_entities_combined = (
+                list(session.carry_forward_entities) + valid_new
+            )
             merged_filters = {
                 **(session.carry_forward_filters or {}),
                 **(ctx_resolution.new_filters or {}),
             }
-            try:
-                await update_session_carry_forward(
-                    conn,
-                    session_id=session_id,
-                    carry_forward_entities=new_entities_combined,
-                    carry_forward_filters=merged_filters,
+            # Only call the UPDATE when something actually changed.
+            should_update = bool(valid_new) or merged_filters != (
+                session.carry_forward_filters or {}
+            )
+            if should_update:
+                async def _roll_carry_forward() -> None:
+                    await update_session_carry_forward(
+                        conn,
+                        session_id=session_id,
+                        carry_forward_entities=new_entities_combined,
+                        carry_forward_filters=merged_filters,
+                    )
+
+                await best_effort_write(
+                    "carry_forward", _roll_carry_forward,
                 )
-            except Exception:  # noqa: BLE001
-                pass
 
         # Tier 2 (Design 8) — Mem0-style rolling summary refresh.
-        # The session's `older_turn_summary` column was historically
-        # written by nothing, so conversations past 6 turns silently
-        # lost their mid-range context. We refresh it every Nth turn
-        # once the verbatim window starts displacing turns. Wrapped
-        # in try/except since the summary is best-effort — failing
-        # here would degrade the answer the user just got, which is
-        # the wrong tradeoff for a cosmetic memory feature.
-        try:
+        # Best-effort, same SAVEPOINT protection as the carry-forward
+        # update above so a future failure here can't poison the
+        # outer txn and revert the chat_turn INSERT.
+        async def _tier2_refresh() -> None:
             await self._maybe_refresh_tier2_summary(
                 conn=conn, session=session, turn_index=turn_index,
             )
-        except Exception:  # noqa: BLE001
-            pass
+
+        await best_effort_write("tier2_summary", _tier2_refresh)
 
         return turn_index
 

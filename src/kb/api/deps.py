@@ -27,6 +27,15 @@ async def kb_app_connection() -> AsyncIterator[Connection]:
     The `SET set_config('app.workspace_id', ..., true)` is LOCAL — scoped
     to the surrounding transaction. The `transaction()` block commits on
     successful exit, rolls back on exception.
+
+    Important invariant: anything that runs while this conn is yielded
+    must not POISON the txn by raising at the Postgres layer without
+    raising in Python. The chat-turn persist path learned this the
+    hard way — a `try/except: pass` around a SQL-level cast error
+    let the txn die silently, taking the chat_turn INSERT with it
+    when this CM rolled back instead of committed. The orchestrator's
+    `_persist_turn` now SAVEPOINT-wraps every best-effort write to
+    contain that risk.
     """
     settings = get_settings()
     workspace_id = current_workspace_id()
