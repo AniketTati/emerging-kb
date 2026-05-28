@@ -704,8 +704,14 @@ export async function listSessions(limit = 50): Promise<SessionInfo[]> {
 }
 
 export async function getSessionTurns(sessionId: string): Promise<SessionTurn[]> {
+  // Pass an explicit large limit so the chat-replay UI sees every turn
+  // in the session, not just the orchestrator's 6-turn verbatim window.
+  // Before this, leaving + re-entering a session showed only the first
+  // few turns (ORDER BY turn_index ASC LIMIT 6 / 2 depending on
+  // backend default) — see the matching backend fix in sessions.py.
+  // 500 matches the server-side cap (le=500 on the Query).
   const resp = await fetch(
-    `${KB_API_URL}/sessions/${sessionId}/turns`,
+    `${KB_API_URL}/sessions/${sessionId}/turns?limit=500`,
     { headers: workspaceHeaders() },
   );
   const body = await _handle<{ items: SessionTurn[] }>(resp);
