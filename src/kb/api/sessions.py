@@ -184,56 +184,43 @@ async def get_session_turns(
     session_id: str,
     workspace_id: Annotated[str, Depends(current_workspace_id)],  # noqa: ARG001
     conn: Annotated[Connection, Depends(kb_app_connection)],
-    limit: int = Query(default=500, ge=1, le=500),
 ) -> TurnsListResponse:
     s = await read_session(conn, session_id=session_id)
     if s is None:
         raise HTTPException(status_code=404, detail="session not found")
-    # Pull pipeline-stage metadata from query_log via LEFT JOIN. Without
-    # this join, the chat UI replays a session with "Intent ?" /
-    # "Faithfulness ?" because that data lived on query_log not
-    # chat_turns.
+    # DISPLAY path — return ALL turns in chronological order. The user
+    # rightly insisted the display side is unbounded; capping it was the
+    # original bug. There is no `limit` query param because there isn't
+    # a sensible UX where the chat UI would want to render only the
+    # first / last N — when a session grows that big, the UI scrolls,
+    # it doesn't truncate.
     #
-    # Two ordering subtleties:
-    #   - The PAGE we want is the LATEST N turns (DESC + LIMIT) — older
-    #     bug was `ORDER BY turn_index ASC LIMIT 6`, which dropped the
-    #     newest turns once a session grew past the verbatim window and
-    #     showed only the first 6.  Default cap is now 500 so by default
-    #     all turns load; the cap exists only to put a hard upper bound
-    #     on a single response.
-    #   - The CALLER (chat-replay UI) wants chronological order, so we
-    #     wrap the LATEST-N select in an outer ORDER BY turn_index ASC.
+    # ANSWER-TIME path is separate and intentionally capped: the
+    # orchestrator calls read_last_k_turns(k=DEFAULT_HOT_TURNS) to pick
+    # the verbatim turns the LLM sees + asks turn_summarizer to roll
+    # older turns into older_turn_summary. That 6-turn cap is the
+    # context-window budget, NOT a display cap. Conflating the two was
+    # how we shipped "only first N chats survive a reload".
     #
-    # The orchestrator's verbatim context window is a separate path
-    # (read_last_k_turns with k=DEFAULT_HOT_TURNS) — that 6-turn cap is
-    # the answer-time budget, not a display cap. Don't conflate the two.
+    # LEFT JOIN to query_log so the chat UI replay shows mode / intent /
+    # crag / faithfulness inline instead of "?" — those columns live on
+    # query_log, not chat_turns.
     cur = await conn.execute(
         """
-        SELECT id, session_id, turn_index,
-               user_query, resolved_query, answer, citations,
-               created_at, query_log_id,
-               mode, intent, intent_confidence,
-               crag_score, faithfulness_verdict,
-               faithfulness_score, refused, refusal_reason,
-               latency_ms, hits_len
-          FROM (
-            SELECT t.id::text AS id, t.session_id::text AS session_id, t.turn_index,
-                   t.user_query, t.resolved_query, t.answer, t.citations,
-                   t.created_at::text AS created_at, t.query_log_id::text AS query_log_id,
-                   ql.mode, ql.intent, ql.intent_confidence,
-                   ql.crag_score, ql.faithfulness_verdict,
-                   ql.faithfulness_score, ql.refused, ql.refusal_reason,
-                   ql.latency_ms,
-                   jsonb_array_length(coalesce(ql.hit_ids, '[]'::jsonb)) AS hits_len
-              FROM chat_turns t
-              LEFT JOIN query_log ql ON ql.id = t.query_log_id
-             WHERE t.session_id = %s
-             ORDER BY t.turn_index DESC
-             LIMIT %s
-          ) latest
-         ORDER BY turn_index ASC
+        SELECT t.id::text, t.session_id::text, t.turn_index,
+               t.user_query, t.resolved_query, t.answer, t.citations,
+               t.created_at::text, t.query_log_id::text,
+               ql.mode, ql.intent, ql.intent_confidence,
+               ql.crag_score, ql.faithfulness_verdict,
+               ql.faithfulness_score, ql.refused, ql.refusal_reason,
+               ql.latency_ms,
+               jsonb_array_length(coalesce(ql.hit_ids, '[]'::jsonb))
+          FROM chat_turns t
+          LEFT JOIN query_log ql ON ql.id = t.query_log_id
+         WHERE t.session_id = %s
+         ORDER BY t.turn_index ASC
         """,
-        (session_id, limit),
+        (session_id,),
     )
     rows = await cur.fetchall()
     items: list[TurnOut] = []
