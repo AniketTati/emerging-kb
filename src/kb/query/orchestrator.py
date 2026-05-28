@@ -1378,6 +1378,54 @@ class Orchestrator:
             c.chain_id = c.chain_id or rich.chain_id
             c.confidence = c.confidence if c.confidence is not None else rich.confidence
 
+        # RAPTOR corpus-scope nodes have file_id=NULL by schema (they
+        # summarize across many files), so the chat right rail rendered
+        # them as a dead label with no /files/<id> link. Resolve each
+        # such citation to the file whose leaves contribute most to the
+        # summary node — that file becomes the click target. Also stash
+        # the full source-file list under ref.source_file_ids so a
+        # future "view all sources" affordance can fan out.
+        raptor_needing_file = [
+            c for c in generation.citations
+            if c.modality == "raptor_summary" and not c.file_id
+        ]
+        if raptor_needing_file:
+            from kb.query.citations import resolve_raptor_source_files
+            node_ids = [c.hit_id for c in raptor_needing_file]
+            resolved = await resolve_raptor_source_files(
+                conn, raptor_node_ids=node_ids,
+            )
+            # Fetch file metas for the resolved best-source file_ids so
+            # we can append the document name to the label (turns
+            # "Workspace summary" into "Workspace summary · contract.pdf").
+            extra_file_ids = {
+                pair[0] for pair in resolved.values() if pair and pair[0]
+            }
+            extra_metas = await fetch_file_metas(
+                conn, file_ids=list(extra_file_ids),
+            ) if extra_file_ids else {}
+            for c in raptor_needing_file:
+                pair = resolved.get(c.hit_id)
+                if not pair:
+                    continue
+                best_file_id, all_file_ids = pair
+                c.file_id = best_file_id
+                # Stash the multi-file list on the ref so the UI can
+                # later render a "+N more sources" dropdown without
+                # another round-trip.
+                if isinstance(c.ref, dict):
+                    c.ref["source_file_ids"] = all_file_ids
+                    c.ref["best_source_file_id"] = best_file_id
+                # Re-label so the user sees what the summary draws from
+                # instead of a bare "Workspace summary" / "Topic cluster
+                # summary" with no document hint.
+                best_meta = extra_metas.get(best_file_id)
+                best_name = best_meta.name if best_meta else None
+                if best_name:
+                    n_other = max(0, len(all_file_ids) - 1)
+                    suffix = f" + {n_other} more" if n_other > 0 else ""
+                    c.label = f"{c.label or 'summary'} · {best_name}{suffix}"
+
     @staticmethod
     def _iter_rich_citations(citations: list[Citation]):
         """Adapter — yields objects with .modality so distinct_modalities()

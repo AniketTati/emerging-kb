@@ -567,6 +567,107 @@ async def build_citations_for_hits(
     ]
 
 
+async def resolve_raptor_source_files(
+    conn: Any, *, raptor_node_ids: Iterable[str],
+) -> dict[str, tuple[str, list[str]]]:
+    """For each RAPTOR node id, descend `raptor_edges` to find the leaf
+    contextual_chunks under it, resolve those to file_ids, and pick the
+    file with the most leaves.
+
+    Returns `{node_id: (best_file_id, all_file_ids)}`. Nodes whose
+    descent yields no leaves (orphaned summary, mid-build state) are
+    omitted — caller leaves the citation's file_id NULL in that case.
+
+    Why this exists: corpus-scope RAPTOR summary nodes have
+    `raptor_nodes.file_id = NULL` by schema constraint (they span
+    multiple files), so the standard `build_citation()` path leaves
+    the citation's file_id NULL and the UI link `/files/<id>` is dead.
+    The RAPTOR node itself doesn't own a file, but the LEAVES under it
+    do — picking the most-represented leaf file gives the user a sane
+    "open the document this summary draws from" click target.
+
+    Wrapped in a SAVEPOINT so a malformed UUID / RLS edge case can't
+    abort the outer txn (orchestrator goes on to write audit + log).
+    """
+    ids = sorted({nid for nid in raptor_node_ids if nid})
+    if not ids:
+        return {}
+
+    in_savepoint = False
+    try:
+        await conn.execute("SAVEPOINT resolve_raptor_files")
+        in_savepoint = True
+    except Exception:
+        pass
+
+    try:
+        # Recursive descent: start at each requested node, walk
+        # raptor_edges following child_node_id until we land on a
+        # child_contextual_chunk_id (the leaf). Then join contextual_chunks
+        # to get the file_id, group by (node, file), count, pick the
+        # winner per node.
+        #
+        # NOTE: a single node's descent can fan out across many files —
+        # that's the whole point of corpus-scope summaries. We return
+        # the full set in addition to the best so callers can stash it
+        # in the ref blob if they want a "view all sources" affordance.
+        cur = await conn.execute(
+            """
+            WITH RECURSIVE descent AS (
+                SELECT id::text AS root_node_id,
+                       id AS parent_node_id
+                  FROM raptor_nodes
+                 WHERE id = ANY(%s::uuid[])
+                UNION ALL
+                SELECT d.root_node_id,
+                       COALESCE(re.child_node_id, NULL) AS parent_node_id
+                  FROM descent d
+                  JOIN raptor_edges re ON re.parent_node_id = d.parent_node_id
+                 WHERE re.child_node_id IS NOT NULL
+            ),
+            leaves AS (
+                SELECT d.root_node_id, re.child_contextual_chunk_id
+                  FROM descent d
+                  JOIN raptor_edges re ON re.parent_node_id = d.parent_node_id
+                 WHERE re.child_contextual_chunk_id IS NOT NULL
+            )
+            SELECT l.root_node_id,
+                   cc.file_id::text,
+                   COUNT(*)::int AS leaf_count
+              FROM leaves l
+              JOIN contextual_chunks cc ON cc.id = l.child_contextual_chunk_id
+             GROUP BY l.root_node_id, cc.file_id
+             ORDER BY l.root_node_id, leaf_count DESC
+            """,
+            (ids,),
+        )
+        rows = await cur.fetchall()
+        if in_savepoint:
+            try:
+                await conn.execute("RELEASE SAVEPOINT resolve_raptor_files")
+            except Exception:
+                pass
+    except Exception:
+        if in_savepoint:
+            try:
+                await conn.execute("ROLLBACK TO SAVEPOINT resolve_raptor_files")
+                await conn.execute("RELEASE SAVEPOINT resolve_raptor_files")
+            except Exception:
+                pass
+        return {}
+
+    by_node: dict[str, list[str]] = {}
+    for nid, fid, _ in rows:
+        by_node.setdefault(str(nid), []).append(str(fid))
+
+    out: dict[str, tuple[str, list[str]]] = {}
+    for nid, files in by_node.items():
+        # First file is the highest-count one because of the
+        # ORDER BY leaf_count DESC above.
+        out[nid] = (files[0], files)
+    return out
+
+
 def distinct_modalities(citations: Iterable[RichCitation]) -> list[str]:
     """Order-preserving distinct modality list — used to populate
     query_log.citation_modalities for the dashboard."""
