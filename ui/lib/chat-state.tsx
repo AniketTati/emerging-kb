@@ -3,16 +3,25 @@
 import {
   createContext,
   useContext,
+  useEffect,
   useReducer,
+  useRef,
   type Dispatch,
   type ReactNode,
 } from "react";
-import type {
-  ChatResponse,
-  ChatStreamEvent,
-  Citation,
-  SessionTurn,
+import {
+  getSessionTurns,
+  type ChatResponse,
+  type ChatStreamEvent,
+  type Citation,
+  type SessionTurn,
 } from "./api";
+
+/** localStorage key that remembers the active chat session_id across
+ *  navigations + page reloads. The DB still holds the canonical turn
+ *  history; this key is just enough state for ChatProvider to know
+ *  which session to fetch when it remounts. Cleared by `new_chat`. */
+const SESSION_LS_KEY = "kb.chat.activeSessionId";
 
 export type Turn = {
   id: string;
@@ -196,6 +205,68 @@ export function useChat() {
 
 export function ChatProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(reducer, initialState);
+
+  // Mirror sessionId → localStorage so navigating away from /chat and
+  // back (or a page reload) doesn't drop the user into a fresh empty
+  // session. The DB has the turns; we just need to remember which
+  // session_id was active.
+  //
+  // Why the `mountedRef` guard: state.sessionId starts as null on every
+  // mount, which would otherwise fire on the initial useEffect run and
+  // wipe the localStorage key BEFORE the restore effect below gets to
+  // read it. We only want to clear the key when sessionId transitions
+  // from non-null → null (an explicit `new_chat`), not on the initial
+  // null seen at mount time.
+  const mountedRef = useRef(false);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (state.sessionId) {
+      window.localStorage.setItem(SESSION_LS_KEY, state.sessionId);
+      mountedRef.current = true;
+    } else if (mountedRef.current) {
+      // We've previously had a sessionId in this mount's lifetime, so
+      // a null now means the user clicked "new chat". Wipe the key so
+      // the next mount doesn't auto-restore the old session.
+      window.localStorage.removeItem(SESSION_LS_KEY);
+    }
+  }, [state.sessionId]);
+
+  // Auto-restore on mount: if a session id is in localStorage AND we
+  // don't already have turns (we might if the parent component already
+  // dispatched load_session from a sidebar click), fetch turns + replay.
+  // The ref guards against React strict-mode double-mount in dev.
+  //
+  // Skip restore when the URL carries `?q=…` — that's the /audit
+  // "Replay" deep-link which wants a fresh session for the replayed
+  // query, not the user's last conversation.
+  const restoredRef = useRef(false);
+  useEffect(() => {
+    if (restoredRef.current) return;
+    if (typeof window === "undefined") return;
+    if (state.turns.length > 0 || state.sessionId) return;
+    if (new URLSearchParams(window.location.search).has("q")) return;
+    const stored = window.localStorage.getItem(SESSION_LS_KEY);
+    if (!stored) return;
+    restoredRef.current = true;
+    (async () => {
+      try {
+        const turns = await getSessionTurns(stored);
+        // Empty array can mean the session was deleted server-side
+        // (e.g. user wiped history elsewhere). Clear the stale key so
+        // we don't keep retrying.
+        if (turns.length === 0) {
+          window.localStorage.removeItem(SESSION_LS_KEY);
+          return;
+        }
+        dispatch({ type: "load_session", sessionId: stored, turns });
+      } catch {
+        // Network / 404 — drop the stale key so we don't loop on it.
+        window.localStorage.removeItem(SESSION_LS_KEY);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   return (
     <ChatContext.Provider value={{ state, dispatch }}>
       {children}
