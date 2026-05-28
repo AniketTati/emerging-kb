@@ -24,12 +24,53 @@ Refusal modes (decisions #6/#7/#8/#9/#10):
 from __future__ import annotations
 
 import json
+import logging
 import os
 from typing import Any, Protocol
 
 from pydantic import BaseModel, Field
 
 from kb.query.rrf import Hit
+
+
+logger = logging.getLogger(__name__)
+
+
+# Brace-balanced JSON extractor — when Gemini wraps its JSON in stray
+# prose ("Sure, here's the answer: { ... }") or appends a trailer
+# ("} Hope that helps!"), naive json.loads fails. We scan for the first
+# `{`, then walk character-by-character tracking brace depth + string
+# state, returning the first balanced `{...}` block.
+#
+# Conservative on purpose: if the extractor can't find a clean block,
+# we return None and the caller falls through to refusal.
+def _extract_json_object(text: str) -> str | None:
+    start = text.find("{")
+    if start < 0:
+        return None
+    depth = 0
+    in_string = False
+    escape = False
+    for i in range(start, len(text)):
+        c = text[i]
+        if escape:
+            escape = False
+            continue
+        if c == "\\":
+            escape = True
+            continue
+        if c == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start:i + 1]
+    return None
 
 
 # Decision #2: top-K post-rerank seen by the generator.
@@ -42,7 +83,15 @@ _TOP_N_HITS = 10
 # asked to echo back `snippet_preview` (~200 chars × 10 citations) in
 # the JSON output. The simplified citation schema below also helps,
 # but a larger cap means longer answers don't truncate either.
-_MAX_OUTPUT_TOKENS = 8000
+#
+# Bumped 8000 → 16000 after a follow-up failure: a compound query
+# ("can you talk more about Vertex Industries / What more info do we
+# have") combined with conflict-resolution context (3 conflicts
+# inlined into the prompt) drove an answer past the 8K cap and
+# truncated JSON mid-response → parse_error. Gemini Flash 2.5
+# supports much larger output budgets; 16K leaves comfortable
+# headroom without affecting cost (we're billed on actual usage).
+_MAX_OUTPUT_TOKENS = 16000
 
 # Decision #15: Astute defensive system prompt.
 #
@@ -305,11 +354,27 @@ def _parse_result(
     raw: str,
     hits: list[Hit],
     model_id: str,
+    finish_reason: str | None = None,
 ) -> GenerationResult:
     """Parse Gemini's JSON output into GenerationResult. Tolerant + fail-safe.
 
-    Decision #9: any parse failure → refusal with reason='parse_error'.
+    Decision #9: any parse failure → refusal with reason='parse_error'
+    (or 'truncated' when finish_reason indicates MAX_TOKENS — that's a
+    distinct, actionable failure and surfacing it as parse_error hides
+    the real fix, which is to bump _MAX_OUTPUT_TOKENS or summarize the
+    conflict-resolution context).
     Decision #8: respects model's own refusal flag.
+
+    Parse pipeline (each step recovers if the prior one fails):
+      1. Strip ```json fenced wrappers.
+      2. Try json.loads directly.
+      3. If that fails, extract first balanced {...} block (handles
+         Gemini wrapping its JSON in prose or appending trailers).
+      4. If that ALSO fails, log + return refusal.
+
+    Every failure path logs the raw_text preview + finish_reason so an
+    operator can diagnose without re-running the query. Pre-fix the
+    raw response was silently dropped on parse failure.
     """
     text = (raw or "").strip()
     if text.startswith("```"):
@@ -320,25 +385,50 @@ def _parse_result(
             lines = lines[1:]
         text = "\n".join(lines)
 
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError:
+    def _refused_parse(reason: str, note: str = "") -> GenerationResult:
+        # MAX_TOKENS gets its own bucket — distinct refusal_reason +
+        # actionable log message. Other parse failures stay bucketed
+        # under "parse_error".
+        actual_reason = (
+            "truncated" if finish_reason == "MAX_TOKENS" else reason
+        )
+        logger.warning(
+            "generate: %s (finish_reason=%s, raw_len=%d, note=%s); "
+            "raw[:500]=%r",
+            actual_reason, finish_reason, len(raw or ""),
+            note, (raw or "")[:500],
+        )
         return GenerationResult(
             answer="",
             citations=[],
             refused=True,
-            refusal_reason="parse_error",
+            refusal_reason=actual_reason,
             model_id=model_id,
         )
 
+    data: Any
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as exc:
+        # Recovery attempt: peel off prose / trailers around the JSON.
+        block = _extract_json_object(text)
+        if block is None:
+            return _refused_parse("parse_error", f"json.loads={exc}; no_block")
+        try:
+            data = json.loads(block)
+            logger.info(
+                "generate: recovered via brace-balanced extractor "
+                "(stripped %d leading + %d trailing chars)",
+                text.find(block),
+                len(text) - text.find(block) - len(block),
+            )
+        except json.JSONDecodeError as exc2:
+            return _refused_parse(
+                "parse_error", f"json.loads={exc}; block_loads={exc2}",
+            )
+
     if not isinstance(data, dict):
-        return GenerationResult(
-            answer="",
-            citations=[],
-            refused=True,
-            refusal_reason="parse_error",
-            model_id=model_id,
-        )
+        return _refused_parse("parse_error", f"not_dict: type={type(data).__name__}")
 
     refused = bool(data.get("refused", False))
     refusal_reason = data.get("refusal_reason")
@@ -355,13 +445,11 @@ def _parse_result(
         )
 
     if not isinstance(answer, str) or not answer.strip():
-        # Missing/empty answer field but not refused → treat as parse error.
-        return GenerationResult(
-            answer="",
-            citations=[],
-            refused=True,
-            refusal_reason="parse_error",
-            model_id=model_id,
+        # Missing/empty answer field but not refused → treat as parse error
+        # (or truncation when MAX_TOKENS is the reason).
+        return _refused_parse(
+            "parse_error",
+            f"missing_answer: keys={list(data.keys())[:10]}",
         )
 
     # Post-fix the citation schema only requires `hit_id` from the LLM
@@ -571,7 +659,17 @@ class GeminiGenerator:
                 raw_text = t
                 break
 
-        return _parse_result(raw_text, hits=hits, model_id=self._model)
+        # finish_reason tells us if the model hit max_output_tokens
+        # mid-response (a recoverable, distinct failure mode) vs. just
+        # produced garbage JSON. Gemini's SDK enum-stringifies to
+        # 'STOP' / 'MAX_TOKENS' / 'SAFETY' / 'RECITATION' / 'OTHER'.
+        fr = getattr(candidates[0], "finish_reason", None)
+        finish_reason = str(fr.name if hasattr(fr, "name") else fr) if fr else None
+
+        return _parse_result(
+            raw_text, hits=hits, model_id=self._model,
+            finish_reason=finish_reason,
+        )
 
 
 # ---------------------------------------------------------------------------

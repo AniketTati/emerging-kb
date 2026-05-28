@@ -155,6 +155,63 @@ def test_parse_result_respects_llm_refusal():
     assert out.refusal_reason == "evidence_insufficient_per_model"
 
 
+# ---------------------------------------------------------------------------
+# Truncation + prose-wrapped recovery — added after a real chat session
+# hit MAX_TOKENS on a compound query and the parser returned a generic
+# `parse_error`, hiding the real cause.
+# ---------------------------------------------------------------------------
+
+
+def test_parse_result_max_tokens_finish_reason_emits_truncated():
+    """When Gemini's finish_reason=MAX_TOKENS, the refusal reason
+    bucket is 'truncated' — distinct + actionable (bump
+    _MAX_OUTPUT_TOKENS or shorten the prompt) instead of the generic
+    'parse_error' that hides what actually went wrong."""
+    # Truncated mid-string: opens an answer field but never closes it.
+    raw = '{"answer": "NorthWind Capital LLC is a New York'
+    out = _parse_result(
+        raw, hits=[_hit("s")], model_id="m",
+        finish_reason="MAX_TOKENS",
+    )
+    assert out.refused is True
+    assert out.refusal_reason == "truncated"
+
+
+def test_parse_result_recovers_json_wrapped_in_prose():
+    """Gemini sometimes prefixes its JSON with prose ('Sure, here's
+    the JSON: { ... }'). The brace-balanced extractor peels the JSON
+    out so the answer surfaces instead of refusing."""
+    raw = (
+        "Sure, here you go:\n"
+        + json.dumps({"answer": "All good.", "citations": []})
+        + "\nHope that helps!"
+    )
+    out = _parse_result(raw, hits=[_hit("s")], model_id="m")
+    assert out.refused is False
+    assert out.answer == "All good."
+
+
+def test_parse_result_recovers_when_json_loads_fails_but_block_extracts():
+    """Trailing comma → json.loads fails → brace extractor finds
+    a clean {...} block earlier in the buffer. Note: extractor only
+    helps when the EARLY block is valid; this test pins the prose-
+    wrapper recovery path specifically."""
+    valid = json.dumps({"answer": "Yes.", "citations": []})
+    raw = "Here's the JSON: " + valid + ". Let me know if you need more."
+    out = _parse_result(raw, hits=[_hit("s")], model_id="m")
+    assert out.refused is False
+    assert out.answer == "Yes."
+
+
+def test_parse_result_truly_unrecoverable_still_returns_parse_error():
+    """If there's no balanced {...} block anywhere, refusal_reason is
+    plain 'parse_error' (without a MAX_TOKENS hint)."""
+    out = _parse_result("definitely not json at all",
+                        hits=[_hit("s")], model_id="m")
+    assert out.refused is True
+    assert out.refusal_reason == "parse_error"
+
+
 # ===========================================================================
 # Factory (decision #1 + #14)
 # ===========================================================================
