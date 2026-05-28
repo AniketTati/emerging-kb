@@ -1,21 +1,33 @@
 # Upload flow audit — docs · backend · UI
 
 Date: 2026-05-25 · branch: `waveB/demo-corpus-and-pages`
+Last refresh: 2026-05-27 — backend + docs gaps closed; UI gaps still open
+(see Status column).
 
 This audit walks the upload flow from the docs through the backend
 through the UI, lists every gap, and links to the fixes that ship in
 the same PR.
 
+> **Status check (2026-05-27).** The four backend `FileResponse` fields
+> and the lifecycle / event taxonomy gap are now fixed in code +
+> `docs/api_contracts.md` (§5.1 #3, §5.2, §5.3). The mentions-extractor
+> issue (§7) is tracked as **E1** in
+> [`extraction_and_citation_plan.md`](extraction_and_citation_plan.md) and
+> escalated to CRITICAL by the broader-corpus audit (PR3). The doc-chain
+> issue (§6) was fixed by moving detection to the post-KV+Tables stage
+> + adding an explicit-`chain_id` path that honors `proposed_fields`
+> (+ frontmatter via Bug K). UI gaps below are still open.
+
 ## TL;DR
 
-| Layer | Score | What's wrong |
-|---|---|---|
-| `POST /files` | ✅ works | docs claim `doc_type: null` always — true at Phase 2a, no longer true; response shape doesn't expose `inferred_doc_type`, `source_authority`, or `doc_status` |
-| `GET /files` | ⚠️ thin | same gap as POST — UI can't see Gemini's classification or source authority |
-| `GET /files/:id` | ⚠️ thin | same fields missing; `lifecycle` array is complete but doc only describes events through Phase 3d (10+ subsequent events fire and aren't documented) |
-| `GET /upload/:id/status` (SSE) | ✅ works | verified live |
-| Lifecycle state machine | ✅ works | the CHECK constraint has all 19 states; docs only list 8 |
-| **UI: `/upload` page** | ❌ thin | missing 6 of 10 prototype features; the columns that matter (Type · Detected · Actions · row-expand) aren't there |
+| Layer | Score (orig.) | Status now | What was wrong |
+|---|---|---|---|
+| `POST /files` | ✅ works | ✅ **fixed** | docs claimed `doc_type: null` always — `FileResponse` now exposes `inferred_doc_type`, `source_authority`, `source_authority_reason`, `doc_status` (`src/kb/domain/files.py:32`). |
+| `GET /files` | ⚠️ thin | ✅ **fixed** (response shape); ⏳ filter params still nice-to-have | same widening as POST. `?doc_type=` / `?status=` filters not yet added. |
+| `GET /files/:id` | ⚠️ thin | ✅ **fixed** | response widened; full event taxonomy now documented in `api_contracts.md` §5.3 (16 event types incl. additive post-ready ones). |
+| `GET /upload/:id/status` (SSE) | ✅ works | ✅ works | verified live. |
+| Lifecycle state machine | ✅ works | ✅ **fixed** (docs) | docs now list all 19 states with per-phase introduction (`api_contracts.md` §5.1 #3). |
+| **UI: `/upload` page** | ❌ thin | ⏳ still thin | missing 6 of 10 prototype features; the columns that matter (Type · Detected · Actions · row-expand) aren't there. UI work not started. |
 
 ## 1. Backend — `POST /files`
 
@@ -152,61 +164,83 @@ shows stages, nothing else. The prototype defines a much richer
 information surface. Whether we build the full prototype now or
 iterate is the conscious call to make.
 
-## 6. Cross-cutting — doc-chain detection (separate concern)
+## 6. Cross-cutting — doc-chain detection (RESOLVED)
 
-When the demo corpus was ingested, the WA-3 chain detector did NOT
-link `vertex-msa.pdf` and `vertex-amendment.txt`. The amendment's
-text body explicitly references the MSA. The detector at
-`src/kb/extraction/doc_chains.py` likely filename-pattern matches
-within an extension family (e.g. `*.pdf` only) — needs investigation
-but out of scope for the upload PR.
+**Original finding (2026-05-25).** The WA-3 chain detector did NOT link
+`vertex-msa.pdf` and `vertex-amendment.txt`. The amendment's text body
+explicitly references the MSA, but the detector ran at parse time —
+before any L3 fields existed — and matched filename / title patterns
+within an extension family, so the cross-format link was lost.
 
-Tracking as a separate item; not blocking.
+**Fix shipped (2026-05-27).** Two changes:
 
-## 7. Cross-cutting — mentions extractor produces 0 mentions on some doc types
+1. **Moved chain detection to post-KV+Tables.** The
+   `detect_doc_chain_file` task is now deferred from the end of
+   `extract_kv_tables_file_impl` (see [tasks.py:1994](../src/kb/workers/tasks.py:1994))
+   instead of from `parse_file_impl`. By the time the detector runs,
+   the file's `proposed_fields` (chain_id, parent_doc, chain_role,
+   chain_version, doc_id) are populated.
+2. **Added an explicit-chain path with 100% precision.** When
+   `proposed_fields` declares a `chain_id`, the detector attaches the
+   file to the matching workspace chain and resolves `parent_doc`
+   against sibling docs' `doc_id`. This is deterministic — no
+   filename matching, no extension family limit. The heuristic
+   detector still fires as a fallback for docs without explicit chain
+   fields.
+3. **Frontmatter guard rail (Bug K).** YAML frontmatter at the top of
+   markdown / text docs is parsed deterministically and lands as
+   `proposed_fields` (overwriting any LLM-extracted value for the same
+   key). Declaring `chain_id: vertex-msa` in an amendment's
+   frontmatter is enough to link it to the parent contract.
 
-While verifying the new `/files/:id/details` endpoint we noticed:
+See [`docs/architecture.md`](architecture.md) §5 step 12.5 +
+[`docs/walkthrough.md`](walkthrough.md) T+32s for the rewritten
+description, and [`docs/extraction_and_citation_plan.md`](extraction_and_citation_plan.md)
+§1.1 E4 for the original tracking entry.
 
-| File | inferred_doc_type | mentions extracted |
-|---|---|---|
-| tiny.pdf (11-token blank) | handwritten_note | 0 (expected) |
-| vertex-sales-thread.eml   | email_thread | **0** (suspicious) |
-| vertex-pricing-tiers.xlsx | price_sheet | 44 |
-| vertex-msa.pdf            | master_services_agreement | **0** (suspicious) |
-| vertex-amendment.txt      | legal_contract | **0** (suspicious) |
-| vertex-eval-notes.md      | vendor_evaluation | 44 |
+## 7. Cross-cutting — mentions extractor produces 0 mentions on some doc types (STILL OPEN — promoted to CRITICAL)
 
-All files passed through `mentions_extracting` cleanly (same lifecycle
-events emitted, same chunk shape) — the Gemini mention extractor
-returned 0 results on `.pdf`, `.txt`, `.eml` chunks. Possible causes:
+**Original finding (2026-05-25, narrow corpus).** The Gemini mention
+extractor returned 0 results on `.pdf` / `.txt` / `.eml` chunks while
+working on `.md` and `.xlsx`. Hypotheses: prompt sensitivity to
+Docling-extracted PDF layout artifacts, TextParser paragraph join,
+.eml nested-quote thread structure.
 
-- Prompt sensitivity to Docling-extracted PDF text (may have layout
-  artifacts that confuse the LLM).
-- TextParser's paragraph-joined content reaching the extractor differs
-  enough from .md to throw the prompt.
-- The .eml's nested-quote thread structure (Reply-In-To headers + quote
-  blocks) may exceed an internal limit in the extractor.
+**Refined finding (2026-05-25 evening, broader 26-doc corpus —
+[`extraction_and_citation_plan.md`](extraction_and_citation_plan.md) §4b.3).**
+The pattern is **content-shape dependent, not format dependent**:
 
-The entities surfaced on the Dashboard ("NorthWind Capital · 4
-mentions", etc.) come from the `entities` table (canonicalized) — they
-were populated via a *different* path (likely the L4 schema-entity
-extractor). The L2 `extracted_mentions` table is the surface-form
-detector; it's underperforming on plain-text inputs.
+- PDFs that work (dense legal/insurance prose): vertex-msa,
+  saas-subscription, mutual-nda, insurance-eob.
+- PDFs that fail (structured / form layouts): resume, invoice,
+  employment-offer-letter, lab-blood-panel, tiny.pdf.
+- Only 1 of 9 markdown files produces mentions (eval-notes); 8 fail.
+- All 3 xlsx + 3 .txt + 2 .eml: 0 mentions on re-upload with
+  deterministic SHA.
 
-Tracking as a separate item; not blocking the upload UI but worth
-investigating in a follow-up since it degrades the Explore + Doc
-Detail pages downstream.
+Affects 22 of 26 docs (85%). Re-tracked as **E1 (CRITICAL)** in the
+extraction plan with three concrete investigation steps. Not blocking
+the upload UI, but degrades Explore + Doc Detail downstream.
+
+Note: the entities surfaced on the Dashboard ("NorthWind Capital · 4
+mentions", etc.) come from the `entities` table populated via a
+*different* path (the L4 schema-entity extractor). The L2
+`extracted_mentions` table is the surface-form detector; it's the one
+underperforming.
 
 ## 7. Plan for this PR
 
 In one PR:
 
-**Backend** (~50 lines)
-1. Widen `FileResponse` to include `inferred_doc_type`,
-   `source_authority`, `source_authority_reason`, `doc_status`.
-2. New endpoint `GET /files/:id/details` returning per-doc rollups
-   (chunk count, mention count, atomic unit count, entity count,
-   chain membership) — what the row-expand wants.
+**Backend** (~50 lines) — ✅ done as of 2026-05-27
+1. ✅ Widen `FileResponse` to include `inferred_doc_type`,
+   `source_authority`, `source_authority_reason`, `doc_status`
+   (`src/kb/domain/files.py:32`).
+2. ✅ New endpoint `GET /files/:id/details` returning per-doc rollups
+   (chunk count, mention count, entity count, triple count, chain
+   membership) — what the row-expand wants. (Atomic-unit count is now
+   derived from `extracted_entities WHERE unit_type IS NOT NULL` since
+   the `atomic_units` table was dropped in migration 0039.)
 
 **UI** (~400 lines, mostly the table + expand)
 3. New columns in `FilesTable`: `Type` (inferred_doc_type), `Status`
@@ -218,18 +252,20 @@ In one PR:
 7. **Needs-attention** filter chip — files with `failed` lifecycle OR
    `low source_authority` OR `superseded` doc_status.
 
-**Docs** (~80 lines)
-8. Update `docs/api_contracts.md`:
-   - §5.2 `FileResponse` shape — add the 4 new fields with which phase
-     introduced each.
-   - §5.3 lifecycle event list — add the 11 missing events with their
-     stages + payload shapes.
-   - §5.1 #3 lifecycle state list — list all 19 states with the phase
-     gate that admits each.
-9. Add a `docs/lifecycle_events_reference.md` — one authoritative
-   table of every event the worker ever emits (stage, from/to state,
-   payload schema, code location). The UI's row-expand reads this
-   shape; the doc lets a reader cross-check.
+**Docs** (~80 lines) — ✅ done as of 2026-05-27
+8. ✅ `docs/api_contracts.md` updated:
+   - §5.1 #3 — full 19-state lifecycle enum table with per-phase
+     introduction.
+   - §5.2 — `FileResponse` widened with `inferred_doc_type`,
+     `source_authority`, `source_authority_reason`, `doc_status`.
+   - §5.3 — full event taxonomy (16 events) with payload shapes,
+     including the additive post-ready events
+     (`triples_extracted`, `relationships_built`, `graph_built`,
+     `doc_chain_detected`).
+9. ⏳ `docs/lifecycle_events_reference.md` — not split out as a
+   separate doc; the §5.3 table in `api_contracts.md` now serves as
+   the authoritative reference. Revisit if it grows beyond one
+   section.
 
 **Tests**
 10. Playwright spec for the row expand + Detected column + Type

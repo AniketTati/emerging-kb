@@ -57,7 +57,7 @@ T+0s        File hits /upload
             │ • If hash exists → link to existing,         │
             │   do nothing else (DEDUP)                    │
             │ • If new → insert row,                       │
-            │   lifecycle_state = 'received'               │
+            │   lifecycle_state = 'queued'                 │
             │   Enqueue job 'parse' keyed by hash          │
             └──────────────────────────────────────────────┘
 
@@ -189,98 +189,165 @@ T+25s       L2 mention extraction (UNIVERSAL types, on EVERY doc)
             │ me all docs mentioning Enron Energy."        │
             └──────────────────────────────────────────────┘
 
-T+28s       L2b emergent-field extraction (OPEN vocabulary)
-            ┌──────────────────────────────────────────────┐
-            │ Gemini Flash with an open-vocabulary prompt: │
-            │ "Identify the structured information this    │
-            │ doc contains. For each, propose field_name   │
-            │ (snake_case), value, one-line description.   │
-            │ Propose a doc_type_label."                   │
-            │                                              │
-            │ NO fixed type list. The doc proposes its     │
-            │ own vocabulary.                              │
-            │                                              │
-            │ Output for this contract:                    │
-            │ {                                            │
-            │   doc_type_proposal: "power_supply_agreement"│
-            │   doc_type_confidence: 0.93,                 │
-            │   fields: [                                  │
-            │     { name: "buyer",                         │
-            │       value: "El Paso Electric",             │
-            │       description: "purchasing party" },     │
-            │     { name: "seller",                        │
-            │       value: "Enron Energy Services",        │
-            │       description: "supplying party" },      │
-            │     { name: "term_years", value: 10, ... },  │
-            │     { name: "indemnity_cap_usd",             │
-            │       value: 25000000, ... },                │
-            │     { name: "governing_law",                 │
-            │       value: "Texas", ... },                 │
-            │     { name: "payment_terms",                 │
-            │       value: "net 30", ... }                 │
-            │   ]                                          │
-            │ }                                            │
-            │                                              │
-            │ Stored: emergent_fields table, with name +   │
-            │ description + value embeddings per row.      │
-            │                                              │
-            │ Why this matters: as more power-supply       │
-            │ agreements arrive, their fields cluster.     │
-            │ After ~20 such docs with prevalence ≥ 80%,   │
-            │ stability ≥ 0.9, and clear value types,      │
-            │ the system AUTO-PROMOTES the inferred schema │
-            │ into typed schema — no user click required.  │
-            │ The promotion is audit-logged and reversible │
-            │ if the user disagrees.                       │
-            │                                              │
-            │ This is "schema emerges from data" working,  │
-            │ literally: discovery → induction → promotion │
-            │ → typed access, all automatic.               │
-            └──────────────────────────────────────────────┘
+T+28s       KV + Tables extraction — ONE structured-output call
+            ┌──────────────────────────────────────────────────────┐
+            │ A single Gemini Flash call (PR #45 collapse) returns │
+            │ BOTH the open-vocabulary scalars AND the typed table │
+            │ rows (the unit/clause layer) in one structured       │
+            │ response. Replaces three older passes (L2b propose · │
+            │ L3 atomic-units · L4 schema-driven re-extract) with  │
+            │ one prompt.                                          │
+            │                                                      │
+            │ Response shape:                                      │
+            │ {                                                    │
+            │   doc_type: "power_supply_agreement",                │
+            │   scalars: [                                         │
+            │     { name: "buyer",                                 │
+            │       value: "El Paso Electric",                     │
+            │       description: "purchasing party",               │
+            │       value_type: "text",                             │
+            │       is_pii: false,                                 │
+            │       source_chunk: 0 },                             │
+            │     { name: "seller",                                │
+            │       value: "Enron Energy Services", ... },         │
+            │     { name: "term_years", value: 10, ... },          │
+            │     { name: "indemnity_cap_usd",                     │
+            │       value: 25000000, ... },                        │
+            │     { name: "governing_law", value: "Texas", ... },  │
+            │     { name: "payment_terms", value: "net 30", ... }  │
+            │   ],                                                 │
+            │   tables: [                                          │
+            │     { name: "clauses",                               │
+            │       description: "contract clauses",                │
+            │       cardinality: "many",                           │
+            │       columns: [                                     │
+            │         {name:"clause_number", value_type:"number"}, │
+            │         {name:"clause_type",   value_type:"text"},   │
+            │         {name:"cap_usd",       value_type:"number"}],│
+            │       rows: [                                        │
+            │         {values:{clause_number:12,                   │
+            │                  clause_type:"indemnification",      │
+            │                  cap_usd:25000000},                  │
+            │          source_chunk: 7,                            │
+            │          source_char_start: 412,                     │
+            │          source_char_end: 580}, ...]                 │
+            │     }                                                │
+            │   ]                                                  │
+            │ }                                                    │
+            │                                                      │
+            │ Worker fan-out (one Postgres tx):                    │
+            │   doc_type    → files.inferred_doc_type              │
+            │   scalars[]   → proposed_fields rows                 │
+            │   tables[].rows[] → extracted_entities rows          │
+            │     unit_type = singularize(table.name)              │
+            │     e.g. "clauses" → "clause"                        │
+            │           "transactions" → "transaction"             │
+            │           "messages" → "message"                     │
+            │     parent_entity_id set later by step 18 (lineage). │
+            │                                                      │
+            │ Frontmatter guard rail (Bug K): before fan-out, the  │
+            │ worker also runs a deterministic                     │
+            │ `_parse_yaml_frontmatter()` over the first raw page. │
+            │ Any `--- key: value ---` block at the top of a       │
+            │ markdown / text doc lands as a proposed_field —      │
+            │ and any LLM-extracted scalar with the same name is   │
+            │ overwritten (frontmatter wins). Catches doc_status,  │
+            │ chain_id, parent_doc, chain_role, etc. that the LLM  │
+            │ sometimes misses when the body is dominant.          │
+            │                                                      │
+            │ Deterministic post-processing (no LLM):              │
+            │   - cross-doc field clustering →                     │
+            │     inferred_schema_fields (name + description       │
+            │     embedding blocking, value-type induction)        │
+            │   - auto-promotion when prevalence ≥ 80% ∧           │
+            │     stability ≥ 0.9 ∧ value-type conf ≥ 0.9 →        │
+            │     schema_fields with auto_promoted=true            │
+            │   - vocabulary discovery (Design 6) →                │
+            │     domain_vocabulary candidate synonyms             │
+            │   - per-unit-type anomaly / rarity scoring on the    │
+            │     newly-written child rows                         │
+            │                                                      │
+            │ The legacy `atomic_units` staging table was dropped  │
+            │ in migration 0039 — KV+Tables writes the canonical   │
+            │ extracted_entities shape directly.                   │
+            │                                                      │
+            │ Why this matters: same demo payoff as before — as    │
+            │ more power-supply agreements arrive, their fields    │
+            │ cluster and the system AUTO-PROMOTES the inferred    │
+            │ schema (no user click). Promotion is audit-logged    │
+            │ and reversible.                                      │
+            └──────────────────────────────────────────────────────┘
 
-T+35s       L3 atomic-unit extraction (doc-type-specific plug-in)
-            ┌──────────────────────────────────────────────┐
-            │ Because doc_type = contract → unit = clause. │
-            │ (Bank statement → transaction; drawing →     │
-            │  component; xlsx → row; note → none.)        │
-            │                                              │
-            │ Layout cues (numbered sections) + LLM split  │
-            │ → 18 clauses.                                │
-            │                                              │
-            │ Each clause typed against CUAD taxonomy:     │
-            │   clause #1   payment_terms                  │
-            │   clause #2   term_and_termination           │
-            │   clause #3   delivery_obligations           │
-            │   ...                                        │
-            │   clause #12  indemnification                │
-            │   clause #13  limitation_of_liability        │
-            │   ...                                        │
-            │                                              │
-            │ Each clause's parameters extracted:          │
-            │   #12 indemnification: { cap: 25_000_000,    │
-            │                          currency: USD,      │
-            │                          scope: per_event }  │
-            │                                              │
-            │ Each clause's rarity_score computed against  │
-            │ corpus centroid for its type:                │
-            │   indemnification clauses corpus centroid:   │
-            │     mean_cap ≈ $5M, σ ≈ $8M                  │
-            │   this clause cap = $25M → z-score 2.5       │
-            │   → rarity_score = 0.91 (rare-ish)           │
-            │                                              │
-            │ Stored: clauses table + clause_embeddings    │
-            │                                              │
-            │ Why this matters: queries like "show me      │
-            │ indemnity caps" filter `clauses` directly    │
-            │ rather than search free text. Queries like   │
-            │ "unusual indemnity terms" filter by          │
-            │ rarity_score.                                │
-            └──────────────────────────────────────────────┘
+T+32s       Doc-chain detection (additive, side-effect only)
+            ┌──────────────────────────────────────────────────────┐
+            │ Deferred from the KV+Tables stage (NOT from parse)   │
+            │ so the detector can read this file's L3              │
+            │ proposed_fields. Two paths:                          │
+            │                                                      │
+            │ Explicit path (100% precision):                      │
+            │   If proposed_fields has `chain_id` (declared in     │
+            │   frontmatter or contract template), attach to the   │
+            │   matching workspace chain; resolve `parent_doc`     │
+            │   against siblings' `doc_id`; update                 │
+            │   `current_version_id` when `chain_role=amendment`.  │
+            │                                                      │
+            │ Heuristic fallback (no explicit chain_id):           │
+            │   - emails: In-Reply-To / References /               │
+            │     normalized subject                               │
+            │   - contracts: title similarity +                    │
+            │     "amends/supersedes" body language                │
+            │   - drawings: filename + revision tag                │
+            │   - circulars: "Corrigendum to ..." header           │
+            │   - patient charts: shared patient_id                │
+            │                                                      │
+            │ Lifecycle does NOT gate on this. If detection        │
+            │ fails, the file still progresses; an admin can       │
+            │ re-run later via                                     │
+            │ `scripts/rerun_chain_detection.py`.                  │
+            └──────────────────────────────────────────────────────┘
 
-T+45s       Identity resolution
+T+38s       Schema-driven entity extraction (Phase 6)
+            ┌──────────────────────────────────────────────────────┐
+            │ Lifecycle: entities_extracting.                      │
+            │                                                      │
+            │ For every active doc_root schema_entity matching     │
+            │ this file's `inferred_doc_type` (set by the          │
+            │ KV+Tables stage), run a Gemini structured-output     │
+            │ extract using the schema's promoted schema_fields.   │
+            │                                                      │
+            │ Produces parent extracted_entities rows (one per     │
+            │ matching schema_entity; parent_entity_id IS NULL):   │
+            │   schema_entity_id: <PowerSupplyAgreement>           │
+            │   schema_version_id: v3                              │
+            │   fields: {                                          │
+            │     buyer:        "El Paso Electric",                │
+            │     seller:       "Enron Energy Services",           │
+            │     term_years:   10,                                │
+            │     indemnity_cap_usd: 25000000,                     │
+            │     governing_law: "Texas",                          │
+            │     payment_terms: "net 30"                          │
+            │   }                                                  │
+            │   citations: { each field → source_chunk + char span}│
+            │                                                      │
+            │ CLEAN-BEFORE-WRITE guard rail (PR #48): the DELETE   │
+            │ before re-insert is scoped to `WHERE unit_type IS    │
+            │ NULL` so the child rows written by KV+Tables (where  │
+            │ unit_type='clause', 'transaction', etc.) are         │
+            │ preserved. Prior unconditional DELETE was wiping     │
+            │ them on wipe+reprocess.                              │
+            │                                                      │
+            │ If you later add a field (e.g. `arbitration_clause`) │
+            │ to the schema — only THIS stage reruns; everything   │
+            │ before is preserved.                                 │
+            └──────────────────────────────────────────────────────┘
+
+T+45s       Identity resolution (Phase 7)
             ┌──────────────────────────────────────────────┐
-            │ For each ORG mention, find candidate matches │
-            │ in the existing entities table:              │
+            │ Lifecycle: identity_resolving.               │
+            │                                              │
+            │ For each ORG mention + each parent           │
+            │ extracted_entity, find candidate matches in  │
+            │ the existing entities table:                 │
             │                                              │
             │ 1. Deterministic blocking — exact match on   │
             │    canonical name, normalized                │
@@ -298,54 +365,52 @@ T+45s       Identity resolution
             │   → link to entity E-001                     │
             │   "El Paso Electric" → new canonical E-178   │
             │                                              │
-            │ Stored: mention_to_entity link table         │
+            │ Stored: entities + mention_to_entity link    │
+            │ table. Lineage pass (PASS 2/3) walks         │
+            │ schema_relationships(kind='contains') to     │
+            │ assign each extracted_entity its             │
+            │ lineage_path (ltree) and parent_entity_id.   │
+            │                                              │
+            │ Lifecycle: ready.                            │
             └──────────────────────────────────────────────┘
 
-T+50s       Relationship layer
+T+52s       Triples (additive — light OpenIE)
             ┌──────────────────────────────────────────────┐
-            │ Open triples whose args resolved to entities │
-            │ become typed edges:                          │
+            │ Fires AFTER lifecycle=ready as a side-effect │
+            │ task; failure does NOT regress the file.     │
             │                                              │
-            │ relationships table:                         │
+            │ Open (subject, predicate, object) tuples     │
+            │ lifted per contextual chunk →                │
+            │ extracted_triples table (with                │
+            │ source_chunk_id + subject/object char spans  │
+            │ for citation grounding).                     │
+            │                                              │
+            │ Event: triples_extracted.                    │
+            └──────────────────────────────────────────────┘
+
+T+58s       Relationships (additive)
+            ┌──────────────────────────────────────────────┐
+            │ Triples whose args resolve to entity IDs     │
+            │ become typed edges in the relationships      │
+            │ table:                                       │
             │   (E-001, has_supply_contract_with, E-178,   │
-            │    evidence: this_doc, p1, span [3,87],      │
+            │    evidence: this_doc, source_chunk + span,  │
             │    confidence: 0.93)                         │
             │                                              │
             │ Predicates are typed if the schema knows     │
             │ them, free-text otherwise.                   │
+            │                                              │
+            │ Event: relationships_built.                  │
             └──────────────────────────────────────────────┘
 
-T+55s       Schema-driven extraction (only if schema active)
+T+65s       HippoRAG-2 graph build (additive)
             ┌──────────────────────────────────────────────┐
-            │ The active schema says:                      │
-            │   Contract { parties[], term_years,          │
-            │              indemnity_cap, governing_law,   │
-            │              payment_terms }                 │
+            │ Entities + relationships added to            │
+            │ graph_edges (PPR-ready adjacency with        │
+            │ edge weights). Incremental — no full         │
+            │ rebuild.                                     │
             │                                              │
-            │ Gemini Flash with JSON-schema constrained    │
-            │ outputs reads the doc and emits:             │
-            │                                              │
-            │ extracted_entities row:                      │
-            │   type: Contract                             │
-            │   schema_version: v3                         │
-            │   fields: {                                  │
-            │     parties: [E-001, E-178],                 │
-            │     term_years: 10,                          │
-            │     indemnity_cap: 25_000_000,               │
-            │     governing_law: "Texas",                  │
-            │     payment_terms: "net 30"                  │
-            │   }                                          │
-            │   citations: { each field → (page, span) }   │
-            │                                              │
-            │ If you later add field `arbitration_clause`  │
-            │ to the schema — only THIS step reruns,       │
-            │ everything before is preserved.              │
-            └──────────────────────────────────────────────┘
-
-T+65s       HippoRAG graph update (incremental)
-            ┌──────────────────────────────────────────────┐
-            │ New entities + new edges added to the PPR    │
-            │ graph index. No full rebuild.                │
+            │ Event: graph_built.                          │
             └──────────────────────────────────────────────┘
 
 T+75s       Artifact generation (async, can finish later)
@@ -357,10 +422,20 @@ T+75s       Artifact generation (async, can finish later)
             │ Mind-map nodes + edges added.                │
             └──────────────────────────────────────────────┘
 
-T+90s       Lifecycle: state = ready
+T+90s       UI shows ✓ green — file fully enriched
             ┌──────────────────────────────────────────────┐
-            │ UI shows ✓ green. The doc is now queryable. │
-            │ Every step above was IDEMPOTENT — re-running │
+            │ Lifecycle reached `ready` back at T+45s      │
+            │ (after identity resolution). Everything past │
+            │ that — triples, relationships, graph,        │
+            │ artifacts, doc-chain — is ADDITIVE: the      │
+            │ file is queryable as soon as lifecycle hits  │
+            │ ready, and each side-effect stage emits its  │
+            │ own event (`triples_extracted`,              │
+            │ `relationships_built`, `graph_built`,        │
+            │ `doc_chain_detected`) without regressing     │
+            │ the file's lifecycle state.                  │
+            │                                              │
+            │ Every step above is IDEMPOTENT — re-running  │
             │ on the same file is a no-op.                 │
             └──────────────────────────────────────────────┘
 ```
@@ -371,19 +446,19 @@ That's the journey. For a 100K-doc corpus, this runs in parallel across many wor
 
 ## 1.5 The same pipeline on seven very different document types
 
-The contract walkthrough above is one of many possible routes. The L3 "clauses" stage I described is a doc-type-specific specialisation; the universal layer is **Atomic Units** — typed structured records inside a doc, where "what counts as a unit" varies by doc type.
+The contract walkthrough above is one of many possible routes. The "clauses" emitted by the KV+Tables stage are a doc-type-specific specialisation: the single KV+Tables call returns a `tables[]` list, and what each table is called depends on the doc type. Bank statements emit a `transactions` table; drawings emit `components`; xlsx emits whatever the sheet headers describe. Each row becomes one `extracted_entities` row with `unit_type = singularize(table.name)` — `clause`, `transaction`, `component`, `row`, etc.
 
-| Doc | Parser | L3 atomic unit | Notable L4 behaviour |
+| Doc | Parser | KV+Tables emits (unit_type) | Notable L4 behaviour |
 |---|---|---|---|
-| **Handwritten note** (jpg) | Mistral OCR 3, VLM fallback | (none — L2 mentions only) | Resolve referenced people/orgs |
+| **Handwritten note** (jpg) | Mistral OCR 3, VLM fallback | (no tables; scalars only) | Resolve referenced people/orgs |
 | **Bank statement** (PDF + tables) | Docling + table extractor | TRANSACTION (per row) | Counterparty resolution across statements |
-| **Invitation card** (image) | Gemini Flash VLM | (doc-as-Event record) | Event entity created/matched |
+| **Invitation card** (image) | Gemini Flash VLM | (doc-as-Event scalars only) | Event entity created/matched |
 | **Employment agreement** (PDF) | Docling | CLAUSE (CUAD types) | Employee + Employer entity |
 | **Plant design drawing** (PDF, image-heavy) | Docling text + ColPali images + VLM | COMPONENT (per labeled item) | Component-graph: feeds/connected_to |
-| **Land record** (scanned form) | Mistral OCR 3 + form-field detection | (doc-as-Parcel) + HISTORY_ENTRY rows | Parcel entity + owner history edges |
+| **Land record** (scanned form) | Mistral OCR 3 + form-field detection | HISTORY_ENTRY (doc-as-Parcel scalars + entries) | Parcel entity + owner history edges |
 | **ID xlsx** (5k+ rows × N cols) | openpyxl + pandas | ROW (per resident, typed by header schema) | Each row → canonical Person entity |
 
-**The universal layers (L0, L1, L1a, L1d, L2, L4, L5, L6) are identical for all seven.** Only the L3 extractor and the optional schema projection differ.
+**The universal layers (parsing, chunking, embedding, RAPTOR, mentions, identity, graph) are identical for all seven.** Only what the KV+Tables stage emits (which scalars / which tables) and the optional schema projection differ.
 
 ### How a multi-doc query stitches them together
 
@@ -395,9 +470,9 @@ The planner emits a multi-mode plan that touches *three* doc types simultaneousl
 Modes: S (note scope) + C (Transaction units, rarity>0.9) +
        T (HippoRAG walk from Aakash) + E (entity resolve counterparties)
 
-Channel ⑤ atomic-units:
-  - In the note: action_item mentions of "vendor invoice review"
-  - In the statement: transactions where rarity_score > 0.9
+Channel ⑤ typed-units (extracted_entities children):
+  - In the note: action_item rows of "vendor invoice review"
+  - In the statement: transaction rows where rarity_score > 0.9
 Channel ⑦ HippoRAG: PPR seeds [Aakash, vendor, invoice] →
   walks to flagged transactions + the note
 
@@ -406,7 +481,7 @@ Join: transactions.counterparty ∩ note.vendors_referenced
 
 Answer cites both docs: the note for the instruction, the statement for the flagged transactions, the entity layer for the counterparty resolution.
 
-**Same retrieval machinery; different doc types contribute different atomic-unit types as evidence.**
+**Same retrieval machinery; different doc types contribute different unit_type rows (`clause`, `transaction`, `action_item`, …) as evidence.**
 
 ---
 
@@ -441,18 +516,23 @@ L2 MENTIONS    typed entity spans             "who/what is mentioned in
                (UNIVERSAL types)              this doc?", cross-doc entity
                                               navigation
 
-L2b EMERGENT   per-doc proposed fields        "what fields does this doc
+L3 OPEN-WORLD  per-doc proposed fields        "what fields does this doc
    FIELDS      in OPEN vocabulary +           have?", "what schema is
-               cross-doc inferred             emerging for this doc type?"
+   (scalars)   cross-doc inferred             emerging for this doc type?"
                schema per doc-type            — the layer that makes
-                                              schema-emerges-from-data
-                                              honestly true
+               (proposed_fields,              schema-emerges-from-data
+                inferred_schema_fields)       honestly true
 
-L3 ATOMIC      typed structured units per      "find indemnity caps >$10M"
-   UNITS       doc type (clauses, txns,        "find unusual delivery clauses"
-               components, rows,               "transactions over ₹3L to
-               decisions, …)                    unknown counterparty"
-               + parameters + RARITY           "rare component spec in P-101"
+L3b TYPED      typed structured child rows    "find indemnity caps >$10M"
+   UNITS       per doc type (clauses, txns,   "find unusual delivery clauses"
+               components, rows, …) emitted   "transactions over ₹3L to
+               as extracted_entities WHERE     unknown counterparty"
+               unit_type IS NOT NULL.         "rare component spec in P-101"
+               + parameters + RARITY scores
+               (legacy `atomic_units` staging
+                table dropped in 0039 —
+                children live in
+                extracted_entities directly)
 
 L4 ENTITIES    resolved canonical entities    "who is El Paso Electric?",
                + aliases                      "show all docs mentioning
@@ -495,24 +575,28 @@ L7 COMMUNITY   (lazy, query time)             "summarise all our IP
 │   raw_pages                          ← L1 (immutable backbone)  │
 │   chunks, contextual_chunks          ← L1a                      │
 │   raptor_nodes, raptor_edges         ← L1d                      │
-│   mentions, surface_forms            ← L2                       │
-│   emergent_fields,                                              │
+│   extracted_mentions, surface_forms  ← L2                       │
+│   proposed_fields,                                              │
 │       field_name_clusters,                                       │
 │       inferred_schemas,                                          │
 │       inferred_schema_fields,                                    │
-│       schema_promotion_suggestions   ← L2b                      │
-│   clauses, clause_types,                                         │
-│       clause_parameters              ← L3                       │
+│       schema_promotion_suggestions   ← L3 open-world             │
+│   extracted_entities (parent + child rows;                       │
+│       unit_type = clause / transaction /                         │
+│       component / row / …)           ← L3b typed units +         │
+│                                        L4 parent entities       │
+│       (PR #45 collapsed the legacy atomic_units                  │
+│        staging into this table; migration 0039 dropped it.)     │
 │   entities, entity_aliases,                                      │
-│       mention_to_entity              ← L4                       │
+│       mention_to_entity              ← L5 identity              │
+│   extracted_triples                  ← L6 OpenIE                │
 │   relationships,                                                 │
-│       relationship_evidence          ← L5                       │
-│   hipporag_edges, ppr_scores         ← L6                       │
-│   extracted_entities,                                            │
-│       citations (+ polymorphic envelope for                      │
-│         pdf_span / xlsx_row / image_bbox / ocr_span /            │
-│         email_message / raptor_summary / aggregate /             │
-│         atomic_unit / entity_ref / chain_ref)  ← Design 5        │
+│       relationship_evidence          ← L6b typed edges          │
+│   graph_edges, ppr_scores            ← L7 PPR-ready graph       │
+│   citations (+ polymorphic envelope for                          │
+│       pdf_span / xlsx_row / image_bbox / ocr_span /             │
+│       email_message / raptor_summary / aggregate /              │
+│       entity_ref / chain_ref)        ← Design 5                 │
 │   fact_conflicts                     ← Design 2 (conflicts)     │
 │   corrections, entity_overrides,                                 │
 │       schema_field_overrides,                                    │
@@ -764,19 +848,24 @@ Total time: ~5.6 seconds. Most of it is the LLM generation step. Retrieval itsel
             ↓                                       ↓
         RAPTOR build                         CRAG gate
             ↓                                       ↓
-        Open extract (mentions)              Generate (Astute RAG)
+        Mentions (L2)                        Generate (Astute RAG)
             ↓                                       ↓
-        Atomic-unit extract + rarity         Faithfulness judge
+        KV+Tables (one call →                Faithfulness judge
+          scalars + typed children +              ↓
+          rarity scoring)                    Audit log
             ↓                                       ↓
-        Identity resolve                     Audit log
-            ↓                                       ↓
-        Relate                               Render w/ citations
+        Frontmatter guard rail               Render w/ citations
             ↓
-        Schema project (optional)
+        Doc-chain detect (additive)
+            ↓
+        Schema-driven entity extract
+            ↓
+        Identity resolve  → READY
+            ↓
+        Triples + Relationships + Graph
+        (all additive, post-ready)
             ↓
         Artifact generate (async)
-            ↓
-        READY
 ```
 
 The ingest pipeline **writes into the layers**. The query pipeline **reads from the layers**. The catalog principle in one line: *what ingest does for the corpus, retrieval undoes for the question*.
@@ -791,7 +880,7 @@ Naive RAG = chunk → embed → cosine-similarity search → stuff into LLM. It 
 |---|---|---|
 | Vague query, vocabulary mismatch | Embeddings don't bridge "party" ↔ "offsite" | HyDE rewrites the query into source-vocabulary |
 | Vague query, abstract level | Chunk embeddings are too local | RAPTOR summary levels match abstract queries |
-| Rare-unit query (clause, txn, component…) | Cosine sim swamped by typical units | Atomic-unit extraction + per-type rarity scoring (L3) |
+| Rare-unit query (clause, txn, component…) | Cosine sim swamped by typical units | KV+Tables typed-unit extraction + per-unit_type rarity scoring (L3b) |
 | Multi-hop reasoning | One retrieval pass can't traverse | HippoRAG PPR graph + IRCoT escalation |
 | Schema change | Re-extract everything | Re-extract only the schema layer; parse stays |
 | "No answer in corpus" | LLM hallucinates anyway | Astute RAG refusal + HHEM gate |

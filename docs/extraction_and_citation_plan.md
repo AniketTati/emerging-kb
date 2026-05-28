@@ -1,11 +1,30 @@
 # Extraction + citation plan — Wave B step 2
 
 Date: 2026-05-25 · branch: `waveB/demo-corpus-and-pages` (post PR #26)
+Last refresh: 2026-05-27.
 
 PR #26 shipped the doc-detail two-pane UI. The citation system in that
 PR is best-effort text-search; this doc lays out the plan to make
 citations work *properly* and to fix the extraction-quality gaps the
 audit surfaced in the same pass.
+
+## Status snapshot (2026-05-27)
+
+The PR2/PR3 work landed in pieces. Where each numbered issue stands today:
+
+| # | Issue | Status (2026-05-27) | Where it lives now |
+|---|---|---|---|
+| **E1** | L2 mentions broken on non-dense-prose docs (PDF/TXT/EML and most .md) | **OPEN — CRITICAL.** Affects 22 of 26 demo docs (85%). Investigation steps in §4b.3 still open. | `src/kb/extraction/mentions.py` |
+| **E2** | `schema_entities` empty | **CLOSED** by Phase 6 schema bootstrap. `ensure_auto_schema_entity()` ([src/kb/extraction/promotion.py:184](../src/kb/extraction/promotion.py:184)) creates an `auto:<doc_type>` schema + a doc_root schema_entity on first sight of each inferred doc_type. The KV+Tables stage also bootstraps a sub_entity per emitted `unit_type` (Transaction, Clause, LineItem, …). | `extraction/promotion.py`, `extraction/kv_tables.py` |
+| **E3** | `atomic_units` = 0 on legal_contract .txt / .eml / .md | **CLOSED — structurally.** The `atomic_units` staging table was dropped (migration `0039_drop_atomic_units.sql`); the KV+Tables collapse (PR #45) writes child rows directly into `extracted_entities WHERE unit_type IS NOT NULL`. Counts now derive from that table. The previous file-format gate is gone — KV+Tables runs identically on every parser output. | `migrations/sql/0039_drop_atomic_units.sql`, `extraction/kv_tables.py` |
+| **E4** | Doc-chain MSA ↔ Amendment not linked | **CLOSED.** Detection moved from `parse_file_impl` to the end of `extract_kv_tables_file_impl` ([tasks.py:1994](../src/kb/workers/tasks.py:1994)) so the detector reads `proposed_fields` for explicit `chain_id`/`parent_doc`/`chain_role`/`chain_version`. New explicit-chain path is 100% precision when docs declare the link; heuristic detector remains as fallback. Combined with the new YAML frontmatter guard rail (Bug K — `_parse_yaml_frontmatter()` in [tasks.py:73](../src/kb/workers/tasks.py:73)), declaring `chain_id` in markdown frontmatter is enough. `scripts/rerun_chain_detection.py` re-detects on existing corpora. | `workers/tasks.py`, `extraction/doc_chains.py` |
+| **E5** | `parse_artifacts` empty (Docling layout dropped) | **OPEN — Wave C.** Unchanged. Not blocking text-based citations; only needed for pixel-precise PDF bbox highlighting. |
+| **E2b** | Classifier returns `unknown` on healthcare/financial docs → no proposed_fields | **OPEN.** Tracked from broader-corpus audit (§4b.4). |
+| **Source-position resolver** (§2) | text-based citations were best-effort first-match | **CLOSED.** `src/kb/extraction/source_resolver.py` is wired into mentions / fields / triples; `(source_chunk_id, source_char_start, source_char_end)` columns are populated. Backfill ran via `scripts/backfill_*.py`. |
+
+The remainder of this doc is the original plan — kept verbatim for
+historical context. Items already marked closed above are not blocking
+new work.
 
 ---
 

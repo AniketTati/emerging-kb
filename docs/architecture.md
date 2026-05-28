@@ -422,15 +422,6 @@ References:
        ↓
 5.  raw_pages table — IMMUTABLE, content-hash keyed
        ↓
-5.5 Doc-chain detection (cheap, ~$0.001/doc):
-       - emails: parse In-Reply-To / References headers; subject normalize
-       - contracts: title similarity + "amends/supersedes" language
-       - drawings: filename + revision tag + project metadata
-       - circulars: explicit "Corrigendum to ..." header
-       - patient charts: same patient_id (L4) across encounters
-       LLM-judge on borderline cases. Insert doc_chain_members rows;
-       update parent chain's current_version_id when amendment detected.
-       ↓
 6.  Hierarchical chunking via LlamaIndex `HierarchicalNodeParser`
        (sizes `[2048, 512, 128]` — three levels) → chunks rows with
        `node_level ∈ {0,1,2}` + self-FK `parent_chunk_id`. Doc-type router
@@ -502,8 +493,48 @@ References:
        At render time, fields with is_pii=true display as "[PII: <type>]"
        placeholder unless workspace policy explicitly allows full display
        (full encryption + permissions-gated decryption is Wave C).
+
+       Two guard rails landed during the demo-corpus pass:
+         a) **YAML frontmatter parser (Bug K)** — before the KV+Tables
+            response is fanned out, the worker also runs a deterministic
+            `_parse_yaml_frontmatter()` over `raw_pages[0].text`. Any
+            `--- key: value ---` block at the top of a markdown / text
+            doc is parsed in-process; recognized keys (doc_status,
+            chain_id, parent_doc, chain_role, …) overwrite the
+            corresponding LLM-extracted scalar in `proposed_fields`.
+            Frontmatter wins because it is ground-truth declared by the
+            author; the LLM occasionally misses it when the body has
+            dominant content (the original failure mode was the
+            safety-incident-corrective doc).
+         b) **Source position resolver** — `extraction/source_resolver.py`
+            runs after every text-extraction stage (mentions, fields,
+            triples) and stamps `(source_chunk_id, source_char_start,
+            source_char_end)` by searching the LLM-emitted text inside
+            the chunk that was sent in. Deterministic; no extra LLM.
        ↓
-13. Open triple extraction (light OpenIE) → temp_triples
+12.5 Doc-chain detection (cheap, ~$0.001/doc, additive):
+       Deferred from step 12 (NOT step 5) so the detector can read this
+       file's L3 `proposed_fields` and honor any explicit `chain_id` /
+       `parent_doc` / `chain_role` / `chain_version` the document
+       declares (or frontmatter declares — see guard rail (a)). Path:
+         - **Explicit-chain path (100% precision):** if proposed_fields
+           contains `chain_id`, attach to the matching workspace chain;
+           resolve `parent_doc` references by looking up sibling docs'
+           `doc_id` fields; update the chain's `current_version_id`
+           when `chain_role=amendment`.
+         - **Heuristic fallback** (when no explicit chain_id):
+             - emails: parse In-Reply-To / References headers; subject normalize
+             - contracts: title similarity + "amends/supersedes" language
+             - drawings: filename + revision tag + project metadata
+             - circulars: explicit "Corrigendum to ..." header
+             - patient charts: same patient_id (L4) across encounters
+       LLM-judge on borderline cases is deferred to a later phase.
+       Side-effect only — file lifecycle does not gate on this; if the
+       defer fails, the file still progresses and chains can be
+       re-detected later via `scripts/rerun_chain_detection.py` or an
+       admin trigger.
+       ↓
+13. Open triple extraction (light OpenIE) → extracted_triples (additive, post-ready; includes `source_chunk_id` + subject/object char spans for citation grounding)
        ↓
 15. Identity resolution
        (deterministic keys → embedding blocking → LLM-judge → union-find clusters)

@@ -892,7 +892,42 @@ Per [build_tracker §5.5](build_tracker.md). Five endpoints under `/files`. Firs
 
 1. **MinIO holds bytes, Postgres holds metadata.** `files.object_key` references a MinIO object under `raw_files/<sha256>`. Never store file bytes in PG.
 2. **Content-hash dedup per workspace.** `(workspace_id, content_sha)` partial unique among `lifecycle_state != 'deleted'` rows. Re-uploading the same content returns the existing `files` row (not a 409).
-3. **Lifecycle state machine** (`files.lifecycle_state`): `queued → parsing → parsed → chunked → contextualized → embedded → raptor_building → ready | failed`; soft-delete via `→ deleted` from any non-failed state. Transitions are append-only logged to `file_lifecycle` (immutable audit table). Phase 3a added `chunked` (chained `chunk_file`); Phase 3b added `contextualized` (chained `contextualize_file` — Anthropic-style prefix LLM call with prompt-cached doc context; 3b-bis adds the Gemini adapter); Phase 3c added `embedded` (chained `embed_file` — Gemini Embedding 001 with DeterministicMockEmbedder fallback when `KB_GEMINI_API_KEY` is unset); Phase 3d added the intermediate `raptor_building` + terminal `ready` (chained `raptor_build_file` — per-doc RAPTOR tree). **Each sub-phase appends exactly one or two new states to the enum** — existing readers ignore unknown states (forward-compatible). Phase 3e (corpus-level RAPTOR) does NOT extend this enum — corpus trees are workspace-scoped, not file-scoped.
+3. **Lifecycle state machine** (`files.lifecycle_state`). The full enum admitted by the CHECK constraint (latest: migration `0023_triples_relationships_graph.sql`):
+
+   ```
+   queued → parsing → parsed → chunked → contextualized → embedded
+        → raptor_building → mentions_extracting → fields_extracting
+        → entities_extracting → identity_resolving → ready | failed
+   ```
+
+   Plus three states reserved for additive post-ready stages (see #3a):
+   `triples_extracting`, `relationships_building`, `graph_building`. And
+   the standalone soft-delete `deleted`. Total: **19** values.
+
+   Soft-delete via `→ deleted` from any non-failed state. Transitions are
+   append-only logged to `file_lifecycle` (immutable audit table).
+   Existing readers ignore unknown states (forward-compatible). Phase 3e
+   (corpus-level RAPTOR) does NOT extend this enum — corpus trees are
+   workspace-scoped, not file-scoped. Per-phase introduction:
+
+   | State | Introduced | Set by |
+   |---|---|---|
+   | `queued` | Phase 2a | `POST /files` |
+   | `parsing` / `parsed` | Phase 2a | `parse_file` |
+   | `chunked` | Phase 3a | `chunk_file` |
+   | `contextualized` | Phase 3b | `contextualize_file` |
+   | `embedded` | Phase 3c | `embed_file` (Gemini Embedding 001; DeterministicMockEmbedder fallback when `KB_GEMINI_API_KEY` is unset) |
+   | `raptor_building` | Phase 3d | `raptor_build_file` |
+   | `mentions_extracting` | Phase 5a | `extract_mentions_file` (transition emitted on `raptor_build_done`) |
+   | `fields_extracting` | Phase 5b/c | `extract_kv_tables_file` (transition emitted on `mentions_extracted`) |
+   | `entities_extracting` | Phase 6 | `extract_kv_tables_file` end-of-stage (transition emitted on `kv_tables_extracted`) |
+   | `identity_resolving` | Phase 7 | `extract_schema_entities_file` (transition emitted on `schema_entities_extracted`) |
+   | `ready` | Phase 7 | `resolve_identities_file` (terminal success state — file is fully queryable here) |
+   | `triples_extracting` | B1 / WA-4 | `extract_triples_file` — **additive**, runs AFTER `ready`, does NOT regress lifecycle. Reserved in enum so a future wave can switch to lifecycle gating. |
+   | `relationships_building` | B1 / WA-5 | `build_relationships_file` — **additive**, post-ready. |
+   | `graph_building` | B1 / WA-5 | `build_graph_file` — **additive**, post-ready. |
+   | `failed` | Phase 2a | Any failed stage (event = `<stage>_failed`) |
+   | `deleted` | Phase 2a | `DELETE /files/:id` |
 4. **`raw_pages` immutable.** Per-page content keyed by `(file_id, page_number)`. `GRANT SELECT, INSERT` only. Re-parsing the same content produces byte-identical rows (content-hash keyed).
 5. **Per-stage idempotency.** If `parse_file(file_id)` is replayed and `files.lifecycle_state == 'parsed'`, the task returns immediately without re-work.
 6. **Workspace-isolated.** All 4 new tables carry own `workspace_id` + own RLS policy. The worker calls `SET LOCAL app.workspace_id` before any per-file query.
@@ -907,9 +942,13 @@ Per [build_tracker §5.5](build_tracker.md). Five endpoints under `/files`. Firs
   "mime_type": "application/pdf",
   "size_bytes": 184321,
   "doc_type": null,
-  "lifecycle_state": "parsed",
+  "lifecycle_state": "ready",
   "created_at": "2026-05-23T12:00:00Z",
-  "updated_at": "2026-05-23T12:00:15Z"
+  "updated_at": "2026-05-23T12:00:45Z",
+  "inferred_doc_type": "master_services_agreement",
+  "source_authority": 0.85,
+  "source_authority_reason": "executed_pdf_with_signature_page",
+  "doc_status": "live"
 }
 ```
 
@@ -920,35 +959,77 @@ Per [build_tracker §5.5](build_tracker.md). Five endpoints under `/files`. Firs
 | `content_sha` | string | sha256 lower-hex (64 chars). Unique with `workspace_id` among non-deleted. |
 | `mime_type` | string | From upload's Content-Type or sniffed from magic bytes. |
 | `size_bytes` | int | Raw byte count. |
-| `doc_type` | string \| null | Always `null` at Phase 2a (classifier lands in a later phase). |
-| `lifecycle_state` | enum | `queued/parsing/parsed/chunked/contextualized/embedded/raptor_building/ready/failed` — `deleted` returns 404 on reads. Terminal success state is `ready` (Phase 3d). Each parsing→…→ready transition appends an entry to `lifecycle` history (§5.3). |
+| `doc_type` | string \| null | Legacy classifier slot (Phase 2a). Still `null`; use `inferred_doc_type` for the active classification. |
+| `lifecycle_state` | enum | Full enum in §5.1 #3. `deleted` returns 404 on reads. Terminal success state is `ready`. Each transition appends an entry to `lifecycle` history (§5.3). |
+| `inferred_doc_type` | string \| null | Phase 5b/c. Set by the KV+Tables stage. `null` until the file passes through `fields_extracting`. |
+| `source_authority` | float \| null | B2 / WA-6. Range `[0.0, 1.0]`. `null` until `apply_source_authority_from_config` runs (in the KV+Tables stage). |
+| `source_authority_reason` | string \| null | B2 / WA-6. Human-readable reason from the workspace authority config (e.g. `"executed_pdf_with_signature_page"`, `"text_only_draft"`). |
+| `doc_status` | enum \| null | B2 / WA-6. One of `live` / `superseded` / `draft` / `archived` / `retracted` (CHECK constraint in migration `0024_conflicts_authority.sql`). May be set deterministically by the frontmatter guard rail (Bug K) when the document declares it. |
 
 No `workspace_id`, no `object_key` in response — `object_key` is a server-internal detail (clients don't read MinIO directly).
 
 ### 5.3 Lifecycle history shape
 
-`GET /files/:id` includes a `lifecycle` array of state-transition events:
+`GET /files/:id` includes a `lifecycle` array of state-transition events.
+Items are in `created_at ASC` order (oldest first). Append-only — clients
+can verify integrity by checking transitions follow §5.1 #3.
+
+Full event taxonomy as of the current branch — every event the worker
+actually emits, in pipeline order:
+
+| Event | from → to | Payload | Stage |
+|---|---|---|---|
+| `upload` | `null → queued` | `{}` | Phase 2a — set by `POST /files`. |
+| `task_started` | `queued → parsing` | `{"task_id": "..."}` | `parse_file` entry. |
+| `parse_done` | `parsing → parsed` | `{"parser": "docling\|xlsx\|email\|text\|gemini_ocr\|mistral_ocr", "pages": <int>, "provenance": "..."?}` | `parse_file` exit. |
+| `chunking_done` | `parsed → chunked` | `{"chunk_count": <int>, "chunker": "hierarchical\|row_per_leaf\|message_per_leaf"}` | `chunk_file` (PR #46 HierarchicalNodeParser; chunker selected via `chunker_configs`). |
+| `contextualization_done` | `chunked → contextualized` | `{"prefix_count", "model_id", "cache_creation_input_tokens", "cache_read_input_tokens"}` | `contextualize_file`. |
+| `embedding_done` | `contextualized → embedded` | `{"embedded_count", "model_id", "dim"}` | `embed_file`. |
+| `raptor_build_started` | `embedded → raptor_building` | `{"leaf_count"}` | `raptor_build_file` entry. |
+| `raptor_build_done` | `raptor_building → mentions_extracting` | `{"leaf_count", "levels_built", "total_summarizer_calls", "summarizer_model_id", "embedder_model_id"}` | `raptor_build_file` exit chains into Phase 5a. |
+| `mentions_extracted` | `mentions_extracting → fields_extracting` | `{"mention_count", "model_id"}` | `extract_mentions_file` exit chains into Phase 5b/c. |
+| `kv_tables_extracted` | `fields_extracting → entities_extracting` | `{"scalars_count", "tables_count", "rows_count", "doc_type": <inferred>, "model_id"}` | `extract_kv_tables_file` exit. Also stamps `files.inferred_doc_type` + runs `apply_source_authority_from_config` (B2). |
+| `doc_chain_detected` | (no transition — additive) | `{"chain_id"?, "chain_role"?, "via": "explicit_field\|heuristic\|none"}` | `detect_doc_chain_file` — deferred from `extract_kv_tables_file` so it can read this file's `proposed_fields`. Side-effect only. |
+| `schema_entities_extracted` | `entities_extracting → identity_resolving` | `{"entity_count", "model_id"}` | `extract_schema_entities_file` exit. Writes parent `extracted_entities` rows (where `parent_entity_id IS NULL`). |
+| `identities_resolved` | `identity_resolving → ready` | `{"clusters_created", "clusters_merged", "judge_calls"}` | `resolve_identities_file` exit — **terminal success**. File is fully queryable from here. |
+| `triples_extracted` | (no transition — additive, post-ready) | `{"triple_count", "model_id"}` | `extract_triples_file` (B1 / WA-4). |
+| `relationships_built` | (no transition — additive, post-ready) | `{"relationship_count"}` | `build_relationships_file` (B1 / WA-5). |
+| `graph_built` | (no transition — additive, post-ready) | `{"node_count", "edge_count"}` | `build_graph_file` (B1 / WA-5). |
+| `<stage>_failed` | `<prior_state> → failed` | `{"error_class", "message", ...}` | Any failed stage. |
+
+**Why some events don't transition state.** `doc_chain_detected`,
+`triples_extracted`, `relationships_built`, and `graph_built` are
+**additive side-effect stages**: a failure here does not regress the
+file's lifecycle state, and an admin can re-run them later without
+touching the rest of the pipeline (e.g.
+`scripts/rerun_chain_detection.py`). The `*_extracting` /
+`*_building` enum slots in §5.1 #3 are reserved so a future wave can
+switch these to gated transitions without another migration.
+
+Example sequence (a contract that completed the full pipeline):
 
 ```json
 {
   "lifecycle": [
-    {"from_state": null,      "to_state": "queued",  "event": "upload",      "payload": {},                                "created_at": "..."},
-    {"from_state": "queued",  "to_state": "parsing", "event": "task_started","payload": {"task_id": "0193..."},            "created_at": "..."},
-    {"from_state": "parsing", "to_state": "parsed",  "event": "parse_done",  "payload": {"parser": "docling", "pages": 12},"created_at": "..."}
-    // Phase 2c: `parser` enum widens to `docling | xlsx | email | gemini_ocr | mistral_ocr`.
-    // `payload.provenance` may also be set when Phase 2c's strategy/escalation runs (see raw_pages.layout_json.provenance).
-    // Phase 3a/3b/3c/3d (subsequent events on a single file's lifecycle history):
-    //   parsed → chunked            event=chunking_done           payload={chunk_count}
-    //   chunked → contextualized    event=contextualization_done  payload={prefix_count, model_id, cache_creation_input_tokens, cache_read_input_tokens}
-    //   contextualized → embedded   event=embedding_done          payload={embedded_count, model_id, dim}
-    //   embedded → raptor_building  event=raptor_build_started    payload={leaf_count}
-    //   raptor_building → ready     event=raptor_build_done       payload={leaf_count, levels_built, total_summarizer_calls, summarizer_model_id, embedder_model_id}
-    // Failures at any stage: <prior_state> → failed, event=<stage>_failed, payload={error_class, message, ...}
+    {"from_state": null,                    "to_state": "queued",              "event": "upload",                    "payload": {},                                                    "created_at": "..."},
+    {"from_state": "queued",                "to_state": "parsing",             "event": "task_started",              "payload": {"task_id": "0193..."},                                "created_at": "..."},
+    {"from_state": "parsing",               "to_state": "parsed",              "event": "parse_done",                "payload": {"parser": "docling", "pages": 12},                    "created_at": "..."},
+    {"from_state": "parsed",                "to_state": "chunked",             "event": "chunking_done",             "payload": {"chunk_count": 18, "chunker": "hierarchical"},        "created_at": "..."},
+    {"from_state": "chunked",               "to_state": "contextualized",     "event": "contextualization_done",    "payload": {"prefix_count": 18, "model_id": "..."},               "created_at": "..."},
+    {"from_state": "contextualized",        "to_state": "embedded",            "event": "embedding_done",            "payload": {"embedded_count": 18, "dim": 768},                    "created_at": "..."},
+    {"from_state": "embedded",              "to_state": "raptor_building",     "event": "raptor_build_started",      "payload": {"leaf_count": 12},                                    "created_at": "..."},
+    {"from_state": "raptor_building",       "to_state": "mentions_extracting", "event": "raptor_build_done",         "payload": {"levels_built": 3},                                   "created_at": "..."},
+    {"from_state": "mentions_extracting",   "to_state": "fields_extracting",   "event": "mentions_extracted",        "payload": {"mention_count": 47},                                 "created_at": "..."},
+    {"from_state": "fields_extracting",     "to_state": "entities_extracting", "event": "kv_tables_extracted",       "payload": {"scalars_count": 23, "tables_count": 1, "rows_count": 5}, "created_at": "..."},
+    {"from_state": "entities_extracting",   "to_state": "entities_extracting", "event": "doc_chain_detected",        "payload": {"via": "heuristic", "chain_id": null},                "created_at": "..."},
+    {"from_state": "entities_extracting",   "to_state": "identity_resolving",  "event": "schema_entities_extracted", "payload": {"entity_count": 1},                                   "created_at": "..."},
+    {"from_state": "identity_resolving",    "to_state": "ready",               "event": "identities_resolved",       "payload": {"clusters_created": 2, "clusters_merged": 1},          "created_at": "..."},
+    {"from_state": "ready",                 "to_state": "ready",               "event": "triples_extracted",         "payload": {"triple_count": 19},                                  "created_at": "..."},
+    {"from_state": "ready",                 "to_state": "ready",               "event": "relationships_built",       "payload": {"relationship_count": 11},                            "created_at": "..."},
+    {"from_state": "ready",                 "to_state": "ready",               "event": "graph_built",               "payload": {"edge_count": 11, "node_count": 7},                   "created_at": "..."}
   ]
 }
 ```
-
-Items in `created_at ASC` order (oldest first). Append-only — clients can verify integrity by checking transitions follow §5.1 #3.
 
 ### 5.4 Raw-page resource shape
 
