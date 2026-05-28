@@ -1112,3 +1112,300 @@ async def get_entity_detail(
     return KMEntityDetailResponse(
         entity=entity, neighbors=neighbors, files=files,
     )
+
+
+# ===========================================================================
+# ✏️ Schema editor — CRUD on schema_fields (the canonical layer)
+# ===========================================================================
+#
+# The schema_fields layer is what the extraction prompt uses as
+# "authoritative existing field names" (Bug D Phase 2). So when a user
+# renames a field here, every FUTURE extraction sees the new name.
+#
+# Editing also backfills proposed_fields rows for the same doctype +
+# old field name → new field name, so existing queries find them
+# under the new canonical name.
+#
+# Schemas in this codebase have name `auto:<doc_type>`. The doc_root
+# schema_entity (kind='doc_root') for that schema holds the top-level
+# scalar fields. We accept doctype (the human-friendly name without
+# the `auto:` prefix) on the URL.
+
+
+class SchemaFieldOut(BaseModel):
+    id: str
+    name: str
+    type: str
+    nl_description: str
+    is_required: bool
+    auto_promoted: bool
+
+
+class SchemaFieldPatchRequest(BaseModel):
+    """All-optional patch — fields not passed stay as-is."""
+    name: str | None = None
+    type: str | None = None
+    nl_description: str | None = None
+    is_required: bool | None = None
+
+
+class SchemaFieldCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    type: str = "string"   # schema_fields CHECK enum: string/number/boolean/date/datetime
+    nl_description: str = ""
+    is_required: bool = False
+
+
+class SchemaFieldsListResponse(BaseModel):
+    items: list[SchemaFieldOut] = Field(default_factory=list)
+
+
+async def _resolve_schema_and_root(
+    conn: Connection, *, workspace_id: str, doctype: str,
+) -> tuple[str, str]:
+    """Return (schema_id, doc_root_entity_id) for a doctype, or raise 404."""
+    from fastapi import HTTPException
+    cur = await conn.execute(
+        """
+        SELECT s.id::text, se.id::text
+          FROM schemas s
+          JOIN schema_entities se ON se.schema_id = s.id
+                                  AND se.lifecycle_state = 'active'
+                                  AND se.kind = 'doc_root'
+         WHERE s.workspace_id = %s
+           AND s.lifecycle_state = 'active'
+           AND s.name = %s
+         LIMIT 1
+        """,
+        (workspace_id, f"auto:{doctype}"),
+    )
+    row = await cur.fetchone()
+    if row is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"no active schema for doc_type={doctype!r}",
+        )
+    return str(row[0]), str(row[1])
+
+
+async def _backfill_proposed_field_rename(
+    conn: Connection,
+    *,
+    workspace_id: str,
+    doctype: str,
+    old_name: str,
+    new_name: str,
+) -> int:
+    """After a canonical rename, propagate the same rename across
+    proposed_fields rows for this doctype. Otherwise existing queries
+    that hit the per-file scalar layer would still see the OLD name
+    on docs ingested before the rename."""
+    if not old_name or not new_name or old_name == new_name:
+        return 0
+    # If a row with the NEW name already exists for the same file
+    # (e.g. extraction wrote both variants), drop the old-named one
+    # first to avoid unique-constraint violation.
+    await conn.execute(
+        """
+        DELETE FROM proposed_fields pf_old
+         USING proposed_fields pf_new
+         WHERE pf_old.workspace_id = %s
+           AND pf_old.inferred_doc_type = %s
+           AND pf_old.field_name = %s
+           AND pf_new.file_id = pf_old.file_id
+           AND pf_new.field_name = %s
+           AND pf_new.id <> pf_old.id
+        """,
+        (workspace_id, doctype, old_name, new_name),
+    )
+    cur = await conn.execute(
+        """
+        UPDATE proposed_fields
+           SET field_name = %s
+         WHERE workspace_id = %s
+           AND inferred_doc_type = %s
+           AND field_name = %s
+        """,
+        (new_name, workspace_id, doctype, old_name),
+    )
+    return int(getattr(cur, "rowcount", 0))
+
+
+def _schema_field_row(row: tuple) -> SchemaFieldOut:
+    return SchemaFieldOut(
+        id=str(row[0]),
+        name=str(row[1]),
+        type=str(row[2] or "text"),
+        nl_description=str(row[3] or ""),
+        is_required=bool(row[4]),
+        auto_promoted=bool(row[5]),
+    )
+
+
+_SF_COLS = "id, name, type, nl_description, is_required, auto_promoted"
+
+
+@router.get(
+    "/schemas/{doctype}/fields",
+    response_model=SchemaFieldsListResponse,
+    summary="List canonical schema_fields for a doctype's doc_root entity.",
+)
+async def list_schema_fields(
+    doctype: str,
+    workspace_id: Annotated[str, Depends(current_workspace_id)],
+    conn: Annotated[Connection, Depends(kb_app_connection)],
+) -> SchemaFieldsListResponse:
+    _, root_id = await _resolve_schema_and_root(
+        conn, workspace_id=workspace_id, doctype=doctype,
+    )
+    cur = await conn.execute(
+        f"SELECT {_SF_COLS} FROM schema_fields "
+        f"WHERE entity_id = %s AND lifecycle_state = 'active' "
+        f"ORDER BY name",
+        (root_id,),
+    )
+    return SchemaFieldsListResponse(
+        items=[_schema_field_row(r) for r in await cur.fetchall()],
+    )
+
+
+@router.post(
+    "/schemas/{doctype}/fields",
+    response_model=SchemaFieldOut,
+    summary="Add a new canonical field to a doctype's doc_root entity.",
+)
+async def create_schema_field(
+    doctype: str,
+    body: SchemaFieldCreateRequest,
+    workspace_id: Annotated[str, Depends(current_workspace_id)],
+    conn: Annotated[Connection, Depends(kb_app_connection)],
+) -> SchemaFieldOut:
+    """User-defined field. auto_promoted=false. Future extractions
+    will see this in the prompt hint list (Phase 2) and will be
+    instructed to extract it."""
+    from fastapi import HTTPException
+    import psycopg
+    _, root_id = await _resolve_schema_and_root(
+        conn, workspace_id=workspace_id, doctype=doctype,
+    )
+    try:
+        cur = await conn.execute(
+            f"INSERT INTO schema_fields "
+            f"  (workspace_id, entity_id, name, type, nl_description, "
+            f"   is_required, lifecycle_state, auto_promoted) "
+            f"VALUES (%s, %s, %s, %s, %s, %s, 'active', false) "
+            f"RETURNING {_SF_COLS}",
+            (
+                workspace_id, root_id, body.name.strip(),
+                body.type or "text",
+                body.nl_description or "",
+                bool(body.is_required),
+            ),
+        )
+    except psycopg.errors.UniqueViolation:
+        raise HTTPException(
+            status_code=409,
+            detail=f"field name {body.name!r} already exists on doctype {doctype!r}",
+        )
+    row = await cur.fetchone()
+    if row is None:
+        raise HTTPException(status_code=500, detail="insert returned no row")
+    return _schema_field_row(row)
+
+
+@router.patch(
+    "/schemas/{doctype}/fields/{field_id}",
+    response_model=SchemaFieldOut,
+    summary="Edit a canonical field (rename / change description / etc.). "
+            "Renames are backfilled across proposed_fields.",
+)
+async def patch_schema_field(
+    doctype: str,
+    field_id: str,
+    body: SchemaFieldPatchRequest,
+    workspace_id: Annotated[str, Depends(current_workspace_id)],
+    conn: Annotated[Connection, Depends(kb_app_connection)],
+) -> SchemaFieldOut:
+    from fastapi import HTTPException
+    import psycopg
+    _, root_id = await _resolve_schema_and_root(
+        conn, workspace_id=workspace_id, doctype=doctype,
+    )
+    # Read current row to detect rename + preserve unchanged fields.
+    cur = await conn.execute(
+        f"SELECT {_SF_COLS} FROM schema_fields "
+        f"WHERE id = %s AND entity_id = %s AND lifecycle_state = 'active'",
+        (field_id, root_id),
+    )
+    current = await cur.fetchone()
+    if current is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"field {field_id} not found on doctype {doctype!r}",
+        )
+    old_name = str(current[1])
+    new_name = (body.name.strip() if body.name else old_name)
+    new_type = body.type if body.type is not None else str(current[2] or "text")
+    new_desc = (
+        body.nl_description if body.nl_description is not None
+        else str(current[3] or "")
+    )
+    new_required = (
+        bool(body.is_required) if body.is_required is not None
+        else bool(current[4])
+    )
+    try:
+        cur = await conn.execute(
+            f"UPDATE schema_fields "
+            f"   SET name = %s, type = %s, nl_description = %s, "
+            f"       is_required = %s, updated_at = now() "
+            f" WHERE id = %s "
+            f"RETURNING {_SF_COLS}",
+            (new_name, new_type, new_desc, new_required, field_id),
+        )
+    except psycopg.errors.UniqueViolation:
+        raise HTTPException(
+            status_code=409,
+            detail=f"field name {new_name!r} already exists on doctype {doctype!r}",
+        )
+    row = await cur.fetchone()
+    # Backfill proposed_fields if name changed.
+    if new_name != old_name:
+        await _backfill_proposed_field_rename(
+            conn,
+            workspace_id=workspace_id,
+            doctype=doctype,
+            old_name=old_name,
+            new_name=new_name,
+        )
+    return _schema_field_row(row)
+
+
+@router.delete(
+    "/schemas/{doctype}/fields/{field_id}",
+    status_code=204,
+    summary="Soft-delete a canonical field (sets lifecycle_state='deleted').",
+)
+async def delete_schema_field(
+    doctype: str,
+    field_id: str,
+    workspace_id: Annotated[str, Depends(current_workspace_id)],
+    conn: Annotated[Connection, Depends(kb_app_connection)],
+) -> None:
+    from fastapi import HTTPException, Response
+    _, root_id = await _resolve_schema_and_root(
+        conn, workspace_id=workspace_id, doctype=doctype,
+    )
+    cur = await conn.execute(
+        "UPDATE schema_fields "
+        "   SET lifecycle_state = 'deleted', updated_at = now() "
+        " WHERE id = %s AND entity_id = %s AND lifecycle_state = 'active' "
+        "RETURNING id",
+        (field_id, root_id),
+    )
+    if (await cur.fetchone()) is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"field {field_id} not found on doctype {doctype!r}",
+        )
+    return Response(status_code=204)
