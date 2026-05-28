@@ -198,6 +198,12 @@ class GeminiQueryRewriter:
             system_instruction=_SYSTEM_PROMPT,
             max_output_tokens=_MAX_OUTPUT_TOKENS,
             response_mime_type="application/json",
+            # Query rewriting is the ONE place where diversity is the
+            # point — step_back / HyDE / query2doc rewrites should
+            # phrase the same intent in different ways. 0.5 keeps
+            # rewrites varied without going gibberish-creative. See
+            # docs/RAG_AUDIT_AND_ACTION_PLAN.md Phase 1.1.
+            temperature=0.5,
             thinking_config=types.ThinkingConfig(thinking_budget=0),
         )
 

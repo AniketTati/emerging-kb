@@ -226,6 +226,12 @@ async def test_identity_resolver_empty_query():
 
 
 def test_parse_resolution_happy_path():
+    # Phase 1.3 contract change — the resolver no longer parses
+    # `new_entities` or `new_filters`. The dataclass still has the
+    # fields for back-compat with downstream callers but they always
+    # come back empty. See docs/RAG_AUDIT_AND_ACTION_PLAN.md Phase 1.3
+    # for the rationale (caused aurangabad UUID cast bug + stale
+    # filter pollution across turns).
     out = _parse_resolution_json(
         '{"resolved_query": "X about Mr. Sharma", '
         '"anaphora_resolved": [{"from": "his", "to": "Mr. Sharma"}], '
@@ -236,8 +242,9 @@ def test_parse_resolution_happy_path():
     assert out.resolved_query == "X about Mr. Sharma"
     assert out.anaphora_resolved[0].from_text == "his"
     assert out.anaphora_resolved[0].to_text == "Mr. Sharma"
-    assert out.new_entities == ("ent-1",)
-    assert out.new_filters == {"date": "Q2-2025"}
+    # Phase 1.3 — these are always empty now, regardless of LLM output.
+    assert out.new_entities == ()
+    assert out.new_filters == {}
     assert out.refinement_of_prior is True
 
 

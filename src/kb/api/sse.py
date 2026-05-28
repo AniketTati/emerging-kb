@@ -318,6 +318,13 @@ async def _run_chat_with_events(
                 fallback_title=(body.query or "").strip()[:120] or None,
             )
 
+        # Phase 1.7 — emit query_log audit row after the chat result is
+        # ready. Without this, GET /sessions/<id>/turns LEFT JOIN to
+        # query_log returns NULL for intent / mode / crag / faithfulness /
+        # latency on every reload, so the "How I answered" inspector
+        # shows `?` everywhere. Same audit row that POST /chat writes.
+        from kb.api.query import _write_query_log
+
         try:
             result = await orchestrator.chat(
                 body.query,
@@ -327,6 +334,17 @@ async def _run_chat_with_events(
                 session_id=effective_session_id,
                 file_ids=body.file_ids,
                 event_sink=sink,
+            )
+            # Best-effort audit write before emitting the final done event.
+            await _write_query_log(
+                conn,
+                workspace_id=workspace_id,
+                query_id=result.query_id,
+                endpoint="chat",
+                body=body,
+                search_result=None,
+                chat_result=result,
+                idempotency_key=None,
             )
             await queue.put({
                 "event": "done",
@@ -345,6 +363,20 @@ async def _run_chat_with_events(
                 session_id=effective_session_id,
                 query=body.query, exc=exc,
             )
+            # Audit the error too so the inspector shows refusal_reason.
+            try:
+                await _write_query_log(
+                    conn,
+                    workspace_id=workspace_id,
+                    query_id=err_result.query_id,
+                    endpoint="chat",
+                    body=body,
+                    search_result=None,
+                    chat_result=err_result,
+                    idempotency_key=None,
+                )
+            except Exception:  # noqa: BLE001
+                pass
             await queue.put({
                 "event": "done",
                 "data": json.loads(err_result.model_dump_json()),

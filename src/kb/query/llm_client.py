@@ -92,12 +92,18 @@ class GeminiJsonClient:
 
     async def generate_json(
         self, *, user: str, system: str, max_tokens: int = 800,
+        temperature: float = 0.1,
     ) -> str:
         from google.genai import types  # type: ignore
         config = types.GenerateContentConfig(
             system_instruction=system,
             max_output_tokens=max_tokens,
             response_mime_type="application/json",
+            # Routing/classification/planner JSON calls should be
+            # deterministic. Gemini SDK default is ~1.0 ("be creative") —
+            # wrong for structured outputs. Callers that genuinely want
+            # diversity (only the query rewriter) can override.
+            temperature=temperature,
             thinking_config=types.ThinkingConfig(thinking_budget=0),
         )
         try:

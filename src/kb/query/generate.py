@@ -73,6 +73,65 @@ def _extract_json_object(text: str) -> str | None:
     return None
 
 
+# Phase 1.6 — refusal answer text.
+#
+# Pre-fix, every refusal path returned `answer=""`. The UI then rendered
+# a BLANK CARD with no explanation — user clicks send, gets a void.
+# Map each `refusal_reason` to a one-line user-facing message so the
+# refusal renders with helpful text.
+_REFUSAL_ANSWER_TEXT: dict[str, str] = {
+    "insufficient_evidence": (
+        "I couldn't find enough relevant information to answer this "
+        "confidently. Try rephrasing or asking about a specific document."
+    ),
+    "no_hits": (
+        "No documents matched this question. Try different terms, or "
+        "upload more documents on the Upload page."
+    ),
+    "parse_error": (
+        "I had trouble formatting the answer. Try asking again or "
+        "breaking the question into smaller parts."
+    ),
+    "truncated": (
+        "The answer ran past the length cap. Try a more specific question, "
+        "or break it into multiple smaller asks."
+    ),
+    "model_refused": (
+        "The model declined to answer this. If this was unexpected, try "
+        "rephrasing — sometimes phrasing triggers safety filters."
+    ),
+    "llm_error": (
+        "Something went wrong while calling the model. Please try again."
+    ),
+    "empty_response": (
+        "The model returned an empty response. Please try again."
+    ),
+    "faithfulness_gate_refused": (
+        "I couldn't verify the answer was grounded in the retrieved "
+        "documents. Try rephrasing — the snippets may not actually "
+        "contain the answer."
+    ),
+}
+
+
+def refusal_answer_for(reason: str | None) -> str:
+    """Map a refusal_reason to a user-readable answer string. Returns a
+    safe fallback for unknown reasons. Pipeline-error reasons (prefixed
+    with `pipeline_error:`) and adversarial subtypes have their own
+    custom messages built upstream — don't overwrite those."""
+    if not reason:
+        return (
+            "I can't confidently answer this from the available evidence. "
+            "Try rephrasing or asking about a specific document."
+        )
+    if reason.startswith("pipeline_error:") or reason.startswith("adversarial:"):
+        return ""  # caller already supplied a custom message
+    return _REFUSAL_ANSWER_TEXT.get(reason, (
+        "I can't confidently answer this. Try rephrasing or providing "
+        "more context."
+    ))
+
+
 # Decision #2: top-K post-rerank seen by the generator.
 _TOP_N_HITS = 10
 
@@ -399,7 +458,7 @@ def _parse_result(
             note, (raw or "")[:500],
         )
         return GenerationResult(
-            answer="",
+            answer=refusal_answer_for(actual_reason),
             citations=[],
             refused=True,
             refusal_reason=actual_reason,
@@ -539,7 +598,7 @@ class IdentityGenerator:
         _ = conflict_context
         if force_refuse:
             return GenerationResult(
-                answer="",
+                answer=refusal_answer_for("insufficient_evidence"),
                 citations=[],
                 refused=True,
                 refusal_reason="insufficient_evidence",
@@ -547,7 +606,7 @@ class IdentityGenerator:
             )
         if not hits:
             return GenerationResult(
-                answer="",
+                answer=refusal_answer_for("no_hits"),
                 citations=[],
                 refused=True,
                 refusal_reason="no_hits",
@@ -596,7 +655,7 @@ class GeminiGenerator:
         # waste a token call.
         if force_refuse:
             return GenerationResult(
-                answer="",
+                answer=refusal_answer_for("insufficient_evidence"),
                 citations=[],
                 refused=True,
                 refusal_reason="insufficient_evidence",
@@ -605,7 +664,7 @@ class GeminiGenerator:
         # Decision #7: empty hits = nothing to cite.
         if not hits:
             return GenerationResult(
-                answer="",
+                answer=refusal_answer_for("no_hits"),
                 citations=[],
                 refused=True,
                 refusal_reason="no_hits",
@@ -618,6 +677,11 @@ class GeminiGenerator:
             system_instruction=_SYSTEM_PROMPT,
             max_output_tokens=_MAX_OUTPUT_TOKENS,
             response_mime_type="application/json",
+            # Answer generation: low-but-nonzero temperature for natural
+            # prose without going off-script. Gemini SDK default (~1.0)
+            # produced too much variance in eval. 0.3 is a standard RAG
+            # value. See docs/RAG_AUDIT_AND_ACTION_PLAN.md Phase 1.1.
+            temperature=0.3,
             thinking_config=types.ThinkingConfig(thinking_budget=0),
         )
 
@@ -633,7 +697,7 @@ class GeminiGenerator:
             # Decision #10: error → refusal (NOT fail-safe pass; consequence
             # of fake answer >> consequence of refusing).
             return GenerationResult(
-                answer="",
+                answer=refusal_answer_for("llm_error"),
                 citations=[],
                 refused=True,
                 refusal_reason="llm_error",
@@ -643,7 +707,7 @@ class GeminiGenerator:
         candidates = getattr(response, "candidates", None) or []
         if not candidates:
             return GenerationResult(
-                answer="",
+                answer=refusal_answer_for("empty_response"),
                 citations=[],
                 refused=True,
                 refusal_reason="empty_response",

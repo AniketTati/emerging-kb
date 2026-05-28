@@ -152,6 +152,11 @@ class GeminiReformulator:
             system_instruction=_REFORMULATION_SYSTEM_PROMPT,
             max_output_tokens=200,
             response_mime_type="application/json",
+            # Follow-up query generation should be deterministic so the
+            # IRCoT loop converges (same retrieval input → same
+            # reformulation). See docs/RAG_AUDIT_AND_ACTION_PLAN.md
+            # Phase 1.1.
+            temperature=0.1,
             thinking_config=types.ThinkingConfig(thinking_budget=0),
         )
         try:

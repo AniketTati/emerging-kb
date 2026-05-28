@@ -175,10 +175,22 @@ class IdentityContextResolver:
 
 
 _GEMINI_SYSTEM_PROMPT = (
+    # Phase 1.3 — output schema tightened.
+    #
+    # Dropped fields from the prior version:
+    #   - "new_entities": [str]  — caused the aurangabad UUID cast bug
+    #     (LLM-returned strings were piped into `carry_forward_entities
+    #     uuid[]` and aborted the txn, silently losing chat turns).
+    #   - "new_filters": object  — got persisted into session state and
+    #     polluted later turns ({document_type: resume} stuck around
+    #     after the first resume question and biased subsequent ones).
+    #
+    # The resolver's ONE job is anaphora resolution. Entity capture +
+    # filter inference belong to retrieval / planner, not to a side-
+    # channel JSON field that no part of the pipeline used productively.
     "You resolve anaphora in a follow-up query using prior conversation. "
     "Output STRICTLY JSON: {\"resolved_query\": str, "
     "\"anaphora_resolved\": [{\"from\": str, \"to\": str}], "
-    "\"new_entities\": [str], \"new_filters\": object, "
     "\"refinement_of_prior\": bool}. "
     "Rewrite the query so pronouns/demonstratives reference their concrete "
     "referents from the prior turns. Set refinement_of_prior=true if the "
@@ -219,24 +231,17 @@ def _parse_resolution_json(raw: str, fallback_query: str) -> ContextResolution:
             if isinstance(f, str) and isinstance(t, str):
                 anaphora.append(AnaphoraSubstitution(from_text=f, to_text=t))
 
-    new_entities_raw = data.get("new_entities") or []
-    new_entities: list[str] = []
-    if isinstance(new_entities_raw, list):
-        for e in new_entities_raw:
-            if isinstance(e, str) and e.strip():
-                new_entities.append(e.strip())
-
-    new_filters = data.get("new_filters")
-    if not isinstance(new_filters, dict):
-        new_filters = {}
-
+    # Phase 1.3 — `new_entities` and `new_filters` are no longer parsed
+    # from the resolver output (they're not in the prompt anymore). The
+    # ContextResolution dataclass still has the fields for back-compat
+    # so existing code that reads them sees empty tuples / dicts.
     refinement = bool(data.get("refinement_of_prior", False))
 
     return ContextResolution(
         resolved_query=rq,
         anaphora_resolved=tuple(anaphora),
-        new_entities=tuple(new_entities),
-        new_filters=new_filters,
+        new_entities=(),
+        new_filters={},
         refinement_of_prior=refinement,
     )
 
@@ -298,6 +303,11 @@ class GeminiContextResolver:
             system_instruction=_GEMINI_SYSTEM_PROMPT,
             max_output_tokens=400,
             response_mime_type="application/json",
+            # Routing/classification calls should be deterministic. Gemini's
+            # SDK default is ~1.0 ("be creative") — wrong for "same query
+            # should resolve to the same intent + same plan". 0.1 keeps the
+            # output reproducible without going fully greedy.
+            temperature=0.1,
             thinking_config=types.ThinkingConfig(thinking_budget=0),
         )
         try:

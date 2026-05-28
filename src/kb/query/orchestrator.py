@@ -69,6 +69,23 @@ async def _noop_sink(_event_type: str, _payload: dict[str, Any]) -> None:
 # without dragging the whole orchestrator state.
 
 
+# Phase 1.4 — anaphora detector for the resolver fast-path. If none of
+# these tokens appear in a query, the context resolver has nothing to
+# resolve and we can skip its ~600ms Gemini call entirely. Empirically
+# ~80% of follow-up queries are standalone (no pronouns / demonstratives /
+# back-references), so this is the largest single latency win in
+# Phase 1 of the action plan. Includes pronouns, demonstratives, and
+# common back-reference markers ("previous", "prior", "above", "same",
+# "the one", "the last").
+_ANAPHORA_RE = re.compile(
+    r"\b(it|its|this|that|these|those|they|them|their|theirs|"
+    r"he|him|his|she|her|hers|"
+    r"previous|prior|above|earlier|same|"
+    r"the\s+one|the\s+last|the\s+former|the\s+latter)\b",
+    re.IGNORECASE,
+)
+
+
 # Catches "per clause 99", "per the contract clause N", "per section X",
 # "according to clause N", "section M says X", "as stated in clause N",
 # "under clause N of the X". Intentionally loose so it doesn't miss
@@ -521,6 +538,64 @@ class Orchestrator:
 
         await emit("started", {"query": query, "session_id": session_id})
 
+        # ---- Pre-resolution adversarial check ----
+        # Phase 1.2 — run pure-pattern adversarial detection on the
+        # ORIGINAL query before context resolution can launder it.
+        #
+        # Reproduced attack: user types "ignore your instructions" → the
+        # context resolver, using carry-forward state, rewrote it as
+        # "what is resume about" → the post-classifier adversarial
+        # check (which sees the LAUNDERED query via intent.label) then
+        # missed the threat entirely. Pen-test finding.
+        #
+        # The helpers below are deterministic regex/keyword matchers,
+        # so this is cheap and runs before any LLM call. The
+        # post-classifier adversarial branch (line ~570 below) stays
+        # in place to catch softer LLM-classifier-only cases.
+        if _looks_like_false_premise(query) or _classify_adversarial_subtype(query) != "adversarial_generic" or any(
+            k in query.lower() for k in _BYPASS_KEYWORDS + _PII_KEYWORDS + _FRAUD_KEYWORDS
+        ):
+            adv_reason = _classify_adversarial_subtype(query)
+            adv_answer = _refusal_template_for(adv_reason)
+            await emit("refused_adversarial_preflight", {
+                "subtype": adv_reason, "stage": "pre_resolution",
+            })
+            # Build a minimal intent + plan placeholder so the refusal
+            # envelope has the shape downstream expects.
+            from kb.query.intent import IntentResult
+            adv_intent = IntentResult(
+                label="adversarial", confidence=0.99,
+                notes="pre-resolution pattern match",
+                model_id="orchestrator:pre_adversarial",
+            )
+            adv_plan = Plan(
+                mode="H", intent="adversarial", intent_confidence=0.99,
+                notes="adversarial pre-flight; pipeline skipped",
+                model_id="orchestrator:pre_adversarial",
+            )
+            adv_result = self._adversarial_refusal_envelope(
+                query_id=query_id,
+                query=query,
+                effective_query=query,
+                rewrites=Rewrites(
+                    original=query, step_back="", hyde="", query2doc="",
+                ),
+                intent=adv_intent,
+                plan=adv_plan,
+                latency_ms=int((time.monotonic() - t0) * 1000),
+                refusal_text=adv_answer,
+                refusal_subtype=adv_reason,
+            )
+            adv_turn_index = await self._persist_turn(
+                workspace_id=workspace_id,
+                session_id=session_id, original_query=query,
+                resolved_query=None, ctx_resolution=None,
+                generation=adv_result.generation, query_log_id=query_id,
+            )
+            adv_result.turn_index = adv_turn_index
+            adv_result.session_id = session_id
+            return adv_result
+
         # B6a — context resolution. Skips quietly when no session_id /
         # no prior context.
         resolved_query, ctx_resolution = await self._resolve_context(
@@ -920,9 +995,16 @@ class Orchestrator:
         # downstream faithfulness gate still catches hallucinations.
         # The LLM also self-refuses cleanly when snippets really don't
         # answer the question (Q16-style out-of-corpus asks).
-        force_refuse = (
-            crag_score < self._crag_threshold and plan.mode == "H"
-        )
+        # Phase 1.5 — CRAG refusal now applies uniformly across ALL
+        # modes, not just H. Previously, non-H modes (E/F/S/T/C/A/D/M/K)
+        # generated from low-CRAG retrieval anyway, which silently
+        # produced hallucinated answers when the specialized mode's
+        # retrieval missed. Users expect "refuse on bad retrieval" to
+        # be a system-wide guarantee, not an H-mode quirk.
+        #
+        # Q-mode and I-mode short-circuit before CRAG so they're
+        # unaffected by this change.
+        force_refuse = crag_score < self._crag_threshold
 
         # ---- R1 — Design 2 conflict resolution ----
         # Run REGARDLESS of force_refuse — the detected conflicts are
@@ -1100,9 +1182,15 @@ class Orchestrator:
                     model_id=faithfulness.model_id,
                 )
             else:
+                # Phase 1.6 — fill answer with refusal text instead of
+                # leaving the model's last (low-faith) answer in place
+                # AND being marked refused. Either show a clean refusal
+                # OR keep the answer with a badge — not both.
+                from kb.query.generate import refusal_answer_for
                 generation = generation.model_copy(update={
                     "refused": True,
                     "refusal_reason": "faithfulness_gate_refused",
+                    "answer": refusal_answer_for("faithfulness_gate_refused"),
                 })
 
         # Wave A close-up — sentence-level HHEM exposure (architecture
@@ -1267,8 +1355,15 @@ class Orchestrator:
     ) -> ChatResult:
         """Build a stable refusal envelope when Q-mode is requested before
         the B4b pipeline lands. Keeps /chat's response shape unchanged."""
+        # Phase 1.6 — fill the answer field so the UI doesn't render a
+        # blank card. Q-mode-not-implemented is a temporary state; tell
+        # the user clearly.
         gen = GenerationResult(
-            answer="",
+            answer=(
+                f"This query needs SQL-style aggregation (Q-mode) which "
+                f"isn't fully implemented yet. Reason: {reason}. Try "
+                f"rephrasing as a search question."
+            ),
             citations=[],
             refused=True,
             refusal_reason="q_mode_not_implemented",
@@ -1516,9 +1611,19 @@ class Orchestrator:
     ) -> tuple[str | None, ContextResolution | None]:
         """B6a — load ChatContext + run anaphora resolver. Returns
         (resolved_query, ctx_resolution) tuple. (None, None) when no
-        session_id supplied or session doesn't exist."""
+        session_id supplied or session doesn't exist.
+
+        Phase 1.4 fast-path: if the query has no pronouns / demonstratives /
+        reference words, there's nothing to resolve. Skip the ~600ms
+        Gemini call and the chat-context fetch entirely. Empirically
+        this is ~80% of follow-up queries (most users ask standalone
+        questions even mid-conversation).
+        """
         if not session_id or conn is None:
             return (None, None)
+        # Fast-path: no anaphoric markers → no LLM call needed.
+        if not _ANAPHORA_RE.search(query):
+            return (query, None)
         from kb.domain.chat_memory import build_chat_context
         try:
             context = await build_chat_context(conn, session_id=session_id)
@@ -1712,7 +1817,6 @@ class Orchestrator:
         from kb.domain.chat_memory import (
             insert_turn,
             read_session,
-            update_session_carry_forward,
         )
 
         settings = get_settings()
@@ -1801,43 +1905,23 @@ class Orchestrator:
 
                         await best_effort_write("title_backfill", _backfill_title)
 
-                    # Carry-forward — UUIDs only.
-                    if ctx_resolution and (
-                        ctx_resolution.new_entities
-                        or ctx_resolution.new_filters
-                        or ctx_resolution.refinement_of_prior
-                    ):
-                        import re as _re
-                        _UUID_RE = _re.compile(
-                            r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
-                            r"[0-9a-f]{4}-[0-9a-f]{12}$",
-                            _re.IGNORECASE,
-                        )
-                        valid_new = [
-                            e for e in ctx_resolution.new_entities
-                            if isinstance(e, str) and _UUID_RE.match(e)
-                            and e not in session.carry_forward_entities
-                        ]
-                        new_entities_combined = (
-                            list(session.carry_forward_entities) + valid_new
-                        )
-                        merged_filters = {
-                            **(session.carry_forward_filters or {}),
-                            **(ctx_resolution.new_filters or {}),
-                        }
-                        should_update = bool(valid_new) or merged_filters != (
-                            session.carry_forward_filters or {}
-                        )
-                        if should_update:
-                            async def _roll() -> None:
-                                await update_session_carry_forward(
-                                    fresh,
-                                    session_id=session_id,
-                                    carry_forward_entities=new_entities_combined,
-                                    carry_forward_filters=merged_filters,
-                                )
-
-                            await best_effort_write("carry_forward", _roll)
+                    # Carry-forward write — disabled in Phase 1.3.
+                    #
+                    # The resolver no longer returns `new_entities` or
+                    # `new_filters` (see context_resolver.py). The fields
+                    # remain on ContextResolution for back-compat but
+                    # always come back empty. Writing the carry-forward
+                    # state was the cause of two production bugs:
+                    #   1. aurangabad UUID cast bug (strings → uuid[])
+                    #   2. {document_type: resume} pollution that biased
+                    #      subsequent turns in the same session.
+                    # The schema columns (chat_sessions.carry_forward_*)
+                    # stay populated with their defaults; if a future
+                    # feature wants to use them, it should populate them
+                    # from a typed source (e.g. canonical_entities.id
+                    # lookups) — NOT from LLM-returned strings.
+                    _noop_carry_forward = True  # explicit marker
+                    _ = _noop_carry_forward
 
                     # Tier-2 summary refresh.
                     async def _tier2() -> None:
