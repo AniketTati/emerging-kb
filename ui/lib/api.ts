@@ -2179,3 +2179,74 @@ export async function deleteSchemaField(
     throw new Error(`delete failed (${resp.status}): ${body}`);
   }
 }
+
+
+// ----- Sub-entity column editor (Bug D Phase 6) -----
+
+export type SubEntityColumnOut = {
+  id: string | null;       // null = not yet promoted to schema_fields
+  name: string;
+  type: string;
+  nl_description: string;
+  is_required: boolean;
+  auto_promoted: boolean;
+  n_rows_observed: number;
+};
+
+export type SubEntityColumnsListResponse = {
+  items: SubEntityColumnOut[];
+};
+
+function _seBase(doctype: string, subName: string): string {
+  return `${KB_API_URL}/knowledge-map/schemas/${encodeURIComponent(doctype)}/sub-entities/${encodeURIComponent(subName)}/fields`;
+}
+
+export async function listSubEntityColumns(
+  doctype: string, subEntityName: string,
+): Promise<SubEntityColumnsListResponse> {
+  const resp = await fetch(_seBase(doctype, subEntityName), {
+    headers: workspaceHeaders(), cache: "no-store",
+  });
+  return _handle<SubEntityColumnsListResponse>(resp);
+}
+
+export async function patchSubEntityColumn(
+  doctype: string, subEntityName: string, fieldKey: string,
+  body: SchemaFieldPatch,
+): Promise<SubEntityColumnOut> {
+  // fieldKey is either the schema_fields UUID (if promoted) OR the
+  // raw column name (when still inferred from jsonb only).
+  const resp = await fetch(
+    `${_seBase(doctype, subEntityName)}/${encodeURIComponent(fieldKey)}`,
+    {
+      method: "PATCH",
+      headers: { ...workspaceHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    },
+  );
+  return _handle<SubEntityColumnOut>(resp);
+}
+
+export async function createSubEntityColumn(
+  doctype: string, subEntityName: string, body: SchemaFieldCreate,
+): Promise<SubEntityColumnOut> {
+  const resp = await fetch(_seBase(doctype, subEntityName), {
+    method: "POST",
+    headers: { ...workspaceHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return _handle<SubEntityColumnOut>(resp);
+}
+
+export async function deleteSubEntityColumn(
+  doctype: string, subEntityName: string, fieldKey: string,
+): Promise<void> {
+  const resp = await fetch(
+    `${_seBase(doctype, subEntityName)}/${encodeURIComponent(fieldKey)}`,
+    { method: "DELETE", headers: workspaceHeaders() },
+  );
+  if (!resp.ok) {
+    const body = await resp.text();
+    throw new Error(`delete failed (${resp.status}): ${body}`);
+  }
+}

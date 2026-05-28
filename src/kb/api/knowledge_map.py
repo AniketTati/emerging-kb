@@ -1409,3 +1409,460 @@ async def delete_schema_field(
             detail=f"field {field_id} not found on doctype {doctype!r}",
         )
     return Response(status_code=204)
+
+
+# ===========================================================================
+# ✏️ Schema editor — sub-entity columns (Bug D Phase 6)
+# ===========================================================================
+#
+# Same CRUD pattern as the doc-root field editor (Phase 3), but scoped
+# to one sub-entity table (e.g. Bank Statement → Transaction columns).
+#
+# Sub-entity columns are tricky because their "schema" lives in two
+# places at once: (a) explicit schema_fields rows when the field was
+# promoted, (b) observed jsonb keys in extracted_entities.fields when
+# nothing has been promoted yet. The list endpoint unions both so the
+# user sees every column they actually have. Mutations operate on
+# schema_fields (the canonical layer) AND the jsonb keys
+# (extracted_entities.fields) so the rename/delete propagates to
+# existing data.
+
+
+class SubEntityColumnOut(BaseModel):
+    """One column of a sub-entity table. May or may not have a
+    schema_fields row backing it; if not, `id` is null and the
+    column was inferred purely from observed jsonb keys."""
+    id: str | None = None
+    name: str
+    type: str = "string"
+    nl_description: str = ""
+    is_required: bool = False
+    auto_promoted: bool = True
+    n_rows_observed: int = 0
+
+
+class SubEntityColumnsListResponse(BaseModel):
+    items: list[SubEntityColumnOut] = Field(default_factory=list)
+
+
+async def _resolve_sub_entity(
+    conn: Connection,
+    *,
+    workspace_id: str,
+    doctype: str,
+    sub_entity_name: str,
+) -> tuple[str, str]:
+    """Return (schema_id, sub_entity_id). Raises 404 if either is missing."""
+    from fastapi import HTTPException
+    cur = await conn.execute(
+        """
+        SELECT s.id::text, se.id::text
+          FROM schemas s
+          JOIN schema_entities se ON se.schema_id = s.id
+                                  AND se.lifecycle_state = 'active'
+                                  AND se.kind = 'sub_entity'
+                                  AND se.name = %s
+         WHERE s.workspace_id = %s
+           AND s.lifecycle_state = 'active'
+           AND s.name = %s
+         LIMIT 1
+        """,
+        (sub_entity_name, workspace_id, f"auto:{doctype}"),
+    )
+    row = await cur.fetchone()
+    if row is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"no active sub-entity {sub_entity_name!r} for "
+                f"doc_type={doctype!r}"
+            ),
+        )
+    return str(row[0]), str(row[1])
+
+
+async def _rename_subentity_jsonb_key(
+    conn: Connection,
+    *,
+    workspace_id: str,
+    sub_entity_id: str,
+    old_name: str,
+    new_name: str,
+) -> int:
+    """Rewrite `fields` jsonb keys for every extracted_entities row of
+    this sub-entity, renaming old_name → new_name. Returns # rows
+    touched. If a row already has new_name, the old value wins (we
+    overwrite — this matches the Phase 7 normalizer's behavior)."""
+    if not old_name or not new_name or old_name == new_name:
+        return 0
+    cur = await conn.execute(
+        """
+        UPDATE extracted_entities ee
+           SET fields = (ee.fields - %s::text)
+                        || jsonb_build_object(%s::text, ee.fields->%s::text)
+         WHERE ee.workspace_id = %s::uuid
+           AND ee.schema_entity_id = %s::uuid
+           AND ee.fields ? %s::text
+        """,
+        (old_name, new_name, old_name, workspace_id, sub_entity_id, old_name),
+    )
+    return int(getattr(cur, "rowcount", 0))
+
+
+async def _drop_subentity_jsonb_key(
+    conn: Connection,
+    *,
+    workspace_id: str,
+    sub_entity_id: str,
+    name: str,
+) -> int:
+    """Remove a jsonb key from every row of this sub-entity. Returns
+    # rows touched."""
+    if not name:
+        return 0
+    cur = await conn.execute(
+        """
+        UPDATE extracted_entities ee
+           SET fields = ee.fields - %s::text
+         WHERE ee.workspace_id = %s::uuid
+           AND ee.schema_entity_id = %s::uuid
+           AND ee.fields ? %s::text
+        """,
+        (name, workspace_id, sub_entity_id, name),
+    )
+    return int(getattr(cur, "rowcount", 0))
+
+
+@router.get(
+    "/schemas/{doctype}/sub-entities/{sub_entity_name}/fields",
+    response_model=SubEntityColumnsListResponse,
+    summary="List columns for one sub-entity table — unions promoted "
+            "schema_fields and observed jsonb keys.",
+)
+async def list_sub_entity_columns(
+    doctype: str,
+    sub_entity_name: str,
+    workspace_id: Annotated[str, Depends(current_workspace_id)],
+    conn: Annotated[Connection, Depends(kb_app_connection)],
+) -> SubEntityColumnsListResponse:
+    _, sub_entity_id = await _resolve_sub_entity(
+        conn, workspace_id=workspace_id, doctype=doctype,
+        sub_entity_name=sub_entity_name,
+    )
+    # Promoted schema_fields for this sub-entity.
+    cur = await conn.execute(
+        f"SELECT {_SF_COLS} FROM schema_fields "
+        f"WHERE entity_id = %s AND lifecycle_state = 'active' "
+        f"ORDER BY name",
+        (sub_entity_id,),
+    )
+    sf_rows = await cur.fetchall()
+    sf_by_name: dict[str, tuple] = {str(r[1]): r for r in sf_rows}
+
+    # Observed jsonb keys + n_rows in extracted_entities.
+    cur = await conn.execute(
+        """
+        SELECT jsonb_object_keys(fields) AS k, count(*)::int AS n
+          FROM extracted_entities
+         WHERE workspace_id = %s AND schema_entity_id = %s
+           AND fields IS NOT NULL
+         GROUP BY jsonb_object_keys(fields)
+         ORDER BY n DESC, k
+        """,
+        (workspace_id, sub_entity_id),
+    )
+    observed_by_name: dict[str, int] = {str(r[0]): int(r[1]) for r in await cur.fetchall()}
+
+    # Merge: every name from either side appears in the result.
+    all_names = sorted(set(sf_by_name.keys()) | set(observed_by_name.keys()))
+    items: list[SubEntityColumnOut] = []
+    for name in all_names:
+        sf = sf_by_name.get(name)
+        n_rows = observed_by_name.get(name, 0)
+        if sf is not None:
+            items.append(SubEntityColumnOut(
+                id=str(sf[0]), name=str(sf[1]),
+                type=str(sf[2] or "string"),
+                nl_description=str(sf[3] or ""),
+                is_required=bool(sf[4]),
+                auto_promoted=bool(sf[5]),
+                n_rows_observed=n_rows,
+            ))
+        else:
+            items.append(SubEntityColumnOut(
+                id=None, name=name, type="string",
+                nl_description="", is_required=False,
+                auto_promoted=True,  # observed-only counts as auto
+                n_rows_observed=n_rows,
+            ))
+    return SubEntityColumnsListResponse(items=items)
+
+
+@router.post(
+    "/schemas/{doctype}/sub-entities/{sub_entity_name}/fields",
+    response_model=SubEntityColumnOut,
+    summary="Declare a new canonical column on a sub-entity table.",
+)
+async def create_sub_entity_column(
+    doctype: str,
+    sub_entity_name: str,
+    body: SchemaFieldCreateRequest,
+    workspace_id: Annotated[str, Depends(current_workspace_id)],
+    conn: Annotated[Connection, Depends(kb_app_connection)],
+) -> SubEntityColumnOut:
+    from fastapi import HTTPException
+    import psycopg
+    _, sub_entity_id = await _resolve_sub_entity(
+        conn, workspace_id=workspace_id, doctype=doctype,
+        sub_entity_name=sub_entity_name,
+    )
+    try:
+        cur = await conn.execute(
+            f"INSERT INTO schema_fields "
+            f"  (workspace_id, entity_id, name, type, nl_description, "
+            f"   is_required, lifecycle_state, auto_promoted) "
+            f"VALUES (%s, %s, %s, %s, %s, %s, 'active', false) "
+            f"RETURNING {_SF_COLS}",
+            (
+                workspace_id, sub_entity_id, body.name.strip(),
+                body.type or "string",
+                body.nl_description or "",
+                bool(body.is_required),
+            ),
+        )
+    except psycopg.errors.UniqueViolation:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"column {body.name!r} already exists on "
+                f"sub-entity {sub_entity_name!r}"
+            ),
+        )
+    row = await cur.fetchone()
+    return SubEntityColumnOut(
+        id=str(row[0]), name=str(row[1]),
+        type=str(row[2] or "string"),
+        nl_description=str(row[3] or ""),
+        is_required=bool(row[4]),
+        auto_promoted=bool(row[5]),
+        n_rows_observed=0,
+    )
+
+
+@router.patch(
+    "/schemas/{doctype}/sub-entities/{sub_entity_name}/fields/{field_key}",
+    response_model=SubEntityColumnOut,
+    summary="Edit a sub-entity column. `field_key` is either the schema_fields "
+            "id (when one exists) or the raw jsonb key name. Renames rewrite "
+            "the jsonb keys across all extracted_entities rows AND "
+            "create/update the canonical schema_fields row.",
+)
+async def patch_sub_entity_column(
+    doctype: str,
+    sub_entity_name: str,
+    field_key: str,
+    body: SchemaFieldPatchRequest,
+    workspace_id: Annotated[str, Depends(current_workspace_id)],
+    conn: Annotated[Connection, Depends(kb_app_connection)],
+) -> SubEntityColumnOut:
+    from fastapi import HTTPException
+    import psycopg
+    _, sub_entity_id = await _resolve_sub_entity(
+        conn, workspace_id=workspace_id, doctype=doctype,
+        sub_entity_name=sub_entity_name,
+    )
+    # field_key can be either a UUID (existing schema_field) or a
+    # bare jsonb key (no schema_field promoted yet). Try UUID first.
+    # MUST wrap in a savepoint — when field_key isn't a valid UUID,
+    # Postgres throws on the ::uuid cast and aborts the surrounding
+    # request transaction, breaking every subsequent query.
+    sf_row: tuple | None = None
+    await conn.execute("SAVEPOINT sf_uuid_probe")
+    try:
+        cur = await conn.execute(
+            f"SELECT {_SF_COLS} FROM schema_fields "
+            f"WHERE id = %s::uuid AND entity_id = %s "
+            f"  AND lifecycle_state = 'active'",
+            (field_key, sub_entity_id),
+        )
+        sf_row = await cur.fetchone()
+        await conn.execute("RELEASE SAVEPOINT sf_uuid_probe")
+    except Exception:
+        sf_row = None
+        await conn.execute("ROLLBACK TO SAVEPOINT sf_uuid_probe")
+        await conn.execute("RELEASE SAVEPOINT sf_uuid_probe")
+    old_name: str
+    if sf_row is not None:
+        old_name = str(sf_row[1])
+    else:
+        # field_key is the raw column name (no schema_fields row).
+        # Verify it actually exists as a jsonb key in this sub-entity.
+        cur = await conn.execute(
+            "SELECT count(*) FROM extracted_entities "
+            " WHERE workspace_id = %s AND schema_entity_id = %s "
+            "   AND fields ? %s",
+            (workspace_id, sub_entity_id, field_key),
+        )
+        n = int((await cur.fetchone())[0])
+        if n == 0:
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    f"column {field_key!r} not found on sub-entity "
+                    f"{sub_entity_name!r}"
+                ),
+            )
+        old_name = field_key
+
+    new_name = (body.name.strip() if body.name else old_name)
+    new_type = (
+        body.type if body.type is not None
+        else (str(sf_row[2]) if sf_row else "string")
+    )
+    new_desc = (
+        body.nl_description if body.nl_description is not None
+        else (str(sf_row[3] or "") if sf_row else "")
+    )
+    new_required = (
+        bool(body.is_required) if body.is_required is not None
+        else (bool(sf_row[4]) if sf_row else False)
+    )
+
+    # Rename jsonb keys if name changed.
+    if new_name != old_name:
+        await _rename_subentity_jsonb_key(
+            conn, workspace_id=workspace_id,
+            sub_entity_id=sub_entity_id,
+            old_name=old_name, new_name=new_name,
+        )
+
+    # Upsert the schema_fields row.
+    if sf_row is not None:
+        try:
+            cur = await conn.execute(
+                f"UPDATE schema_fields "
+                f"   SET name = %s, type = %s, nl_description = %s, "
+                f"       is_required = %s, updated_at = now() "
+                f" WHERE id = %s "
+                f"RETURNING {_SF_COLS}",
+                (new_name, new_type, new_desc, new_required, sf_row[0]),
+            )
+        except psycopg.errors.UniqueViolation:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"column name {new_name!r} already exists on "
+                    f"sub-entity {sub_entity_name!r}"
+                ),
+            )
+        row = await cur.fetchone()
+    else:
+        # Promote: create a schema_fields row representing this
+        # (now-canonical) column.
+        try:
+            cur = await conn.execute(
+                f"INSERT INTO schema_fields "
+                f"  (workspace_id, entity_id, name, type, nl_description, "
+                f"   is_required, lifecycle_state, auto_promoted) "
+                f"VALUES (%s, %s, %s, %s, %s, %s, 'active', false) "
+                f"RETURNING {_SF_COLS}",
+                (
+                    workspace_id, sub_entity_id, new_name,
+                    new_type, new_desc, new_required,
+                ),
+            )
+        except psycopg.errors.UniqueViolation:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"column {new_name!r} already promoted on sub-entity "
+                    f"{sub_entity_name!r}"
+                ),
+            )
+        row = await cur.fetchone()
+
+    # Recompute n_rows_observed under the new name.
+    cur = await conn.execute(
+        "SELECT count(*) FROM extracted_entities "
+        " WHERE workspace_id = %s AND schema_entity_id = %s "
+        "   AND fields ? %s",
+        (workspace_id, sub_entity_id, new_name),
+    )
+    n_rows = int((await cur.fetchone())[0])
+
+    return SubEntityColumnOut(
+        id=str(row[0]), name=str(row[1]),
+        type=str(row[2] or "string"),
+        nl_description=str(row[3] or ""),
+        is_required=bool(row[4]),
+        auto_promoted=bool(row[5]),
+        n_rows_observed=n_rows,
+    )
+
+
+@router.delete(
+    "/schemas/{doctype}/sub-entities/{sub_entity_name}/fields/{field_key}",
+    status_code=204,
+    summary="Remove a column from a sub-entity. Drops the jsonb key from "
+            "every row AND soft-deletes the schema_fields row if one exists.",
+)
+async def delete_sub_entity_column(
+    doctype: str,
+    sub_entity_name: str,
+    field_key: str,
+    workspace_id: Annotated[str, Depends(current_workspace_id)],
+    conn: Annotated[Connection, Depends(kb_app_connection)],
+) -> None:
+    from fastapi import HTTPException, Response
+    _, sub_entity_id = await _resolve_sub_entity(
+        conn, workspace_id=workspace_id, doctype=doctype,
+        sub_entity_name=sub_entity_name,
+    )
+    # Resolve to canonical name (field_key is uuid or raw column).
+    # Savepoint protects the txn from UUID-cast errors on non-UUID input.
+    col_name: str | None = None
+    await conn.execute("SAVEPOINT sf_uuid_probe_del")
+    try:
+        cur = await conn.execute(
+            "SELECT name FROM schema_fields "
+            " WHERE id = %s::uuid AND entity_id = %s AND lifecycle_state = 'active'",
+            (field_key, sub_entity_id),
+        )
+        r = await cur.fetchone()
+        if r is not None:
+            col_name = str(r[0])
+        await conn.execute("RELEASE SAVEPOINT sf_uuid_probe_del")
+    except Exception:
+        col_name = None
+        await conn.execute("ROLLBACK TO SAVEPOINT sf_uuid_probe_del")
+        await conn.execute("RELEASE SAVEPOINT sf_uuid_probe_del")
+    if col_name is None:
+        # Treat field_key as raw column name.
+        cur = await conn.execute(
+            "SELECT count(*) FROM extracted_entities "
+            " WHERE workspace_id = %s AND schema_entity_id = %s AND fields ? %s",
+            (workspace_id, sub_entity_id, field_key),
+        )
+        if int((await cur.fetchone())[0]) > 0:
+            col_name = field_key
+    if col_name is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"column {field_key!r} not found on sub-entity "
+                f"{sub_entity_name!r}"
+            ),
+        )
+    # Drop jsonb key + soft-delete schema_field (best-effort).
+    await _drop_subentity_jsonb_key(
+        conn, workspace_id=workspace_id,
+        sub_entity_id=sub_entity_id, name=col_name,
+    )
+    await conn.execute(
+        "UPDATE schema_fields "
+        "   SET lifecycle_state = 'deleted', updated_at = now() "
+        " WHERE workspace_id = %s AND entity_id = %s "
+        "   AND name = %s AND lifecycle_state = 'active'",
+        (workspace_id, sub_entity_id, col_name),
+    )
+    return Response(status_code=204)

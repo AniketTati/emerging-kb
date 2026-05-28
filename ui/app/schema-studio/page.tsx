@@ -36,12 +36,13 @@ import {
   getKnowledgeMapSchemaSample, getKnowledgeMapAnomalyCohort,
   getKnowledgeMapEntities, getKnowledgeMapEntityDetail,
   listSchemaFields, patchSchemaField, createSchemaField, deleteSchemaField,
+  listSubEntityColumns, patchSubEntityColumn, createSubEntityColumn, deleteSubEntityColumn,
   downloadSchemaExportYaml,
   type KMStats, type KMSchemaCard, type KMNeedsReview, type KMHistoryResp,
   type KMHistoryEvent, type KMAnomaly, type KMConflict,
   type KMSchemaSample, type KMSubEntitySample, type KMCohortResponse,
   type KMEntity, type KMEntityDetailResponse, type KMEntityNeighbor,
-  type KMEntityFile, type SchemaFieldOut,
+  type KMEntityFile, type SchemaFieldOut, type SubEntityColumnOut,
 } from "@/lib/api";
 import {
   humanizeSchemaName, categorizeSchema, DOMAINS, VISIBLE_DOMAINS,
@@ -595,7 +596,7 @@ function CatalogDetail({ card }: { card: KMSchemaCard }) {
             Contains
           </div>
           {sample.sub_entity_samples.map((s) => (
-            <SubEntityTable key={s.unit_type} sub={s} />
+            <SubEntityTable key={s.unit_type} sub={s} doctype={card.name.replace(/^auto:/, "")} />
           ))}
         </section>
       )}
@@ -620,14 +621,58 @@ function CatalogDetail({ card }: { card: KMSchemaCard }) {
 }
 
 
-function SubEntityTable({ sub }: { sub: KMSubEntitySample }) {
+function SubEntityTable({
+  sub, doctype,
+}: {
+  sub: KMSubEntitySample;
+  doctype: string;
+}) {
+  // Sub-entity name as the API knows it (PascalCase, matches
+  // schema_entities.name). humanizeSchemaName(sub.unit_type) is
+  // the display form ("Sheet Index"); the API needs the raw
+  // PascalCase ("SheetIndex"). We derive it from the snake_case
+  // unit_type to avoid extra round-trips.
+  const subEntityName = useMemo(
+    () => sub.unit_type.split(/[_-]+/).map(p => p ? p[0].toUpperCase() + p.slice(1).toLowerCase() : "").join(""),
+    [sub.unit_type],
+  );
+  const [editingColumns, setEditingColumns] = useState(false);
+  const heading = (
+    <div className="text-[12px] font-medium text-zinc-700 mb-1.5 flex items-center gap-2">
+      <span>↳ {humanizeSchemaName(sub.unit_type)}</span>
+      <span className="text-[10px] text-zinc-400 mono">
+        {sub.row_count} row{sub.row_count === 1 ? "" : "s"}
+        {sub.rows.length > 0 && sub.row_count - sub.rows.length > 0 && ` · showing first ${sub.rows.length}`}
+      </span>
+      <button
+        type="button"
+        onClick={() => setEditingColumns(v => !v)}
+        className={`ml-auto flex items-center gap-1 text-[10px] px-2 py-0.5 rounded cursor-pointer ${
+          editingColumns
+            ? "bg-zinc-900 text-white hover:bg-zinc-800"
+            : "text-zinc-600 hover:text-zinc-900 hover:bg-zinc-100"
+        }`}
+        title="Toggle column editor"
+      >
+        <Pencil className="w-3 h-3" strokeWidth={2} />
+        {editingColumns ? "Done" : "Edit columns"}
+      </button>
+    </div>
+  );
+
+  if (editingColumns) {
+    return (
+      <div>
+        {heading}
+        <SubEntityColumnsEditor doctype={doctype} subEntityName={subEntityName} />
+      </div>
+    );
+  }
+
   if (sub.rows.length === 0 || sub.columns.length === 0) {
     return (
       <div>
-        <div className="text-[12px] font-medium text-zinc-700 mb-1">
-          ↳ {humanizeSchemaName(sub.unit_type)}{" "}
-          <span className="text-[10px] text-zinc-400 mono">0 rows</span>
-        </div>
+        {heading}
         <div className="text-[11px] text-zinc-400 italic">No rows extracted yet.</div>
       </div>
     );
@@ -635,13 +680,7 @@ function SubEntityTable({ sub }: { sub: KMSubEntitySample }) {
   const moreCount = sub.row_count - sub.rows.length;
   return (
     <div>
-      <div className="text-[12px] font-medium text-zinc-700 mb-1.5 flex items-baseline gap-2">
-        <span>↳ {humanizeSchemaName(sub.unit_type)}</span>
-        <span className="text-[10px] text-zinc-400 mono">
-          {sub.row_count} row{sub.row_count === 1 ? "" : "s"}
-          {moreCount > 0 && ` · showing first ${sub.rows.length}`}
-        </span>
-      </div>
+      {heading}
       <div className="overflow-x-auto border border-zinc-200 rounded-md">
         <table className="w-full text-[11px]">
           <thead className="bg-zinc-50 text-[10px] uppercase tracking-wider text-zinc-500">
@@ -674,6 +713,199 @@ function SubEntityTable({ sub }: { sub: KMSubEntitySample }) {
         <div className="text-[10px] text-zinc-400 mt-1">
           + {moreCount} more row{moreCount === 1 ? "" : "s"} not shown
         </div>
+      )}
+    </div>
+  );
+}
+
+
+// Per-sub-entity column editor: list / rename / add / delete columns
+// on a sub-entity table. Mirrors the doc-level editor pattern but
+// scoped to one sub-entity, with the additional concept that columns
+// may be "observed-only" (no schema_fields row yet — see API).
+function SubEntityColumnsEditor({
+  doctype, subEntityName,
+}: {
+  doctype: string;
+  subEntityName: string;
+}) {
+  const [cols, setCols] = useState<SubEntityColumnOut[] | null>(null);
+  const [loadErr, setLoadErr] = useState<string | null>(null);
+  const [editingKey, setEditingKey] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [opErr, setOpErr] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    setLoadErr(null);
+    try {
+      const r = await listSubEntityColumns(doctype, subEntityName);
+      setCols(r.items);
+    } catch (e) {
+      setLoadErr((e as Error).message);
+    }
+  }, [doctype, subEntityName]);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  function colKey(c: SubEntityColumnOut): string {
+    return c.id ?? c.name;
+  }
+
+  const handlePatch = useCallback(async (
+    fieldKey: string,
+    patch: { name?: string; nl_description?: string; type?: string },
+  ) => {
+    setBusy(true);
+    setOpErr(null);
+    try {
+      await patchSubEntityColumn(doctype, subEntityName, fieldKey, patch);
+      await refresh();
+      setEditingKey(null);
+    } catch (e) {
+      setOpErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }, [doctype, subEntityName, refresh]);
+
+  const handleDelete = useCallback(async (fieldKey: string, name: string) => {
+    if (!confirm(`Remove column "${name}" from ${subEntityName}? This drops the jsonb key from every existing row AND soft-deletes the canonical field.`)) return;
+    setBusy(true);
+    setOpErr(null);
+    try {
+      await deleteSubEntityColumn(doctype, subEntityName, fieldKey);
+      await refresh();
+    } catch (e) {
+      setOpErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }, [doctype, subEntityName, refresh]);
+
+  const handleCreate = useCallback(async (body: { name: string; nl_description: string; type: string; is_required: boolean }) => {
+    setBusy(true);
+    setOpErr(null);
+    try {
+      await createSubEntityColumn(doctype, subEntityName, body);
+      await refresh();
+      setAdding(false);
+    } catch (e) {
+      setOpErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }, [doctype, subEntityName, refresh]);
+
+  if (loadErr) return <ErrorBanner msg={`Failed to load columns: ${loadErr}`} />;
+
+  return (
+    <div className="border border-zinc-200 rounded-md overflow-hidden">
+      <div className="px-2.5 py-1.5 bg-zinc-50 border-b border-zinc-200 flex items-center">
+        <span className="text-[10px] uppercase tracking-wider text-zinc-500">
+          Columns {cols ? `(${cols.length})` : ""}
+        </span>
+        <button
+          type="button"
+          onClick={() => { setAdding(true); setEditingKey(null); }}
+          disabled={busy || adding}
+          className="ml-auto flex items-center gap-1 text-[11px] text-zinc-600 hover:text-zinc-900 px-1.5 py-0.5 rounded hover:bg-zinc-100 cursor-pointer disabled:opacity-50"
+        >
+          <Plus className="w-3 h-3" strokeWidth={2} /> Add column
+        </button>
+      </div>
+
+      {opErr && <ErrorBanner msg={opErr} />}
+
+      {cols === null ? (
+        <SkeletonLines count={3} />
+      ) : (
+        <table className="w-full text-[11px]">
+          <thead className="bg-zinc-50/60 text-[10px] uppercase tracking-wider text-zinc-500">
+            <tr>
+              <th className="text-left px-2.5 py-1.5 font-medium w-1/4">Column</th>
+              <th className="text-left px-2.5 py-1.5 font-medium">Description</th>
+              <th className="text-left px-2.5 py-1.5 font-medium w-16">Type</th>
+              <th className="text-right px-2.5 py-1.5 font-medium w-12 mono">Rows</th>
+              <th className="w-16"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {adding && (
+              <FieldEditRow
+                mode="create"
+                initial={{ name: "", type: "string", nl_description: "", is_required: false }}
+                fileCountIsOne={false}
+                onSave={(b) => handleCreate(b)}
+                onCancel={() => setAdding(false)}
+                busy={busy}
+              />
+            )}
+            {cols.length === 0 && !adding && (
+              <tr>
+                <td colSpan={5} className="px-2.5 py-3 text-[11px] text-zinc-400 italic text-center">
+                  No columns yet. Click "Add column" to define one.
+                </td>
+              </tr>
+            )}
+            {cols.map((c) => editingKey === colKey(c) ? (
+              <FieldEditRow
+                key={colKey(c)}
+                mode="edit"
+                initial={{ name: c.name, type: c.type || "string", nl_description: c.nl_description || "", is_required: c.is_required }}
+                fileCountIsOne={false}
+                onSave={(b) => handlePatch(colKey(c), { name: b.name, nl_description: b.nl_description, type: b.type })}
+                onCancel={() => setEditingKey(null)}
+                busy={busy}
+              />
+            ) : (
+              <tr key={colKey(c)} className="border-t border-zinc-100 group">
+                <td className="px-2.5 py-1.5 mono text-zinc-700 align-top">
+                  {c.name}
+                  {c.id === null && (
+                    <span className="ml-1.5 text-[9px] px-1 py-px rounded bg-amber-50 text-amber-800 border border-amber-200 mono" title="Inferred from observed jsonb keys; not yet promoted to schema_fields">
+                      inferred
+                    </span>
+                  )}
+                  {c.id !== null && !c.auto_promoted && (
+                    <span className="ml-1.5 text-[9px] px-1 py-px rounded bg-emerald-50 text-emerald-700 border border-emerald-200 mono" title="User-defined">
+                      custom
+                    </span>
+                  )}
+                </td>
+                <td className="px-2.5 py-1.5 text-[11px] text-zinc-500 align-top">
+                  {c.nl_description || <span className="italic text-zinc-400">no description</span>}
+                </td>
+                <td className="px-2.5 py-1.5 text-[11px] text-zinc-500 align-top">
+                  {c.type || "—"}
+                </td>
+                <td className="px-2.5 py-1.5 text-[11px] text-zinc-500 align-top text-right mono">
+                  {c.n_rows_observed}
+                </td>
+                <td className="px-2.5 py-1.5 align-top">
+                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button type="button"
+                      onClick={() => { setEditingKey(colKey(c)); setAdding(false); }}
+                      disabled={busy}
+                      className="p-1 rounded hover:bg-zinc-100 text-zinc-500 hover:text-zinc-900 cursor-pointer disabled:opacity-50"
+                      title="Edit column">
+                      <Pencil className="w-3 h-3" strokeWidth={2} />
+                    </button>
+                    <button type="button"
+                      onClick={() => handleDelete(colKey(c), c.name)}
+                      disabled={busy}
+                      className="p-1 rounded hover:bg-rose-50 text-zinc-500 hover:text-rose-700 cursor-pointer disabled:opacity-50"
+                      title="Delete column">
+                      <Trash2 className="w-3 h-3" strokeWidth={2} />
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       )}
     </div>
   );
