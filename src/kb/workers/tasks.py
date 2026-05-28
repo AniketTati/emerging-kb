@@ -1562,23 +1562,52 @@ async def extract_kv_tables_file_impl(file_id: str) -> None:
             # Without this, the LLM kept inventing fresh names per
             # doc (CO-005 → total_cost_premium, CO-018 →
             # total_cost_inr) — making cross-doc aggregation
-            # impossible. We cap to fields that appear in 2+ docs OR
-            # match a "stable" pattern, so a one-off invented name
-            # doesn't lock us into bad nomenclature.
+            # impossible.
+            #
+            # Two sources, UNIONed with canonical-first priority:
+            #   (a) `schema_fields` — promoted/canonical names that
+            #       went through user-review (or auto-promote when
+            #       prevalence was high). These are AUTHORITATIVE.
+            #   (b) `proposed_fields` — raw per-file LLM output.
+            #       Fallback when no canonical name exists yet for a
+            #       doctype.
+            # Canonical names get a giant priority bump so they
+            # appear first in the LLM hint list — the prompt tells
+            # the LLM to PREFER the first names listed.
             cur = await conn.execute(
                 """
-                SELECT inferred_doc_type, field_name, count(DISTINCT file_id) AS n_docs
-                  FROM proposed_fields
-                 WHERE workspace_id = %s
-                   AND inferred_doc_type IS NOT NULL
-                 GROUP BY inferred_doc_type, field_name
-                 ORDER BY inferred_doc_type, n_docs DESC, field_name
+                SELECT doctype, field_name FROM (
+                    SELECT regexp_replace(s.name, '^auto:', '') AS doctype,
+                           sf.name AS field_name,
+                           1000000 AS pri
+                      FROM schema_fields sf
+                      JOIN schema_entities se ON se.id = sf.entity_id
+                      JOIN schemas s ON s.id = se.schema_id
+                     WHERE sf.workspace_id = %s
+                       AND sf.lifecycle_state = 'active'
+                       AND s.lifecycle_state = 'active'
+                       AND se.kind = 'doc_root'
+                       AND s.name LIKE 'auto:%%'
+                  UNION ALL
+                    SELECT inferred_doc_type AS doctype, field_name,
+                           count(DISTINCT file_id)::int AS pri
+                      FROM proposed_fields
+                     WHERE workspace_id = %s
+                       AND inferred_doc_type IS NOT NULL
+                     GROUP BY inferred_doc_type, field_name
+                ) all_fields
+                ORDER BY doctype, pri DESC, field_name
                 """,
-                (workspace_id_str,),
+                (workspace_id_str, workspace_id_str),
             )
             scalar_hint_rows = await cur.fetchall()
             existing_scalar_hints: dict[str, list[str]] = {}
-            for dt, fn, _n in scalar_hint_rows:
+            seen_hint: set[tuple[str, str]] = set()
+            for dt, fn in scalar_hint_rows:
+                key = (str(dt), str(fn))
+                if key in seen_hint:
+                    continue
+                seen_hint.add(key)
                 existing_scalar_hints.setdefault(str(dt), []).append(str(fn))
 
     chunk_indexed_text = build_chunk_indexed_text(chunks) if chunks else ""
