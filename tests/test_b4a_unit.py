@@ -195,6 +195,20 @@ def test_detect_inventory_intent_matches(query):
     # Empty / whitespace
     "",
     "   ",
+    # File-scoped follow-ups — the reproduceable chat bug. After a
+    # turn focused on bank-statement.xlsx, "What else is in
+    # bank-statement?" got context-resolved to a phrasing that
+    # tripped the `\bwhat\s+(documents?|docs?|files?)\s+...` regex
+    # and routed to I-mode, which silently re-rendered the workspace
+    # inventory instead of reading bank-statement content. The
+    # negative-scope guard now rejects any inventory-pattern hit when
+    # the query has "in <specific-thing>".
+    "What else is in bank-statement?",
+    "What is in the invoice",
+    "what's in this MSA",
+    "What documents are in bank-statement.xlsx?",
+    "what files are inside the contract amendment",
+    "list everything inside vertex-msa.pdf",
 ])
 def test_detect_inventory_intent_no_false_match(query):
     from kb.query.intent import detect_inventory_intent

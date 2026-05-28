@@ -108,12 +108,57 @@ INVENTORY_PATTERNS: tuple[re.Pattern[str], ...] = (
 )
 
 
+# Negative guard. If the query SCOPES to a specific file / doctype /
+# entity ("in bank-statement", "from invoice.pdf", "inside the
+# contract"), it's NOT a workspace-wide inventory ask — it's a content
+# question about a specific thing, and downstream wants S/H/F mode, not
+# I-mode's "show me the 26-doc table".
+#
+# This caught a reproducible chat bug: after a turn focused on
+# bank-statement.xlsx, the follow-up "What else is in bank-statement?"
+# either matched an inventory regex (post context-resolver rewrite to
+# "what documents are…") OR got LLM-labelled as `inventory`. Either
+# path routed to I-mode which ignores file scope and re-rendered the
+# global workspace inventory — looking to the user like the previous
+# turn's context evaporated.
+#
+# Two-step check:
+#   1. _HAS_IN_SCOPE — query mentions "in/inside/within <something>"
+#   2. _WORKSPACE_SCOPE_PHRASES — that something IS one of the
+#      workspace-scope synonyms (workspace / corpus / kb / files / docs)
+# Inventory fires only when (1) doesn't match, or when both match.
+# Anything else (e.g. "in bank-statement", "inside the invoice") is a
+# file-scoped content question and routes to S/H/F mode instead.
+#
+# Why not a single negative-lookahead regex: the negative-lookahead
+# form lets the engine skip the optional determiner ("my/the/this")
+# and then accept the determiner itself as the scope noun, so "in my
+# workspace" still matches and false-positive-rejects. Two separate
+# checks are clearer and don't have that backtracking hole.
+_HAS_IN_SCOPE = re.compile(
+    r"\b(?:in|inside|within)\s+\S+", re.IGNORECASE,
+)
+_WORKSPACE_SCOPE_PHRASES = re.compile(
+    r"\b(?:in|inside|within)\s+(?:(?:my|the|this|that|all)\s+)?"
+    r"(?:workspace|corpus|kb|knowledge\s*base|files?|docs?|documents?|"
+    r"inventory|catalog|index|database|system)\b",
+    re.IGNORECASE,
+)
+
+
 def detect_inventory_intent(query: str) -> tuple[bool, float]:
     """Pattern-match the query against `INVENTORY_PATTERNS`. Returns
     `(matched, confidence)`. Confidence is 0.95 on match — high enough
     to override any softer LLM classification, low enough to leave
-    room for the LLM to revise on ambiguous edge cases."""
+    room for the LLM to revise on ambiguous edge cases.
+
+    Refuses to fire when the query has an "in/inside/within X" scope
+    qualifier and X is NOT one of the workspace-scope synonyms — see
+    the rationale on `_HAS_IN_SCOPE` / `_WORKSPACE_SCOPE_PHRASES`.
+    """
     if not query or not query.strip():
+        return False, 0.0
+    if _HAS_IN_SCOPE.search(query) and not _WORKSPACE_SCOPE_PHRASES.search(query):
         return False, 0.0
     for pat in INVENTORY_PATTERNS:
         if pat.search(query):
@@ -347,8 +392,13 @@ _SYSTEM_PROMPT = (
     "    SQL-style numeric aggregation across multiple docs.\n"
     "  - anomaly: 'what's unusual', 'outliers', 'rare transactions' — \n"
     "    surface rare/anomalous extracted rows, not aggregates.\n"
-    "  - inventory: 'list my files', 'how many docs of type X' — \n"
-    "    file-metadata listing, no chunk content.\n"
+    "  - inventory: 'list my files', 'how many docs of type X', \n"
+    "    'what's in my workspace' — WORKSPACE-WIDE file-metadata \n"
+    "    listing, no chunk content. Do NOT use `inventory` when the \n"
+    "    query is scoped to a SPECIFIC file/doc/contract/entity \n"
+    "    ('what's in bank-statement', 'what else is in the invoice', \n"
+    "    'what does this MSA cover') — those are scoped_summarize or \n"
+    "    factoid, NOT inventory.\n"
     "  - doc_metadata: 'PDFs from 2024', 'files by author X' — \n"
     "    file-level filter (mime_type / date / source), like inventory \n"
     "    but with predicates beyond just the count.\n"
