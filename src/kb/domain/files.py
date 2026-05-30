@@ -857,6 +857,31 @@ class BackwardLifecycleTransitionError(RuntimeError):
     """
 
 
+# Lifecycle states a file has *left* the per-doc ingestion pipeline in.
+# `ready` = ingested; `failed`/`deleted` = will never progress further.
+TERMINAL_LIFECYCLE_STATES: tuple[str, ...] = ("ready", "failed", "deleted")
+
+
+async def count_inflight_files(conn: Connection, *, workspace_id: str) -> int:
+    """Number of files in `workspace_id` still progressing through the
+    per-doc ingestion pipeline (i.e. not in a terminal lifecycle_state).
+
+    I3: the corpus-finalization phase (field convergence → re-extract →
+    identity reconcile → corpus RAPTOR) must run once, AFTER per-doc ingest
+    has *settled*. Settled ⇔ this returns 0 — no file is still in-flight.
+    The additive post-`ready` graph layers (build_relationships/build_graph)
+    do not move lifecycle_state, so they don't count as in-flight here.
+    """
+    cur = await conn.execute(
+        "SELECT count(*) FROM files "
+        "WHERE workspace_id = %s "
+        "  AND lifecycle_state <> ALL(%s)",
+        (workspace_id, list(TERMINAL_LIFECYCLE_STATES)),
+    )
+    row = await cur.fetchone()
+    return int(row[0]) if row else 0
+
+
 async def transition_lifecycle(
     conn: Connection,
     *,

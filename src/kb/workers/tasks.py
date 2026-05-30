@@ -2731,6 +2731,18 @@ async def resolve_identities_file_impl(file_id: str) -> None:
     except Exception:  # noqa: BLE001
         traceback.print_exc()
 
+    # I3 — auto-trigger the corpus-finalization phase. Fired on every file
+    # → ready; finalize_corpus self-gates on ingest-settle, so it's a cheap
+    # no-op until the LAST file in the workspace lands, then runs once.
+    # Separate (best-effort) defer so a queue hiccup never rolls back the
+    # successful identity resolution.
+    try:
+        await procrastinate_app.configure_task(
+            name="finalize_corpus"
+        ).defer_async(workspace_id=workspace_id_str)
+    except Exception:  # noqa: BLE001
+        traceback.print_exc()
+
 
 # ---------------------------------------------------------------------------
 # WA-3 / Design 3 — detect_doc_chain_file_impl
@@ -3987,6 +3999,61 @@ async def raptor_build_corpus(workspace_id: str) -> None:
     via POST /corpus/raptor/rebuild (not chained from any file event).
     """
     await raptor_build_corpus_impl(workspace_id=workspace_id)
+
+
+# ---------------------------------------------------------------------------
+# I3 — corpus-finalization phase (auto-trigger after per-doc ingest settles)
+# ---------------------------------------------------------------------------
+
+
+async def finalize_corpus_impl(workspace_id: str) -> None:
+    """Corpus-finalization phase entry point (I3).
+
+    Runs the cross-document passes that can only happen once ALL per-doc
+    ingest for the workspace has *settled* (no files left in-flight).
+
+    Deferred from the tail of the per-doc chain (resolve_identities_file_impl)
+    every time a file reaches `ready`, but **self-gates on settle**: it does
+    one cheap COUNT and returns immediately while any file is still in-flight,
+    so during a batch ingest it's a no-op for every file except the last one
+    to land — which then runs the finalization work once.
+
+    Today the finalization work is just the corpus-RAPTOR build, so
+    corpus-scope retrieval works after a normal ingest with no manual
+    POST /corpus/raptor/rebuild call. Task #19 expands this in place into the
+    full ordered sequence: field convergence (I2) → cold-start schema-entity
+    re-extraction → identity reconcile → corpus RAPTOR.
+    """
+    from kb.config import get_settings
+    from kb.domain.files import count_inflight_files
+
+    settings = get_settings()
+    db_url = settings.database_url
+
+    async with open_connection(db_url) as conn:
+        await conn.execute(
+            "SELECT set_config('app.workspace_id', %s, true)",
+            (workspace_id,),
+        )
+        inflight = await count_inflight_files(conn, workspace_id=workspace_id)
+    if inflight > 0:
+        # Per-doc ingest hasn't settled — a later file's completion re-fires
+        # this. (A benign tail race may run the build twice; the corpus build
+        # is an idempotent atomic teardown-and-rebuild, so the result is the
+        # same — see test_raptor_build_corpus_atomic_rebuild_replaces_old_rows.)
+        return
+
+    await raptor_build_corpus_impl(workspace_id=workspace_id)
+
+
+@procrastinate_app.task(name="finalize_corpus", queue="kb", pass_context=False)
+async def finalize_corpus(workspace_id: str) -> None:
+    """Wire-level Procrastinate task. Delegates to the testable impl.
+
+    I3: corpus-finalization phase. Auto-deferred from the per-doc chain tail
+    when a file reaches `ready`; self-gates on ingest-settle (see impl).
+    """
+    await finalize_corpus_impl(workspace_id=workspace_id)
 
 
 # ---------------------------------------------------------------------------
