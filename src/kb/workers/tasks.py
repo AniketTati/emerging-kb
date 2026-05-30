@@ -2548,6 +2548,7 @@ async def resolve_identities_file_impl(file_id: str) -> None:
         EMBEDDING_HIGH_THRESHOLD,
         EMBEDDING_LOW_THRESHOLD,
         is_noise_mention_type,
+        select_entity_match,
     )
 
     settings = get_settings()
@@ -2662,29 +2663,22 @@ async def resolve_identities_file_impl(file_id: str) -> None:
                             workspace_id=workspace_id_str,
                             entity_type=mention_type,
                             embedding=mention_emb,
-                            limit=1,
+                            limit=int(os.environ.get("KB_IDENTITY_TOPK") or 5),
                         )
-                        if candidates:
-                            cand_id, cand_name, sim = candidates[0]
-                            if sim >= EMBEDDING_HIGH_THRESHOLD:
-                                resolved_entity_id = cand_id
-                                resolution_method = "embedding"
-                                confidence = sim
-                                method_counts["embedding"] += 1
-                            elif sim >= EMBEDDING_LOW_THRESHOLD:
-                                # Stage 3: LLM judge
-                                try:
-                                    same = await judge.same_entity(
-                                        text_a=mention_text, type_a=mention_type,
-                                        text_b=cand_name, type_b=mention_type,
-                                    )
-                                except Exception:
-                                    same = False
-                                if same:
-                                    resolved_entity_id = cand_id
-                                    resolution_method = "llm_judge"
-                                    confidence = sim
-                                    method_counts["llm_judge"] += 1
+                        # I4 — top-k candidate selection (pure, testable
+                        # helper). Walks the top-k nearest neighbours instead
+                        # of only the single nearest, so a true match that's
+                        # the 2nd/3rd neighbour is still found.
+                        match = await select_entity_match(
+                            candidates,
+                            judge_same=lambda cand_name: judge.same_entity(
+                                text_a=mention_text, type_a=mention_type,
+                                text_b=cand_name, type_b=mention_type,
+                            ),
+                        )
+                        if match is not None:
+                            resolved_entity_id, resolution_method, confidence = match
+                            method_counts[resolution_method] += 1
 
                     # Stage 4: create new entity
                     if resolved_entity_id is None:
