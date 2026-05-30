@@ -112,6 +112,102 @@ def cluster_fields_for_doctype(
     return clusters
 
 
+async def converge_clusters_semantic(
+    clusters: list[FieldCluster],
+    *,
+    embed_fn: Any,
+    judge_fn: Any,
+    sim_threshold: float = 0.86,
+) -> list[FieldCluster]:
+    """I2 (EDC) — merge exact-match clusters that mean the SAME field under
+    different names (e.g. `total_cost` vs `total_amount`).
+
+    Two-stage embedding-block + LLM-judge:
+      1. BLOCK — embed each cluster's "name: description" and take cosine
+         similarity; only pairs ≥ `sim_threshold` are merge CANDIDATES (cheap
+         filter so the judge sees few pairs, not O(n²)).
+      2. JUDGE — `judge_fn(a, b)` confirms each candidate pair is truly the
+         same concept; confirmed pairs are union-merged.
+
+    `embed_fn(list[str]) -> list[list[float]]` and `judge_fn(a, b) -> bool`
+    are injected (real wiring uses the Gemini embedder + an LLM judge; tests
+    pass fakes). Merged clusters keep the most-prevalent name as canonical and
+    sum doc observations. Pure aside from the two injected calls — order of
+    the returned list is by descending prevalence for determinism.
+    """
+    if len(clusters) < 2:
+        return list(clusters)
+
+    texts = [f"{c.canonical_name}: {c.description}".strip(": ") for c in clusters]
+    vectors = await embed_fn(texts)
+
+    def _cos(a: list[float], b: list[float]) -> float:
+        import math
+        dot = sum(x * y for x, y in zip(a, b))
+        na = math.sqrt(sum(x * x for x in a))
+        nb = math.sqrt(sum(y * y for y in b))
+        return dot / (na * nb) if na and nb else 0.0
+
+    # Union-find over cluster indices.
+    parent = list(range(len(clusters)))
+
+    def _find(i: int) -> int:
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    def _union(i: int, j: int) -> None:
+        ri, rj = _find(i), _find(j)
+        if ri != rj:
+            parent[max(ri, rj)] = min(ri, rj)
+
+    # Candidate pairs above the blocking threshold, judged for true merge.
+    for i in range(len(clusters)):
+        for j in range(i + 1, len(clusters)):
+            if _find(i) == _find(j):
+                continue
+            if _cos(vectors[i], vectors[j]) < sim_threshold:
+                continue
+            try:
+                if await judge_fn(clusters[i], clusters[j]):
+                    _union(i, j)
+            except Exception:  # noqa: BLE001 — judge failure → don't merge
+                continue
+
+    # Build merged groups.
+    groups: dict[int, list[int]] = {}
+    for idx in range(len(clusters)):
+        groups.setdefault(_find(idx), []).append(idx)
+
+    merged: list[FieldCluster] = []
+    for members in groups.values():
+        if len(members) == 1:
+            merged.append(clusters[members[0]])
+            continue
+        group = [clusters[m] for m in members]
+        # Canonical = the most-prevalent member's name (the dominant spelling).
+        lead = max(group, key=lambda c: (c.prevalence, c.n_docs_observed))
+        total_docs = sum(c.n_docs_observed for c in group)
+        # Prevalence/stability: doc-weighted averages, clamped to 1.0.
+        prevalence = min(1.0, sum(c.prevalence * c.n_docs_observed for c in group)
+                         / total_docs) if total_docs else lead.prevalence
+        stability = (sum(c.stability * c.n_docs_observed for c in group)
+                     / total_docs) if total_docs else lead.stability
+        merged.append(FieldCluster(
+            canonical_name=lead.canonical_name,
+            description=lead.description,
+            value_type=lead.value_type,
+            n_docs_observed=total_docs,
+            prevalence=prevalence,
+            stability=stability,
+            value_type_confidence=stability,
+        ))
+
+    merged.sort(key=lambda c: (-c.prevalence, c.canonical_name))
+    return merged
+
+
 @dataclass
 class PromotionThresholds:
     prevalence: float = 0.80
