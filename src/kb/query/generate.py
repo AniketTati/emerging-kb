@@ -652,10 +652,16 @@ def _parse_result(
     # C1 — ground aggregate (mode-Q) answers in their source documents.
     citations = _ensure_aggregate_sources_cited(citations, hits)
 
-    # If model produced an answer but no citations, fall back to synthesizing
-    # the top-3 hits — the UI still gets something to render.
-    if not citations and hits:
-        citations = _citations_from_hits(hits, limit=3)
+    # #8 Citation honesty ("cited or it didn't happen", §3 NFR) — do NOT
+    # fabricate provenance. Pre-fix, an answer the model cited nothing for
+    # fell back to synthesizing the top-3 hits, presenting an arbitrary
+    # guess as if it were the answer's sources. That violates the NFR: an
+    # uncited answer is unattributed, and we surface it as such (empty
+    # citations) rather than inventing them. The downstream faithfulness
+    # gate still verifies grounding against the hits and refuses an
+    # ungrounded answer; deriving citations from that *verified* grounding
+    # (vs a blind top-3) is the Q5 follow-up. The Identity stub keeps its
+    # own `_citations_from_hits` use (no model to cite).
 
     return GenerationResult(
         answer=answer,
