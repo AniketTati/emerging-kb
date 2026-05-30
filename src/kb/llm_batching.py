@@ -23,6 +23,53 @@ T = TypeVar("T")
 R = TypeVar("R")
 
 
+# ---------------------------------------------------------------------------
+# I7 — transient-failure retry
+# ---------------------------------------------------------------------------
+
+_TRANSIENT_MARKERS = (
+    "429", "rate limit", "too many requests", "resource_exhausted",
+    "timeout", "timed out", "503", "502", "504", "500",
+    "service unavailable", "unavailable", "deadline", "connection",
+)
+
+
+def is_transient(exc: Exception) -> bool:
+    """True for retryable LLM/network errors (rate limit, timeout, 5xx).
+    Permanent errors (bad key/model, 4xx other than 429, arity/parse
+    mismatch) are NOT retried — retrying just wastes the budget."""
+    msg = str(exc).lower()
+    return any(m in msg for m in _TRANSIENT_MARKERS)
+
+
+async def with_retry(
+    fn: Callable[[], Awaitable[R]],
+    *,
+    attempts: int = 3,
+    base_delay_s: float = 2.0,
+    label: str = "llm call",
+) -> R:
+    """Run `fn`, retrying TRANSIENT failures with exponential backoff. The
+    final attempt's exception (or the first permanent one) propagates so the
+    caller's existing error handling decides what to do (e.g. mark failed)."""
+    last: Exception | None = None
+    for attempt in range(attempts):
+        try:
+            return await fn()
+        except Exception as exc:  # noqa: BLE001
+            last = exc
+            if not is_transient(exc) or attempt == attempts - 1:
+                raise
+            delay = base_delay_s * (2 ** attempt)
+            _LOG.warning(
+                "%s transient failure (attempt %d/%d): %s — retrying in %.0fs",
+                label, attempt + 1, attempts, exc, delay,
+            )
+            await asyncio.sleep(delay)
+    assert last is not None
+    raise last
+
+
 def _chunked(items: list[T], size: int):
     for i in range(0, len(items), size):
         yield i, items[i : i + size]
