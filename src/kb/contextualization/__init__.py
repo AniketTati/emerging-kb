@@ -36,6 +36,7 @@ the adapter:
 
 from __future__ import annotations
 
+import json
 import os
 from typing import Any, Protocol
 
@@ -56,6 +57,16 @@ _USER_TEMPLATE = (
     "within the document. Return ONLY the context line, no preamble."
 )
 _MAX_OUTPUT_TOKENS = 200
+
+# S1 — batch template: one call situates N chunks at once. Returns a JSON
+# array of exactly N context lines (order preserved). Falls back to per-chunk
+# (`contextualize`) via `llm_batching.run_batched` on any arity/parse failure.
+_BATCH_USER_TEMPLATE = (
+    "Here are {n} chunks from the document above, numbered. For EACH chunk, "
+    "write a short (50-100 token) context line situating it within the "
+    "document. Return ONLY a JSON array of EXACTLY {n} strings, in the same "
+    "order as the chunks — no preamble, no keys.\n\n{chunks_block}"
+)
 
 
 class ContextualizationError(Exception):
@@ -104,6 +115,14 @@ class IdentityContextualizer:
             cache_creation_input_tokens=0,
             cache_read_input_tokens=0,
         )
+
+    async def contextualize_batch(
+        self, *, doc_text: str, chunk_texts: list[str]
+    ) -> list[ContextualizedChunk]:
+        return [
+            await self.contextualize(doc_text=doc_text, chunk_text=t)
+            for t in chunk_texts
+        ]
 
 
 # ---------------------------------------------------------------------------
@@ -317,6 +336,85 @@ class GeminiContextualizer:
             cache_creation_input_tokens=prompt_tokens,
             cache_read_input_tokens=0,
         )
+
+    async def contextualize_batch(
+        self, *, doc_text: str, chunk_texts: list[str]
+    ) -> list[ContextualizedChunk]:
+        """S1 — situate N chunks in ONE call (doc_text sent once, not per
+        chunk). Returns a JSON array of N prefixes. Raises on arity/parse
+        mismatch so `run_batched` cleanly falls back to per-chunk."""
+        if not chunk_texts:
+            return []
+        model = os.environ.get("KB_CONTEXTUAL_MODEL") or self._model
+        from google.genai import types
+
+        chunks_block = "\n\n".join(
+            f"[{i + 1}]\n{t}" for i, t in enumerate(chunk_texts)
+        )
+        config = types.GenerateContentConfig(
+            system_instruction=_SYSTEM_TEMPLATE.format(doc_text=doc_text),
+            # Budget output for N context lines (≈ per-chunk cap × N, capped).
+            max_output_tokens=min(_MAX_OUTPUT_TOKENS * len(chunk_texts) + 200, 8192),
+            thinking_config=types.ThinkingConfig(thinking_budget=0),
+            response_mime_type="application/json",
+        )
+        try:
+            response = await self._client.aio.models.generate_content(
+                model=model,
+                contents=_BATCH_USER_TEMPLATE.format(
+                    n=len(chunk_texts), chunks_block=chunks_block,
+                ),
+                config=config,
+            )
+        except Exception as exc:
+            raise ContextualizationError(
+                f"Gemini contextualize_batch call failed: {exc}"
+            ) from exc
+
+        candidates = getattr(response, "candidates", None) or []
+        if not candidates:
+            raise ContextualizationError("Gemini batch returned no candidates")
+        text = ""
+        parts = getattr(getattr(candidates[0], "content", None), "parts", None) or []
+        for part in parts:
+            if getattr(part, "text", None):
+                text += part.text
+        prefixes = _parse_json_str_array(text)
+        if len(prefixes) != len(chunk_texts):
+            raise ContextualizationError(
+                f"batch returned {len(prefixes)} prefixes for "
+                f"{len(chunk_texts)} chunks"
+            )
+
+        usage = getattr(response, "usage_metadata", None)
+        prompt_tokens = getattr(usage, "prompt_token_count", 0) or 0
+        cand_tokens = getattr(usage, "candidates_token_count", 0) or 0
+        out: list[ContextualizedChunk] = []
+        for i, (prefix, chunk_text) in enumerate(zip(prefixes, chunk_texts)):
+            prefix = (prefix or "").strip()
+            out.append(ContextualizedChunk(
+                contextual_prefix=prefix,
+                contextual_text=f"{prefix}\n\n{chunk_text}" if prefix else chunk_text,
+                model_id=model,
+                prefix_token_count=cand_tokens // len(chunk_texts),
+                # Attribute the batch's billed input tokens to the first row;
+                # the lifecycle payload sums these, so the total is preserved.
+                cache_creation_input_tokens=prompt_tokens if i == 0 else 0,
+                cache_read_input_tokens=0,
+            ))
+        return out
+
+
+def _parse_json_str_array(text: str) -> list[str]:
+    """Parse a JSON array of strings, tolerating ```json fences."""
+    t = (text or "").strip()
+    if t.startswith("```"):
+        lines = t.splitlines()
+        t = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
+    data = json.loads(t)
+    if not isinstance(data, list):
+        raise ValueError("expected a JSON array")
+    return [str(x) for x in data]
 
 
 # ---------------------------------------------------------------------------
