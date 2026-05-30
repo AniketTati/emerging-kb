@@ -174,6 +174,17 @@ each remaining mode earn its place on the now-trustworthy eval. Consider
 ColBERT/SPLADE only as a scale option later (S-series). We over-built on top of
 a correct base; the fix is subtraction.
 
+**Progress (this build).** Reranker switched `bge-reranker-v2-m3` → **Cohere
+`rerank-v3.5`** (the architecture's stated default; `KB_RERANKER=cohere`):
+hosted, async, SOTA multilingual (the construction corpus has Marathi).
+Diagnosed via M1's per-stage timing that the local bge was the dominant
+per-query cost — a *synchronous* call blocking the asyncio event loop, plus a
+first-call model-load stampede that stalled concurrency (it was **not** rate
+limiting, which we verified). `CohereReranker` hardened with transient
+retry/backoff + loud fallback so a trial-key 429 can't silently degrade rerank
+to passthrough and corrupt the rerank-stage metrics. Per-query ~25s→~13s; full
+50-Q eval ~4.6 min. (Q2 mode-facade subtraction still pending.)
+
 ---
 
 ## D6 — Citations, provenance, confidence, faithfulness (§2.4)
@@ -211,6 +222,21 @@ claim-level pass rates.
   "cited or it didn't happen."
 - **P5: extend single-page to page-range.** All four are completion, not new
   architecture.
+
+**Progress (this build).** Partial, measured on construction via M1:
+- **C1** (checklist #8 slice) — grounded aggregate (mode-Q) answers to their
+  source documents. The synthetic aggregate Hit carried no `file_id`, so the
+  citation degraded to a bare `"document"`; mode-Q now keeps the retrieved
+  source-doc hits and the generator attaches them ("cited or it didn't
+  happen"). Aggregation citation **0.00 → 1.00**.
+- **C2** (checklist #6 slice) — made the CRAG (relevance) and faithfulness
+  gates **agree instead of cancel**: a `low_confidence` answer that retrieval
+  also didn't support is now refused (out-of-corpus / false-premise
+  hallucinations). Negative refuse **0.00 → 0.67**, no over-refusal.
+- **Remaining (full D6):** claim-decomposition + span verification (the SOTA
+  grounding method above) as the default Q5 gate; **P2** confidence from
+  per-claim pass rates; **kill the fake-citation fallback** (`generate.py:629`);
+  **P5** page-range; **C2b** entity-grounded q009 case.
 
 ---
 
@@ -285,6 +311,14 @@ context relevance) and **generation** (faithfulness, answer correctness)
 **per-stage measurement** (checklist M1) — score retrieval and generation
 separately, which the now-verified citations make possible. Do M1 early; it
 makes every other decision measurable.
+
+**Progress (this build).** ✅ **M1 delivered** (`docs/M1_STAGE_EVAL.md`) —
+retrieval recall@k + rerank retention + citation correctness + faithfulness,
+per stratum AND per domain, scored against the verified `expected_citations`,
+with per-question localisation (lost_retrieval / lost_rerank / lost_generation).
+Phase-0 construction baseline recorded; it directly drove the build sequencing
+(losses are in generation-citation + refusal, not retrieval). Note: the eval is
+stochastic run-to-run — multi-run averaging + a held-out split is **E1** (#33).
 
 ---
 

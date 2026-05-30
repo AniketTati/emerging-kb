@@ -86,22 +86,64 @@ delta here. Reranker = Cohere `rerank-v3.5`.
 > (which stage moved on *which* question) over headline averages. Multiple-run
 > averaging / a held-out set is E1 (later).
 
-**Sequencing note:** this roadmap order was authored *before* per-stage
-measurement existed. M1 shows construction's losses are **not** in
-retrieval/chunking (r@30=0.97, rerank_ret=1.00) but in **generation-citation**
-and **negative-refusal**. So we **reprioritise to construction's measured weak
-stages first** (C1, C2 below) and **defer I1 + the write-path foundation** to
-when a *tabular* domain (finance/healthcare) is ingested, where chunking
-actually moves retrieval.
+**Commitment:** the **whole list below (all 33 tasks, Phase 0→6, each task's
+full done-when, no shortcuts) is the definition of done.** Nothing here is
+dropped. Completing it includes **ingesting the other 5 domains** at the point
+the plan needs them (Phase 1 I1/I2/I4 validation is best measured on tabular
+domains; Phase 5 scale needs the full corpus) — that is the "go to other
+domains after the current work" stage, not a skip.
 
-| Task | Status | Measured effect (construction) |
-|---|---|---|
-| **M1** — per-stage harness + Cohere reranker | ✅ done (`0fef654`) | Phase-0 baseline set; query ~25s→~13s. `docs/M1_STAGE_EVAL.md` |
-| **C1** — aggregation (mode Q) citations not grounded to source docs | ✅ done | aggregation `cite` **0.00 → 1.00**; overall `cite` 0.75 → 0.83; `lost_generation` 8 → 4. `construction_after_c1.*` |
-| **C2** — negative-refusal (Q5 relevance gate) | ◑ largely done | negative `refuse` **0.00 → 0.67**; overall `refuse` 0.57 → 0.86; refuse✓ 4→6, **no over-refusal**. Residual q009 → C2b. `construction_after_c2.*` |
-| **C2b** — entity-grounded relevance (q009-class) | ⏳ pending | refuse when the asked entity/premise isn't in the retrieved docs (CRAG sits at neutral 0.5 default + faith in paraphrase band → threshold can't separate). Part of deeper Q5/A1. |
-| **I1** — classify-before-chunk + clause/row chunker | ⏸ deferred | benefit shows on tabular domains, not construction |
-| (other roadmap tasks below) | ⏳ pending | — |
+**Sequencing (judgment, measurement-led — order only, not scope):** the order
+below was authored *before* per-stage measurement. M1 shows construction's
+losses are **not** in retrieval/chunking (r@30=0.97, rerank_ret=1.00) but in
+**generation-citation** and **negative-refusal**. So we work the **Phase-2
+items construction can measure now first** (the only domain ingested), then the
+write-path foundation (Phase 1) + Phases 3–6, which need the other domains.
+Done out of numeric order, but **every task is tracked to completion** in the
+master table below.
+
+#### Master status — all 33 tasks (legend: ✅ done · ◑ partial · ⏳ pending)
+
+| # | Task | Phase | Status | Note / measured effect |
+|---|---|---|---|---|
+| 1 | **M1** per-stage harness (+Cohere reranker) | 0 | ✅ | `0fef654`. Phase-0 baseline; query ~25s→13s. `docs/M1_STAGE_EVAL.md`, D9 |
+| 2 | **I1** classify-before-chunk + clause/row chunker | 1 | ⏳ | confirmed bug (chunk before classify; clause chunker is a stub). Best validated on a tabular domain. D2 |
+| 3 | **I2** field convergence (EDC) | 1 | ⏳ | D3 |
+| 4 | **I4** identity resolution (top-k) | 1 | ⏳ | D4 |
+| 5 | **Q1** conflict across independent docs | 2 | ⏳ | depends I2+I4. D8 |
+| 6 | **Q5** faithfulness (claim-decomp + span verify) | 2 | ◑ | **C2** did the relevance-gate/override slice (negative refuse 0.00→0.67, no over-refusal; `6ae2571`). **Remaining:** claim-decomposition + span verification (D6); **C2b** entity-grounded q009 case. |
+| 7 | **P2** answer confidence signal + reason | 2 | ⏳ | derives from Q5. D6 |
+| 8 | **Citation honesty** (kill fake-cite fallback) + **P5** page-range | 2 | ◑ | **C1** grounded aggregate (mode-Q) citations (cite 0.00→1.00; `0079118`). **Remaining:** kill fake-citation fallback (`generate.py:629`); P5 page-range. D6 |
+| 9 | **Q3** strip corpus-specific facts from generator prompt | 2 | ⏳ | after I1/I2/Q1. D5/NFR |
+| 10 | **Q2** collapse 13-mode facade → ~4 honest modes | 2 | ⏳ | D5 |
+| 11 | **P1** wire pipeline to read layered config | 3 | ⏳ | D7 |
+| 12 | **P3** committed, loadable demo-schema artifact | 3 | ⏳ | D7 |
+| 13 | **P1b** define-from-scratch schema + onboarding | 3 | ⏳ | D7 |
+| 14 | **P6** FE: failure reasons + schema version view | 3 | ⏳ | |
+| 15 | **P4 + F1** schema-change re-extraction loop | 3 | ⏳ | |
+| 16 | **I5** contextualization cost cap/cache | 4 | ⏳ | |
+| 17 | **I7** transient-failure retry + visibility | 4 | ⏳ | (Cohere retry/backoff added in M1 is a small down-payment) |
+| 18 | **OCR per-page escalation** | 4 | ⏳ | D1 |
+| 19 | **Q4** per-channel DB connections | 4 | ⏳ | |
+| 20 | **Q6** IRCoT: fix env-var or delete | 4 | ⏳ | |
+| 21 | **Q7** per-turn cost cap | 4 | ⏳ | |
+| 22 | **Cheap bugs** (`/tmp` dump, etc.) | 4 | ⏳ | |
+| 23 | **S1** batch per-chunk/entity LLM calls | 5 | ⏳ | #1 100k blocker |
+| 24 | **S3** `mentions_exact` trigram index | 5 | ⏳ | |
+| 25 | **S2** identity-resolution throughput | 5 | ⏳ | |
+| 26 | **I6** chain detection O(N²)→bounded | 5 | ⏳ | |
+| 27 | **I3** corpus RAPTOR incremental + auto-trigger | 5 | ⏳ | |
+| 28 | **S4** vector memory/recall at ~3M vectors | 5 | ⏳ | |
+| 29 | **S5** retrieval result cache | 5 | ⏳ | |
+| 30 | **S6** bulk-ingest + docs/hour benchmark | 5 | ⏳ | |
+| 31 | **R1** retrieval recall — measure (M1) then improve | 6 | ⏳ | M1 ready; construction retrieval already strong |
+| 32 | **A1** query decomposition (agentic) | 6 | ⏳ | |
+| 33 | **E1** grow + hold-out eval | 6 | ⏳ | (variance/averaging caveat noted above) |
+
+> **Sub-items spun off** (tracked so they're not lost): **C2b** — entity-grounded
+> relevance for the q009-class (asked entity/premise absent from retrieved docs;
+> CRAG sits at the neutral 0.5 default so a threshold can't separate it). Folds
+> into #6 Q5 / #32 A1.
 
 > **Phase-0 baseline** (50 Q, `construction_phase0.*`): `r@10=0.93 r@30=0.97
 > mrr=0.82 rerank_ret=1.00 cite=0.75 faith=0.66 refuse=0.57` ·
@@ -144,12 +186,14 @@ makes a claim true · **[QUALITY]** robustness/honesty · **[SCALE]** 100k ·
 
 **Phase 2 — Read-path correctness + the brief's promises**
 5. **Q1** [SUBMIT] — conflict across independent docs. *Depends on I2 + I4.*
-6. **Q5** [SUBMIT] — faithfulness via claim-decomposition + span verification
-   (replace the Jaccard default).
+6. **Q5** [SUBMIT] ◑ **partial** — faithfulness via claim-decomposition + span
+   verification (replace the Jaccard default). *Done:* C2 relevance-gate /
+   override (`6ae2571`). *Remaining:* claim-decomposition + span verify; C2b.
 7. **P2** [SUBMIT] — answer confidence signal + reason, derived from Q5's
    per-claim verification.
-8. **Citation honesty** [SUBMIT] — kill the fake-citation fallback (§5 bug) +
-   **P5** page-range.
+8. **Citation honesty** [SUBMIT] ◑ **partial** — kill the fake-citation fallback
+   (§5 bug) + **P5** page-range. *Done:* C1 grounded aggregate citations
+   (`0079118`). *Remaining:* fake-citation fallback + P5.
 9. **Q3** [SUBMIT] — strip corpus-specific facts from the generator prompt.
    *Do after I1/I2/Q1 so quality holds.*
 10. **Q2** [QUALITY] — collapse the 13-mode facade to ~4 honest modes.
