@@ -116,7 +116,7 @@ master table below.
 | 5 | **Q1** conflict across independent docs | 2 | ⏳ | depends I2+I4. D8 |
 | 6 | **Q5** faithfulness (claim-decomp + span verify) | 2 | ◑ | **C2** did the relevance-gate/override slice (negative refuse 0.00→0.67, no over-refusal; `6ae2571`). **Remaining:** claim-decomposition + span verification (D6); **C2b** entity-grounded q009 case. |
 | 7 | **P2** answer confidence signal + reason | 2 | ⏳ | derives from Q5. D6 |
-| 8 | **Citation honesty** (kill fake-cite fallback) + **P5** page-range | 2 | ◑ | **C1** grounded aggregate citations (cite 0.00→1.00; `0079118`). **Fake-citation fallback killed** (`generate.py`; spot-check cite=1.00, no regression). **Remaining:** P5 page-range. D6 |
+| 8 | **Citation honesty** (kill fake-cite fallback) + **P5** page-range | 2 | ✅ | **C1** grounded aggregate citations (0.00→1.00; `0079118`); **fake-citation fallback killed** (`45d7da3`); **P5** page-range (citation reports `pp. X–Y`; mechanism-tested — not construction-visible, markdown corpus). D6 |
 | 9 | **Q3** strip corpus-specific facts from generator prompt | 2 | ⏳ | after I1/I2/Q1. D5/NFR |
 | 10 | **Q2** collapse 13-mode facade → ~4 honest modes | 2 | ⏳ | D5 |
 | 11 | **P1** wire pipeline to read layered config | 3 | ⏳ | D7 |

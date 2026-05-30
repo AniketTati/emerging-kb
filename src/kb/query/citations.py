@@ -205,10 +205,28 @@ def pick_modality(
 # ---------------------------------------------------------------------------
 
 
+def _page_span(md: dict[str, Any]) -> tuple[int | None, int | None]:
+    """P5 — derive (page_start, page_end) from a chunk's source pages.
+    The brief (§2.4) wants source → **page range** → excerpt; a chunk that
+    spans pages 4-5 must report 4-5, not just its first page. Returns
+    (None, None) when no numeric page info is present."""
+    pages = md.get("source_page_numbers") or md.get("pages") or []
+    nums = [int(p) for p in pages if str(p).strip().lstrip("-").isdigit()]
+    if not nums:
+        p = md.get("page")
+        try:
+            p = int(p)
+            return p, p
+        except (TypeError, ValueError):
+            return None, None
+    return min(nums), max(nums)
+
+
 def _pdf_span_ref(hit: Hit, meta: FileMetaForCitation | None) -> dict[str, Any]:
     md = hit.metadata or {}
     pages = md.get("source_page_numbers") or md.get("pages") or []
     page = pages[0] if pages else md.get("page")
+    page_start, page_end = _page_span(md)
     # R2 — prefer the PR2 source-resolver output (worker-time char range
     # inside a specific chunk) over the chunk's whole-text range. When
     # both are present the resolver's narrower window wins because that
@@ -218,6 +236,9 @@ def _pdf_span_ref(hit: Hit, meta: FileMetaForCitation | None) -> dict[str, Any]:
     src_end = md.get("source_char_end")
     return {
         "page": int(page) if page is not None else None,
+        # P5 — explicit page range (start==end for single-page chunks).
+        "page_start": page_start,
+        "page_end": page_end,
         "char_start": src_start if src_start is not None else md.get("char_start"),
         "char_end": src_end if src_end is not None else md.get("char_end"),
         # Distinct from the citation's `hit_id` — `source_chunk_id` is
@@ -402,9 +423,12 @@ def _format_label(hit: Hit, meta: FileMetaForCitation | None, modality: str) -> 
     if modality == "email_message":
         return f"{name} · email"
     if modality == "pdf_span":
-        pages = md.get("source_page_numbers") or md.get("pages") or []
-        if pages:
-            return f"{name} · p. {pages[0]}"
+        # P5 — show a page range when the chunk spans pages.
+        ps, pe = _page_span(md)
+        if ps is not None and pe is not None and pe != ps:
+            return f"{name} · pp. {ps}–{pe}"
+        if ps is not None:
+            return f"{name} · p. {ps}"
         return name
     return name
 
