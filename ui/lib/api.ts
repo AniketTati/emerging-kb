@@ -622,6 +622,9 @@ export type ChatResponse = {
   faithfulness_score?: number | null;
   faithfulness_regenerations?: number;
   faithfulness_model_id?: string | null;
+  // P2 — answer-level confidence signal + one-line reason (§2.4).
+  confidence?: "high" | "medium" | "low" | null;
+  confidence_reason?: string | null;
   citation_modalities?: string[];
   // R1 — surfaced conflict resolutions for the chat UI banner. Empty
   // when no chained-doc disagreements were detected for this query.

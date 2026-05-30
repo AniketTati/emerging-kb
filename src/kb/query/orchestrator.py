@@ -32,7 +32,7 @@ from typing import Any, Awaitable, Callable
 
 logger = logging.getLogger(__name__)
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 # Live pipeline-event callback. The orchestrator invokes it (when set)
@@ -304,6 +304,39 @@ def grounding_gate_refuses(
     )
 
 
+def derive_answer_confidence(
+    *,
+    refused: bool,
+    faithfulness_verdict: str | None,
+    faithfulness_score: float | None,
+    crag_score: float,
+    crag_threshold: float = CRAG_THRESHOLD,
+) -> tuple[str, str]:
+    """P2 — one answer-level confidence (`high`/`medium`/`low`) + a short
+    reason, derived from the grounding signals we already compute
+    (faithfulness verdict/score + CRAG relevance). The brief (§2.4) requires
+    every answer to carry a confidence signal with a brief why.
+
+    Until full Q5 claim-decomposition lands (which would give per-claim
+    confidence), this composes the two existing gate signals:
+      - faithfulness verdict = is the answer grounded in the contexts,
+      - CRAG = did retrieval surface relevant evidence at all.
+    """
+    if refused:
+        return "low", "Withheld — evidence was insufficient or not grounded."
+    weak_retrieval = crag_score < crag_threshold
+    if faithfulness_verdict == "pass" and not weak_retrieval:
+        return "high", "Grounded in the cited sources; retrieval was confident."
+    if faithfulness_verdict == "refused" or (
+        faithfulness_verdict == "low_confidence" and weak_retrieval
+    ):
+        return "low", "Weak grounding — the sources may not fully support this."
+    if faithfulness_verdict == "low_confidence" or weak_retrieval:
+        return "medium", "Supported, but some claims are only weakly grounded."
+    # pass-with-weak-retrieval, or skipped/None verdict with OK retrieval.
+    return "medium", "Answer drawn from the retrieved sources."
+
+
 class SearchResult(BaseModel):
     """`/search` response shape — retrieval inspector, no generation."""
 
@@ -339,6 +372,11 @@ class ChatResult(BaseModel):
     faithfulness_score: float | None = None       # 0.0 - 1.0
     faithfulness_regenerations: int = 0
     faithfulness_model_id: str | None = None
+    # P2 — single answer-level confidence + one-line reason (§2.4). Derived
+    # from the grounding signals (faithfulness verdict/score + CRAG) by the
+    # validator below, for every construction site, unless explicitly set.
+    confidence: str | None = None            # 'high' | 'medium' | 'low'
+    confidence_reason: str | None = None
     # Wave A close-up — sentence-level HHEM verdicts (architecture §6
     # step 8 "generation is STREAMED to the chat UI sentence-by-sentence").
     # The HHEM gate already produces per-claim scores; surfacing them
@@ -365,6 +403,23 @@ class ChatResult(BaseModel):
     # found. Citations are independently tagged with `superseded=true` on
     # the loser side so the UI can render in-line annotations.
     conflict_resolutions: list[dict[str, Any]] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _derive_confidence(self) -> "ChatResult":
+        # P2 — populate confidence + reason from the grounding signals for
+        # every ChatResult (all construction sites) unless already set.
+        if self.confidence is None:
+            level, reason = derive_answer_confidence(
+                refused=self.generation.refused,
+                faithfulness_verdict=self.faithfulness_verdict,
+                faithfulness_score=self.faithfulness_score,
+                crag_score=self.crag_score,
+            )
+            # Bypass frozen-ness via object.__setattr__ is unnecessary —
+            # BaseModel is mutable by default; assign directly.
+            self.confidence = level
+            self.confidence_reason = reason
+        return self
 
 
 class Orchestrator:

@@ -91,6 +91,32 @@ export function AnswerCard({ response, events, onFollowUp }: Props) {
         />
       )}
 
+      {/* P2 — answer-level confidence signal + one-line reason (§2.4). */}
+      {response.confidence && (
+        <div
+          className="mt-4 flex items-start gap-2 text-xs"
+          data-testid="confidence-badge"
+        >
+          <span
+            className={
+              "shrink-0 rounded-full px-2 py-0.5 font-semibold uppercase tracking-wide " +
+              (response.confidence === "high"
+                ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                : response.confidence === "medium"
+                  ? "bg-amber-50 text-amber-700 border border-amber-200"
+                  : "bg-rose-50 text-rose-700 border border-rose-200")
+            }
+          >
+            {response.confidence} confidence
+          </span>
+          {response.confidence_reason && (
+            <span className="text-zinc-500 pt-0.5">
+              {response.confidence_reason}
+            </span>
+          )}
+        </div>
+      )}
+
       {/* Follow-up suggestion pills — context-aware drilldowns derived
           from the response (entity from top hit, intent-keyed prompts).
           Hidden on refusal (the refusal body has its own "Try this"
