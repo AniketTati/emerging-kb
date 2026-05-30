@@ -241,8 +241,14 @@ async def parse_file_impl(file_id: str, forced_parser: str | None = None) -> Non
                 file_bytes=file_bytes,
                 forced_parser=forced_parser,
             )
-            doc = await parser.parse(
-                file_bytes, file_id=file_id, workspace_id=str(workspace_id),
+            # I7 — retry TRANSIENT parse/OCR failures (429/timeout/5xx) with
+            # backoff before failing the doc; permanent ParseError re-raises.
+            from kb.llm_batching import with_retry as _with_retry
+            doc = await _with_retry(
+                lambda: parser.parse(
+                    file_bytes, file_id=file_id, workspace_id=str(workspace_id),
+                ),
+                label=f"parse {file_id}",
             )
 
             # Phase 2c quality escalation (§5.6.1 #10): only meaningful when
