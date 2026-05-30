@@ -110,8 +110,8 @@ master table below.
 | # | Task | Phase | Status | Note / measured effect |
 |---|---|---|---|---|
 | 1 | **M1** per-stage harness (+Cohere reranker) | 0 | ✅ | `0fef654`. Phase-0 baseline; query ~25s→13s. `docs/M1_STAGE_EVAL.md`, D9 |
-| 2 | **I1** classify-before-chunk + clause/row chunker | 1 | ⏳ | confirmed bug (chunk before classify; clause chunker is a stub). Best validated on a tabular domain. D2 |
-| 3 | **I2** field convergence (EDC) | 1 | ⏳ | D3 |
+| 2 | **I1** classify-before-chunk + clause/row chunker | 1 | ✅ | `kb.classification` pre-chunk classifier (vocab-constrained) wired into chunk_file_impl → bank_statement chunks row-aware. 6 tests. Clause chunking still hier-backed (markdown-limited; PDF follow-up). D2 |
+| 3 | **I2** field convergence (EDC) | 1 | ◑ | converger `converge_clusters_semantic` (embed-block + judge merge) done + 5 tests; corpus-pass wiring in #19. D3 |
 | 4 | **I4** identity resolution (top-k) | 1 | ⏳ | D4 |
 | 5 | **Q1** conflict across independent docs | 2 | ⏳ | depends I2+I4. D8 |
 | 6 | **Q5** faithfulness (claim-decomp + span verify) | 2 | ◑ | **C2** did the relevance-gate/override slice (negative refuse 0.00→0.67, no over-refusal; `6ae2571`). **Remaining:** claim-decomposition + span verification (D6); **C2b** entity-grounded q009 case. |
@@ -125,7 +125,7 @@ master table below.
 | 14 | **P6** FE: failure reasons + schema version view | 3 | ⏳ | |
 | 15 | **P4 + F1** schema-change re-extraction loop | 3 | ⏳ | |
 | 16 | **I5** contextualization cost cap/cache | 4 | ⏳ | |
-| 17 | **I7** transient-failure retry + visibility | 4 | ⏳ | (Cohere retry/backoff added in M1 is a small down-payment) |
+| 17 | **I7** transient-failure retry + visibility | 4 | ◑ | retry done: is_transient+with_retry in llm_batching; run_batched + parse_file_impl retry transient 429/timeout/5xx. 5 tests. Part 2 (degraded-rate visibility event) optional, not blocking. |
 | 18 | **OCR per-page escalation** | 4 | ⏳ | D1 |
 | 19 | **Q4** per-channel DB connections | 4 | ⏳ | |
 | 20 | **Q6** IRCoT: fix env-var or delete | 4 | ⏳ | |
