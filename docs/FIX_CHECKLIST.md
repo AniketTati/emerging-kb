@@ -103,20 +103,15 @@ actually moves retrieval.
 | **I1** — classify-before-chunk + clause/row chunker | ⏸ deferred | benefit shows on tabular domains, not construction |
 | (other roadmap tasks below) | ⏳ pending | — |
 
-> Phase-0 baseline (50 Q): `OVERALL r@10=0.93 r@30=0.97 mrr=0.82
-> rerank_ret=1.00 cite=0.75 faith=0.66 refuse=0.57` ·
+> **Phase-0 baseline** (50 Q, `construction_phase0.*`): `r@10=0.93 r@30=0.97
+> mrr=0.82 rerank_ret=1.00 cite=0.75 faith=0.66 refuse=0.57` ·
 > `ok=27 lost_retrieval=1 lost_rerank=0 lost_generation=8 refused✗=3`.
-> Root cause C1: mode **Q** synthesizes one aggregate Hit
-> (`mode_router.py:743`) with `id=audit_uuid` + metadata
-> (`audit_query_id`/`row_count`/`column_names`) but **no source `file_id`s** —
-> so the citation has no file to resolve and degrades to `label="document"`
-> (`citations.py:373`). Fix (simple, low-risk first): `_route_q_mode`
-> (`mode_router.py:104`) *discards* the retrieved hits and returns only the
-> synthetic aggregate Hit — even though retrieval already surfaced the source
-> docs at rank 1 with real file_ids. Return the aggregate Hit **plus** the
-> retrieved source-doc hits so the answer cites real documents (and
-> faithfulness can ground against them). Escalate to a contributing-file_id
-> companion query only if M1 shows the simple fix is insufficient.
+>
+> **Current** (after C2, `construction_after_c2.*`): `cite=0.86 refuse=0.86
+> ok=31/36` · `lost_generation=4 refused✗=1`. Retrieval/rerank unchanged
+> (not the bottleneck). Remaining construction losses → **C2b** (q009
+> entity-substitution) + the **lost_generation=4** cluster (chain-aware
+> q014/q017, conflict q025, long-form q038: gold retrieved, not cited).
 
 > **DEFINITION OF DONE: every task on this list must be completed — no
 > shortcuts.** The phases are an *order*, not a menu. We may *submit* an early
