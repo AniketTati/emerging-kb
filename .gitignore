@@ -66,3 +66,6 @@ prototype/qa/reports/
 # deliverable. Only genuine ingest/validation scratch should be ignored below.
 demo-corpus/**/*.bak
 demo-corpus/**/*.bak[0-9]
+
+# M1 stage-eval transient run outputs (baselines are snapshotted under docs/eval_baselines/)
+eval_out/

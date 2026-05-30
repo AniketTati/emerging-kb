@@ -20,13 +20,32 @@ Factory `make_reranker()` reads `KB_RERANKER ∈ {cohere, mxbai, identity, auto}
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import os
 from typing import Protocol
 
 from kb.query.rrf import Hit
 
 
+_LOG = logging.getLogger(__name__)
+
+
 DEFAULT_COHERE_MODEL = "rerank-english-v3.0"
+
+
+def _is_transient(exc: Exception) -> bool:
+    """A retryable Cohere error: rate limit (429), timeout, or a 5xx.
+    Permanent errors (bad key, bad model, 4xx other than 429) are not
+    retried — retrying them just wastes the rate budget."""
+    msg = str(exc).lower()
+    return any(
+        s in msg for s in (
+            "429", "rate limit", "too many requests",
+            "timeout", "timed out", "503", "502", "504",
+            "service unavailable",
+        )
+    )
 
 
 class Reranker(Protocol):
@@ -65,9 +84,18 @@ class CohereReranker:
     Decision #11: uses `cohere.AsyncClientV2.rerank()` — v5 SDK async path.
     """
 
+    # Number of times to retry a TRANSIENT failure (rate limit / timeout)
+    # before giving up and falling back to passthrough. Env-tunable so a
+    # rate-limited trial key (Cohere trial ≈ 10 rerank/min) can wait out a
+    # burst instead of silently degrading rerank to a no-op — which would
+    # corrupt any eval measuring the rerank stage.
+    _MAX_RETRIES = int(os.environ.get("KB_COHERE_MAX_RETRIES") or "3")
+    _BASE_BACKOFF_S = float(os.environ.get("KB_COHERE_BACKOFF_S") or "6.0")
+
     def __init__(self, *, api_key: str) -> None:
         self._api_key = api_key
         self._model = os.environ.get("KB_COHERE_RERANK_MODEL") or DEFAULT_COHERE_MODEL
+        self._client = None  # lazily built, reused across calls
 
     async def rerank(
         self, query: str, hits: list[Hit], top_k: int,
@@ -88,15 +116,37 @@ class CohereReranker:
         # chars per 8b decision #11).
         documents = [h.snippet or "" for h in hits]
 
-        try:
-            client = cohere.AsyncClientV2(api_key=self._api_key)
-            result = await client.rerank(
-                model=self._model,
-                query=query,
-                documents=documents,
-                top_n=top_k,
+        if self._client is None:
+            self._client = cohere.AsyncClientV2(api_key=self._api_key)
+
+        result = None
+        last_exc: Exception | None = None
+        for attempt in range(self._MAX_RETRIES + 1):
+            try:
+                result = await self._client.rerank(
+                    model=self._model,
+                    query=query,
+                    documents=documents,
+                    top_n=top_k,
+                )
+                break
+            except Exception as exc:  # noqa: BLE001
+                last_exc = exc
+                # Permanent error (bad key/model) → fall back now; retrying
+                # only burns the rate budget.
+                if not _is_transient(exc) or attempt == self._MAX_RETRIES:
+                    break
+                # Exponential backoff — gives a rate-limited trial key time
+                # to recover its per-minute budget before the next try.
+                await asyncio.sleep(self._BASE_BACKOFF_S * (attempt + 1))
+
+        if result is None:
+            # LOUD fallback — a silent passthrough here would make rerank
+            # look like a no-op and quietly corrupt rerank-stage metrics.
+            _LOG.warning(
+                "cohere rerank fell back to passthrough after %d attempt(s): %s",
+                self._MAX_RETRIES + 1, last_exc,
             )
-        except Exception:
             return hits[:top_k]
 
         # Decision #9: reranked score = Cohere relevance_score.

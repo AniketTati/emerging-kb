@@ -86,9 +86,13 @@ makes a claim true · **[QUALITY]** robustness/honesty · **[SCALE]** 100k ·
 **[STANDOUT]** raises the ceiling.
 
 **Phase 0 — Measurement (unblocks everything; do first)**
-1. **M1** [SUBMIT-enabler] — per-stage measurement harness. Cheap now that the
-   eval is trustworthy; lets you localise every later change (retrieval vs
-   rerank vs generation). Without this you fix blind — the trap that cost a week.
+1. **M1** [SUBMIT-enabler] ✅ **DONE** — per-stage measurement harness. Cheap
+   now that the eval is trustworthy; lets you localise every later change
+   (retrieval vs rerank vs generation). Without this you fix blind — the trap
+   that cost a week. → see `docs/M1_STAGE_EVAL.md` (harness, how-to, dev-loop
+   policy, and the Phase-0 construction baseline). Construction baseline:
+   retrieval/rerank are solid (r@30=0.97, rerank_ret=1.00); the losses are in
+   generation-**citation** (aggregation cite=0.00) and **negative refusal**.
 
 **Phase 1 — Write-path foundation (everything downstream inherits this)**
 2. **I1** [SUBMIT] — classify before chunk. Highest leverage (SOTA: structure-

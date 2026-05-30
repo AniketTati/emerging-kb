@@ -765,6 +765,7 @@ class Orchestrator:
                 rewrites=rewrites,
                 workspace_id=workspace_id,
                 conn=conn,
+                emit=emit,
             )
             if retrieve_sp_open:
                 try:
@@ -2029,8 +2030,19 @@ class Orchestrator:
         rewrites: Rewrites,
         workspace_id: str,
         conn: Any,
+        emit: Any = None,
     ) -> list[Hit]:
-        """Fan out N rewrites × 6 channels → RRF → rerank → top-10."""
+        """Fan out N rewrites × 6 channels → RRF → rerank → top-10.
+
+        `emit` is an optional async event sink (same signature as the
+        one `chat()` threads through its stages). When provided, this
+        method emits the fused candidate set (pre-rerank) and the
+        reranked set as ordered file_id lists, so the M1 stage-eval
+        harness can score retrieval-recall vs rerank-retention
+        *separately* (checklist M1 / DECISIONS D9). It is purely
+        observational: production callers pass `emit=None` (the default)
+        and pay zero cost — no behaviour or response shape changes.
+        """
         rewrite_texts = self._iter_rewrites(rewrites)
 
         # Batch-embed all rewrites in one call (dense channels need vectors).
@@ -2073,10 +2085,31 @@ class Orchestrator:
         # RRF (k=60) → top-30 (decision #5).
         fused = rrf_fuse(all_lists, k=DEFAULT_K)[:_POST_FUSION_TOP_K]
 
+        # M1 stage-eval observability — surface the fused candidate set
+        # (pre-rerank) so retrieval recall@k can be scored independently
+        # of the reranker. No-op unless a sink was threaded in.
+        if emit is not None:
+            await emit("fused_candidates", {
+                "file_ids": [
+                    (h.metadata or {}).get("file_id") for h in fused
+                ],
+                "n": len(fused),
+            })
+
         # Rerank → top-10 (decision #6).
         reranked = await self._reranker.rerank(
             query, fused, top_k=_POST_RERANK_TOP_K
         )
+
+        # M1 — the reranked top-K, also as ordered file_ids. Lets the
+        # harness measure rerank retention = P(expected in top-K | in fused).
+        if emit is not None:
+            await emit("reranked_candidates", {
+                "file_ids": [
+                    (h.metadata or {}).get("file_id") for h in reranked
+                ],
+                "n": len(reranked),
+            })
         return reranked
 
     @staticmethod

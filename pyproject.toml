@@ -51,6 +51,10 @@ dependencies = [
     # backoff pattern we'd otherwise hand-roll, but battle-tested.
     "llama-index-core>=0.12.0",
     "sentence-transformers>=5.5.1",
+    # Phase 8c — Cohere Rerank (architecture default reranker; KB_RERANKER=cohere).
+    # Hosted, async, SOTA multilingual. Without it the reranker silently
+    # falls back to passthrough, so it's a hard dep now that it's the default.
+    "cohere>=7.0",
 ]
 
 [dependency-groups]

@@ -513,6 +513,450 @@ def hhem_scores(
 
 
 # ---------------------------------------------------------------------------
+# M1 — per-stage measurement (checklist M1 / DECISIONS D9)
+#
+# The end-to-end metrics above answer "was the final answer right?". They
+# CANNOT tell you WHERE accuracy was lost. M1 scores the three pipeline
+# stages separately, against the verified `expected_citations` from the
+# rebuilt eval (demo-corpus/domains/*/queries.yaml):
+#
+#   retrieval recall@k  — did the verified citation's file appear in the
+#                         FUSED candidate set (pre-rerank), within top-k?
+#   rerank retention    — GIVEN it was in the fused set, did the reranker
+#                         keep it in the top-10? (isolates the reranker)
+#   citation correctness— did the GENERATED answer actually cite that file?
+#   faithfulness        — is the answer grounded (reuses the verdict / HHEM)
+#
+# Each question is then localised to the FIRST stage that dropped its
+# gold doc (lost_retrieval / lost_rerank / lost_generation / ok), so a
+# later fix can be attributed to the stage it targets.
+#
+# These are pure functions over a plain `StageObservation` (no orchestrator
+# / DB types) so this module stays import-light. The driver that produces
+# observations lives in `kb.eval.stage_runner`.
+# ---------------------------------------------------------------------------
+
+
+# Fusion keeps top-30 (orchestrator `_POST_FUSION_TOP_K`); rerank keeps
+# top-10 (`_POST_RERANK_TOP_K`). Mirrored here so the scorer's k-cutoffs
+# match what the pipeline actually returns.
+RECALL_KS: tuple[int, ...] = (10, 30)
+RERANK_K: int = 10
+FUSED_K: int = 30
+
+
+@dataclass(frozen=True)
+class StageObservation:
+    """One question's per-stage trace, captured by `stage_runner` from a
+    single `orchestrator.chat()` call + its event sink. All file refs are
+    workspace-resolved file_ids (the `expected_citations` slugs are
+    resolved to file_ids before construction)."""
+
+    question_id: str
+    domain: str
+    stratum: str
+    verified: bool
+    expected_refusal: bool
+    # Resolved gold file_ids (from expected_citations). Empty when the
+    # question carries no citations (some negatives) or none resolved.
+    expected_file_ids: tuple[str, ...]
+    # Ordered file_ids of the fused candidate set (pre-rerank, ≤30).
+    fused_file_ids: tuple[str, ...]
+    # Ordered file_ids of the reranked top-K (≤10).
+    reranked_file_ids: tuple[str, ...]
+    # file_ids the generated answer actually cited.
+    cited_file_ids: tuple[str, ...]
+    refused: bool
+    faithfulness_verdict: str | None
+    # True when slug→file_id resolution found EVERY expected citation in
+    # the workspace. False means the gold doc may be absent from the
+    # ingested corpus — retrieval misses on such rows are not the
+    # pipeline's fault, so they're excluded from recall denominators.
+    citations_resolved: bool = True
+    error: str | None = None
+
+    def is_scorable_retrieval(self) -> bool:
+        """A row contributes to retrieval/rerank/citation metrics only
+        when it's a verified, non-refusal question whose gold citations
+        were fully resolved in the workspace and it didn't error."""
+        return (
+            self.verified
+            and not self.expected_refusal
+            and self.citations_resolved
+            and bool(self.expected_file_ids)
+            and not self.error
+        )
+
+
+def _clean_set(ids: Iterable[str]) -> set[str]:
+    return {i for i in ids if i}
+
+
+def first_rank(expected_file_ids: Iterable[str], ranked: Iterable[str]) -> int | None:
+    """1-indexed rank of the earliest gold file in `ranked` (chunk-level,
+    so dups count as positions), or None if no gold file appears."""
+    exp = _clean_set(expected_file_ids)
+    if not exp:
+        return None
+    for i, fid in enumerate(ranked):
+        if fid and fid in exp:
+            return i + 1
+    return None
+
+
+def recall_at_k(
+    expected_file_ids: Iterable[str], ranked: Iterable[str], k: int,
+) -> float | None:
+    """Fraction of gold files that appear in the first `k` ranked
+    positions. None when there's nothing to measure (no gold files)."""
+    exp = _clean_set(expected_file_ids)
+    if not exp:
+        return None
+    topk = _clean_set(list(ranked)[:k])
+    return len(exp & topk) / len(exp)
+
+
+def reciprocal_rank(
+    expected_file_ids: Iterable[str], ranked: Iterable[str],
+) -> float:
+    """1 / (rank of the earliest gold file), or 0.0 if it never appears."""
+    r = first_rank(expected_file_ids, ranked)
+    return (1.0 / r) if r else 0.0
+
+
+def rerank_outcome(
+    expected_file_ids: Iterable[str],
+    fused: Iterable[str],
+    reranked: Iterable[str],
+    *,
+    k_fused: int = FUSED_K,
+    k_rerank: int = RERANK_K,
+) -> str:
+    """Classify the reranker's effect on the gold doc:
+
+      'retained'        — gold was in the fused set AND survived to top-K
+      'dropped'         — gold was in the fused set but rerank evicted it
+      'miss_retrieval'  — gold wasn't in the fused set (not rerank's fault)
+      'n/a'             — nothing to measure (no gold files)
+    """
+    exp = _clean_set(expected_file_ids)
+    if not exp:
+        return "n/a"
+    in_fused = exp & _clean_set(list(fused)[:k_fused])
+    if not in_fused:
+        return "miss_retrieval"
+    in_rerank = exp & _clean_set(list(reranked)[:k_rerank])
+    return "retained" if in_rerank else "dropped"
+
+
+def citation_correct(
+    expected_file_ids: Iterable[str], cited: Iterable[str],
+) -> bool | None:
+    """True when the answer cited at least one gold file. None when there's
+    no gold to check against."""
+    exp = _clean_set(expected_file_ids)
+    if not exp:
+        return None
+    return bool(exp & _clean_set(cited))
+
+
+def localise(obs: StageObservation) -> str:
+    """Attribute the question to the FIRST stage that lost its gold doc.
+
+    Returns one of: 'ok', 'lost_retrieval', 'lost_rerank',
+    'lost_generation', 'refused_correct', 'refused_wrong', 'unscorable'.
+    """
+    if obs.expected_refusal:
+        return "refused_correct" if obs.refused else "refused_wrong"
+    if not obs.is_scorable_retrieval():
+        return "unscorable"
+    outcome = rerank_outcome(obs.expected_file_ids, obs.fused_file_ids,
+                             obs.reranked_file_ids)
+    if outcome == "miss_retrieval":
+        return "lost_retrieval"
+    if outcome == "dropped":
+        return "lost_rerank"
+    if not citation_correct(obs.expected_file_ids, obs.cited_file_ids):
+        return "lost_generation"
+    return "ok"
+
+
+# Localisation buckets, ordered for stable reporting.
+_LOCALISATION_BUCKETS: tuple[str, ...] = (
+    "ok", "lost_retrieval", "lost_rerank", "lost_generation",
+    "refused_correct", "refused_wrong", "unscorable",
+)
+
+
+@dataclass(frozen=True)
+class StageScore:
+    """Aggregated per-stage metrics for one group (a stratum or a domain)."""
+
+    group: str                       # stratum name or domain name
+    count: int                       # all rows in the group
+    scorable: int                    # rows contributing to recall/rerank
+    # Retrieval — recall@k over scorable rows, keyed by k.
+    recall_at_k: dict[int, float]
+    retrieval_mrr: float
+    # Rerank — retention = retained / (retained + dropped).
+    rerank_retention: float | None
+    rerank_dropped: int
+    # Generation.
+    citation_accuracy: float | None
+    faithfulness_pass_rate: float | None
+    # Refusal subset (expected_refusal rows).
+    refusal_count: int
+    refusal_accuracy: float | None
+    # Localisation histogram over the WHOLE group.
+    localisation: dict[str, int]
+    errors: int
+
+
+@dataclass(frozen=True)
+class StageReport:
+    """Top-level per-stage report: overall + by-stratum + by-domain."""
+
+    total: int
+    overall: StageScore
+    by_stratum: tuple[StageScore, ...] = field(default_factory=tuple)
+    by_domain: tuple[StageScore, ...] = field(default_factory=tuple)
+
+    def to_dict(self) -> dict[str, Any]:
+        def _s(s: StageScore) -> dict[str, Any]:
+            return {
+                "group": s.group, "count": s.count, "scorable": s.scorable,
+                "recall_at_k": {str(k): v for k, v in s.recall_at_k.items()},
+                "retrieval_mrr": s.retrieval_mrr,
+                "rerank_retention": s.rerank_retention,
+                "rerank_dropped": s.rerank_dropped,
+                "citation_accuracy": s.citation_accuracy,
+                "faithfulness_pass_rate": s.faithfulness_pass_rate,
+                "refusal_count": s.refusal_count,
+                "refusal_accuracy": s.refusal_accuracy,
+                "localisation": s.localisation,
+                "errors": s.errors,
+            }
+        return {
+            "total": self.total,
+            "overall": _s(self.overall),
+            "by_stratum": [_s(s) for s in self.by_stratum],
+            "by_domain": [_s(s) for s in self.by_domain],
+        }
+
+
+def _score_group(group: str, rows: list[StageObservation]) -> StageScore:
+    """Aggregate one group's per-stage metrics."""
+    n = len(rows)
+    scorable = [r for r in rows if r.is_scorable_retrieval()]
+    ns = len(scorable)
+
+    recall: dict[int, float] = {}
+    for k in RECALL_KS:
+        vals = [
+            recall_at_k(r.expected_file_ids, r.fused_file_ids, k)
+            for r in scorable
+        ]
+        vals = [v for v in vals if v is not None]
+        recall[k] = (sum(vals) / len(vals)) if vals else 0.0
+
+    mrr_vals = [
+        reciprocal_rank(r.expected_file_ids, r.fused_file_ids)
+        for r in scorable
+    ]
+    mrr = (sum(mrr_vals) / len(mrr_vals)) if mrr_vals else 0.0
+
+    # Rerank retention only over rows whose gold was actually in the fused
+    # set (else the reranker had nothing to retain).
+    outcomes = [
+        rerank_outcome(r.expected_file_ids, r.fused_file_ids,
+                       r.reranked_file_ids)
+        for r in scorable
+    ]
+    retained = sum(1 for o in outcomes if o == "retained")
+    dropped = sum(1 for o in outcomes if o == "dropped")
+    denom = retained + dropped
+    retention = (retained / denom) if denom else None
+
+    cit_vals = [
+        citation_correct(r.expected_file_ids, r.cited_file_ids)
+        for r in scorable
+    ]
+    cit_vals = [1.0 if v else 0.0 for v in cit_vals if v is not None]
+    cit_acc = (sum(cit_vals) / len(cit_vals)) if cit_vals else None
+
+    # Faithfulness over non-refused scorable rows (reuse the verdict map).
+    faith_rows = [r for r in scorable if not r.refused]
+    faith = (
+        sum(faithfulness_score(r.faithfulness_verdict) for r in faith_rows)
+        / len(faith_rows)
+    ) if faith_rows else None
+
+    refusal_rows = [r for r in rows if r.expected_refusal]
+    refusal_acc = (
+        sum(1.0 for r in refusal_rows if r.refused) / len(refusal_rows)
+    ) if refusal_rows else None
+
+    loc: dict[str, int] = {b: 0 for b in _LOCALISATION_BUCKETS}
+    for r in rows:
+        loc[localise(r)] += 1
+
+    return StageScore(
+        group=group, count=n, scorable=ns,
+        recall_at_k=recall, retrieval_mrr=mrr,
+        rerank_retention=retention, rerank_dropped=dropped,
+        citation_accuracy=cit_acc, faithfulness_pass_rate=faith,
+        refusal_count=len(refusal_rows), refusal_accuracy=refusal_acc,
+        localisation=loc,
+        errors=sum(1 for r in rows if r.error),
+    )
+
+
+def score_stages(observations: list[StageObservation]) -> StageReport:
+    """Aggregate per-stage observations into overall + per-stratum +
+    per-domain `StageScore`s (checklist M1 done-when)."""
+    if not observations:
+        empty = _score_group("overall", [])
+        return StageReport(total=0, overall=empty)
+
+    overall = _score_group("overall", observations)
+
+    by_stratum_groups: dict[str, list[StageObservation]] = defaultdict(list)
+    by_domain_groups: dict[str, list[StageObservation]] = defaultdict(list)
+    for o in observations:
+        by_stratum_groups[o.stratum].append(o)
+        by_domain_groups[o.domain].append(o)
+
+    # Group by whatever stratum strings actually appear — the verified
+    # queries.yaml uses hyphenated names (chain-aware, rare-clause,
+    # conflict-resolution, long-form) that don't all match the canonical
+    # underscore STRATA tuple; filtering to STRATA would silently drop
+    # them from the per-stratum table. Order: canonical strata first (for
+    # stable diffs), then any extras, both alphabetical within group.
+    seen_strata = set(by_stratum_groups)
+    ordered_strata = [s for s in STRATA if s in seen_strata] + sorted(
+        seen_strata - set(STRATA)
+    )
+    by_stratum = tuple(
+        _score_group(s, by_stratum_groups[s]) for s in ordered_strata
+    )
+    by_domain = tuple(
+        _score_group(d, by_domain_groups[d])
+        for d in sorted(by_domain_groups)
+    )
+
+    return StageReport(
+        total=len(observations), overall=overall,
+        by_stratum=by_stratum, by_domain=by_domain,
+    )
+
+
+# Per-question stage CSV columns.
+_STAGE_CSV_FIELDS: tuple[str, ...] = (
+    "question_id", "domain", "stratum", "verified", "expected_refusal",
+    "n_expected", "citations_resolved",
+    "retrieval_rank", "recall_at_10", "recall_at_30",
+    "rerank_outcome", "citation_correct",
+    "refused", "faithfulness_verdict", "localisation", "error",
+)
+
+
+def write_stage_csv(
+    observations: list[StageObservation], out_path: Path | str,
+) -> Path:
+    """Write one stage-scored row per question for offline analysis."""
+    p = Path(out_path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with p.open("w", encoding="utf-8", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=list(_STAGE_CSV_FIELDS))
+        writer.writeheader()
+        for o in observations:
+            r10 = recall_at_k(o.expected_file_ids, o.fused_file_ids, 10)
+            r30 = recall_at_k(o.expected_file_ids, o.fused_file_ids, 30)
+            cc = citation_correct(o.expected_file_ids, o.cited_file_ids)
+            writer.writerow({
+                "question_id": o.question_id,
+                "domain": o.domain,
+                "stratum": o.stratum,
+                "verified": "1" if o.verified else "0",
+                "expected_refusal": "1" if o.expected_refusal else "0",
+                "n_expected": len(o.expected_file_ids),
+                "citations_resolved": "1" if o.citations_resolved else "0",
+                "retrieval_rank": (
+                    first_rank(o.expected_file_ids, o.fused_file_ids) or ""
+                ),
+                "recall_at_10": _fmt(r10),
+                "recall_at_30": _fmt(r30),
+                "rerank_outcome": rerank_outcome(
+                    o.expected_file_ids, o.fused_file_ids, o.reranked_file_ids,
+                ),
+                "citation_correct": (
+                    "" if cc is None else ("1" if cc else "0")
+                ),
+                "refused": "1" if o.refused else "0",
+                "faithfulness_verdict": o.faithfulness_verdict or "",
+                "localisation": localise(o),
+                "error": o.error or "",
+            })
+    return p
+
+
+def render_stage_summary(report: StageReport) -> str:
+    """Human-readable per-stage table: overall + per-stratum + per-domain,
+    plus the localisation histogram (where accuracy is lost)."""
+
+    def _line(s: StageScore) -> str:
+        rec = " ".join(
+            f"r@{k}={s.recall_at_k.get(k, 0.0):.2f}" for k in RECALL_KS
+        )
+        ret = (
+            f"{s.rerank_retention:.2f}" if s.rerank_retention is not None
+            else "  - "
+        )
+        cit = (
+            f"{s.citation_accuracy:.2f}" if s.citation_accuracy is not None
+            else "  - "
+        )
+        faith = (
+            f"{s.faithfulness_pass_rate:.2f}"
+            if s.faithfulness_pass_rate is not None else "  - "
+        )
+        ref = (
+            f"{s.refusal_accuracy:.2f}" if s.refusal_accuracy is not None
+            else "  - "
+        )
+        return (
+            f"n={s.count:<3d} scor={s.scorable:<3d} {rec} "
+            f"mrr={s.retrieval_mrr:.2f} rerank_ret={ret} "
+            f"cite={cit} faith={faith} refuse={ref}"
+        )
+
+    def _loc(s: StageScore) -> str:
+        L = s.localisation
+        return (
+            f"      └─ ok={L['ok']} retrieval={L['lost_retrieval']} "
+            f"rerank={L['lost_rerank']} generation={L['lost_generation']} "
+            f"refuse✓={L['refused_correct']} refuse✗={L['refused_wrong']} "
+            f"unscorable={L['unscorable']}"
+        )
+
+    lines: list[str] = []
+    lines.append(f"=== Per-stage Eval ({report.total} questions) ===")
+    lines.append(f"OVERALL  {_line(report.overall)}")
+    lines.append(_loc(report.overall))
+    if report.by_domain:
+        lines.append("--- by domain ---")
+        for s in report.by_domain:
+            lines.append(f"  [{s.group:<14}] {_line(s)}")
+            lines.append(_loc(s))
+    if report.by_stratum:
+        lines.append("--- by stratum ---")
+        for s in report.by_stratum:
+            lines.append(f"  [{s.group:<14}] {_line(s)}")
+            lines.append(_loc(s))
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
 # CSV writer
 # ---------------------------------------------------------------------------
 
