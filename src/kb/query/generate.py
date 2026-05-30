@@ -409,6 +409,31 @@ def _citations_from_hits(hits: list[Hit], limit: int = 3) -> list[Citation]:
     return out
 
 
+def _ensure_aggregate_sources_cited(
+    citations: list[Citation], hits: list[Hit], *, limit: int = 5,
+) -> list[Citation]:
+    """C1 — make aggregate (mode-Q) answers traceable to source documents.
+
+    The synthetic aggregate Hit carries the computed number but no source
+    file, so a model that cites only the aggregate yields an un-citable
+    answer ("5 incidents" pointing at a query id, not the incident docs).
+    The orchestrator deliberately keeps the retrieved source-doc hits behind
+    the aggregate (see `mode_router._route_q_mode`); when the answer cites
+    the aggregate but omits those sources, attach them here so the count is
+    cited to real documents ("cited or it didn't happen"). No-op for
+    non-aggregate answers."""
+    if not any(c.kind == "aggregate" for c in citations):
+        return citations
+    already = {c.hit_id for c in citations}
+    source_hits = [
+        h for h in hits
+        if h.kind != "aggregate"
+        and str(h.id) not in already
+        and (h.metadata or {}).get("file_id")
+    ]
+    return citations + _citations_from_hits(source_hits, limit=limit)
+
+
 def _build_user_prompt(
     query: str,
     hits: list[Hit],
@@ -623,6 +648,9 @@ def _parse_result(
                 }))
             except (TypeError, ValueError):
                 continue
+
+    # C1 — ground aggregate (mode-Q) answers in their source documents.
+    citations = _ensure_aggregate_sources_cited(citations, hits)
 
     # If model produced an answer but no citations, fall back to synthesizing
     # the top-3 hits — the UI still gets something to render.

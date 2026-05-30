@@ -583,6 +583,11 @@ async def _fetch_corpus_raptor_hits(
 # ---------------------------------------------------------------------------
 
 
+# C1 — how many retrieved source-doc hits to keep alongside the aggregate
+# result so an aggregation answer can cite the documents it was drawn from.
+_Q_SOURCE_HITS_CAP = 5
+
+
 def _q_refusal_hit(reason: str) -> Hit:
     """Build a synthetic Hit representing a Q-mode refusal. The orchestrator
     surfaces this through the normal citation pipeline; the generator's
@@ -734,13 +739,21 @@ async def _route_q_mode(
         )
         audit_id = "audit-insert-failed"
 
-    # Synthesize the single aggregate Hit.
+    # Synthesize the aggregate Hit, then KEEP the retrieved source-doc hits
+    # behind it. C1: the aggregate Hit carries the computed number but no
+    # source file_id, so on its own the answer cites a bare "document"
+    # (label fallback) instead of the documents the number was drawn from.
+    # Retrieval already surfaced those source docs (typically at rank 1)
+    # with real file_ids — discarding them is what made aggregation answers
+    # un-citable (and skipped the faithfulness gate). Returning the
+    # aggregate result FIRST (primary answer) followed by the source-doc
+    # hits lets the generator cite real documents and ground the count.
     if result.status == "ok":
         snippet = _format_aggregate_snippet(
             result.column_names, result.rows,
             plan=plan.q_payload,
         )
-        return [Hit(
+        aggregate_hit = Hit(
             id=audit_id,
             kind="aggregate",
             score=1.0,
@@ -754,7 +767,12 @@ async def _route_q_mode(
                 "Q_plan_id": audit_id,
                 "column_names": list(result.column_names),
             },
-        )]
+        )
+        # Source-doc hits from retrieval, kept for citation + grounding.
+        # Capped so the aggregate stays the headline and the prompt stays
+        # bounded.
+        source_hits = [h for h in hits if h.kind != "aggregate"][:_Q_SOURCE_HITS_CAP]
+        return [aggregate_hit, *source_hits]
 
     # Non-ok status: refusal Hit.
     return [_q_refusal_hit(

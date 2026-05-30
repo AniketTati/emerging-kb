@@ -73,6 +73,50 @@ This is the order to actually work through. Each ID's full spec
 (researched SOTA per decision) is in `DECISIONS.md`. **Re-run M1's per-stage
 eval after each task** so you can attribute every change.
 
+### ▸ Live status (update after every task)
+
+**Operating mode:** construction only (`c0000000-…001`, 46 docs ingested);
+other 5 domains not ingested yet — deferred until construction build is done.
+Measurement-driven: re-run the M1 per-stage eval after each task and record the
+delta here. Reranker = Cohere `rerank-v3.5`.
+
+> **Eval is stochastic** (LLM intent/planner/rewriter + Cohere rerank vary
+> run-to-run). A ±1–2-question wobble on a stratum is **noise** — only
+> attribute deltas above that to a change, and prefer the per-question CSV
+> (which stage moved on *which* question) over headline averages. Multiple-run
+> averaging / a held-out set is E1 (later).
+
+**Sequencing note:** this roadmap order was authored *before* per-stage
+measurement existed. M1 shows construction's losses are **not** in
+retrieval/chunking (r@30=0.97, rerank_ret=1.00) but in **generation-citation**
+and **negative-refusal**. So we **reprioritise to construction's measured weak
+stages first** (C1, C2 below) and **defer I1 + the write-path foundation** to
+when a *tabular* domain (finance/healthcare) is ingested, where chunking
+actually moves retrieval.
+
+| Task | Status | Measured effect (construction) |
+|---|---|---|
+| **M1** — per-stage harness + Cohere reranker | ✅ done (`0fef654`) | Phase-0 baseline set; query ~25s→~13s. `docs/M1_STAGE_EVAL.md` |
+| **C1** — aggregation (mode Q) citations not grounded to source docs | ✅ done | aggregation `cite` **0.00 → 1.00**; overall `cite` 0.75 → 0.83; `lost_generation` 8 → 4. `construction_after_c1.*` |
+| **C2** — negative-refusal (Q5 relevance gate) | ⏳ next | target: negative `refuse` 0.00 → ~1.0 |
+| **I1** — classify-before-chunk + clause/row chunker | ⏸ deferred | benefit shows on tabular domains, not construction |
+| (other roadmap tasks below) | ⏳ pending | — |
+
+> Phase-0 baseline (50 Q): `OVERALL r@10=0.93 r@30=0.97 mrr=0.82
+> rerank_ret=1.00 cite=0.75 faith=0.66 refuse=0.57` ·
+> `ok=27 lost_retrieval=1 lost_rerank=0 lost_generation=8 refused✗=3`.
+> Root cause C1: mode **Q** synthesizes one aggregate Hit
+> (`mode_router.py:743`) with `id=audit_uuid` + metadata
+> (`audit_query_id`/`row_count`/`column_names`) but **no source `file_id`s** —
+> so the citation has no file to resolve and degrades to `label="document"`
+> (`citations.py:373`). Fix (simple, low-risk first): `_route_q_mode`
+> (`mode_router.py:104`) *discards* the retrieved hits and returns only the
+> synthetic aggregate Hit — even though retrieval already surfaced the source
+> docs at rank 1 with real file_ids. Return the aggregate Hit **plus** the
+> retrieved source-doc hits so the answer cites real documents (and
+> faithfulness can ground against them). Escalate to a contributing-file_id
+> companion query only if M1 shows the simple fix is insufficient.
+
 > **DEFINITION OF DONE: every task on this list must be completed — no
 > shortcuts.** The phases are an *order*, not a menu. We may *submit* an early
 > snapshot, but the system must be fully built (through Phase 6) before the
