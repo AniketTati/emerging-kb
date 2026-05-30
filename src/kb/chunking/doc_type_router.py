@@ -66,6 +66,13 @@ _TABULAR_MIME = {
 _EMAIL_MIME = {"message/rfc822"}
 
 
+def known_doc_types() -> frozenset[str]:
+    """The doc_type keys the router routes on (I1 — the pre-chunk classifier
+    must emit one of these, else its label won't select a type-aware chunker
+    and we silently fall back to hierarchical)."""
+    return frozenset(_DEFAULT_BY_DOC_TYPE)
+
+
 @dataclass(frozen=True)
 class ChunkerConfig:
     """Resolved configuration for one chunk_file run."""
