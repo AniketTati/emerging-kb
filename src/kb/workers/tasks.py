@@ -2585,13 +2585,31 @@ async def resolve_identities_file_impl(file_id: str) -> None:
 
     mention_embeddings: dict[str, list[float]] = {}
     if mentions:
+        # I4 — embedder failure must NOT silently create all-new entities
+        # (every mention would become a brand-new canonical entity, polluting
+        # the graph with duplicates of things that already exist). Retry
+        # transient failures with backoff; if it STILL fails, mark the file
+        # failed (visible) so it can be re-run once the embedder recovers,
+        # rather than proceeding with no embeddings.
+        from kb.llm_batching import with_retry
         try:
-            results = await embedder.embed_batch([m[1] for m in mentions])
+            results = await with_retry(
+                lambda: embedder.embed_batch([m[1] for m in mentions]),
+                label=f"identity embed {file_id}",
+            )
             for (mid, _, _), emb in zip(mentions, results, strict=True):
                 mention_embeddings[mid] = list(emb.vector)
-        except Exception:
+        except Exception as exc:  # noqa: BLE001
             traceback.print_exc()
-            # Fall through with no embeddings → all resolve as new entities.
+            await _mark_failed(
+                db_url, file_id, workspace_id_str,
+                error_class="IdentityEmbedError",
+                message=f"embedder failed for identity resolution: {exc}",
+                from_state="identity_resolving",
+                event="identity_resolution_failed",
+                traceback_head=traceback.format_exc()[:2000],
+            )
+            return
 
     # Phase 3: atomic resolution + insert links in one tx.
     async with open_connection(db_url) as conn:
