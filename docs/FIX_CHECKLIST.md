@@ -147,18 +147,25 @@ master table below.
 > - **C2b** — entity-grounded relevance for the q009-class (asked entity/premise
 >   absent from retrieved docs; CRAG sits at the neutral 0.5 default so a
 >   threshold can't separate it). Folds into #6 Q5 / #32 A1.
-> - **C3 — mode-K real chain retrieval** (diagnosed; folds into **#10 Q2** /
->   K-mode). The `lost_generation` cluster (q014/q017/q038) is NOT a citation
->   bug: `_route_k_mode` is a **filter, not a retriever** — it only keeps hits
->   already surfaced and never fetches the *other* members of a chain. For
->   "walk/summarise the chain" questions the planner also leaves
->   `chain_view=current_version`, so historical members (initial/investigation,
->   revA/revB) are dropped and non-chain docs (safety-003) get cited. Fix =
->   (a) planner picks `all_versions` for chain-walk intent, (b) mode K *fetches*
->   all members of the chains present in the hits. Chains ARE registered in
->   `doc_chain_members` (safety-001, drawing-001) — detection is fine; retrieval
->   isn't. *(version_index also mis-set: revB & revC both =1; investigation &
->   corrective both =1 — minor backfill.)*
+> - **C3 — mode-K chain_view** ◑ (`24d365f`; folds into **#10 Q2**). Real root
+>   cause found: the Gemini planner emits an **invalid** `chain_view` (a topic
+>   string like "safety incident-fall"); `_route_k_mode` coerced that to
+>   `current_version`, whose filter DROPPED the chain members → chain-walk
+>   questions cited the wrong, non-chain docs. Fixed at source: `_parse_plan_json`
+>   infers the view from the query when chain_view is absent or invalid.
+>   Affected-query check: q014+q038 cite the full safety-001 chain. **BUT** the
+>   full-50 aggregate stayed flat (cite 0.86) — run-to-run variance (~±2 Q:
+>   q014 flipped back, q033 aggregation flipped out) swamps the gain. q017
+>   (cites revB not revA/revC) + intermittent q014 remain — ranking nuance,
+>   folds into #31 R1. *(version_index mis-set: revB&revC=1, investigation&
+>   corrective=1 — minor backfill.)*
+>
+> **⚠ Measurement note (important):** single full-50 runs CANNOT reliably
+> detect 1–2-question deltas — the pipeline is stochastic (Cohere rerank +
+> Gemini planner/rewriter/generation) with ~±2-question run-to-run noise.
+> **Trust the per-affected-question check** (deterministic improvement on the
+> target) over the full-run aggregate for small fixes; use multi-run averaging
+> for headline numbers (**E1 #33**).
 > - **q025** (conflict) — borderline: mode-H CRAG `force_refuse` at crag≈0.5
 >   flips refuse↔ship run-to-run; when it ships it cites the wrong doc. Hard
 >   case; folds into #5 Q1 / #6 Q5. Not a C2 regression.
@@ -167,11 +174,13 @@ master table below.
 > mrr=0.82 rerank_ret=1.00 cite=0.75 faith=0.66 refuse=0.57` ·
 > `ok=27 lost_retrieval=1 lost_rerank=0 lost_generation=8 refused✗=3`.
 >
-> **Current** (after C2, `construction_after_c2.*`): `cite=0.86 refuse=0.86
-> ok=31/36` · `lost_generation=4 refused✗=1`. Retrieval/rerank unchanged
-> (not the bottleneck). Remaining construction losses → **C2b** (q009
-> entity-substitution) + the **lost_generation=4** cluster (chain-aware
-> q014/q017, conflict q025, long-form q038: gold retrieved, not cited).
+> **Current** (after Phase-2 batch C1/C2/#8/P2/C3, `construction_after_phase2batch.*`):
+> `cite≈0.86–0.92 refuse=0.86 ok≈31–33/36` (range = run-to-run variance).
+> Retrieval/rerank unchanged (not the bottleneck). C3 confirmed on
+> affected-query checks (q014/q038 chain citations) but flat in the noisy
+> aggregate. Remaining construction losses → **C2b** (q009), **q017**
+> (revB vs revA/revC ranking), **q025** (borderline conflict/CRAG); these
+> fold into R1/Q2/Q1, not quick wins.
 
 > **DEFINITION OF DONE: every task on this list must be completed — no
 > shortcuts.** The phases are an *order*, not a menu. We may *submit* an early

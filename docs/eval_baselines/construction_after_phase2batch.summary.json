@@ -1,0 +1,293 @@
+{
+  "total": 50,
+  "overall": {
+    "group": "overall",
+    "count": 50,
+    "scorable": 36,
+    "recall_at_k": {
+      "10": 0.925925925925926,
+      "30": 0.9722222222222222
+    },
+    "retrieval_mrr": 0.8175925925925926,
+    "rerank_retention": 1.0,
+    "rerank_dropped": 0,
+    "citation_accuracy": 0.8611111111111112,
+    "faithfulness_pass_rate": 0.6129032258064516,
+    "refusal_count": 7,
+    "refusal_accuracy": 0.8571428571428571,
+    "localisation": {
+      "ok": 31,
+      "lost_retrieval": 1,
+      "lost_rerank": 0,
+      "lost_generation": 4,
+      "refused_correct": 6,
+      "refused_wrong": 1,
+      "unscorable": 7
+    },
+    "errors": 0
+  },
+  "by_stratum": [
+    {
+      "group": "needle",
+      "count": 11,
+      "scorable": 11,
+      "recall_at_k": {
+        "10": 0.8636363636363636,
+        "30": 0.9090909090909091
+      },
+      "retrieval_mrr": 0.759090909090909,
+      "rerank_retention": 1.0,
+      "rerank_dropped": 0,
+      "citation_accuracy": 0.9090909090909091,
+      "faithfulness_pass_rate": 0.6,
+      "refusal_count": 0,
+      "refusal_accuracy": null,
+      "localisation": {
+        "ok": 10,
+        "lost_retrieval": 1,
+        "lost_rerank": 0,
+        "lost_generation": 0,
+        "refused_correct": 0,
+        "refused_wrong": 0,
+        "unscorable": 0
+      },
+      "errors": 0
+    },
+    {
+      "group": "adversarial",
+      "count": 4,
+      "scorable": 0,
+      "recall_at_k": {
+        "10": 0.0,
+        "30": 0.0
+      },
+      "retrieval_mrr": 0.0,
+      "rerank_retention": null,
+      "rerank_dropped": 0,
+      "citation_accuracy": null,
+      "faithfulness_pass_rate": null,
+      "refusal_count": 4,
+      "refusal_accuracy": 1.0,
+      "localisation": {
+        "ok": 0,
+        "lost_retrieval": 0,
+        "lost_rerank": 0,
+        "lost_generation": 0,
+        "refused_correct": 4,
+        "refused_wrong": 0,
+        "unscorable": 0
+      },
+      "errors": 0
+    },
+    {
+      "group": "ambiguous",
+      "count": 3,
+      "scorable": 0,
+      "recall_at_k": {
+        "10": 0.0,
+        "30": 0.0
+      },
+      "retrieval_mrr": 0.0,
+      "rerank_retention": null,
+      "rerank_dropped": 0,
+      "citation_accuracy": null,
+      "faithfulness_pass_rate": null,
+      "refusal_count": 0,
+      "refusal_accuracy": null,
+      "localisation": {
+        "ok": 0,
+        "lost_retrieval": 0,
+        "lost_rerank": 0,
+        "lost_generation": 0,
+        "refused_correct": 0,
+        "refused_wrong": 0,
+        "unscorable": 3
+      },
+      "errors": 0
+    },
+    {
+      "group": "negative",
+      "count": 5,
+      "scorable": 0,
+      "recall_at_k": {
+        "10": 0.0,
+        "30": 0.0
+      },
+      "retrieval_mrr": 0.0,
+      "rerank_retention": null,
+      "rerank_dropped": 0,
+      "citation_accuracy": null,
+      "faithfulness_pass_rate": null,
+      "refusal_count": 3,
+      "refusal_accuracy": 0.6666666666666666,
+      "localisation": {
+        "ok": 0,
+        "lost_retrieval": 0,
+        "lost_rerank": 0,
+        "lost_generation": 0,
+        "refused_correct": 2,
+        "refused_wrong": 1,
+        "unscorable": 2
+      },
+      "errors": 0
+    },
+    {
+      "group": "aggregation",
+      "count": 5,
+      "scorable": 4,
+      "recall_at_k": {
+        "10": 0.8333333333333334,
+        "30": 1.0
+      },
+      "retrieval_mrr": 0.8125,
+      "rerank_retention": 1.0,
+      "rerank_dropped": 0,
+      "citation_accuracy": 0.75,
+      "faithfulness_pass_rate": 0.875,
+      "refusal_count": 0,
+      "refusal_accuracy": null,
+      "localisation": {
+        "ok": 3,
+        "lost_retrieval": 0,
+        "lost_rerank": 0,
+        "lost_generation": 1,
+        "refused_correct": 0,
+        "refused_wrong": 0,
+        "unscorable": 1
+      },
+      "errors": 0
+    },
+    {
+      "group": "chain-aware",
+      "count": 9,
+      "scorable": 9,
+      "recall_at_k": {
+        "10": 1.0,
+        "30": 1.0
+      },
+      "retrieval_mrr": 0.8611111111111112,
+      "rerank_retention": 1.0,
+      "rerank_dropped": 0,
+      "citation_accuracy": 0.7777777777777778,
+      "faithfulness_pass_rate": 0.5714285714285714,
+      "refusal_count": 0,
+      "refusal_accuracy": null,
+      "localisation": {
+        "ok": 7,
+        "lost_retrieval": 0,
+        "lost_rerank": 0,
+        "lost_generation": 2,
+        "refused_correct": 0,
+        "refused_wrong": 0,
+        "unscorable": 0
+      },
+      "errors": 0
+    },
+    {
+      "group": "conflict-resolution",
+      "count": 5,
+      "scorable": 5,
+      "recall_at_k": {
+        "10": 0.9,
+        "30": 1.0
+      },
+      "retrieval_mrr": 0.85,
+      "rerank_retention": 1.0,
+      "rerank_dropped": 0,
+      "citation_accuracy": 0.8,
+      "faithfulness_pass_rate": 0.625,
+      "refusal_count": 0,
+      "refusal_accuracy": null,
+      "localisation": {
+        "ok": 4,
+        "lost_retrieval": 0,
+        "lost_rerank": 0,
+        "lost_generation": 1,
+        "refused_correct": 0,
+        "refused_wrong": 0,
+        "unscorable": 0
+      },
+      "errors": 0
+    },
+    {
+      "group": "long-form",
+      "count": 4,
+      "scorable": 3,
+      "recall_at_k": {
+        "10": 1.0,
+        "30": 1.0
+      },
+      "retrieval_mrr": 0.7777777777777778,
+      "rerank_retention": 1.0,
+      "rerank_dropped": 0,
+      "citation_accuracy": 1.0,
+      "faithfulness_pass_rate": 0.5,
+      "refusal_count": 0,
+      "refusal_accuracy": null,
+      "localisation": {
+        "ok": 3,
+        "lost_retrieval": 0,
+        "lost_rerank": 0,
+        "lost_generation": 0,
+        "refused_correct": 0,
+        "refused_wrong": 0,
+        "unscorable": 1
+      },
+      "errors": 0
+    },
+    {
+      "group": "rare-clause",
+      "count": 4,
+      "scorable": 4,
+      "recall_at_k": {
+        "10": 1.0,
+        "30": 1.0
+      },
+      "retrieval_mrr": 0.875,
+      "rerank_retention": 1.0,
+      "rerank_dropped": 0,
+      "citation_accuracy": 1.0,
+      "faithfulness_pass_rate": 0.5,
+      "refusal_count": 0,
+      "refusal_accuracy": null,
+      "localisation": {
+        "ok": 4,
+        "lost_retrieval": 0,
+        "lost_rerank": 0,
+        "lost_generation": 0,
+        "refused_correct": 0,
+        "refused_wrong": 0,
+        "unscorable": 0
+      },
+      "errors": 0
+    }
+  ],
+  "by_domain": [
+    {
+      "group": "construction",
+      "count": 50,
+      "scorable": 36,
+      "recall_at_k": {
+        "10": 0.925925925925926,
+        "30": 0.9722222222222222
+      },
+      "retrieval_mrr": 0.8175925925925926,
+      "rerank_retention": 1.0,
+      "rerank_dropped": 0,
+      "citation_accuracy": 0.8611111111111112,
+      "faithfulness_pass_rate": 0.6129032258064516,
+      "refusal_count": 7,
+      "refusal_accuracy": 0.8571428571428571,
+      "localisation": {
+        "ok": 31,
+        "lost_retrieval": 1,
+        "lost_rerank": 0,
+        "lost_generation": 4,
+        "refused_correct": 6,
+        "refused_wrong": 1,
+        "unscorable": 7
+      },
+      "errors": 0
+    }
+  ]
+}
