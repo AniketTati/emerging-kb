@@ -97,6 +97,11 @@ class IdentityTripleExtractor:
     async def extract(self, *, chunk_text: str) -> TripleExtractionResult:
         return TripleExtractionResult(triples=[])
 
+    async def extract_batch(
+        self, *, chunk_texts: list[str]
+    ) -> list[TripleExtractionResult]:
+        return [TripleExtractionResult(triples=[]) for _ in chunk_texts]
+
 
 # ---------------------------------------------------------------------------
 # Helpers shared by LLM extractors
