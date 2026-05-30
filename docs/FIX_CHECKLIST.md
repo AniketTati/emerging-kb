@@ -75,6 +75,29 @@ eval after each task** so you can attribute every change.
 
 ### ▸ Live status (update after every task)
 
+**▶ CURRENT FOCUS — pre-ingest WRITE-PATH BATCH (then ingest `finance` once).**
+Plan: `~/.claude/plans/lets-create-a-plan-peppy-mitten.md`. Batch ALL write-path
+changes first, then run the finance ingest ONCE (finance = most tabular domain;
+868 md table-rows). HEAD `a5ff669`, tree clean, 28 ingestion tests pass.
+
+Ingestion-batch progress (do tasks ONE-AT-A-TIME — see
+`memory/editing-cadence-tooling`; never batch Edit+Bash, never `git stash pop`):
+- ✅ **S1** batching (contextualize/mentions/triples via `kb/llm_batching.run_batched`)
+- ✅ **I7** transient retry (`is_transient`/`with_retry`; run_batched + parse retry)
+- ✅ **I1** classify-before-chunk (`kb.classification`; bank_statement→row chunker)
+- ✅ **I2** field-convergence converger (`converge_clusters_semantic`) — *wiring → #19*
+- ✅ **I4** identity top-k (`select_entity_match`) + embedder-fail parks file
+- ✅ **S3** mentions trigram index (migration 0049, applied+verified)
+- ⏳ **I3** corpus RAPTOR auto-trigger + incremental (task #16)
+- ⏳ **P1** extraction-side config wiring (task #17)
+- ⏳ **#19** corpus-finalization pass: wire I2 converger (real embedder+judge) +
+  **cold-start re-extraction** + identity reconcile + corpus RAPTOR
+- ⏳ **#20** pre-ingest gate → ingest finance once → M1 finance baseline
+- ⏸ **I6** chain detection (deferred to scale; no-op at 46 docs)
+
+> Pre-existing (NOT my regression): `tests/test_b4b_api.py` 2 failures
+> (StubPlanner `.plan()` missing `conn` kwarg) — fail identically at `ff0ceea`.
+
 **Operating mode:** construction only (`c0000000-…001`, 46 docs ingested);
 other 5 domains not ingested yet — deferred until construction build is done.
 Measurement-driven: re-run the M1 per-stage eval after each task and record the
@@ -204,12 +227,14 @@ makes a claim true · **[QUALITY]** robustness/honesty · **[SCALE]** 100k ·
    generation-**citation** (aggregation cite=0.00) and **negative refusal**.
 
 **Phase 1 — Write-path foundation (everything downstream inherits this)**
-2. **I1** [SUBMIT] — classify before chunk. Highest leverage (SOTA: structure-
-   aware chunking is "the single biggest, easiest win").
-3. **I2** [SUBMIT] — field convergence (EDC: embedding-block + LLM-judge). Makes
-   "structured outputs matching schema" + cross-doc aggregation real.
-4. **I4** [SUBMIT] — identity resolution (semantic blocking, top-k not top-1).
-   Entities must resolve before conflict can work.
+2. **I1** [SUBMIT] ✅ — classify before chunk. Highest leverage (SOTA: structure-
+   aware chunking is "the single biggest, easiest win"). *Done: pre-chunk
+   classifier wired; clause chunker still hier-backed (PDF follow-up).*
+3. **I2** [SUBMIT] ◑ — field convergence (EDC: embedding-block + LLM-judge). Makes
+   "structured outputs matching schema" + cross-doc aggregation real. *Converger
+   done + tested; corpus-pass wiring → #19.*
+4. **I4** [SUBMIT] ✅ — identity resolution (semantic blocking, top-k not top-1).
+   Entities must resolve before conflict can work. *Done: top-k + park-on-fail.*
 
 **Phase 2 — Read-path correctness + the brief's promises**
 5. **Q1** [SUBMIT] — conflict across independent docs. *Depends on I2 + I4.*
