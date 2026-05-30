@@ -1991,9 +1991,19 @@ async def extract_kv_tables_file_impl(file_id: str) -> None:
                             cluster_names_for_embed, embeddings,
                         )
                     }
+                    # P1 — field-name convergence similarity via layered
+                    # config (default 0.85 == prior hardcoded threshold).
+                    vocab_sim_threshold = await _resolve_threshold(
+                        conn,
+                        key="extraction.l2b.vocabulary.similarity_threshold",
+                        workspace_id=workspace_id_str,
+                        default=0.85,
+                        doc_type=doc_type,
+                    )
                     vocab_candidates = discover_vocabulary_candidates(
                         clusters=clusters,
                         name_embeddings=name_embed_map,
+                        similarity_threshold=vocab_sim_threshold,
                     )
                     domain_id = (
                         os.environ.get("KB_DEFAULT_DOMAIN")
@@ -2013,7 +2023,31 @@ async def extract_kv_tables_file_impl(file_id: str) -> None:
                 traceback.print_exc()
 
             # UPSERT inferred_schema_fields + promote crossed clusters.
+            # P1 — auto-promotion thresholds via layered config (min_docs
+            # stays env-driven via from_env; the three gates fall back to
+            # the dataclass defaults == config/defaults.yaml values).
             thresholds = PromotionThresholds.from_env()
+            thresholds.prevalence = await _resolve_threshold(
+                conn,
+                key="extraction.l2b.auto_promotion.prevalence_threshold",
+                workspace_id=workspace_id_str,
+                default=thresholds.prevalence,
+                doc_type=doc_type,
+            )
+            thresholds.stability = await _resolve_threshold(
+                conn,
+                key="extraction.l2b.auto_promotion.stability_threshold",
+                workspace_id=workspace_id_str,
+                default=thresholds.stability,
+                doc_type=doc_type,
+            )
+            thresholds.value_type_confidence = await _resolve_threshold(
+                conn,
+                key="extraction.l2b.auto_promotion.value_type_confidence",
+                workspace_id=workspace_id_str,
+                default=thresholds.value_type_confidence,
+                doc_type=doc_type,
+            )
             promotion_count = 0
             schema_entity_id: str | None = None
             for cluster in clusters:

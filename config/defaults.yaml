@@ -48,6 +48,12 @@ extraction:
       value_type_confidence: 0.90
       # Default for production scale; demo uses min_doc_count=5 via override.
       min_doc_count: 20
+    # Field-name convergence: cosine-similarity gate above which two
+    # discovered field clusters are treated as synonyms of one canonical
+    # vocabulary term (extraction-side; distinct from query-time
+    # retrieval.vocab_expansion). P1: read at extract_kv_tables time.
+    vocabulary:
+      similarity_threshold: 0.85
 
   # L3 — atomic units + per-type rarity (Phase 5c).
   l3:
