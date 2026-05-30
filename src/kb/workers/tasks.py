@@ -70,6 +70,43 @@ from kb.storage.files import get_file_bytes
 from kb.workers.app import app as procrastinate_app
 
 
+async def _resolve_threshold(
+    conn,
+    *,
+    key: str,
+    workspace_id: str,
+    default: float,
+    doc_type: str | None = None,
+) -> float:
+    """P1 — read a write-path threshold through the layered-config resolver
+    so domain / workspace / doc_type overrides set in the Settings UI
+    actually change pipeline behavior, instead of a hardcoded constant.
+
+    SAFE by construction (pre-ingest checklist item H): `default` is the
+    current hardcoded value and is passed to `resolve_config`, and any
+    resolver / coercion error also falls back to it — a config miss or a
+    malformed override value never breaks ingest. The domain is taken from
+    `KB_DEFAULT_DOMAIN` (same source the vocabulary-discovery path uses);
+    when unset, layer-5 domain YAML is skipped and the value resolves from
+    `config/defaults.yaml` (== the hardcoded default).
+    """
+    from kb.layered_config.resolver import resolve_config
+
+    domain = os.environ.get("KB_DEFAULT_DOMAIN") or None
+    try:
+        value = await resolve_config(
+            key,
+            workspace_id=workspace_id,
+            conn=conn,
+            domain=domain,
+            doc_type=doc_type,
+            default=default,
+        )
+        return float(value)
+    except Exception:  # noqa: BLE001
+        return default
+
+
 def _parse_yaml_frontmatter(text: str) -> dict[str, str]:
     """Extract YAML frontmatter at the start of a markdown doc.
 
@@ -2626,6 +2663,22 @@ async def resolve_identities_file_impl(file_id: str) -> None:
                 "skipped_noise": 0,
             }
 
+            # P1 — identity thresholds via layered config (safe defaults =
+            # the prior hardcoded constants). Resolved once per file, not
+            # per mention.
+            identity_high = await _resolve_threshold(
+                conn,
+                key="extraction.identity.embedding_high_threshold",
+                workspace_id=workspace_id_str,
+                default=EMBEDDING_HIGH_THRESHOLD,
+            )
+            identity_low = await _resolve_threshold(
+                conn,
+                key="extraction.identity.embedding_low_threshold",
+                workspace_id=workspace_id_str,
+                default=EMBEDDING_LOW_THRESHOLD,
+            )
+
             for mention_id, mention_text, mention_type in mentions:
                 resolved_entity_id: str | None = None
                 resolution_method: str = "deterministic"
@@ -2675,6 +2728,8 @@ async def resolve_identities_file_impl(file_id: str) -> None:
                                 text_a=mention_text, type_a=mention_type,
                                 text_b=cand_name, type_b=mention_type,
                             ),
+                            high_threshold=identity_high,
+                            low_threshold=identity_low,
                         )
                         if match is not None:
                             resolved_entity_id, resolution_method, confidence = match
