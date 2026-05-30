@@ -78,7 +78,7 @@ eval after each task** so you can attribute every change.
 **▶ CURRENT FOCUS — pre-ingest WRITE-PATH BATCH (then ingest `finance` once).**
 Plan: `~/.claude/plans/lets-create-a-plan-peppy-mitten.md`. Batch ALL write-path
 changes first, then run the finance ingest ONCE (finance = most tabular domain;
-868 md table-rows). HEAD `a5ff669`, tree clean, 28 ingestion tests pass.
+868 md table-rows). HEAD `09fe2e9`, tree clean, 32 ingestion tests pass.
 
 Ingestion-batch progress (do tasks ONE-AT-A-TIME — see
 `memory/editing-cadence-tooling`; never batch Edit+Bash, never `git stash pop`):
@@ -88,10 +88,17 @@ Ingestion-batch progress (do tasks ONE-AT-A-TIME — see
 - ✅ **I2** field-convergence converger (`converge_clusters_semantic`) — *wiring → #19*
 - ✅ **I4** identity top-k (`select_entity_match`) + embedder-fail parks file
 - ✅ **S3** mentions trigram index (migration 0049, applied+verified)
-- ⏳ **I3** corpus RAPTOR auto-trigger + incremental (task #16)
+- ✅ **I3** corpus RAPTOR auto-trigger (`finalize_corpus` self-gates on
+  `count_inflight_files`; deferred from per-doc chain tail on file→ready).
+  Incremental rebuild deferred to scale (full-teardown is correct/cheap for
+  one-shot ≤50-doc ingests). 4 tests. `09fe2e9`. *finalization-phase wiring
+  (I2 converge / re-extract / reconcile) lands in #19, expanding
+  `finalize_corpus_impl` in place.*
 - ⏳ **P1** extraction-side config wiring (task #17)
-- ⏳ **#19** corpus-finalization pass: wire I2 converger (real embedder+judge) +
-  **cold-start re-extraction** + identity reconcile + corpus RAPTOR
+- ⏳ **#19** corpus-finalization pass: **expand `finalize_corpus_impl`** (I3
+  built the entry point + settle-trigger) → wire I2 converger (real
+  embedder+judge) + **cold-start re-extraction** + identity reconcile +
+  corpus RAPTOR
 - ⏳ **#20** pre-ingest gate → ingest finance once → M1 finance baseline
 - ⏸ **I6** chain detection (deferred to scale; no-op at 46 docs)
 
@@ -158,7 +165,7 @@ master table below.
 | 24 | **S3** `mentions_exact` trigram index | 5 | ✅ | migration 0049: `CREATE EXTENSION pg_trgm` + GIN `gin_trgm_ops` on `lower(mention_text)`. Applied + verified on running DB. |
 | 25 | **S2** identity-resolution throughput | 5 | ⏳ | |
 | 26 | **I6** chain detection O(N²)→bounded | 5 | ⏳ | |
-| 27 | **I3** corpus RAPTOR incremental + auto-trigger | 5 | ⏳ | |
+| 27 | **I3** corpus RAPTOR incremental + auto-trigger | 5 | ◑ | `09fe2e9`. Auto-trigger DONE (`finalize_corpus` self-gates on `count_inflight_files`; deferred from chain tail). Incremental rebuild deferred to scale. 4 tests |
 | 28 | **S4** vector memory/recall at ~3M vectors | 5 | ⏳ | |
 | 29 | **S5** retrieval result cache | 5 | ⏳ | |
 | 30 | **S6** bulk-ingest + docs/hour benchmark | 5 | ⏳ | |
