@@ -3181,6 +3181,24 @@ async def detect_doc_chain_file_impl(file_id: str) -> None:
                     email_references=sib_references,
                 ))
 
+            # P1 — title-similarity gates via layered config (defaults ==
+            # prior hardcoded 0.7 / 0.8). inferred_doc_type scopes doc_type
+            # overrides (e.g. tighter for loan_agreement amendments).
+            chain_title_sim = await _resolve_threshold(
+                conn,
+                key="doc_chains.detection.title_similarity_threshold",
+                workspace_id=workspace_id_str,
+                default=0.7,
+                doc_type=inferred_doc_type,
+            )
+            chain_corrigendum_sim = await _resolve_threshold(
+                conn,
+                key="doc_chains.detection.corrigendum_similarity_threshold",
+                workspace_id=workspace_id_str,
+                default=0.8,
+                doc_type=inferred_doc_type,
+            )
+
             # Run the detector chain.
             det_input = DetectionInput(
                 file_id=file_id,
@@ -3195,6 +3213,8 @@ async def detect_doc_chain_file_impl(file_id: str) -> None:
                 email_sender=email_sender,
                 email_recipients=email_recipients,
                 siblings=tuple(siblings),
+                title_similarity_threshold=chain_title_sim,
+                corrigendum_similarity_threshold=chain_corrigendum_sim,
             )
             candidate = detect_chain(det_input)
 

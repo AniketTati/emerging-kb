@@ -71,6 +71,11 @@ class DetectionInput:
     email_recipients: tuple[str, ...] = ()
     email_date_iso: str | None = None
     siblings: tuple[SiblingFile, ...] = ()
+    # P1 — title-similarity gates, resolved from layered config by the
+    # worker. Defaults match the prior hardcoded thresholds so direct
+    # callers / tests that omit them are unaffected.
+    title_similarity_threshold: float = 0.7
+    corrigendum_similarity_threshold: float = 0.8
 
 
 @dataclass(frozen=True)
@@ -410,7 +415,7 @@ def _detect_contract_chain(input_: DetectionInput) -> ChainCandidate | None:
             best_sim = sim
             candidate_sibling = sib
 
-    if candidate_sibling is None or best_sim < 0.7:
+    if candidate_sibling is None or best_sim < input_.title_similarity_threshold:
         return None
 
     # When the new doc has amendment language OR the filename hints "amendment",
@@ -520,7 +525,7 @@ def _detect_circular_corrigendum(input_: DetectionInput) -> ChainCandidate | Non
             best_sim = sim
             candidate = sib
 
-    if candidate is None or best_sim < 0.8:
+    if candidate is None or best_sim < input_.corrigendum_similarity_threshold:
         return None
 
     return ChainCandidate(

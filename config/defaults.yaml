@@ -124,6 +124,8 @@ models:
 doc_chains:
   detection:
     title_similarity_threshold: 0.70
+    # Stricter gate for circular/corrigendum chains (Design 3 §gov circulars).
+    corrigendum_similarity_threshold: 0.80
     sender_recipient_overlap: 0.50
     amendment_phrases:
       - "amends"
