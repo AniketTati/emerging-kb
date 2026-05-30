@@ -1,0 +1,58 @@
+SHIFT LOG — BOKARO COAL BLOCK
+Bench-4 Drilling + Bench-3 Blasting Prep
+Evening Shift: 14:00 → 22:00 (29-Aug-2025)
+Shift Lead: Site Manager P. Mukherjee
+==========================================================
+
+14:00 Shift handover from Day shift completed.
+      Equipment: 6 drill rigs + 4 haul trucks + crusher running.
+
+14:30 Routine pre-blast bore-hole drilling on Bench-3 commencing.
+      Target: 14 holes at 3m spacing.
+
+15:00 Methane sampling on Bench-4 SE corner (per drilling-004 advisory):
+        - 0.6 % LEL — below action threshold.
+        - 0.8 % LEL — below action threshold.
+        - 0.4 % LEL — normal.
+      Continuous monitoring active.
+
+15:42 Drill rig DR-7 hydraulic leak — repaired in 18 min.
+
+16:30 Crusher feed dropping to 1,420 tph (vs target 1,600 tph). Crusher
+      ops investigating belt-conveyor speed; resolved 16:55.
+
+17:14 Drill operations on Bench-3 progressing — 10 of 14 holes complete.
+
+17:30 Tea break for crews.
+
+18:00 Hole BH-8 reached target depth. Pre-blast geotechnical inspection
+      ongoing.
+
+19:00 Heavy rain (10 mm/hr) — drilling paused; wet ground.
+
+19:42 Rain stopped. Resumption planned after 30 min for ground to firm.
+
+20:15 Operations resumed. Bench-3: 12 of 14 holes complete.
+
+20:48 Final pre-blast inspection completed for Bench-3 holes 1-10.
+      Charging team will load explosives on day-shift tomorrow.
+
+21:14 Routine dust + methane monitoring — all stations within target
+      ranges.
+
+22:00 Shift end. Night shift assumes operations.
+
+==========================================================
+SHIFT SUMMARY:
+  Drill holes completed: 12 of 14 (delayed by rain)
+  Bench-3 pre-blast prep: 80% complete; pickup tomorrow
+  Crusher throughput: ~1,520 tph average (target 1,600)
+  Incidents: 0
+  Methane: All readings below action thresholds at monitored stations
+
+NOTE FROM SHIFT LEAD:
+The Bench-4 SE corner methane readings (0.6-0.8 % LEL during today's
+shift) align with the historical pattern from drilling-004. Continuous
+monitoring remains adequate. No anomalies.
+
+— P. Mukherjee, Site Manager (signed)

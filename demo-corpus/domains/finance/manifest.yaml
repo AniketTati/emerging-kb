@@ -1,0 +1,533 @@
+# Finance domain manifest — 46 docs across 9 subtypes.
+#
+# Headline stressors:
+#   - Acme/HDFC loan chain (original + 2 addenda; interest rate flips
+#     8.85 → 9.40%); Design 2 + 3 conflict.
+#   - Aniket Desai complaint chain (initial → resolution).
+#   - AML structured-transaction pattern (7 × INR 9.5L same day at Federal Bank).
+#   - USD 1.2 billion attempted wire (must-refuse stressor + fabricated
+#     "FEMA Circular #99999" false-premise).
+#   - 3 SEC-style 10-Ks (NorthWind US, Solaris IND, Marigold Pharma — long-
+#     context for RAPTOR apex retrieval stress).
+#   - KYC + complaint with PII (Aadhaar + PAN + bank account + mobile + email).
+#   - Treasury draft FY26 budget (authority stressor: DRAFT vs LIVE).
+#   - Cross-domain: HDFC Bank, Acme Corp, Apollo Hospitals, Priya Iyer name
+#     collision (legal VP vs healthcare patient).
+
+domain: finance
+description: |
+  46 finance docs across bank statements, loans + addenda chains, demo
+  SEC-style 10-Ks, KYC records with PII, customer complaint tickets,
+  treasury memos (incl. a DRAFT), audit reports, wire-transfer email
+  threads, and customer profiles. Numeric aggregation (Q-mode), structured-
+  AML pattern, long-context RAPTOR stress, PII redaction, false-premise
+  defenses, and draft-vs-live authority gating are all seeded.
+
+docs:
+
+  # =========================================================================
+  # Bank statements (8: 4 Acme/HDFC + 1 retail + 1 AML + 1 Nimbus + 1 Apollo)
+  # =========================================================================
+
+  - id: statement-001-acme-hdfc-jan-2025
+    file: demo-corpus/domains/finance/docs/statement-001-acme-hdfc-jan-2025.md
+    doc_type: bank_statement
+    title: HDFC Bank Statement — Acme Corp Current A/c January 2025
+    parties: [acme_corp, hdfc_bank]
+    effective_date: "2025-02-03"
+    authority: 0.9
+    doc_status: live
+
+  - id: statement-002-acme-hdfc-feb-2025
+    file: demo-corpus/domains/finance/docs/statement-002-acme-hdfc-feb-2025.md
+    doc_type: bank_statement
+    title: HDFC Bank Statement — Acme Corp Current A/c February 2025
+    parties: [acme_corp, hdfc_bank]
+    effective_date: "2025-03-03"
+    authority: 0.9
+    doc_status: live
+
+  - id: statement-003-acme-hdfc-mar-2025
+    file: demo-corpus/domains/finance/docs/statement-003-acme-hdfc-mar-2025.md
+    doc_type: bank_statement
+    title: HDFC Bank Statement — Acme Corp Current A/c March 2025
+    parties: [acme_corp, hdfc_bank]
+    effective_date: "2025-04-03"
+    authority: 0.9
+    doc_status: live
+
+  - id: statement-004-acme-hdfc-quarterly-summary
+    file: demo-corpus/domains/finance/docs/statement-004-acme-hdfc-quarterly-summary.md
+    doc_type: bank_statement
+    title: HDFC Bank Quarterly Summary — Acme Corp Q4 FY 2024-25
+    parties: [acme_corp, hdfc_bank]
+    effective_date: "2025-04-08"
+    authority: 0.9
+    doc_status: live
+
+  - id: statement-005-neha-kapoor-icici
+    file: demo-corpus/domains/finance/docs/statement-005-neha-kapoor-icici.md
+    doc_type: bank_statement
+    title: ICICI Bank Savings A/c Statement — Neha Kapoor (March 2025)
+    parties: [icici_bank]
+    subject: customer_neha_kapoor
+    effective_date: "2025-04-05"
+    authority: 0.9
+    doc_status: live
+    stressors: [pii_pan, pii_aadhaar_masked]
+
+  - id: statement-006-suspicious-aml-pattern
+    file: demo-corpus/domains/finance/docs/statement-006-suspicious-aml-pattern.md
+    doc_type: bank_statement
+    title: Federal Bank Statement — Sterling Trade (AML structured-transactions case)
+    parties: [federal_bank]
+    effective_date: "2025-03-22"
+    authority: 0.85
+    doc_status: live
+    stressors:
+      - rare_aml_structured_transactions
+      - conflict_aml_threshold
+
+  - id: statement-007-nimbus-finance-kotak
+    file: demo-corpus/domains/finance/docs/statement-007-nimbus-finance-kotak.md
+    doc_type: bank_statement
+    title: Kotak Bank Statement — Nimbus Finance Pvt Ltd (cross-domain entity)
+    parties: [nimbus_finance_subsidiary, kotak_mahindra_bank]
+    effective_date: "2025-04-03"
+    authority: 0.9
+    doc_status: live
+
+  - id: statement-008-apollo-loan-payment
+    file: demo-corpus/domains/finance/docs/statement-008-apollo-loan-payment.md
+    doc_type: bank_statement
+    title: HDFC Bank — Apollo Hospitals Pune CT-scanner equipment-loan a/c
+    parties: [apollo_hospitals_pune, hdfc_bank]
+    effective_date: "2025-04-04"
+    authority: 0.9
+    doc_status: live
+
+  # =========================================================================
+  # Loan agreements (6: 3 in chain + 3 standalone)
+  # =========================================================================
+
+  - id: loan-001-acme-hdfc-original
+    file: demo-corpus/domains/finance/docs/loan-001-acme-hdfc-original.md
+    doc_type: loan_agreement
+    title: Term Loan Agreement — Acme Corp ↔ HDFC Bank (original, 8.85% rate)
+    parties: [acme_corp, hdfc_bank]
+    effective_date: "2023-08-15"
+    chain: chain_acme_hdfc_loan_addendum
+    chain_role: original
+    chain_version: 0
+    authority: 0.7
+    doc_status: superseded
+    stressors:
+      - chain_member
+      - conflict_source_interest_rate
+
+  - id: loan-001-acme-hdfc-addendum-1
+    file: demo-corpus/domains/finance/docs/loan-001-acme-hdfc-addendum-1.md
+    doc_type: loan_agreement
+    title: Loan Addendum #1 — Acme/HDFC interest rate revised to 9.40%
+    parties: [acme_corp, hdfc_bank]
+    effective_date: "2024-06-12"
+    chain: chain_acme_hdfc_loan_addendum
+    chain_role: amendment
+    chain_version: 1
+    parent_doc: loan-001-acme-hdfc-original
+    authority: 0.9
+    doc_status: live
+    stressors:
+      - chain_winner
+      - conflict_resolution_target
+
+  - id: loan-001-acme-hdfc-addendum-2
+    file: demo-corpus/domains/finance/docs/loan-001-acme-hdfc-addendum-2.md
+    doc_type: loan_agreement
+    title: Loan Addendum #2 — Acme/HDFC collateral substitution
+    parties: [acme_corp, hdfc_bank]
+    effective_date: "2025-03-22"
+    chain: chain_acme_hdfc_loan_addendum
+    chain_role: amendment
+    chain_version: 2
+    parent_doc: loan-001-acme-hdfc-original
+    authority: 0.9
+    doc_status: live
+    stressors: [chain_member]
+
+  - id: loan-002-northwind-hdfc
+    file: demo-corpus/domains/finance/docs/loan-002-northwind-hdfc.md
+    doc_type: loan_agreement
+    title: Term Loan Agreement — NorthWind Capital ↔ HDFC Bank (USD 80M ECB)
+    parties: [northwind_capital, hdfc_bank]
+    effective_date: "2024-09-22"
+    authority: 0.9
+    doc_status: live
+
+  - id: loan-003-apollo-equipment-financing
+    file: demo-corpus/domains/finance/docs/loan-003-apollo-equipment-financing.md
+    doc_type: loan_agreement
+    title: Equipment Financing — Apollo Hospitals Pune (CT scanner, INR 22.4cr)
+    parties: [apollo_hospitals_pune, hdfc_bank]
+    effective_date: "2024-03-12"
+    authority: 0.9
+    doc_status: live
+
+  - id: loan-004-nimbus-finance-corporate
+    file: demo-corpus/domains/finance/docs/loan-004-nimbus-finance-corporate.md
+    doc_type: loan_agreement
+    title: Corporate Loan — Nimbus Finance Pvt Ltd (Kotak working capital line)
+    parties: [nimbus_finance_subsidiary, kotak_mahindra_bank]
+    effective_date: "2024-04-22"
+    authority: 0.9
+    doc_status: live
+
+  # =========================================================================
+  # SEC-style 10-Ks (3 — RAPTOR apex stress, long-context)
+  # =========================================================================
+
+  - id: 10k-001-northwind-capital-fy2024
+    file: demo-corpus/domains/finance/docs/10k-001-northwind-capital-fy2024.md
+    doc_type: financial_report
+    title: NorthWind Capital Inc — Form 10-K FY 2024 (USD parent)
+    parties: [northwind_capital]
+    effective_date: "2025-03-15"
+    authority: 0.95
+    doc_status: live
+    stressors: [long_context_raptor_apex]
+
+  - id: 10k-002-solaris-industries-fy2024
+    file: demo-corpus/domains/finance/docs/10k-002-solaris-industries-fy2024.md
+    doc_type: financial_report
+    title: Solaris Industries Ltd — Annual Report FY 2024-25 (SEBI)
+    parties: [solaris_industries_ltd]
+    effective_date: "2025-05-28"
+    authority: 0.95
+    doc_status: live
+    stressors: [long_context_raptor_apex]
+
+  - id: 10k-003-marigold-pharma-fy2024
+    file: demo-corpus/domains/finance/docs/10k-003-marigold-pharma-fy2024.md
+    doc_type: financial_report
+    title: Marigold Pharma Ltd — Annual Report FY 2024-25 (SEBI)
+    parties: [marigold_pharma_ltd]
+    effective_date: "2025-05-30"
+    authority: 0.95
+    doc_status: live
+    stressors: [long_context_raptor_apex]
+
+  # =========================================================================
+  # KYC records (5 — PII Aadhaar/PAN/account/mobile/email)
+  # =========================================================================
+
+  - id: kyc-001-aniket-desai
+    file: demo-corpus/domains/finance/docs/kyc-001-aniket-desai.md
+    doc_type: kyc_document
+    title: KYC — Aniket Desai (HDFC HNW, PEP-related)
+    parties: [hdfc_bank]
+    subject: customer_aniket_desai
+    effective_date: "2024-08-12"
+    authority: 0.9
+    doc_status: live
+    stressors: [pii_aadhaar, pii_pan, pii_address, pii_mobile]
+
+  - id: kyc-002-neha-kapoor
+    file: demo-corpus/domains/finance/docs/kyc-002-neha-kapoor.md
+    doc_type: kyc_document
+    title: KYC — Neha Kapoor (ICICI retail salaried)
+    parties: [icici_bank]
+    subject: customer_neha_kapoor
+    effective_date: "2023-05-08"
+    authority: 0.9
+    doc_status: live
+    stressors: [pii_aadhaar, pii_pan, pii_address, pii_mobile]
+
+  - id: kyc-003-acme-corporate
+    file: demo-corpus/domains/finance/docs/kyc-003-acme-corporate.md
+    doc_type: kyc_document
+    title: KYC — Acme Corp Pvt Ltd (corporate KYC + UBO declaration)
+    parties: [acme_corp, hdfc_bank]
+    effective_date: "2024-06-14"
+    authority: 0.9
+    doc_status: live
+
+  - id: kyc-004-northwind-corporate
+    file: demo-corpus/domains/finance/docs/kyc-004-northwind-corporate.md
+    doc_type: kyc_document
+    title: KYC — NorthWind Capital India Pvt Ltd (foreign-owned NBFC)
+    parties: [northwind_capital, hdfc_bank]
+    effective_date: "2024-09-22"
+    authority: 0.9
+    doc_status: live
+
+  - id: kyc-005-nimbus-finance
+    file: demo-corpus/domains/finance/docs/kyc-005-nimbus-finance.md
+    doc_type: kyc_document
+    title: KYC — Nimbus Finance Pvt Ltd (Singapore parent look-through)
+    parties: [nimbus_finance_subsidiary, kotak_mahindra_bank]
+    effective_date: "2023-11-04"
+    authority: 0.9
+    doc_status: live
+
+  # =========================================================================
+  # Customer complaints (5 — chain pair + 3 standalone)
+  # =========================================================================
+
+  - id: complaint-001-desai-initial
+    file: demo-corpus/domains/finance/docs/complaint-001-desai-initial.md
+    doc_type: complaint_ticket
+    title: Complaint — Aniket Desai (duplicate USD wire) initial filing
+    parties: [hdfc_bank]
+    subject: customer_aniket_desai
+    effective_date: "2025-02-12"
+    chain: chain_acme_complaint_resolution
+    chain_role: original
+    chain_version: 0
+    authority: 0.7
+    doc_status: superseded
+    stressors:
+      - chain_member
+      - pii_mobile
+      - pii_email
+
+  - id: complaint-001-desai-resolution
+    file: demo-corpus/domains/finance/docs/complaint-001-desai-resolution.md
+    doc_type: complaint_ticket
+    title: Complaint Resolution — Aniket Desai (full refund + compensation)
+    parties: [hdfc_bank]
+    subject: customer_aniket_desai
+    effective_date: "2025-03-08"
+    chain: chain_acme_complaint_resolution
+    chain_role: amendment
+    chain_version: 1
+    parent_doc: complaint-001-desai-initial
+    authority: 0.9
+    doc_status: live
+    stressors: [chain_winner]
+
+  - id: complaint-002-kotak-fraudulent-card
+    file: demo-corpus/domains/finance/docs/complaint-002-kotak-fraudulent-card.md
+    doc_type: complaint_ticket
+    title: Complaint — Unauthorised card txns (Kotak White Reserve, Bulgaria IPs)
+    parties: [kotak_mahindra_bank]
+    effective_date: "2025-04-04"
+    authority: 0.85
+    doc_status: live
+    stressors: [pii_mobile, pii_email]
+
+  - id: complaint-003-icici-emi-mismatch
+    file: demo-corpus/domains/finance/docs/complaint-003-icici-emi-mismatch.md
+    doc_type: complaint_ticket
+    title: Complaint — Neha Kapoor (ICICI fixed-rate PL reset incorrectly)
+    parties: [icici_bank]
+    subject: customer_neha_kapoor
+    effective_date: "2024-12-18"
+    authority: 0.85
+    doc_status: live
+    stressors: [conflict_icici_loan_emi]
+
+  - id: complaint-004-hdfc-cheque-clearing
+    file: demo-corpus/domains/finance/docs/complaint-004-hdfc-cheque-clearing.md
+    doc_type: complaint_ticket
+    title: Complaint — Vertex Industries cheque-clearing delay (HDFC corporate)
+    parties: [vertex_industries, hdfc_bank]
+    effective_date: "2025-01-28"
+    authority: 0.85
+    doc_status: live
+
+  - id: complaint-005-axis-mis-selling
+    file: demo-corpus/domains/finance/docs/complaint-005-axis-mis-selling.md
+    doc_type: complaint_ticket
+    title: Complaint — Senior citizen mis-selling (Axis Bank, ULIP)
+    parties: [axis_bank]
+    effective_date: "2025-04-22"
+    authority: 0.85
+    doc_status: live
+    stressors: [pii_mobile, pii_email]
+
+  # =========================================================================
+  # Treasury memos (4 — incl 1 DRAFT for authority stressor)
+  # =========================================================================
+
+  - id: treasury-001-acme-q1-cash-position
+    file: demo-corpus/domains/finance/docs/treasury-001-acme-q1-cash-position.md
+    doc_type: treasury_memo
+    title: Treasury Memo — Acme Corp Q1 FY 2025-26 cash position + deployment
+    parties: [acme_corp]
+    effective_date: "2025-04-10"
+    authority: 0.9
+    doc_status: live
+
+  - id: treasury-002-acme-fx-hedging
+    file: demo-corpus/domains/finance/docs/treasury-002-acme-fx-hedging.md
+    doc_type: treasury_memo
+    title: Treasury Memo — Acme FX hedging policy (revised 2025)
+    parties: [acme_corp]
+    effective_date: "2025-02-18"
+    authority: 0.9
+    doc_status: live
+
+  - id: treasury-003-acme-fy26-budget-DRAFT
+    file: demo-corpus/domains/finance/docs/treasury-003-acme-fy26-budget-DRAFT.md
+    doc_type: treasury_memo
+    title: DRAFT — Acme Corp FY 2025-26 budget + capital allocation (NOT APPROVED)
+    parties: [acme_corp]
+    effective_date: "2025-03-22"
+    authority: 0.4
+    doc_status: draft
+    stressors: [authority_stressor_draft, set_op_stressor]
+
+  - id: treasury-004-acme-counterparty-credit-limits
+    file: demo-corpus/domains/finance/docs/treasury-004-acme-counterparty-credit-limits.md
+    doc_type: treasury_memo
+    title: Treasury Memo — Counterparty credit-limits policy (revised Jan 2025)
+    parties: [acme_corp]
+    effective_date: "2025-01-20"
+    authority: 0.9
+    doc_status: live
+
+  # =========================================================================
+  # Audit reports (4)
+  # =========================================================================
+
+  - id: audit-001-acme-internal-q3
+    file: demo-corpus/domains/finance/docs/audit-001-acme-internal-q3.md
+    doc_type: audit_report
+    title: Internal Audit — Acme Corp Q3 FY 2024-25 (findings + remediation)
+    parties: [acme_corp]
+    effective_date: "2024-12-20"
+    authority: 0.9
+    doc_status: live
+
+  - id: audit-002-acme-statutory-fy2324
+    file: demo-corpus/domains/finance/docs/audit-002-acme-statutory-fy2324.md
+    doc_type: audit_report
+    title: Statutory Audit — Acme Corp FY 2023-24 (KPMG, clean opinion)
+    parties: [acme_corp]
+    effective_date: "2024-08-22"
+    authority: 0.95
+    doc_status: live
+
+  - id: audit-003-northwind-india-statutory-fy2324
+    file: demo-corpus/domains/finance/docs/audit-003-northwind-india-statutory-fy2324.md
+    doc_type: audit_report
+    title: Statutory Audit — NorthWind India FY 2023-24 (PwC, unqualified)
+    parties: [northwind_capital]
+    effective_date: "2024-08-30"
+    authority: 0.95
+    doc_status: live
+
+  - id: audit-004-nimbus-finance-internal
+    file: demo-corpus/domains/finance/docs/audit-004-nimbus-finance-internal.md
+    doc_type: audit_report
+    title: Internal Audit — Nimbus Finance H1 FY 2024-25 (RPT + concentration)
+    parties: [nimbus_finance_subsidiary]
+    effective_date: "2025-02-18"
+    authority: 0.9
+    doc_status: live
+
+  # =========================================================================
+  # Wire-transfer email threads (5 .eml)
+  # =========================================================================
+
+  - id: wire-001-acme-vertex-routine
+    file: demo-corpus/domains/finance/threads/wire-001-acme-vertex-routine.eml
+    doc_type: email_thread
+    title: Wire transfer — Acme → Vertex Industries (routine quarterly SaaS payment)
+    parties: [acme_corp, vertex_industries, hdfc_bank]
+    effective_date: "2025-02-12"
+    authority: 0.7
+    doc_status: live
+
+  - id: wire-002-northwind-loan-disbursement
+    file: demo-corpus/domains/finance/threads/wire-002-northwind-loan-disbursement.eml
+    doc_type: email_thread
+    title: Wire transfer — NorthWind ECB disbursement to Acme (USD 80M facility schedule)
+    parties: [acme_corp, northwind_capital, hdfc_bank]
+    effective_date: "2024-10-08"
+    authority: 0.7
+    doc_status: live
+
+  - id: wire-003-singapore-cross-border
+    file: demo-corpus/domains/finance/threads/wire-003-singapore-cross-border.eml
+    doc_type: email_thread
+    title: Wire transfer — Nimbus Finance → Singapore parent (USD 5.82M cross-border)
+    parties: [nimbus_finance_subsidiary, kotak_mahindra_bank]
+    effective_date: "2025-03-08"
+    authority: 0.7
+    doc_status: live
+
+  - id: wire-004-billion-dollar-suspicious
+    file: demo-corpus/domains/finance/threads/wire-004-billion-dollar-suspicious.eml
+    doc_type: email_thread
+    title: AML — Suspicious USD 1.2B wire attempt (fabricated FEMA circular + bribe offer)
+    parties: [hdfc_bank]
+    effective_date: "2025-04-14"
+    authority: 0.85
+    doc_status: live
+    stressors:
+      - rare_billion_dollar_wire
+      - adversarial_unverified_sender
+      - false_premise
+
+  - id: wire-005-apollo-vendor-payment
+    file: demo-corpus/domains/finance/threads/wire-005-apollo-vendor-payment.eml
+    doc_type: email_thread
+    title: Wire transfer — Apollo Hospitals → Siemens AMC (cross-domain link to loan-003)
+    parties: [apollo_hospitals_pune, hdfc_bank]
+    effective_date: "2025-03-18"
+    authority: 0.7
+    doc_status: live
+
+  # =========================================================================
+  # Customer profiles (5)
+  # =========================================================================
+
+  - id: profile-001-acme-corporate
+    file: demo-corpus/domains/finance/docs/profile-001-acme-corporate.md
+    doc_type: customer_profile
+    title: Corporate Customer Profile — Acme Corp Pvt Ltd (HDFC Imperia Corp)
+    parties: [acme_corp, hdfc_bank]
+    effective_date: "2025-04-12"
+    authority: 0.85
+    doc_status: live
+
+  - id: profile-002-northwind-corporate
+    file: demo-corpus/domains/finance/docs/profile-002-northwind-corporate.md
+    doc_type: customer_profile
+    title: Corporate Customer Profile — NorthWind Capital India (FI segment)
+    parties: [northwind_capital, hdfc_bank]
+    effective_date: "2025-04-18"
+    authority: 0.85
+    doc_status: live
+
+  - id: profile-003-aniket-desai-retail
+    file: demo-corpus/domains/finance/docs/profile-003-aniket-desai-retail.md
+    doc_type: customer_profile
+    title: Retail Customer Profile — Aniket Desai (HDFC Imperia, PEP-related)
+    parties: [hdfc_bank]
+    subject: customer_aniket_desai
+    effective_date: "2025-04-20"
+    authority: 0.85
+    doc_status: live
+    stressors: [pii_mobile, pii_email]
+
+  - id: profile-004-neha-kapoor-retail
+    file: demo-corpus/domains/finance/docs/profile-004-neha-kapoor-retail.md
+    doc_type: customer_profile
+    title: Retail Customer Profile — Neha Kapoor (ICICI Privy League)
+    parties: [icici_bank]
+    subject: customer_neha_kapoor
+    effective_date: "2025-04-15"
+    authority: 0.85
+    doc_status: live
+    stressors: [pii_mobile, pii_email]
+
+  - id: profile-005-apollo-hospitals
+    file: demo-corpus/domains/finance/docs/profile-005-apollo-hospitals.md
+    doc_type: customer_profile
+    title: Corporate Customer Profile — Apollo Hospitals Pune (healthcare)
+    parties: [apollo_hospitals_pune, hdfc_bank]
+    effective_date: "2025-04-22"
+    authority: 0.85
+    doc_status: live

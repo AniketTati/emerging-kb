@@ -1,0 +1,56 @@
+SHIFT LOG — RAJPURA-DARIBA ZINC MINE
+Sub-Level 4 / Stope-12 Underground
+Day Shift: 08:00 → 16:00 (05-Oct-2025)
+Shift Lead: A. Joshi (Underground Mine Manager); Site Supervisor: M. Tamang
+==========================================================
+
+08:00 Shift handover from Night shift completed.
+      Equipment: 2 LHDs (Load-Haul-Dump units L-3, L-5), 3 UG trucks
+      (T-7, T-8, T-9), 1 long-hole drill (LH-2).
+      Personnel: 42 underground + 8 surface support.
+      Pre-shift atmospheric check (mandatory underground):
+        - O2: 20.8 % (normal range 19-23 %).
+        - CO: <5 ppm (action threshold 25 ppm).
+        - H2S: 0 ppm.
+        - Methane: 0.1 % LEL (background).
+
+08:30 Crew descent to Sub-Level 4. Ventilation status: nominal
+      (main fan running, secondary fans active at Stope-12).
+
+09:00 Production drilling on Stope-12: LH-2 commencing long-hole patterns.
+
+10:00 LHD L-3 brought first load from production face. Crusher
+      hand-off at ore pass — 24 t.
+
+11:00 Atmospheric re-check: O2 stable at 20.7 %. No issues.
+
+12:00 Lunch break in muck-bay (designated rest area).
+
+13:00 Production resumed. LHD L-5 to surface ore pass.
+
+13:42 Long-hole drill LH-2 hydraulic pressure dropping. Operator paused
+      for diagnostic.
+
+14:15 LH-2 fault: bearing failure on rotation head.
+      Maintenance team mobilized from surface.
+
+14:50 Replacement drill LH-1 brought down. LH-2 hauled to surface for
+      repair. Production drilling resumed 15:08.
+
+15:30 Stope-12 production target: 380 t/shift. Actual 348 t (~92%
+      target) due to LH-2 downtime.
+
+15:42 Pre-shift handover preparations. Atmospheric re-check.
+
+16:00 Crew ascent. Shift end. Night shift commences.
+
+==========================================================
+SHIFT SUMMARY:
+  Ore produced (Stope-12): 348 t (target 380, ~92% achievement)
+  LH-2 down: bearing failure; repair underway
+  Other equipment: nominal
+  Incidents: 0
+  Atmospheric: all parameters nominal throughout
+
+— A. Joshi, Underground Mine Manager (signed)
+— M. Tamang, Site Supervisor (signed)

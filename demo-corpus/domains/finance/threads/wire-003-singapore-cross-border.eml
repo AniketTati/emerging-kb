@@ -1,0 +1,99 @@
+---
+doc_id: wire-003-singapore-cross-border
+doc_type: email_thread
+effective_date: 2025-03-08
+parties: [Nimbus Finance Pvt Ltd, Nimbus Technologies Pte Ltd, Kotak Mahindra Bank Ltd]
+status: live
+---
+
+From: Meera Bhattacharya <meera.bhattacharya@nimbusfinance.in>
+To: Ravi Subramanian <ravi.subramanian@nimbustech.sg>; Vikram Pillai <vikram.pillai@nimbusfinance.in>
+Cc: Anand Iyer <anand.iyer@kotak.com>; Sanjay Rao <sanjay.rao@nimbusfinance.in>; finance@nimbustech.sg
+Subject: USD 5.82M wire to Singapore parent — Mar 8, 2025 — purpose: technology service fees
+Date: Sat, 8 Mar 2025 09:18:12 +0530
+Message-ID: <NIMB-2025030800184228@nimbusfinance.in>
+
+Ravi + Vikram,
+
+This confirms the cross-border wire transfer of **USD 5,820,000** (FIVE MILLION EIGHT HUNDRED TWENTY THOUSAND US DOLLARS ONLY) from Nimbus Finance Pvt Ltd (India) to Nimbus Technologies Pte Ltd (Singapore) being initiated today.
+
+DETAILS:
+- Sender: Nimbus Finance Pvt Ltd
+- Sender account: KOTAK-CA-7700218842 (Kotak BKC Mumbai)
+- Beneficiary: Nimbus Technologies Pte Ltd
+- Beneficiary bank: DBS Bank Ltd, Marina Boulevard, Singapore
+- Beneficiary account: 0080-184228-0
+- Amount: USD 5,820,000 (INR ~48.24 crore at 82.85 conversion rate)
+- Settlement target: 11 March 2025 (T+1 from Singapore standard)
+- Purpose code: S0807 (Computer services - software, hosting, technical services)
+- FEMA documentation: Form A2 attached + invoice (NTSP-2025-Q1-3842) for Q1 SaaS subscription
+
+This is a related-party transaction with the parent company. Documentation:
+- Transfer Pricing study confirms arm's-length pricing
+- Audit Committee resolution dated 22 January 2025 pre-approves this quarterly transaction
+- RBI: not a separate filing required (FEMA regulation A.P. (DIR Series) Circular No. 18/2008 — software services payable to parent group as ordinary-course)
+
+Anand — please confirm Kotak's USD desk has lined up the conversion + the wire is on track for execution this afternoon.
+
+Sanjay — once executed, file the Form A2 + send the SWIFT MT103 copy to me for the Treasury folder.
+
+Best,
+Meera Bhattacharya
+CFO India, Nimbus Finance Pvt Ltd
++91 22 4218 1842
+
+---
+
+From: Anand Iyer <anand.iyer@kotak.com>
+To: Meera Bhattacharya; Vikram Pillai
+Cc: Ravi Subramanian; Sanjay Rao; forex.bkc@kotak.com; trade.bkc@kotak.com
+Subject: RE: USD 5.82M wire to Singapore parent — Mar 8, 2025 — purpose: technology service fees
+Date: Sat, 8 Mar 2025 11:42:18 +0530
+Message-ID: <KOT-1842184228-018@kotak.com>
+
+Hi Meera,
+
+Confirmed.
+
+EXECUTION DETAILS:
+- USD-INR conversion booked at **82.85** (spot, 11:18 IST quote)
+- INR equivalent debited: INR 48,21,87,000
+- SWIFT MT103 dispatched at 12:18 IST today
+- Beneficiary credit ETA: 11 March 2025 (DBS Singapore standard settlement)
+
+DOCUMENTATION:
+- Form A2 signed by Meera + Sanjay — attached
+- Invoice NTSP-2025-Q1-3842 — verified + on file
+- Underlying contract (Master Services Agreement with Nimbus SG) — verified
+
+REGULATORY:
+- All within FEMA A.P. (DIR Series) Circular 18/2008 — software services as ordinary-course payable
+- No RBI separate filing required for this quarterly + recurring transaction
+- TDS withheld by you per Section 195(2) at 10% (DTAA India-Singapore) — please remit to government by 7 Apr 2025
+
+If there are any operational queries or you need a forex confirmation slip in additional formats (some Singapore counterparts ask for SWIFT-ACK confirmation), let me know.
+
+Best,
+Anand Iyer
+Corporate RM, Kotak Mahindra Bank — BKC
++91 22 4218 1843
+
+---
+
+From: Ravi Subramanian <ravi.subramanian@nimbustech.sg>
+To: Meera Bhattacharya <meera.bhattacharya@nimbusfinance.in>; Anand Iyer <anand.iyer@kotak.com>
+Cc: Vikram Pillai; Sanjay Rao
+Subject: RE: USD 5.82M wire to Singapore parent — Mar 8, 2025 — purpose: technology service fees
+Date: Sat, 8 Mar 2025 14:18:42 +0800
+Message-ID: <NTSP-2025030800018421@nimbustech.sg>
+
+Confirmed. Looking forward to receipt on 11 March.
+
+Thanks for the smooth execution.
+
+Note for Q2 FY 2025-26 onwards: Singapore management is reviewing potentially restructuring the parent-subsidiary fee model with a USD-denominated payable + INR-receivable to create a natural hedge in our group books. We will revert with a proposal by mid-April. Please plan to keep the Q1 (this) transaction as the last under the current model.
+
+Ravi Subramanian
+Managing Director
+Nimbus Technologies Pte Ltd, Singapore
++65 9018 4228

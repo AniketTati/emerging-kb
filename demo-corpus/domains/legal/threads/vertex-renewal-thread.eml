@@ -1,0 +1,105 @@
+From: Priya Iyer <priya.iyer@vertex.example>
+To: Robert Sharma <robert.sharma@acmecorp.example>
+Cc: Marcus Chen <marcus.chen@vertex.example>, Aisha Mehta <aisha.mehta@mehta-law.example>
+Subject: Re: MSA renewal — preliminary terms ahead of Q4 board
+Date: Tue, 04 Oct 2025 17:42:18 -0700
+Message-ID: <vertex-renewal-004@vertex.example>
+In-Reply-To: <vertex-renewal-003@acmecorp.example>
+References: <vertex-renewal-001@vertex.example> <vertex-renewal-002@acmecorp.example> <vertex-renewal-003@acmecorp.example>
+
+Robert,
+
+Thanks for the detailed comments. Our counsel has pushed back on the 5-year out-clause but is comfortable with the rest. We'd like to firm up the following before going to the board on Oct 22:
+
+  - Term: 7 years (with no exit during years 1-5; 2-year window thereafter)
+  - Payment terms: NET-90 (extended from current NET-60)
+  - Liability cap: USD 10M aggregate
+  - Volume discount: 8% applies above USD 750K (matching current Amendment No. 2)
+
+Will Aisha confirm the India tax position (per the Mehta memo dated March 20) still holds?
+
+Best,
+Priya
+
+---
+
+From: Robert Sharma <robert.sharma@acmecorp.example>
+To: Priya Iyer <priya.iyer@vertex.example>
+Cc: Aisha Mehta <aisha.mehta@mehta-law.example>
+Subject: Re: MSA renewal — preliminary terms ahead of Q4 board
+Date: Fri, 27 Sep 2025 11:05:32 +0530
+Message-ID: <vertex-renewal-003@acmecorp.example>
+In-Reply-To: <vertex-renewal-002@acmecorp.example>
+References: <vertex-renewal-001@vertex.example> <vertex-renewal-002@acmecorp.example>
+
+Priya,
+
+Aligned on all the headline terms with one open issue:
+
+  1. We need a hard out-clause at year 5. Our growth scenarios price-in a
+     possible buy-vs-build pivot in 2030; we cannot commit beyond year 5
+     without that protection.
+
+  2. Volume discount trigger should drop to USD 600K (we're projecting
+     to be there comfortably) — given the longer term, we believe this
+     is fair value.
+
+  3. Tax: Aisha confirms the position in her March 20 memo holds. No
+     withholding triggered by NET-90 extension. She'll send a one-pager
+     reconfirming.
+
+Happy to discuss on the call Monday.
+
+Robert
+
+---
+
+From: Priya Iyer <priya.iyer@vertex.example>
+To: Robert Sharma <robert.sharma@acmecorp.example>
+Cc: Marcus Chen <marcus.chen@vertex.example>
+Subject: Re: MSA renewal — preliminary terms ahead of Q4 board
+Date: Mon, 22 Sep 2025 14:18:55 -0700
+Message-ID: <vertex-renewal-002@acmecorp.example>
+In-Reply-To: <vertex-renewal-001@vertex.example>
+References: <vertex-renewal-001@vertex.example>
+
+Robert,
+
+Thanks for the warm-up call last week. Here's our internal proposal
+shape — these are negotiable but reflect Marcus's and the board's
+direction:
+
+  - 7-year term (vs current 5)
+  - NET-90 payment (vs current NET-60)
+  - USD 10M liability cap (vs current USD 1M + USD 5M side letter)
+  - 3% annual escalation (locked, no negotiation)
+  - Volume discount: 8% above USD 750K (kept from current Amendment 2)
+  - Open question from our side: dedicated tenancy in ap-south-1 is now
+    included in Enterprise Plus tier; we want to confirm this works
+    for your data-residency requirements.
+
+Would like to socialize ahead of Marcus's Q4 board on Oct 22.
+
+Priya
+
+---
+
+From: Marcus Chen <marcus.chen@vertex.example>
+To: Robert Sharma <robert.sharma@acmecorp.example>
+Cc: Priya Iyer <priya.iyer@vertex.example>
+Subject: MSA renewal — preliminary terms ahead of Q4 board
+Date: Mon, 15 Sep 2025 10:00:12 -0700
+Message-ID: <vertex-renewal-001@vertex.example>
+
+Robert,
+
+Hope you're well. Now that we've had a year under the current MSA with
+the Amendment No. 2 + side letter, I wanted to open a conversation
+about the follow-on. We're heading into our annual board review on
+Oct 22 and would love to discuss a multi-year renewal at the
+Enterprise Plus tier.
+
+Priya will follow up with shape-of-terms this week. Looking forward
+to it.
+
+Marcus

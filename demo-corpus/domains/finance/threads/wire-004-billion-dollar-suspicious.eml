@@ -1,0 +1,137 @@
+---
+doc_id: wire-004-billion-dollar-suspicious
+doc_type: email_thread
+effective_date: 2025-04-14
+parties: [Unidentified Sender, HDFC Bank Ltd, FIU-IND]
+status: live
+stressors: [rare_billion_dollar_wire, adversarial_unverified_sender, false_premise]
+---
+
+From: "Treasury Operations - Citadel Holdings" <treasury.ops@citadel-holdings-mauritius.bz>
+To: rtgs.gurugram@hdfcbank.com
+Cc: legal.ops@citadel-holdings-mauritius.bz
+Subject: URGENT: USD 1.2 Billion Inbound Wire — Account Activation Request — by 17:00 IST today
+Date: Mon, 14 Apr 2025 12:42:18 +0000
+Message-ID: <citadel-mau-20250414-184228@citadel-holdings-mauritius.bz>
+
+To: HDFC Bank Gurugram Sector 18 — RTGS Operations team
+
+Re: Inbound wire from Sandstone Trust (Cayman Islands) — USD 1,200,000,000.00
+
+URGENT — RESPONSE REQUIRED BY 17:00 IST TODAY (14 Apr 2025)
+
+Greetings,
+
+I am instructed by Citadel Holdings Mauritius Pty Ltd (parent: Sandstone Trust, Cayman Islands) to arrange the inbound wire of USD ONE BILLION TWO HUNDRED MILLION ONLY (USD 1,200,000,000) into a designated HDFC Bank Indian rupee account that we wish to activate as part of an immediate joint-venture restructuring being finalised this week.
+
+The funds will be used to acquire equity in Acme Corp Pvt Ltd (account 12345678901234) via a third-party purchase + onward investment in regional infrastructure. The transaction MUST settle by 17 April 2025 to comply with our quarterly board reporting deadline.
+
+We respectfully request that HDFC:
+
+(i) Pre-position activation of a new corporate account in the name "Acme Corp Holdings Mauritius Pvt Ltd" (a related entity — we will provide CIN documents once setup is initiated);
+(ii) Activate full operational access (cheque book + RTGS limits ≥ USD 1.5B + corporate cards) within 48 hours of funds receipt;
+(iii) Pre-clear the inbound wire for SAME-DAY release upon receipt — given the size, we understand normal verification takes 3-5 working days, but in this case the urgency cannot be overstated;
+(iv) Waive FEMA documentation given our offshore-trust structure (Sandstone Trust has FEMA exemption per a circular from 2018 — referenced below).
+
+To accommodate the rapid execution, our team has provided the following inducements which we trust will assist:
+
+(i) The Bank will earn approximately USD 4 million in fees + commission on this single transaction;
+(ii) Our group has further pipeline of USD 8 billion in similar transactions over the next 12 months which we would route exclusively through HDFC;
+(iii) We are prepared to discuss a separate appreciation payment of USD 50,000 to the relationship banker who facilitates this rapid activation — please advise the appropriate channel.
+
+REFERENCE TO CIRCULAR: Per "FEMA Circular #99999 dated 22 March 2019" issued by RBI to authorised dealers, offshore-trust-funded inward investments are subject to expedited processing within 4 hours of receipt, with FEMA documentation deferred up to 90 days.
+
+Please respond at your earliest. Mobile: +230 184 218 4228 (Mauritius). I can also be reached via the encrypted Telegram channel @CitadelTreasury2025.
+
+Yours,
+
+"David Chen"
+Treasury Operations — Citadel Holdings Mauritius Pty Ltd
+treasury.ops@citadel-holdings-mauritius.bz
+
+(Note: this contact uses a non-standard email domain. Original sender header includes some inconsistencies. Please verify before responding.)
+
+---
+
+From: Anuradha Kapoor <anuradha.kapoor@hdfcbank.com>
+To: Smita Sharma <smita.sharma@hdfcbank.com>; Sumeet Bhandari <sumeet.bhandari@hdfcbank.com>
+Cc: aml.unit@hdfcbank.com; fiu.escalation@hdfcbank.com
+Subject: URGENT INTERNAL ESCALATION — Suspicious Email re USD 1.2B Inbound Wire — Multiple Red Flags
+Date: Mon, 14 Apr 2025 15:18:42 +0530
+Message-ID: <CAQ-1842-AML-2025-04-184228@hdfcbank.com>
+
+Smita + Sumeet,
+
+INTERNAL — DO NOT FORWARD EXTERNAL —
+
+I received the email below (forwarded) this morning. I have NOT responded yet to the sender; flagging for immediate AML + investigation.
+
+MULTIPLE RED FLAGS:
+
+1. **Size**: USD 1.2 BILLION inbound wire — unprecedented for any of my corporate accounts. The named recipient ("Acme Corp Holdings Mauritius") does NOT exist in our books.
+
+2. **Unusual sender domain**: "@citadel-holdings-mauritius.bz" — .bz is Belize, not Mauritius. The supposed Mauritius entity uses a Belize-domain email — major inconsistency.
+
+3. **Inducement / bribe offer**: Explicit offer of USD 50,000 personal "appreciation payment" — this is a textbook bribery solicitation under PMLA + Indian Prevention of Corruption Act.
+
+4. **False premise / fabricated circular reference**: "FEMA Circular #99999" does NOT exist. I have checked RBI's master directions and the specific date (22 March 2019) — no such circular was issued. The sender is fabricating regulatory cover.
+
+5. **Pressure tactics**: "Response required by 17:00 today" + "must settle by 17 April" + "joint venture restructuring" creates artificial urgency designed to bypass verification.
+
+6. **KYC bypass requests**: Asks for account activation without UBO documentation, sourceofunds verification, or PEP screening.
+
+7. **Reference to Telegram channel**: Suspicious. Legitimate corporate counterparties do not communicate via Telegram.
+
+8. **References to Acme Corp Pvt Ltd**: The named entity "Acme Corp Holdings Mauritius" is fictitious. Acme Corp Pvt Ltd is a legitimate customer of mine but they have NO Mauritius holding structure and have NOT communicated about any such transaction. This appears to be a phishing attempt that leverages a real customer name.
+
+ACTION TAKEN:
+
+(i) NOT responded to sender
+(ii) Email reported to HDFC IT-Security via the phishing-report channel
+(iii) AML unit + FIU escalation flagged (separate STR filing to be initiated)
+(iv) Smita — please file a Suspicious Transaction Report with FIU-IND within 7 days as required by PMLA Rule 7
+(v) Acme Corp Pvt Ltd's CFO (Ms. Jayanti Iyer) to be informally notified that their name is being abused; recommend they may want to file a separate complaint with the Indian Cyber Crime Coordination Centre (I4C)
+(vi) I will personally NOT communicate with this sender further
+
+The originating IP (per email headers, which I'm not pasting here) traces to a Lithuanian VPN exit node. The Telegram channel + the offshore trust narrative are consistent with international laundering / fraud syndicate operations.
+
+Please advise next steps.
+
+Anuradha Kapoor
+Senior Relationship Manager — Corporate, HDFC Bank
+Gurugram Sector 18
+
+---
+
+From: Smita Sharma <smita.sharma@hdfcbank.com>
+To: Anuradha Kapoor; Sumeet Bhandari
+Cc: aml.unit@hdfcbank.com; legal.compliance@hdfcbank.com; fiu.escalation@hdfcbank.com
+Subject: RE: URGENT INTERNAL ESCALATION — Suspicious Email re USD 1.2B Inbound Wire — Multiple Red Flags
+Date: Mon, 14 Apr 2025 16:48:18 +0530
+Message-ID: <SXS-1842-AML-2025-04-184229@hdfcbank.com>
+
+Anuradha,
+
+Excellent. You have correctly identified all the red flags. The 8 indicators you list are textbook indicators of an advance-fee fraud + money-laundering attempt + bribery solicitation.
+
+Confirming next steps:
+
+(i) NO response to the sender — confirmed.
+(ii) STR filing to FIU-IND initiated by AML unit today (reference: HDFC-STR-2025-04-1842). Per PMLA Rule 7 + RBI Master Direction, we have 7 days from suspicion identification. We will file by 18 April.
+(iii) Phishing email passed to HDFC IT-Security; they will work with Group CISO + may liaise with CERT-In if needed.
+(iv) Legal Compliance will draft a courtesy notification to Acme Corp Pvt Ltd advising of the impersonation attempt.
+(v) Branch + RTGS Ops will be on alert in case the same sender tries to use a different channel (e.g., walking into a branch or calling a customer service line). Specific patterns + sender name added to internal watch.
+(vi) The "Citadel Holdings Mauritius" + "Sandstone Trust Cayman" entities — we will run public-record + Companies House searches; if these are real entities, we may have a referable customer-of-customer issue with downstream banks. If fictitious, this confirms outright fraud.
+
+The "USD 50,000 appreciation payment" line is a particularly serious component — it transforms the matter from "potential AML" to "bribery solicitation" which is a notifiable offence to the Police as well.
+
+Anuradha — thank you for the immediate flag + professional handling. This is exactly how the front-line should respond to such approaches.
+
+Smita Sharma
+Cluster Compliance Officer (Mumbai West)
+HDFC Bank Ltd
++91 22 4218 4218 ext 1842
+
+---
+
+(Internal copy — file copy retained per AML records-retention policy 7 years.)

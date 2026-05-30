@@ -1,0 +1,108 @@
+From: Kenji Tanaka <kenji.tanaka@nimbus-tech.example>
+To: Robert Sharma <robert.sharma@acmecorp.example>
+Cc: noc-singapore@nimbus-tech.example, sre-oncall@acmecorp.example
+Subject: Re: Severity-1 incident — ap-southeast-1-prod (resolved, awaiting RCA)
+Date: Tue, 22 Jul 2025 16:42:18 +0800
+Message-ID: <nimbus-inc-004@nimbus-tech.example>
+In-Reply-To: <nimbus-inc-003@acmecorp.example>
+References: <nimbus-inc-001@acmecorp.example> <nimbus-inc-002@nimbus-tech.example> <nimbus-inc-003@acmecorp.example>
+
+Robert,
+
+We acknowledge the 4-hour SLA breach. The full RCA will be circulated
+within 48 hours. Per MSA Section 2.4, the 15% service credit will be
+applied automatically on next invoice.
+
+To recap the incident:
+  - Onset: 22 Jul 2025 09:14 SGT
+  - Acknowledged: 09:23 SGT (within 15 min — compliant with §2.2(a))
+  - Restoration: 14:48 SGT (5h 34m total — exceeded the 4h §2.2(b)
+    commitment by 1h 34m)
+
+I want to apologize on behalf of the Nimbus team. We treat the 4-hour
+Severity-1 SLA as a material commitment and we did not meet it on this
+occasion. We are conducting a full review of our incident-response
+playbook and will share findings with you and the Acme exec team.
+
+Best regards,
+Kenji
+
+---
+
+From: Robert Sharma <robert.sharma@acmecorp.example>
+To: Kenji Tanaka <kenji.tanaka@nimbus-tech.example>
+Cc: noc-singapore@nimbus-tech.example
+Subject: Re: Severity-1 incident — ap-southeast-1-prod (now resolved)
+Date: Tue, 22 Jul 2025 14:55:08 +0530
+Message-ID: <nimbus-inc-003@acmecorp.example>
+In-Reply-To: <nimbus-inc-002@nimbus-tech.example>
+References: <nimbus-inc-001@acmecorp.example> <nimbus-inc-002@nimbus-tech.example>
+
+Kenji,
+
+Glad it's resolved. Two observations:
+
+  1. Restoration was at 14:48 SGT — that's 5h 34m from onset. Per
+     MSA Section 2.2(b), the Sev-1 restoration commitment is 4 hours.
+     Please confirm the 15% service credit per Section 2.4 will be
+     applied.
+
+  2. We need the RCA within 5 business days. This is the second
+     Sev-1 in 6 months. If there's a pattern (or shared root cause),
+     I'd like to discuss whether the operational profile needs to
+     change before our Q3 board.
+
+Thanks for the team's effort getting this fixed.
+
+Robert
+
+---
+
+From: Kenji Tanaka <kenji.tanaka@nimbus-tech.example>
+To: sre-oncall@acmecorp.example, Robert Sharma <robert.sharma@acmecorp.example>
+Subject: Re: Severity-1 incident — ap-southeast-1-prod
+Date: Tue, 22 Jul 2025 14:52:33 +0800
+Message-ID: <nimbus-inc-002@nimbus-tech.example>
+In-Reply-To: <nimbus-inc-001@acmecorp.example>
+
+Robert,
+
+The incident has been resolved as of 14:48 SGT.
+
+Root cause (preliminary): A regression in the storage layer triggered
+a cascading failure across our zonal replicas in ap-southeast-1.
+Production traffic is now restored across all three AZs.
+
+Full RCA will follow within 5 business days. Apologies for the
+extended impact.
+
+Kenji
+
+---
+
+From: sre-oncall@acmecorp.example
+To: noc-singapore@nimbus-tech.example
+Cc: Robert Sharma <robert.sharma@acmecorp.example>
+Subject: Severity-1 incident — ap-southeast-1-prod
+Date: Tue, 22 Jul 2025 09:18:42 +0530
+Message-ID: <nimbus-inc-001@acmecorp.example>
+
+Nimbus NOC,
+
+Filing this as Severity-1 per the MSA between Acme Corp and Nimbus
+Technologies (MSA-002, dated June 1, 2024):
+
+  - Symptom: Acme's production services backed by Nimbus's
+    ap-southeast-1 region are returning 5xx errors. Customer-facing
+    impact began at approximately 09:14 SGT.
+  - Severity classification: Sev-1 (production outage; broad scope).
+  - Request: Acknowledge per the 15-minute SLA, then proceed to
+    remediation per the 4-hour commitment in Section 2.2(b) of the
+    MSA.
+
+Acme on-call lead: Vikram Kale (+91-98xx-xx-xxxx).
+
+Please confirm acknowledgement on this thread and via the shared
+incident bridge.
+
+— Acme SRE on-call

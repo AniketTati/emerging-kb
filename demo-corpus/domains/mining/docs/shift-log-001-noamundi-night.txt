@@ -1,0 +1,73 @@
+SHIFT LOG — NOAMUNDI IRON-ORE BLOCK
+Block-B / Phase-3 Drilling Area
+Night Shift: 20:00 (14-Sep-2025) → 08:00 (15-Sep-2025)
+Shift Lead: Manish Deshmukh (Chief Mining Engineer); Site Supervisor: A. Beck
+==========================================================
+
+20:00 Shift handover from Day shift completed.
+      Equipment status:
+        - Bench-3 face: 2 shovels operational (S-12, S-14).
+        - Bench-4 face: 1 shovel + 4 haul trucks active.
+        - Phase-3 drilling area: 3 rigs running (BH-31, BH-32, BH-33).
+        - Crusher feed: 145 tph, target 160 tph.
+      Personnel: 96 (down from 102 — 6 on leave).
+      Safety briefing covered: drill-rig PPE, haul-road wet conditions
+      from afternoon shower, no-go zone around BH-32 (recent shotcrete
+      curing).
+
+20:42 Routine pre-shift walk-around by Naresh Soren (Safety) completed.
+      No findings. Bench-3 face slope monitoring stable
+      (deformation <2 mm in past 7 days).
+
+21:15 Production rate at crusher: 152 tph. Target 160. Adjusting feed
+      rate on Bench-3.
+
+22:08 Haul truck T-19 reported a minor hydraulic leak. Stopped for
+      maintenance. Replacement truck T-23 in service within 15 min.
+      Production briefly dropped to 134 tph, recovered to 156.
+
+23:30 Drilling BH-31 reached target depth 248m. Core box transferred to
+      core shack. Hole BH-32 active.
+
+00:14 BH-32 encountered fault — drill string deviation noted. Operator
+      Rajiv Kumar logged "drill drift 4°" — paused to allow drill
+      assessment.
+
+01:42 BH-32 resumed after pull-back + re-orientation. Quality of advance
+      will be reviewed post-shift.
+
+02:38 Crusher belt CV-1 alarm: dust suppression low water pressure.
+      Mechanical team paged. Water tanker top-up arrived 02:51.
+      Production paused briefly; cycle resumed 02:54.
+
+03:18 Lighting failure on Bench-3 west face — short replacement
+      tower light deployed (10 min downtime).
+
+04:00 Mid-shift break for crews. Crusher continued.
+
+05:30 Routine geotechnical check on Bench-3 face — Tata Steel
+      geotechnical team logged stable slope, no displacement above
+      threshold.
+
+06:00 Pre-dawn shift fatigue check. All operators alert; no incidents.
+
+06:45 Production summary so far this shift:
+        - ROM extracted (Bench-3 + Bench-4): 1,608 tonnes.
+        - Crusher throughput: 152 tph average.
+        - Phase-3 drilling: BH-31 complete (248m), BH-32 at 168m of 220m
+          target.
+
+07:30 Pre-handover walk-around with day-shift incoming lead.
+07:55 Outgoing shift handover briefing.
+08:00 Shift end. Day shift assumes operations.
+
+==========================================================
+SHIFT SUMMARY:
+  Production: 1,608 t ROM (target 1,600 t — met)
+  Equipment uptime: 92% (T-19 hydraulic issue + dust suppression)
+  Drilling: 1.5 holes complete (target 1 hole + 1 partial)
+  Incidents / Near-misses: 0
+  Off-line equipment: T-19 (returning to service after morning service)
+
+— A. Beck, Site Supervisor (signed)
+— Naresh Soren, Safety Officer (signed)

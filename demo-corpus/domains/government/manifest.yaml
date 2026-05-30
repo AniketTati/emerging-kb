@@ -1,0 +1,605 @@
+# Government domain manifest — 55 docs across 9 subtypes.
+#
+# Headline stressors:
+#   - PMAY Beed GR corrigendum chain (Design 2 + 3 — allocation flipped
+#     from 84cr → 62cr).
+#   - CIDCO tender + bid-decision chain (lowest bid disqualified
+#     post-RTI; second-lowest awarded; Design 2 conflict).
+#   - Kamla Jadhav 7/12 land-record mutation chain.
+#   - PII: Aadhaar in citizen-facing records (welfare, FIR, 7/12).
+#   - Multilingual Marathi+English scanned land records (parser stress).
+#   - Set-op stressor: ration-card-AND-no-Aadhaar list (Wave-B4 / red-team).
+#   - RTI false-premise refusal (asking about a non-existent circular).
+
+domain: government
+description: |
+  55 government docs across GRs, 7/12 land extracts, cabinet/meeting
+  minutes, tenders, RTI Q&A, FIRs, voter-roll snippets, district admin
+  orders, and welfare scheme records. Multilingual scanned land records
+  + GR corrigendum chain + Aadhaar PII + tender conflict pair + set-op
+  ration-aadhaar stressor are all seeded.
+
+docs:
+
+  # =========================================================================
+  # Government Resolutions (12 — 3 with corrigenda)
+  # =========================================================================
+
+  - id: gr-001-pmay-beed-original
+    file: demo-corpus/domains/government/docs/gr-001-pmay-beed-original.md
+    doc_type: government_resolution
+    title: GR — PMAY housing scheme allocation (Beed district, original 84cr)
+    parties: [mh_general_admin_dept, beed_district_admin]
+    provider: secretary_gad_kulkarni
+    effective_date: "2024-05-15"
+    chain: chain_pmay_beed_gr_corrigendum
+    chain_role: original
+    chain_version: 0
+    authority: 0.7
+    doc_status: superseded
+    stressors: [chain_member, conflict_source_pmay_allocation]
+
+  - id: gr-001-pmay-beed-corrigendum
+    file: demo-corpus/domains/government/docs/gr-001-pmay-beed-corrigendum.md
+    doc_type: government_resolution
+    title: GR CORRIGENDUM — PMAY Beed allocation revised (84cr → 62cr)
+    parties: [mh_general_admin_dept, beed_district_admin]
+    provider: secretary_gad_kulkarni
+    effective_date: "2024-08-22"
+    chain: chain_pmay_beed_gr_corrigendum
+    chain_role: amendment
+    chain_version: 1
+    parent_doc: gr-001-pmay-beed-original
+    authority: 0.9
+    doc_status: live
+    stressors: [chain_winner, conflict_resolution_target]
+
+  - id: gr-002-handloom-textile-policy
+    file: demo-corpus/domains/government/docs/gr-002-handloom-textile-policy.md
+    doc_type: government_resolution
+    title: GR — Handloom and Textile Industry Policy (Maharashtra)
+    parties: [mh_general_admin_dept]
+    effective_date: "2024-09-10"
+    authority: 0.9
+    doc_status: live
+
+  - id: gr-003-water-conservation-marathwada
+    file: demo-corpus/domains/government/docs/gr-003-water-conservation-marathwada.md
+    doc_type: government_resolution
+    title: GR — Water Conservation Programme for Marathwada (Beed + 7 districts)
+    parties: [mh_general_admin_dept, beed_district_admin]
+    effective_date: "2025-02-18"
+    authority: 0.9
+    doc_status: live
+
+  - id: gr-004-msme-credit-guarantee
+    file: demo-corpus/domains/government/docs/gr-004-msme-credit-guarantee.md
+    doc_type: government_resolution
+    title: GR — MSME Credit Guarantee Scheme (state subsidy)
+    parties: [mh_general_admin_dept]
+    effective_date: "2025-04-12"
+    authority: 0.9
+    doc_status: live
+
+  - id: gr-005-tribal-welfare-fund
+    file: demo-corpus/domains/government/docs/gr-005-tribal-welfare-fund.md
+    doc_type: government_resolution
+    title: GR — Tribal Welfare Fund Allocation FY 2025-26
+    parties: [mh_general_admin_dept]
+    effective_date: "2025-03-08"
+    authority: 0.9
+    doc_status: live
+
+  - id: gr-006-mhada-housing-scheme
+    file: demo-corpus/domains/government/docs/gr-006-mhada-housing-scheme.md
+    doc_type: government_resolution
+    title: GR — MHADA Affordable Housing Mumbai (allocation policy)
+    parties: [mh_general_admin_dept]
+    effective_date: "2025-01-22"
+    authority: 0.9
+    doc_status: live
+
+  - id: gr-007-pension-revision-employees
+    file: demo-corpus/domains/government/docs/gr-007-pension-revision-employees.md
+    doc_type: government_resolution
+    title: GR — Pension Revision for State Government Employees (8th Pay Commission)
+    parties: [mh_general_admin_dept]
+    effective_date: "2024-11-20"
+    authority: 0.9
+    doc_status: live
+
+  - id: gr-008-monsoon-relief-2025
+    file: demo-corpus/domains/government/docs/gr-008-monsoon-relief-2025.md
+    doc_type: government_resolution
+    title: GR — Monsoon Relief Package (8 districts including Beed)
+    parties: [mh_general_admin_dept, beed_district_admin]
+    effective_date: "2025-08-15"
+    authority: 0.9
+    doc_status: live
+
+  - id: gr-009-school-meal-scheme
+    file: demo-corpus/domains/government/docs/gr-009-school-meal-scheme.md
+    doc_type: government_resolution
+    title: GR — Mid-Day Meal Scheme expansion (school meal rate revision)
+    parties: [mh_general_admin_dept]
+    effective_date: "2025-06-25"
+    authority: 0.9
+    doc_status: live
+
+  - id: gr-010-skill-development-allocation
+    file: demo-corpus/domains/government/docs/gr-010-skill-development-allocation.md
+    doc_type: government_resolution
+    title: GR — Skill Development Mission FY 2025-26 fund allocation
+    parties: [mh_general_admin_dept]
+    effective_date: "2025-04-30"
+    authority: 0.9
+    doc_status: live
+
+  - id: gr-011-women-empowerment-scheme
+    file: demo-corpus/domains/government/docs/gr-011-women-empowerment-scheme.md
+    doc_type: government_resolution
+    title: GR — Women Empowerment Scheme (revised eligibility 2025)
+    parties: [mh_general_admin_dept]
+    effective_date: "2025-05-18"
+    authority: 0.9
+    doc_status: live
+
+  # =========================================================================
+  # 7/12 land extracts (10 — Marathi scanned)
+  # =========================================================================
+
+  - id: 7-12-001-kamla-jadhav-original
+    file: demo-corpus/domains/government/docs/7-12-001-kamla-jadhav-original.md
+    doc_type: land_record
+    title: 7/12 Extract — Survey No. 47/3, Beed (Vasantrao Jadhav, deceased)
+    parties: [mh_revenue_dept, beed_district_admin]
+    provider: tehsildar_sunil_pawar
+    effective_date: "2024-10-15"
+    chain: chain_kamla_jadhav_mutation
+    chain_role: original
+    chain_version: 0
+    authority: 0.7
+    doc_status: superseded
+    stressors: [parser_scanned_ocr, multilingual_marathi]
+
+  - id: 7-12-002-kamla-jadhav-mutation
+    file: demo-corpus/domains/government/docs/7-12-002-kamla-jadhav-mutation.md
+    doc_type: land_record
+    title: 7/12 Mutation Order — Kamla Jadhav added (post-husband's death)
+    parties: [mh_revenue_dept, beed_district_admin]
+    provider: tehsildar_sunil_pawar
+    subject: citizen_kamla_jadhav
+    effective_date: "2024-12-04"
+    chain: chain_kamla_jadhav_mutation
+    chain_role: amendment
+    chain_version: 1
+    parent_doc: 7-12-001-kamla-jadhav-original
+    authority: 0.9
+    doc_status: live
+    stressors:
+      - parser_scanned_ocr
+      - multilingual_marathi
+      - pii_aadhaar
+
+  - id: 7-12-003-survey-58-2-mutation
+    file: demo-corpus/domains/government/docs/7-12-003-survey-58-2-mutation.md
+    doc_type: land_record
+    title: 7/12 Mutation — Survey No. 58/2, Beed (boundary correction)
+    parties: [mh_revenue_dept, beed_district_admin]
+    effective_date: "2025-02-08"
+    authority: 0.8
+    doc_status: live
+    stressors: [parser_scanned_ocr]
+
+  - id: 7-12-004-survey-103-1
+    file: demo-corpus/domains/government/docs/7-12-004-survey-103-1.md
+    doc_type: land_record
+    title: 7/12 Extract — Survey No. 103/1, Beed (joint-family holding)
+    parties: [mh_revenue_dept]
+    effective_date: "2025-01-12"
+    authority: 0.85
+    doc_status: live
+    stressors: [parser_scanned_ocr]
+
+  - id: 7-12-005-survey-89-4-marathi-only
+    file: demo-corpus/domains/government/docs/7-12-005-survey-89-4-marathi-only.md
+    doc_type: land_record
+    title: 7/12 Extract — Survey No. 89/4 (Marathi-only legacy)
+    parties: [mh_revenue_dept]
+    effective_date: "2018-08-22"
+    authority: 0.5
+    doc_status: archived
+    stressors:
+      - parser_scanned_ocr
+      - multilingual_marathi
+
+  - id: 7-12-006-survey-22-3
+    file: demo-corpus/domains/government/docs/7-12-006-survey-22-3.md
+    doc_type: land_record
+    title: 7/12 Extract — Survey No. 22/3, Beed (tribal allotment area)
+    parties: [mh_revenue_dept, beed_district_admin]
+    effective_date: "2025-03-15"
+    authority: 0.85
+    doc_status: live
+
+  - id: 7-12-007-survey-67-5
+    file: demo-corpus/domains/government/docs/7-12-007-survey-67-5.md
+    doc_type: land_record
+    title: 7/12 Extract — Survey No. 67/5, Beed (irrigation-linked)
+    parties: [mh_revenue_dept, beed_district_admin]
+    effective_date: "2025-04-08"
+    authority: 0.85
+    doc_status: live
+
+  - id: 7-12-008-survey-44-1-disputed
+    file: demo-corpus/domains/government/docs/7-12-008-survey-44-1-disputed.md
+    doc_type: land_record
+    title: 7/12 Extract — Survey No. 44/1, Beed (disputed — see FIR-003)
+    parties: [mh_revenue_dept, beed_district_admin]
+    effective_date: "2025-06-22"
+    authority: 0.8
+    doc_status: live
+
+  - id: 7-12-009-survey-78-2-irrigation
+    file: demo-corpus/domains/government/docs/7-12-009-survey-78-2-irrigation.md
+    doc_type: land_record
+    title: 7/12 Extract — Survey No. 78/2, Beed (canal-irrigation rights)
+    parties: [mh_revenue_dept]
+    effective_date: "2025-05-30"
+    authority: 0.85
+    doc_status: live
+
+  - id: 7-12-010-survey-115-3
+    file: demo-corpus/domains/government/docs/7-12-010-survey-115-3.md
+    doc_type: land_record
+    title: 7/12 Extract — Survey No. 115/3, Beed (post-land-reform record)
+    parties: [mh_revenue_dept]
+    effective_date: "2025-07-18"
+    authority: 0.85
+    doc_status: live
+
+  # =========================================================================
+  # Cabinet / meeting minutes (5)
+  # =========================================================================
+
+  - id: cabinet-001-monsoon-package
+    file: demo-corpus/domains/government/docs/cabinet-001-monsoon-package.md
+    doc_type: cabinet_minutes
+    title: Cabinet Meeting Minutes — Monsoon Relief Package (12 Aug 2025)
+    parties: [mh_general_admin_dept]
+    effective_date: "2025-08-12"
+    authority: 0.9
+    doc_status: live
+
+  - id: cabinet-002-msme-credit
+    file: demo-corpus/domains/government/docs/cabinet-002-msme-credit.md
+    doc_type: cabinet_minutes
+    title: Cabinet Meeting Minutes — MSME Credit Guarantee approval
+    parties: [mh_general_admin_dept]
+    effective_date: "2025-04-08"
+    authority: 0.9
+    doc_status: live
+
+  - id: cabinet-003-housing-scheme-revision
+    file: demo-corpus/domains/government/docs/cabinet-003-housing-scheme-revision.md
+    doc_type: cabinet_minutes
+    title: Cabinet Meeting Minutes — PMAY Beed allocation revision discussion
+    parties: [mh_general_admin_dept]
+    effective_date: "2024-08-15"
+    authority: 0.9
+    doc_status: live
+
+  - id: cabinet-004-mid-day-meal
+    file: demo-corpus/domains/government/docs/cabinet-004-mid-day-meal.md
+    doc_type: cabinet_minutes
+    title: Cabinet Meeting Minutes — Mid-Day Meal Scheme expansion
+    parties: [mh_general_admin_dept]
+    effective_date: "2025-06-20"
+    authority: 0.9
+    doc_status: live
+
+  - id: cabinet-005-women-empowerment
+    file: demo-corpus/domains/government/docs/cabinet-005-women-empowerment.md
+    doc_type: cabinet_minutes
+    title: Cabinet Meeting Minutes — Women Empowerment Scheme approval
+    parties: [mh_general_admin_dept]
+    effective_date: "2025-05-14"
+    authority: 0.9
+    doc_status: live
+
+  # =========================================================================
+  # Tenders + bid (6 — 1 conflict pair)
+  # =========================================================================
+
+  - id: tender-001-cidco-road-resurfacing
+    file: demo-corpus/domains/government/docs/tender-001-cidco-road-resurfacing.md
+    doc_type: tender_document
+    title: CIDCO Tender — Road resurfacing Navi Mumbai Sector 14 (original RFP)
+    parties: [cidco_corporation]
+    effective_date: "2025-03-20"
+    chain: chain_cidco_tender_bid_pair
+    chain_role: original
+    chain_version: 0
+    authority: 0.7
+    doc_status: superseded
+    stressors: [chain_member]
+
+  - id: tender-001-cidco-bid-decision
+    file: demo-corpus/domains/government/docs/tender-001-cidco-bid-decision.md
+    doc_type: tender_decision
+    title: CIDCO Bid Decision — Road resurfacing Sector 14 (lowest bid disqualified, post-RTI)
+    parties: [cidco_corporation]
+    effective_date: "2025-06-12"
+    chain: chain_cidco_tender_bid_pair
+    chain_role: amendment
+    chain_version: 1
+    parent_doc: tender-001-cidco-road-resurfacing
+    authority: 0.9
+    doc_status: live
+    stressors: [chain_winner, conflict_resolution_target]
+
+  - id: tender-002-water-supply-beed
+    file: demo-corpus/domains/government/docs/tender-002-water-supply-beed.md
+    doc_type: tender_document
+    title: Tender — Water supply pipeline (Beed district)
+    parties: [beed_district_admin]
+    effective_date: "2025-04-30"
+    authority: 0.85
+    doc_status: live
+
+  - id: tender-003-school-construction
+    file: demo-corpus/domains/government/docs/tender-003-school-construction.md
+    doc_type: tender_document
+    title: Tender — Government school construction (3 villages, Beed)
+    parties: [beed_district_admin]
+    effective_date: "2025-05-22"
+    authority: 0.85
+    doc_status: live
+
+  - id: tender-004-cidco-housing
+    file: demo-corpus/domains/government/docs/tender-004-cidco-housing.md
+    doc_type: tender_document
+    title: CIDCO Tender — Affordable housing block (Navi Mumbai)
+    parties: [cidco_corporation]
+    effective_date: "2025-07-08"
+    authority: 0.85
+    doc_status: live
+
+  - id: tender-005-road-bridge
+    file: demo-corpus/domains/government/docs/tender-005-road-bridge.md
+    doc_type: tender_document
+    title: Tender — Road bridge reconstruction (Beed)
+    parties: [beed_district_admin]
+    effective_date: "2025-09-04"
+    authority: 0.85
+    doc_status: live
+
+  # =========================================================================
+  # RTI Q&A (5 — 1 refusal)
+  # =========================================================================
+
+  - id: rti-001-cidco-tender-disclosure
+    file: demo-corpus/domains/government/docs/rti-001-cidco-tender-disclosure.md
+    doc_type: rti_response
+    title: RTI Response — CIDCO tender disclosure (filed by Ramesh Solanki)
+    parties: [cidco_corporation]
+    subject: citizen_ramesh_solanki
+    effective_date: "2025-05-08"
+    authority: 0.85
+    doc_status: live
+
+  - id: rti-002-beed-mutation-disclosure
+    file: demo-corpus/domains/government/docs/rti-002-beed-mutation-disclosure.md
+    doc_type: rti_response
+    title: RTI Response — Beed mutation orders FY 2024-25 (filed by M. Khan)
+    parties: [beed_district_admin]
+    subject: rti_applicant_anonymous
+    effective_date: "2025-07-20"
+    authority: 0.85
+    doc_status: live
+
+  - id: rti-003-pmay-list-refused
+    file: demo-corpus/domains/government/docs/rti-003-pmay-list-refused.md
+    doc_type: rti_response
+    title: RTI Response REFUSED — PMAY Beed beneficiary list (PII exemption)
+    parties: [beed_district_admin]
+    effective_date: "2025-06-15"
+    authority: 0.85
+    doc_status: live
+
+  - id: rti-004-non-existent-circular
+    file: demo-corpus/domains/government/docs/rti-004-non-existent-circular.md
+    doc_type: rti_response
+    title: RTI Response — false-premise applicant asked about Circular #99999 (does not exist)
+    parties: [mh_general_admin_dept]
+    effective_date: "2025-09-12"
+    authority: 0.85
+    doc_status: live
+
+  - id: rti-005-tehsildar-meeting
+    file: demo-corpus/domains/government/docs/rti-005-tehsildar-meeting.md
+    doc_type: rti_response
+    title: RTI Response — Tehsildar Beed monthly meeting minutes (Q1 FY 2025-26)
+    parties: [beed_district_admin]
+    effective_date: "2025-08-04"
+    authority: 0.85
+    doc_status: live
+
+  # =========================================================================
+  # FIRs (4 — sensitive + scanned)
+  # =========================================================================
+
+  - id: fir-001-beed-ramesh-solanki-complaint
+    file: demo-corpus/domains/government/docs/fir-001-beed-ramesh-solanki-complaint.md
+    doc_type: fir
+    title: FIR — Solanki vs ABC Construction Pvt Ltd (fraudulent bid in CIDCO tender)
+    parties: [mh_police_beed]
+    subject: citizen_ramesh_solanki
+    effective_date: "2025-05-02"
+    authority: 0.85
+    doc_status: live
+    stressors: [pii_aadhaar]
+
+  - id: fir-002-beed-petty-theft-scanned
+    file: demo-corpus/domains/government/docs/fir-002-beed-petty-theft-scanned.md
+    doc_type: fir
+    title: FIR — Petty theft Beed Mandi area (scanned handwritten)
+    parties: [mh_police_beed]
+    effective_date: "2025-04-18"
+    authority: 0.7
+    doc_status: live
+    stressors: [parser_scanned_ocr]
+
+  - id: fir-003-beed-land-dispute-scanned
+    file: demo-corpus/domains/government/docs/fir-003-beed-land-dispute-scanned.md
+    doc_type: fir
+    title: FIR — High-value land dispute (24 crore claimed value)
+    parties: [mh_police_beed]
+    effective_date: "2025-07-08"
+    authority: 0.85
+    doc_status: live
+    stressors:
+      - parser_scanned_ocr
+      - rare_fir_high_value
+
+  - id: fir-004-beed-mva-collision
+    file: demo-corpus/domains/government/docs/fir-004-beed-mva-collision.md
+    doc_type: fir
+    title: FIR — Motor vehicle collision (Beed-Aurangabad highway)
+    parties: [mh_police_beed]
+    effective_date: "2025-09-22"
+    authority: 0.85
+    doc_status: live
+
+  # =========================================================================
+  # Voter-roll snippets (3 — md tables)
+  # =========================================================================
+
+  - id: voter-001-beed-ward-1
+    file: demo-corpus/domains/government/docs/voter-001-beed-ward-1.md
+    doc_type: voter_roll
+    title: Voter Roll snippet — Beed Ward 1 (200-row sample)
+    parties: [beed_district_admin]
+    effective_date: "2025-03-10"
+    authority: 0.85
+    doc_status: live
+
+  - id: voter-002-beed-ward-4
+    file: demo-corpus/domains/government/docs/voter-002-beed-ward-4.md
+    doc_type: voter_roll
+    title: Voter Roll snippet — Beed Ward 4 (200-row sample)
+    parties: [beed_district_admin]
+    effective_date: "2025-03-10"
+    authority: 0.85
+    doc_status: live
+
+  - id: voter-003-beed-ward-7
+    file: demo-corpus/domains/government/docs/voter-003-beed-ward-7.md
+    doc_type: voter_roll
+    title: Voter Roll snippet — Beed Ward 7 (200-row sample)
+    parties: [beed_district_admin]
+    effective_date: "2025-03-10"
+    authority: 0.85
+    doc_status: live
+
+  # =========================================================================
+  # District admin orders (5)
+  # =========================================================================
+
+  - id: order-001-section-144
+    file: demo-corpus/domains/government/docs/order-001-section-144.md
+    doc_type: district_admin_order
+    title: District Admin Order — Section 144 imposition (Beed, post-incident)
+    parties: [beed_district_admin]
+    provider: dm_beed_rajshree_patil
+    effective_date: "2025-05-04"
+    authority: 0.9
+    doc_status: live
+
+  - id: order-002-school-closure-monsoon
+    file: demo-corpus/domains/government/docs/order-002-school-closure-monsoon.md
+    doc_type: district_admin_order
+    title: District Admin Order — School closure (monsoon flooding)
+    parties: [beed_district_admin]
+    effective_date: "2025-08-14"
+    authority: 0.85
+    doc_status: live
+
+  - id: order-003-fair-price-shops
+    file: demo-corpus/domains/government/docs/order-003-fair-price-shops.md
+    doc_type: district_admin_order
+    title: District Admin Order — Fair Price Shop licensing renewals (Beed)
+    parties: [beed_district_admin, ration_dept_mh]
+    effective_date: "2025-06-08"
+    authority: 0.85
+    doc_status: live
+
+  - id: order-004-irrigation-scheduling
+    file: demo-corpus/domains/government/docs/order-004-irrigation-scheduling.md
+    doc_type: district_admin_order
+    title: District Admin Order — Irrigation water scheduling (post-monsoon adjustment)
+    parties: [beed_district_admin]
+    effective_date: "2025-10-02"
+    authority: 0.85
+    doc_status: live
+
+  - id: order-005-fr-pickup
+    file: demo-corpus/domains/government/docs/order-005-fr-pickup.md
+    doc_type: district_admin_order
+    title: District Admin Order — Forest Rights Act claim disposal schedule
+    parties: [beed_district_admin]
+    effective_date: "2025-07-25"
+    authority: 0.85
+    doc_status: live
+
+  # =========================================================================
+  # Welfare scheme records (5)
+  # =========================================================================
+
+  - id: welfare-001-ration-card-anomaly-list
+    file: demo-corpus/domains/government/docs/welfare-001-ration-card-anomaly-list.md
+    doc_type: welfare_record
+    title: Welfare — Ration cards WITHOUT linked Aadhaar (Beed district, anomaly list)
+    parties: [ration_dept_mh, beed_district_admin]
+    effective_date: "2025-07-28"
+    authority: 0.85
+    doc_status: live
+    stressors: [rare_ration_aadhaar_missing, set_op_stressor]
+
+  - id: welfare-002-kamla-jadhav-pmay
+    file: demo-corpus/domains/government/docs/welfare-002-kamla-jadhav-pmay.md
+    doc_type: welfare_record
+    title: Welfare — PMAY beneficiary record (Kamla Jadhav, Beed)
+    parties: [beed_district_admin]
+    subject: citizen_kamla_jadhav
+    effective_date: "2025-01-18"
+    authority: 0.85
+    doc_status: live
+    stressors: [pii_aadhaar]
+
+  - id: welfare-003-school-meal-rollout
+    file: demo-corpus/domains/government/docs/welfare-003-school-meal-rollout.md
+    doc_type: welfare_record
+    title: Welfare — Mid-Day Meal Scheme rollout Q3 FY 2025-26
+    parties: [beed_district_admin]
+    effective_date: "2025-10-15"
+    authority: 0.85
+    doc_status: live
+
+  - id: welfare-004-tribal-scholarship-disbursement
+    file: demo-corpus/domains/government/docs/welfare-004-tribal-scholarship-disbursement.md
+    doc_type: welfare_record
+    title: Welfare — Tribal Scholarship Disbursement Q2 FY 2025-26
+    parties: [beed_district_admin]
+    effective_date: "2025-09-05"
+    authority: 0.85
+    doc_status: live
+
+  - id: welfare-005-old-age-pension
+    file: demo-corpus/domains/government/docs/welfare-005-old-age-pension.md
+    doc_type: welfare_record
+    title: Welfare — Old Age Pension disbursement (Beed Q3 FY 2025-26)
+    parties: [beed_district_admin]
+    effective_date: "2025-10-08"
+    authority: 0.85
+    doc_status: live

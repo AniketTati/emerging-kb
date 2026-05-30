@@ -1,0 +1,69 @@
+SHIFT LOG — PARSA COAL BLOCK
+Bench-3 + Bench-4 / Coal Production
+Day Shift: 08:00 → 20:00 (22-Jul-2025)
+Shift Lead: Pradeep Khurana (Mine Superintendent); Site Supervisor: K. Sharma
+==========================================================
+
+08:00 Shift handover from Night shift completed.
+      Equipment status:
+        - Bench-3: 1 dragline + 2 shovels operational.
+        - Bench-4: 2 shovels + 6 haul trucks active.
+        - Crusher feed: 1,820 tph (steady state).
+      Personnel: 184 (full strength).
+      Safety briefing covered: monsoon-period haul road conditions,
+      mud accumulation on Bench-4 east ramp.
+
+08:25 Pre-shift dust monitoring check — within parameters
+      (PM₁₀ 64 µg/m³ at Bench-3 face).
+
+09:18 First haul truck dispatch from Bench-4 east face — 220t load.
+
+10:42 Heavy rain (15 mm/hr) started — automated dust suppression
+      reduced (rain provides natural suppression). Trucks reduce speed
+      on haul roads.
+
+11:30 Rain stopped (~25 mm total). Haul-road inspection requested.
+
+11:48 Site supervisor inspected haul-road segments:
+        - H-3: minor washouts at km-marker 0.8 — graded out.
+        - H-4 (north): standing water — drained via temporary cut.
+      Haul operations resumed at 11:55.
+
+12:30 Lunch break.
+
+13:20 Resumed full operations. Crusher throughput recovered to 1,840 tph.
+
+14:48 Loader S-22 reported high-temperature alarm on transmission.
+      Stopped for inspection.
+      Maintenance team confirmed: cooling-fluid level low; topped up;
+      back in service 15:18.
+
+15:45 Geological consultant Dr. Mishra (CMPDI) on-site for routine
+      Sm-IIIB seam quality check. Joined the Bench-4 face inspection.
+      Verbal report: ash content consistent with seam profile.
+
+16:20 Haul truck T-44 reported tipper hydraulic ram irregular extension.
+      Stopped for service. Replacement T-39 in service in 22 min.
+
+17:10 Routine emissions monitoring station data download — within
+      target ranges across all 6 in-lease stations.
+
+18:00 Production tally:
+        - Coal produced this shift: 18,420 tonnes (target 18,000).
+        - OB removed: 48,200 BCM (target 48,000).
+        - Cumulative WTD month: 384,200 t coal (on track for 540kt
+          monthly target).
+
+19:30 Pre-handover walk-around with night-shift lead.
+20:00 Shift end. Night shift assumes operations.
+
+==========================================================
+SHIFT SUMMARY:
+  Coal produced: 18,420 t (target 18,000 t — exceeded)
+  OB removed: 48,200 BCM (target met)
+  Equipment uptime: 89% (S-22 + T-44 issues)
+  Incidents: 0
+  Compliance: All emissions monitoring within target ranges
+
+— K. Sharma, Site Supervisor (signed)
+— Safety Officer (signed)

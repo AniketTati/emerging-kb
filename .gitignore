@@ -60,11 +60,9 @@ prototype/package-lock.json
 prototype/qa/screens/
 prototype/qa/reports/
 
-# Local demo-corpus testing artifacts — scratch generated during
-# ingest/validation runs, not part of the canonical corpus. The actual
-# demo docs + build.py/ingest.py loaders ARE tracked; only these
-# workspace artifacts get ignored.
-demo-corpus/domains/
-demo-corpus/workspaces/
-demo-corpus/entities.yaml
-demo-corpus/validate.py
+# demo-corpus/domains, workspaces, entities.yaml, validate.py are NOW tracked:
+# they hold the 6-domain corpus + the verified eval set (queries.yaml, 93%
+# corpus-grounded) + manifests — the canonical eval, and an assignment
+# deliverable. Only genuine ingest/validation scratch should be ignored below.
+demo-corpus/**/*.bak
+demo-corpus/**/*.bak[0-9]

@@ -1,0 +1,123 @@
+---
+doc_id: rfi-003-fire-noc-clarification
+doc_type: email_thread
+effective_date: 2025-11-22
+parties: [Mahalaxmi Infrastructure Pvt Ltd, Deshpande Architects + Engineers LLP, Karnataka State Fire and Emergency Services]
+status: live
+---
+
+From: Rakesh Iyer <rakesh.iyer@mahalaxmiinfra.in>
+To: Amit Deshpande <a.deshpande@deshpandearch.in>; Sushil Patil <sushil.patil@phoenixmep.in>
+Cc: Sanjay Tripathi <sanjay.tripathi@acme.in>
+Subject: URGENT: KSFES Fire NOC inspection conditions - need clarification + action by 28 Nov
+Date: Fri, 22 Nov 2025 14:42:18 +0530
+
+Amit, Sushil,
+
+KSFES Fire NOC inspection conducted by Inspector Mr. Chandrashekar yesterday (21 Nov). He has flagged 4 conditions that need to be addressed before fire NOC can be issued. NOC is needed by 31 December for occupancy.
+
+CONDITIONS:
+
+1. ADDITIONAL EMERGENCY EXIT REQUIRED:
+   - Inspector noted that the East server hall is 1,758 sq.m + has only 2 emergency exits. NBC 2016 requires 3 exits for areas > 1,500 sq.m (high-rise threshold lower in this case for assembly-class space).
+   - Action: Add 1 emergency exit on East elevation (south end). This requires a new door + small canopy + sign.
+
+2. FIRE-PUMP CAPACITY UPGRADE:
+   - Inspector calculated the fire-water demand at 2,400 LPM (for sprinkler + hydrant operating simultaneously); current pump set is rated 2,000 LPM.
+   - Action: Upgrade fire pump (diesel) from 2,000 LPM to 2,400 LPM rating.
+
+3. SMOKE EXTRACT FOR LOADING DOCK:
+   - Loading dock is a "low ventilation high fuel-load area" — needs smoke extract fan (~30,000 CMH).
+   - Action: Install dedicated smoke extract.
+
+4. SIGNAGE + EVACUATION PLAN:
+   - Evacuation route signage missing from corridors + stairwells.
+   - Evacuation plans not yet posted at each floor.
+   - Action: Procure + install signage + plans.
+
+COST + SCHEDULE:
+- Item 1 (additional exit): ~INR 4.5 lakh + 5 days
+- Item 2 (pump upgrade): ~INR 8 lakh + procurement lead-time 14 days
+- Item 3 (smoke extract): ~INR 5.5 lakh + 7 days
+- Item 4 (signage): ~INR 1.2 lakh + 3 days
+
+Total: ~INR 19.2 lakh; combined critical-path delay 14 days
+
+Amit — for Item 1 we'll need a quick drawing revision. Can you turn around by Monday 24 Nov?
+Sushil — Items 2 + 3 are MEP scope. Please procure + start work.
+Sanjay — flagging this for Acme awareness. Total cost ~INR 20 lakh + 2-week schedule risk to occupancy. RECOMMEND we proceed without re-debate.
+
+Best,
+Rakesh Iyer
+Project Manager (Mahalaxmi)
++91 80 4218 4218
+
+---
+
+From: Amit Deshpande <a.deshpande@deshpandearch.in>
+To: Rakesh Iyer; Sushil Patil
+Cc: Sanjay Tripathi
+Subject: RE: KSFES Fire NOC inspection conditions - response on Item 1
+Date: Mon, 24 Nov 2025 14:42:18 +0530
+
+Rakesh,
+
+Re: Item 1 (additional emergency exit on East elevation):
+
+Drawing revision DAE-WCD-ARCH-007 Rev D issued today (24 Nov). Adds emergency exit at East elevation South corner with:
+- Door: D6-7 (1800 × 2100, panic-bar, 2hr fire rated)
+- External staircase: 1.5m wide, GI grating, with weather protection
+- Signage per NBC
+
+Total exits now 7 (was 6); East hall covered: 3 (was 2). NBC compliance restored.
+
+Cost: ~INR 4.2 lakh — slightly less than your estimate.
+
+Schedule: 4 working days assuming we start Monday 25 Nov.
+
+Best,
+Ar. Amit Deshpande
+
+---
+
+From: Sushil Patil <sushil.patil@phoenixmep.in>
+To: Rakesh Iyer; Amit Deshpande
+Cc: Sanjay Tripathi
+Subject: RE: KSFES Fire NOC inspection conditions - MEP response on Items 2 + 3
+Date: Mon, 24 Nov 2025 17:18:42 +0530
+
+Confirmed. MEP actions:
+
+ITEM 2 (pump upgrade):
+- Existing 2,000 LPM diesel pump will be retained as backup (still meets spec for sprinkler-only operation)
+- New 2,400 LPM pump procurement initiated Monday — supplier ETA 8 December
+- Installation + commissioning by 14 December
+- Total cost: INR 7.8 lakh
+
+ITEM 3 (smoke extract):
+- Existing ventilation supplemented with dedicated smoke extract fan (40,000 CMH — slight upgrade beyond requirement for redundancy)
+- Procurement initiated Monday — supplier ETA 5 December
+- Installation by 10 December
+- Total cost: INR 5.8 lakh
+
+ITEM 4 (signage):
+- Procurement initiated; vendor commits delivery by 28 November
+- Installation in stair + corridor by 30 November
+- Total cost: INR 1.2 lakh
+
+Re-inspection with KSFES scheduled for 18 December. Confident of NOC by 26 December.
+
+Sushil
+
+---
+
+From: Sanjay Tripathi <sanjay.tripathi@acme.in>
+To: All
+Subject: Acme approval for Fire NOC compliance scope additions
+Date: Tue, 25 Nov 2025 09:18:42 +0530
+
+Approved. Total ~INR 19 lakh as Change Order CO-018 against the EPC contract. Mahalaxmi please raise the formal CO.
+
+This is non-negotiable for occupancy. Thanks for the quick response.
+
+Sanjay

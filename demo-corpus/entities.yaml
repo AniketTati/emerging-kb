@@ -1,0 +1,1614 @@
+# Master entity registry — shared across ALL demo-corpus domains.
+#
+# Every document references entities from here by `id`. The downstream
+# identity resolver should converge on the same canonical entity given
+# the same `id` even when surface forms differ ("Acme Corp" vs "ACME
+# Corp Pvt Ltd" vs "Acme") — this is how we test L4 identity resolution
+# at corpus scale.
+#
+# Cross-domain hooks:
+#   - `acme_corp` appears in Legal (counterparty in MSA) AND in Finance
+#     (counterparty in bank statements) — deliberate stressor for the
+#     "mixed" workspace.
+#   - `mehta_law_partners` appears in Legal and Government (counsel of
+#     record on a tender dispute).
+#   - `apollo_hospitals_pune` appears in Healthcare (patient encounters)
+#     and Finance (loan agreement debtor).
+#
+# Surface-form variants are intentional: identity resolution must
+# collapse "Acme Corp Pvt Ltd", "Acme Corp", "ACME", "Acme Corporation"
+# to the same canonical row.
+
+organizations:
+  # ---------------------------------------------------------------------
+  # Legal counterparties (also appear in Finance for cross-domain test)
+  # ---------------------------------------------------------------------
+  - id: acme_corp
+    canonical: Acme Corp Pvt Ltd
+    type: ORG
+    domain_primary: legal
+    domain_secondary: [finance]
+    surface_variants:
+      - Acme Corp
+      - ACME Corp.
+      - Acme Corporation
+      - ACME
+      - Acme Pvt Ltd
+    profile: |
+      Mid-cap Indian technology services company. Customer in 4 vendor
+      relationships, party to 3 contracts in this corpus, bank-statement
+      counterparty in 2 finance docs.
+    address: "Plot 47, Sector 18, Gurugram, Haryana 122015"
+    pan: "AABCA1234M"   # SYNTHETIC — Faker; PII handler must redact in chat output
+
+  - id: vertex_industries
+    canonical: Vertex Industries Inc.
+    type: ORG
+    domain_primary: legal
+    surface_variants:
+      - Vertex Industries
+      - Vertex
+      - VERTEX INDUSTRIES INC
+      - Vertex Inc.
+    profile: |
+      US-incorporated SaaS vendor of document-intelligence platform.
+      Has master services agreement with Acme; relationship has been
+      amended twice (chain stressor).
+    address: "1010 Vertex Way, Palo Alto, CA 94306"
+
+  - id: nimbus_technologies
+    canonical: Nimbus Technologies Pte Ltd
+    type: ORG
+    domain_primary: legal
+    surface_variants:
+      - Nimbus Tech
+      - Nimbus
+      - Nimbus Technologies
+    profile: |
+      Singapore-based cloud-infra vendor. Engaged via SOW chain
+      pegged to a 2024 MSA. Singapore governing law (used in the F-mode
+      filter test).
+    address: "30 Cecil Street, #15-00, Prudential Tower, Singapore 049712"
+
+  - id: orion_consulting
+    canonical: Orion Consulting Group LLC
+    type: ORG
+    domain_primary: legal
+    surface_variants:
+      - Orion Consulting
+      - Orion LLC
+    profile: |
+      US strategy consulting firm; party to a most-favored-nation license
+      (rare clause stressor).
+    address: "200 Park Avenue, New York, NY 10166"
+
+  - id: helios_partners
+    canonical: Helios Partners LLP
+    type: ORG
+    domain_primary: legal
+    surface_variants:
+      - Helios Partners
+      - Helios LLP
+    profile: |
+      Boutique advisory; party to a side letter that amends an MSA
+      (chain participant via side-letter pattern).
+    address: "1 Finsbury Avenue, London EC2M 2PP, United Kingdom"
+
+  # ---------------------------------------------------------------------
+  # Law firms (counsel of record on multiple deals)
+  # ---------------------------------------------------------------------
+  - id: mehta_law_partners
+    canonical: Mehta & Associates LLP
+    type: ORG
+    domain_primary: legal
+    domain_secondary: [government]
+    surface_variants:
+      - Mehta Law
+      - Mehta and Associates
+      - "Mehta & Associates"
+    profile: |
+      Mumbai-based commercial law firm. Aisha Mehta (partner) signs as
+      counsel-of-record on multiple contracts + one government tender
+      dispute.
+    address: "Express Towers, Nariman Point, Mumbai 400021"
+
+  - id: stark_levin
+    canonical: Stark Levin & Co
+    type: ORG
+    domain_primary: legal
+    surface_variants:
+      - Stark Levin
+      - "Stark, Levin & Co."
+    profile: |
+      US-side counsel for Vertex Industries. Counsel-of-record on MSA
+      chain + side letter.
+    address: "555 California Street, San Francisco, CA 94104"
+
+  # ---------------------------------------------------------------------
+  # Tenants / landlords (for lease docs)
+  # ---------------------------------------------------------------------
+  - id: lakeview_properties
+    canonical: Lakeview Properties Ltd
+    type: ORG
+    domain_primary: legal
+    surface_variants:
+      - Lakeview Properties
+    profile: |
+      Commercial real-estate landlord; lessor in 2 demo leases.
+    address: "Cyber Hub, DLF Phase 2, Gurugram, Haryana 122002"
+
+  # ---------------------------------------------------------------------
+  # Cross-domain (also appear in Finance / Healthcare)
+  # ---------------------------------------------------------------------
+  - id: apollo_hospitals_pune
+    canonical: Apollo Hospitals Pvt Ltd (Pune)
+    type: ORG
+    domain_primary: healthcare
+    domain_secondary: [finance]
+    surface_variants:
+      - Apollo Hospitals
+      - Apollo Pune
+      - Apollo Hospitals Pune
+    profile: |
+      Tertiary care hospital in Pune. Cross-domain hook for the Healthcare
+      domain; also appears in a Finance loan-agreement (Apollo borrowing
+      equipment-financing from HDFC).
+    address: "Plot 1, Mumbai-Pune Highway, Pune 411018"
+
+  - id: hdfc_bank
+    canonical: HDFC Bank Ltd
+    type: ORG
+    domain_primary: finance
+    domain_secondary: [legal]
+    surface_variants:
+      - HDFC
+      - HDFC Bank
+    profile: |
+      Issuing bank in 4 demo finance docs; also counterparty in a Legal
+      loan-collateral agreement (cross-domain).
+    address: "HDFC Bank House, Senapati Bapat Marg, Mumbai 400013"
+
+  # ---------------------------------------------------------------------
+  # Healthcare orgs (apollo_hospitals_pune declared above as cross-domain)
+  # ---------------------------------------------------------------------
+  - id: manipal_hospital_bangalore
+    canonical: Manipal Hospital (Old Airport Road)
+    type: ORG
+    domain_primary: healthcare
+    surface_variants:
+      - Manipal Hospitals
+      - Manipal Hospital Bangalore
+      - Manipal
+    profile: |
+      Tertiary care hospital — Acme Corp's empanelled hospital for the
+      Bangalore region. Cross-doc patient encounters in the healthcare
+      domain.
+    address: "98, HAL Old Airport Road, Bangalore 560017"
+
+  - id: fortis_escorts_delhi
+    canonical: Fortis Escorts Heart Institute
+    type: ORG
+    domain_primary: healthcare
+    surface_variants:
+      - Fortis Escorts
+      - Fortis Heart Institute
+      - Fortis
+    profile: |
+      Cardiac-specialty referral hospital in Delhi NCR.
+    address: "Okhla Road, New Delhi 110025"
+
+  - id: cipla_pharmaceuticals
+    canonical: Cipla Ltd
+    type: ORG
+    domain_primary: healthcare
+    surface_variants:
+      - Cipla
+      - Cipla Limited
+    profile: |
+      Pharmaceutical manufacturer; producer of generic metformin,
+      atorvastatin, and other drugs in the prescription docs.
+    address: "Cipla House, Peninsula Business Park, Lower Parel, Mumbai 400013"
+
+  - id: star_health_insurance
+    canonical: Star Health and Allied Insurance Co Ltd
+    type: ORG
+    domain_primary: healthcare
+    surface_variants:
+      - Star Health
+      - Star Health Insurance
+      - Star Health & Allied
+    profile: |
+      Health insurance provider underwriting claims in this corpus.
+    address: "1, New Tank Street, Valluvar Kottam High Road, Chennai 600034"
+
+  - id: hdfc_ergo_health
+    canonical: HDFC ERGO General Insurance Company Ltd (Health)
+    type: ORG
+    domain_primary: healthcare
+    domain_secondary: [finance]
+    surface_variants:
+      - HDFC ERGO
+      - HDFC ERGO Health
+    profile: |
+      Mid-corporate health-insurance carrier; cross-domain hook with HDFC
+      Bank (same parent group).
+    address: "1st Floor, HDFC House, 165-166 Backbay Reclamation, H.T. Parekh Marg, Mumbai 400020"
+
+  # ---------------------------------------------------------------------
+  # Mining / Heavy-Industry orgs
+  # ---------------------------------------------------------------------
+  - id: tata_steel_mining
+    canonical: Tata Steel Mining Operations
+    type: ORG
+    domain_primary: mining
+    surface_variants:
+      - Tata Steel Mining
+      - TSML
+      - Tata Mining
+    profile: |
+      Mining-operations division of Tata Steel Ltd. Lessee of multiple
+      iron-ore and coal blocks across Jharkhand and Odisha. Multiple
+      drilling reports + safety incident records.
+    address: "Tata Centre, 43 Jawaharlal Nehru Road, Kolkata 700071"
+
+  - id: adani_mining
+    canonical: Adani Enterprises Mining Division
+    type: ORG
+    domain_primary: mining
+    surface_variants:
+      - Adani Mining
+      - AEML Mining
+      - Adani Enterprises
+    profile: |
+      Mining contractor and lessee. Operates several coal blocks in
+      Chhattisgarh and Jharkhand. Subject of multiple environmental
+      clearances + corrigenda chain in this corpus.
+    address: "Adani Corporate House, Shantigram, S.G. Highway, Ahmedabad 382421"
+
+  - id: dgms_directorate
+    canonical: Directorate General of Mines Safety (DGMS)
+    type: ORG
+    domain_primary: mining
+    domain_secondary: [government]
+    surface_variants:
+      - DGMS
+      - Directorate General of Mines Safety
+    profile: |
+      Federal regulator under the Ministry of Labour & Employment;
+      enforces safety standards across Indian mines. Cross-domain to
+      Government — issues notices and inspection reports.
+    address: "Hirapur, Dhanbad 826001, Jharkhand"
+
+  - id: moefcc_ministry
+    canonical: Ministry of Environment, Forest and Climate Change
+    type: ORG
+    domain_primary: government
+    domain_secondary: [mining]
+    surface_variants:
+      - MoEFCC
+      - Ministry of Environment
+    profile: |
+      Issues environmental clearances (EC) for mining projects.
+      Corrigendum chain seeded here.
+    address: "Indira Paryavaran Bhawan, Jor Bagh Road, New Delhi 110003"
+
+  - id: jharkhand_pollution_board
+    canonical: Jharkhand State Pollution Control Board (JSPCB)
+    type: ORG
+    domain_primary: mining
+    domain_secondary: [government]
+    surface_variants:
+      - JSPCB
+      - Jharkhand Pollution Board
+    profile: |
+      State-level pollution regulator; receives quarterly emission
+      monitoring reports from mine operators.
+    address: "T.A. Division Building, HEC, Dhurwa, Ranchi 834004"
+
+  - id: cmpdi_consulting
+    canonical: Central Mine Planning and Design Institute Ltd (CMPDI)
+    type: ORG
+    domain_primary: mining
+    surface_variants:
+      - CMPDI
+      - Central Mine Planning
+    profile: |
+      Mining-consultancy / planning subsidiary of Coal India Ltd.
+      Prepares mine plans + drilling reports.
+    address: "Gondwana Place, Kanke Road, Ranchi 834008"
+
+  - id: mahalaxmi_drilling
+    canonical: Mahalaxmi Drilling & Geo-Services Pvt Ltd
+    type: ORG
+    domain_primary: mining
+    surface_variants:
+      - Mahalaxmi Drilling
+      - MDGS
+    profile: |
+      Contract drilling services vendor. Subject of a multi-hop
+      query — linked to one safety incident.
+    address: "Plot 12B, Industrial Estate, Dhanbad 826001"
+
+  - id: bharat_safety_audit
+    canonical: Bharat Safety Audit Services
+    type: ORG
+    domain_primary: mining
+    surface_variants:
+      - BSAS
+      - Bharat Safety Audit
+    profile: |
+      Third-party safety auditor for mining operations.
+    address: "5th Floor, Ranchi Tower, Lalpur Chowk, Ranchi 834001"
+
+  # ---------------------------------------------------------------------
+  # Government orgs (moefcc_ministry + dgms_directorate already declared
+  # above as cross-domain hooks from mining)
+  # ---------------------------------------------------------------------
+  - id: mh_revenue_dept
+    canonical: Maharashtra Revenue Department
+    type: ORG
+    domain_primary: government
+    surface_variants:
+      - Maharashtra Revenue Dept
+      - Revenue Department, GoM
+      - MH Revenue
+    profile: |
+      State revenue department — issues 7/12 land extracts, mutation
+      orders, and tehsildar circulars. Multilingual (Marathi + English)
+      jurisdiction.
+    address: "Mantralaya, Madame Cama Road, Mumbai 400032"
+
+  - id: mh_general_admin_dept
+    canonical: Government of Maharashtra — General Administration Department (GAD)
+    type: ORG
+    domain_primary: government
+    surface_variants:
+      - GAD Maharashtra
+      - GoM GAD
+      - Maharashtra GAD
+    profile: |
+      Cross-cutting department that issues Government Resolutions (GRs)
+      on policy + administrative matters. Multiple GRs + corrigenda
+      seeded in this corpus.
+    address: "Mantralaya, Mumbai 400032"
+
+  - id: beed_district_admin
+    canonical: Office of the District Magistrate, Beed (Maharashtra)
+    type: ORG
+    domain_primary: government
+    surface_variants:
+      - DM Beed
+      - District Beed
+      - Collectorate Beed
+    profile: |
+      District administration in central Maharashtra. Issues
+      district-admin orders; receives mutation applications and
+      welfare-scheme records.
+    address: "Collectorate, Civil Lines, Beed 431122, Maharashtra"
+
+  - id: cidco_corporation
+    canonical: City and Industrial Development Corporation of Maharashtra (CIDCO)
+    type: ORG
+    domain_primary: government
+    surface_variants:
+      - CIDCO
+      - CIDCO Maharashtra
+    profile: |
+      State-owned development corporation. Subject of one tender
+      conflict-pair stressor.
+    address: "Nirmal, 2nd Floor, Nariman Point, Mumbai 400021"
+
+  - id: mh_police_beed
+    canonical: Maharashtra Police — Beed District
+    type: ORG
+    domain_primary: government
+    surface_variants:
+      - Police Beed
+      - SP Beed
+    profile: |
+      District police — issues FIRs and case-progress reports.
+    address: "SP Office, Bargaon Road, Beed 431122"
+
+  - id: ration_dept_mh
+    canonical: Maharashtra Food, Civil Supplies and Consumer Protection Department
+    type: ORG
+    domain_primary: government
+    surface_variants:
+      - Ration Department
+      - MH PDS Dept
+      - Food and Civil Supplies, Maharashtra
+    profile: |
+      State food/PDS department — administers ration card schemes;
+      maintains beneficiary lists. PII handling sensitive.
+    address: "Mantralaya, Mumbai 400032"
+
+  # ---------------------------------------------------------------------
+  # Finance orgs (HDFC Bank + HDFC ERGO already declared above as
+  # cross-domain hooks)
+  # ---------------------------------------------------------------------
+  - id: icici_bank
+    canonical: ICICI Bank Ltd
+    type: ORG
+    domain_primary: finance
+    surface_variants:
+      - ICICI
+      - ICICI Bank
+    profile: |
+      Issuing bank for one loan agreement chain + multiple statements.
+    address: "ICICI Bank Towers, Bandra-Kurla Complex, Mumbai 400051"
+
+  - id: kotak_mahindra_bank
+    canonical: Kotak Mahindra Bank Ltd
+    type: ORG
+    domain_primary: finance
+    surface_variants:
+      - Kotak
+      - Kotak Mahindra
+    profile: |
+      Mid-tier bank — counterparty in two complaint tickets + KYC PDFs.
+    address: "27BKC, C-27, G-Block, Bandra-Kurla Complex, Mumbai 400051"
+
+  - id: federal_bank
+    canonical: Federal Bank Ltd
+    type: ORG
+    domain_primary: finance
+    surface_variants:
+      - Federal
+      - Federal Bank
+    profile: |
+      Mid-tier private bank. Holds the Sterling Trade Enterprises account
+      flagged for AML structured-transaction pattern (statement-006).
+    address: "Federal Towers, MG Road, Ernakulam 682035"
+
+  - id: axis_bank
+    canonical: Axis Bank Ltd
+    type: ORG
+    domain_primary: finance
+    surface_variants:
+      - Axis
+      - Axis Bank
+    profile: |
+      Tier-1 private bank. Defendant in the senior-citizen ULIP mis-selling
+      complaint (complaint-005-axis-mis-selling).
+    address: "Axis House, Wadia International Centre, Mumbai 400025"
+
+  - id: nimbus_finance_subsidiary
+    canonical: Nimbus Finance Pvt Ltd
+    type: ORG
+    domain_primary: finance
+    domain_secondary: [legal]
+    surface_variants:
+      - Nimbus Finance
+      - Nimbus Fin
+    profile: |
+      Cross-domain — finance subsidiary of Nimbus Technologies Pte Ltd
+      (which appears in the Legal corpus). Subject of one corporate
+      loan agreement.
+
+  - id: northwind_capital
+    canonical: NorthWind Capital Ltd
+    type: ORG
+    domain_primary: finance
+    surface_variants:
+      - NorthWind
+      - NWC Ltd
+    profile: |
+      Listed Indian SaaS company (subject of a Demo 10-K filing in this
+      corpus). Borrower in a Term Loan from HDFC Bank.
+
+  - id: solaris_industries_ltd
+    canonical: Solaris Industries Ltd
+    type: ORG
+    domain_primary: finance
+    surface_variants:
+      - Solaris
+      - Solaris Industries
+    profile: |
+      Listed Indian manufacturing company (subject of a Demo 10-K).
+
+  - id: marigold_pharma_ltd
+    canonical: Marigold Pharma Ltd
+    type: ORG
+    domain_primary: finance
+    domain_secondary: [healthcare]
+    surface_variants:
+      - Marigold Pharma
+      - Marigold
+    profile: |
+      Listed Indian pharma company; one Demo 10-K + cross-domain
+      manufacturing tie-in (its products appear in healthcare Rx).
+
+  # ---------------------------------------------------------------------
+  # Construction orgs (Acme datacentre Phase-2 project + ancillary
+  # projects). Cross-domain hooks: Mahalaxmi Infra also appears in
+  # mining (vendor on incident-003). MMRDA + CIDCO also appear in
+  # government domain.
+  # ---------------------------------------------------------------------
+  - id: mahalaxmi_infra
+    canonical: Mahalaxmi Infrastructure Pvt Ltd
+    type: ORG
+    domain_primary: construction
+    domain_secondary: [mining]
+    surface_variants:
+      - Mahalaxmi Infra
+      - Mahalaxmi
+      - Mahalaxmi Infrastructure
+    profile: |
+      Mid-large Indian EPC contractor (Mumbai-headquartered). Main
+      contractor on the Acme Whitefield Datacentre Phase-2 project.
+      Also appears in mining domain as a vendor implicated in
+      incident-003.
+    address: "Mahalaxmi Tower, Worli Sea Face, Mumbai 400018"
+    cin: "U45200MH2002PTC184118"
+    pan: "AABCM4218P"
+
+  - id: deshpande_architects
+    canonical: Deshpande Architects + Engineers LLP
+    type: ORG
+    domain_primary: construction
+    surface_variants:
+      - Deshpande Architects
+      - DAE
+      - Deshpande
+    profile: |
+      Bangalore-based architecture + engineering firm. Architect of
+      record for the Acme Whitefield Datacentre Phase-2.
+    address: "DAE House, 16 Indiranagar 80 Ft Road, Bangalore 560038"
+
+  - id: sundar_structural
+    canonical: Sundar Structural Consultants Pvt Ltd
+    type: ORG
+    domain_primary: construction
+    surface_variants:
+      - Sundar Structural
+      - SSC
+    profile: |
+      Structural engineering consultancy. Engineer of record (structural)
+      for Acme datacentre Phase-2.
+    address: "Sundar Plaza, Whitefield Main Road, Bangalore 560066"
+
+  - id: phoenix_mep
+    canonical: Phoenix MEP Services Pvt Ltd
+    type: ORG
+    domain_primary: construction
+    surface_variants:
+      - Phoenix MEP
+      - Phoenix Mechanical
+    profile: |
+      MEP (Mechanical-Electrical-Plumbing) subcontractor on the Acme
+      Whitefield Datacentre project.
+    address: "Phoenix Tower, Electronic City Phase-1, Bangalore 560100"
+
+  - id: cidco_corp
+    canonical: City and Industrial Development Corporation of Maharashtra Ltd
+    type: ORG
+    domain_primary: government
+    domain_secondary: [construction]
+    surface_variants:
+      - CIDCO
+      - CIDCO Ltd
+    profile: |
+      Maharashtra state-owned urban development corporation. Tendering
+      authority for the Mumbai Trans-Harbour Link (referenced from
+      government domain) + the Navi Mumbai infrastructure tender that
+      appears in this domain.
+    address: "CIDCO Bhavan, CBD Belapur, Navi Mumbai 400614"
+
+  - id: mmrda
+    canonical: Mumbai Metropolitan Region Development Authority
+    type: ORG
+    domain_primary: government
+    domain_secondary: [construction]
+    surface_variants:
+      - MMRDA
+    profile: |
+      Mumbai metropolitan planning + development authority. Authority
+      for the Mumbai Metro Line-9 contract referenced in this corpus.
+    address: "Bandra-Kurla Complex, Bandra (East), Mumbai 400051"
+
+  - id: apollo_hospitals_pune
+    # Already declared in healthcare-finance section above; re-referenced
+    # here as a cross-domain construction client (maternity Phase-2).
+    canonical: Apollo Hospitals Pune Pvt Ltd
+    type: ORG_REF
+    note: "Cross-domain reference — full record under healthcare entity registry."
+
+  - id: directorate_factories_kar
+    canonical: Directorate of Factories and Boilers, Karnataka
+    type: ORG
+    domain_primary: government
+    domain_secondary: [construction]
+    surface_variants:
+      - Karnataka Factories Dept
+      - Factory Inspector Karnataka
+    profile: |
+      Statutory authority under the Karnataka Factories Act + Building
+      and Other Construction Workers Act. Authority for inspection of
+      construction sites; counterparty in incident reports.
+    address: "DFB Bhavan, Jayanagar, Bangalore 560011"
+
+
+people:
+  # ---------------------------------------------------------------------
+  # Executives (signatories on contracts)
+  # ---------------------------------------------------------------------
+  - id: robert_sharma
+    canonical: Robert Sharma
+    type: PERSON
+    role: "CEO, Acme Corp Pvt Ltd"
+    surface_variants: [Mr. Sharma, R. Sharma, Sharma]
+    org_ref: acme_corp
+
+  - id: priya_iyer
+    canonical: Priya Iyer
+    type: PERSON
+    role: "VP Legal, Vertex Industries Inc."
+    surface_variants: [Ms. Iyer, P. Iyer, Iyer]
+    org_ref: vertex_industries
+
+  - id: marcus_chen
+    canonical: Marcus Chen
+    type: PERSON
+    role: "CEO, Vertex Industries Inc."
+    surface_variants: [Mr. Chen, M. Chen]
+    org_ref: vertex_industries
+
+  - id: kenji_tanaka
+    canonical: Kenji Tanaka
+    type: PERSON
+    role: "Managing Director, Nimbus Technologies Pte Ltd"
+    surface_variants: [Mr. Tanaka, K. Tanaka]
+    org_ref: nimbus_technologies
+
+  # ---------------------------------------------------------------------
+  # Counsel
+  # ---------------------------------------------------------------------
+  - id: aisha_mehta
+    canonical: Aisha Mehta, Esq.
+    type: PERSON
+    role: "Partner, Mehta & Associates LLP"
+    surface_variants: [Aisha Mehta, A. Mehta, Ms. Mehta]
+    org_ref: mehta_law_partners
+
+  - id: jonathan_levin
+    canonical: Jonathan Levin, Esq.
+    type: PERSON
+    role: "Partner, Stark Levin & Co"
+    surface_variants: [Jonathan Levin, J. Levin, Mr. Levin]
+    org_ref: stark_levin
+
+  # ---------------------------------------------------------------------
+  # Employees (subjects of employment offers)
+  # ---------------------------------------------------------------------
+  - id: vikram_kale
+    canonical: Vikram Kale
+    type: PERSON
+    role: "Senior Software Engineer (incoming)"
+    surface_variants: [V. Kale, Mr. Kale]
+    org_ref: acme_corp
+    pan: "BNZPK4567N"   # SYNTHETIC — PII; redaction handler must surface
+    aadhaar: "9341 0820 4536"  # SYNTHETIC — PII
+
+  - id: sneha_joshi
+    canonical: Sneha Joshi
+    type: PERSON
+    role: "Director of Product (incoming)"
+    surface_variants: [S. Joshi, Ms. Joshi]
+    org_ref: vertex_industries
+
+  - id: raghav_menon
+    canonical: Raghav Menon
+    type: PERSON
+    role: "VP Engineering (incoming)"
+    surface_variants: [R. Menon, Mr. Menon]
+    org_ref: nimbus_technologies
+
+  - id: deepa_subramaniam
+    canonical: Deepa Subramaniam
+    type: PERSON
+    role: "Head of Sales (incoming)"
+    surface_variants: [D. Subramaniam, Ms. Subramaniam]
+    org_ref: orion_consulting
+
+  - id: arjun_pillai
+    canonical: Arjun Pillai
+    type: PERSON
+    role: "Principal Architect (incoming)"
+    surface_variants: [A. Pillai, Mr. Pillai]
+    org_ref: helios_partners
+
+  - id: maya_krishnan
+    canonical: Maya Krishnan
+    type: PERSON
+    role: "Senior Counsel (incoming)"
+    surface_variants: [M. Krishnan, Ms. Krishnan]
+    org_ref: lakeview_properties
+
+  - id: tarun_bhatia
+    canonical: Tarun Bhatia
+    type: PERSON
+    role: "Director of Marketing (incoming)"
+    surface_variants: [T. Bhatia, Mr. Bhatia]
+    org_ref: acme_corp
+
+  - id: leena_rao
+    canonical: Leena Rao
+    type: PERSON
+    role: "Senior Data Scientist (incoming)"
+    surface_variants: [L. Rao, Ms. Rao]
+    org_ref: vertex_industries
+
+  # ---------------------------------------------------------------------
+  # Healthcare patients (SYNTHETIC — Faker-equivalent IDs)
+  # ---------------------------------------------------------------------
+  - id: arjun_singh_patient
+    canonical: Arjun Singh
+    type: PERSON
+    role: "Patient (5-doc chain across multiple visits)"
+    surface_variants: [A. Singh, Mr. Singh, Mr. Arjun Singh]
+    profile: |
+      54-year-old male, hypertension + Type-2 diabetes + newly-diagnosed
+      atrial fibrillation. Multi-visit patient chain spans 5 docs across
+      Apollo Pune.
+    aadhaar: "5247 9183 6024"   # SYNTHETIC PII
+    mrn: "APO-2025-008842"      # Medical Record Number
+
+  - id: kavya_reddy_patient
+    canonical: Kavya Reddy
+    type: PERSON
+    role: "Patient (lab-value conflict pair)"
+    surface_variants: [K. Reddy, Mrs. Reddy, Ms. Kavya Reddy]
+    profile: |
+      42-year-old female. Two thyroid lab panels two weeks apart with
+      contradicting TSH values — Design 2 conflict-resolution stressor.
+    mrn: "MNP-2025-104732"
+
+  - id: suresh_iyer_patient
+    canonical: Suresh Iyer
+    type: PERSON
+    role: "Patient (lab anomaly — extreme abnormal)"
+    surface_variants: [S. Iyer, Mr. Iyer]
+    profile: |
+      63-year-old male. Extreme creatinine elevation = atomic-units
+      rarity stressor.
+    mrn: "FOR-2025-203195"
+
+  - id: meera_gupta_patient
+    canonical: Meera Gupta
+    type: PERSON
+    role: "Patient (consent form with PII)"
+    surface_variants: [M. Gupta, Mrs. Gupta]
+    profile: |
+      37-year-old female. Pre-op consent form with Aadhaar + PAN —
+      PII redaction stressor.
+    aadhaar: "8136 2945 7710"   # SYNTHETIC PII
+    pan: "AAQPG2284R"            # SYNTHETIC PII
+    mrn: "APO-2025-008401"
+
+  - id: ramesh_naidu_patient
+    canonical: Ramesh Naidu
+    type: PERSON
+    role: "Patient (insurance claim dispute)"
+    surface_variants: [R. Naidu, Mr. Naidu]
+    profile: |
+      58-year-old male. Insurance claim rejection then appeal — chain
+      across 2 insurance-claim docs.
+    mrn: "MNP-2025-104511"
+
+  - id: priya_iyer_patient
+    canonical: Priya Iyer
+    type: PERSON
+    role: "Patient (cross-doc entity-collision test — same name as Vertex VP Legal)"
+    surface_variants: [P. Iyer, Ms. Iyer]
+    profile: |
+      31-year-old female patient. Deliberately shares first+last name
+      with the Vertex VP Legal in the Legal corpus — entity-resolution
+      must NOT collapse these (different DOB, different MRN, different
+      domain context). Cross-domain disambiguation stressor.
+    mrn: "FOR-2025-203282"
+
+  # ---------------------------------------------------------------------
+  # Healthcare providers (doctors)
+  # ---------------------------------------------------------------------
+  - id: dr_anjali_verma
+    canonical: Dr. Anjali Verma, MD
+    type: PERSON
+    role: "Cardiologist, Apollo Hospitals Pune"
+    surface_variants: [Dr. Verma, A. Verma, Anjali Verma]
+    org_ref: apollo_hospitals_pune
+    license_no: "MCI-MH-58291"   # SYNTHETIC
+
+  - id: dr_suresh_nair
+    canonical: Dr. Suresh Nair, MD (Endocrinology)
+    type: PERSON
+    role: "Endocrinologist, Manipal Hospital Bangalore"
+    surface_variants: [Dr. Nair, S. Nair, Suresh Nair]
+    org_ref: manipal_hospital_bangalore
+    license_no: "MCI-KA-32411"
+
+  - id: dr_rashmi_pillai
+    canonical: Dr. Rashmi Pillai, MD (Nephrology)
+    type: PERSON
+    role: "Nephrologist, Fortis Escorts"
+    surface_variants: [Dr. Pillai, R. Pillai, Rashmi Pillai]
+    org_ref: fortis_escorts_delhi
+    license_no: "MCI-DL-19887"
+
+  - id: dr_vikram_shah
+    canonical: Dr. Vikram Shah, MBBS DGO (Gynecology)
+    type: PERSON
+    role: "OB-GYN, Apollo Hospitals Pune"
+    surface_variants: [Dr. Shah, V. Shah]
+    org_ref: apollo_hospitals_pune
+    license_no: "MCI-MH-44721"
+
+  - id: dr_lakshmi_natarajan
+    canonical: Dr. Lakshmi Natarajan, MD (General Medicine)
+    type: PERSON
+    role: "Internist, Manipal Hospital Bangalore"
+    surface_variants: [Dr. Natarajan, L. Natarajan]
+    org_ref: manipal_hospital_bangalore
+    license_no: "MCI-KA-29103"
+
+  # ---------------------------------------------------------------------
+  # Nursing / handover staff
+  # ---------------------------------------------------------------------
+  - id: nurse_priya_kumar
+    canonical: Sr. Priya Kumar, RN
+    type: PERSON
+    role: "Senior Nursing Officer, Apollo Pune"
+    surface_variants: [Sr. Kumar, P. Kumar, Nurse Kumar]
+    org_ref: apollo_hospitals_pune
+
+  - id: nurse_anil_thomas
+    canonical: Br. Anil Thomas, RN
+    type: PERSON
+    role: "Charge Nurse, Manipal Bangalore"
+    surface_variants: [Br. Thomas, A. Thomas, Nurse Thomas]
+    org_ref: manipal_hospital_bangalore
+
+  # ---------------------------------------------------------------------
+  # Mining personas
+  # ---------------------------------------------------------------------
+  - id: manish_deshmukh_engineer
+    canonical: Manish Deshmukh, P.E.
+    type: PERSON
+    role: "Chief Mining Engineer, Tata Steel Mining (Noamundi block)"
+    surface_variants: [M. Deshmukh, Manish Deshmukh, Mr. Deshmukh]
+    org_ref: tata_steel_mining
+
+  - id: pradeep_khurana_engineer
+    canonical: Pradeep Khurana, P.E.
+    type: PERSON
+    role: "Mine Superintendent, Adani Enterprises (Parsa coal block)"
+    surface_variants: [P. Khurana, Pradeep Khurana, Mr. Khurana]
+    org_ref: adani_mining
+
+  - id: dgms_inspector_singh
+    canonical: A. K. Singh, DGMS Inspector
+    type: PERSON
+    role: "DGMS Inspector of Mines, Dhanbad Region"
+    surface_variants: [A.K. Singh, Inspector Singh, Mr. A. K. Singh]
+    org_ref: dgms_directorate
+
+  - id: union_leader_mahato
+    canonical: Sushil Mahato
+    type: PERSON
+    role: "President, Bharatiya Khanikamgar Union (Jharia chapter)"
+    surface_variants: [S. Mahato, Mahato]
+
+  - id: safety_officer_naresh
+    canonical: Naresh Soren
+    type: PERSON
+    role: "Safety Officer, Tata Steel Mining (Noamundi block)"
+    surface_variants: [N. Soren, Mr. Soren, Naresh Soren]
+    org_ref: tata_steel_mining
+
+  - id: geo_consultant_ranjan
+    canonical: Dr. Ranjan Mishra, Ph.D. (Geology)
+    type: PERSON
+    role: "Senior Geologist, CMPDI"
+    surface_variants: [Dr. Mishra, R. Mishra]
+    org_ref: cmpdi_consulting
+
+  - id: contractor_supervisor_kumar
+    canonical: Vinod Kumar
+    type: PERSON
+    role: "Field Supervisor, Mahalaxmi Drilling & Geo-Services"
+    surface_variants: [V. Kumar, Mr. Kumar]
+    org_ref: mahalaxmi_drilling
+
+  # ---------------------------------------------------------------------
+  # Government personas
+  # ---------------------------------------------------------------------
+  - id: tehsildar_sunil_pawar
+    canonical: Sunil Pawar
+    type: PERSON
+    role: "Tehsildar, Beed Taluka, Maharashtra Revenue Department"
+    surface_variants: [Tehsildar Pawar, S. Pawar, Mr. Pawar]
+    org_ref: beed_district_admin
+
+  - id: dm_beed_rajshree_patil
+    canonical: Rajshree Patil, IAS
+    type: PERSON
+    role: "District Magistrate, Beed (Maharashtra)"
+    surface_variants: [DM Patil, R. Patil, Rajshree Patil IAS]
+    org_ref: beed_district_admin
+
+  - id: secretary_gad_kulkarni
+    canonical: A. R. Kulkarni, IAS
+    type: PERSON
+    role: "Principal Secretary, GAD, Government of Maharashtra"
+    surface_variants: [Secretary Kulkarni, A.R. Kulkarni]
+    org_ref: mh_general_admin_dept
+
+  - id: sp_beed_anant_jadhav
+    canonical: Anant Jadhav, IPS
+    type: PERSON
+    role: "Superintendent of Police, Beed District"
+    surface_variants: [SP Jadhav, A. Jadhav]
+    org_ref: mh_police_beed
+
+  - id: citizen_kamla_jadhav
+    canonical: Kamla Jadhav
+    type: PERSON
+    role: "Citizen (PMAY beneficiary, mutation applicant — Beed)"
+    surface_variants: [K. Jadhav, Smt. Kamla Jadhav]
+    aadhaar: "6193 4827 5841"   # SYNTHETIC PII
+    profile: |
+      63-year-old widow, beneficiary of Pradhan Mantri Awas Yojana (PMAY)
+      housing scheme; also subject of a mutation application after her
+      husband's passing. Cross-doc identity used in welfare + land
+      records.
+
+  - id: citizen_ramesh_solanki
+    canonical: Ramesh Solanki
+    type: PERSON
+    role: "Citizen (FIR complainant, tender objector)"
+    surface_variants: [R. Solanki, Shri R. Solanki]
+    aadhaar: "7421 0398 4761"   # SYNTHETIC PII
+    profile: |
+      Local contractor + civic activist; complainant in an FIR; filed
+      RTI on the CIDCO tender (see tender-001 conflict pair).
+
+  - id: rti_applicant_anonymous
+    canonical: Anonymous RTI Applicant (Mehboob Khan)
+    type: PERSON
+    role: "RTI applicant (Beed mutation transparency)"
+    surface_variants: [M. Khan, Anonymous RTI]
+    profile: |
+      Filer of a Right-To-Information request asking the Beed district
+      to disclose mutation orders for the period 2024-25. Source of
+      one false-premise stressor.
+
+  # ---------------------------------------------------------------------
+  # Finance personas
+  # ---------------------------------------------------------------------
+  - id: customer_aniket_desai
+    canonical: Aniket Desai
+    type: PERSON
+    role: "Bank customer (KYC + complaint subject)"
+    surface_variants: [A. Desai, Mr. Desai]
+    pan: "AEZPD4521N"           # SYNTHETIC PII
+    aadhaar: "8412 0394 6172"   # SYNTHETIC PII
+    profile: |
+      HDFC Bank retail customer; subject of one KYC doc + complaint
+      ticket pair (allegedly disputed transaction).
+
+  - id: customer_neha_kapoor
+    canonical: Neha Kapoor
+    type: PERSON
+    role: "Bank customer (loan + statements)"
+    surface_variants: [N. Kapoor, Ms. Kapoor]
+    pan: "ABRPK7732M"           # SYNTHETIC PII
+
+  - id: cfo_acme_jayanti
+    canonical: Jayanti Iyer
+    type: PERSON
+    role: "CFO, Acme Corp Pvt Ltd"
+    surface_variants: [J. Iyer, CFO Iyer]
+    org_ref: acme_corp
+
+  - id: treasurer_acme_meera
+    canonical: Meera Bhattacharya
+    type: PERSON
+    role: "Treasurer, Acme Corp Pvt Ltd"
+    surface_variants: [M. Bhattacharya, Treasurer Bhattacharya]
+    org_ref: acme_corp
+
+  - id: relationship_mgr_hdfc_raj
+    canonical: Raj Mehta
+    type: PERSON
+    role: "Senior Relationship Manager, HDFC Bank Mumbai Corporate"
+    surface_variants: [R. Mehta, RM Mehta]
+    org_ref: hdfc_bank
+
+  - id: cfo_northwind_arjun_kapoor
+    canonical: Arjun Kapoor
+    type: PERSON
+    role: "CFO, NorthWind Capital Ltd"
+    surface_variants: [A. Kapoor, CFO Kapoor]
+    org_ref: northwind_capital
+
+  # ---------------------------------------------------------------------
+  # Construction-domain people
+  # ---------------------------------------------------------------------
+  - id: arch_amit_deshpande
+    canonical: Ar. Amit Deshpande
+    type: PERSON
+    role: "Principal Architect, Deshpande Architects + Engineers LLP"
+    surface_variants: [A. Deshpande, Amit Deshpande, Ar Deshpande]
+    org_ref: deshpande_architects
+
+  - id: struct_eng_sundar
+    canonical: Dr. Murali Sundar
+    type: PERSON
+    role: "Principal Structural Engineer, Sundar Structural Consultants Pvt Ltd"
+    surface_variants: [M. Sundar, Dr Sundar, Sundar]
+    org_ref: sundar_structural
+
+  - id: pm_rakesh_iyer
+    canonical: Mr. Rakesh Iyer
+    type: PERSON
+    role: "Project Manager (Mahalaxmi Infra), Acme Whitefield Datacentre Phase-2"
+    surface_variants: [R. Iyer (Construction PM), PM Iyer]
+    org_ref: mahalaxmi_infra
+
+  - id: safety_officer_pradeep
+    canonical: Mr. Pradeep Bhargava
+    type: PERSON
+    role: "Senior Safety Officer, Mahalaxmi Infra (site safety)"
+    surface_variants: [P. Bhargava, Safety Officer Bhargava]
+    org_ref: mahalaxmi_infra
+
+  - id: site_engineer_anand
+    canonical: Mr. Anand Krishnamurthy
+    type: PERSON
+    role: "Site Engineer (Civil), Mahalaxmi Infra"
+    surface_variants: [A. Krishnamurthy, Site Eng Anand]
+    org_ref: mahalaxmi_infra
+
+  - id: factory_inspector_kar
+    canonical: Mr. Mohan Rao
+    type: PERSON
+    role: "Factory Inspector, Directorate of Factories + Boilers, Karnataka"
+    surface_variants: [Inspector Rao, M. Rao (Karnataka)]
+    org_ref: directorate_factories_kar
+
+  - id: worker_dinesh_kumar
+    canonical: Mr. Dinesh Kumar
+    type: PERSON
+    role: "Construction worker (mason), Mahalaxmi Infra (sub-contracted via labour agency)"
+    surface_variants: [Dinesh K., D. Kumar]
+    org_ref: mahalaxmi_infra
+    pii_aadhaar: "8421 2840 1842"   # SYNTHETIC
+    pii_residence: "Hosur Road, Electronic City, Bangalore"
+
+
+# ---------------------------------------------------------------------------
+# Doc chains — explicit lineage between docs.
+# Each chain id is referenced from individual docs' front-matter.
+# ---------------------------------------------------------------------------
+chains:
+  - id: chain_acme_vertex_msa
+    type: contract_chain
+    description: |
+      Master Services Agreement between Acme Corp and Vertex Industries,
+      followed by 2 amendments and 1 side letter. Payment terms shift
+      across the chain (NET-30 → NET-45 → NET-60), creating a Design 2
+      conflict the orchestrator must resolve via chain rules.
+    members:
+      - { doc: legal/docs/msa-001-acme-vertex.md,           role: original,  version_index: 0 }
+      - { doc: legal/docs/msa-001-amendment-1.md,           role: amendment, version_index: 1 }
+      - { doc: legal/docs/msa-001-amendment-2.md,           role: amendment, version_index: 2 }
+      - { doc: legal/docs/msa-001-side-letter.md,           role: amendment, version_index: 3 }
+
+  - id: chain_acme_nimbus_sow
+    type: sow_chain
+    description: |
+      MSA between Acme and Nimbus Technologies (Singapore-governed),
+      then 2 SOWs scoped under it.
+    members:
+      - { doc: legal/docs/msa-002-acme-nimbus.md,           role: original,  version_index: 0 }
+      - { doc: legal/docs/sow-001-acme-nimbus.md,           role: amendment, version_index: 1 }
+      - { doc: legal/docs/sow-002-acme-nimbus.md,           role: amendment, version_index: 2 }
+
+  - id: chain_acme_orion_msa
+    type: contract_chain
+    description: |
+      Acme-Orion MSA with one amendment that introduces a most-favored-
+      nation clause (rare-clause stressor).
+    members:
+      - { doc: legal/docs/msa-003-acme-orion.md,            role: original,  version_index: 0 }
+      - { doc: legal/docs/license-001-acme-orion-mfn.md,    role: amendment, version_index: 1 }
+
+  - id: chain_nda_acme_vertex_pair
+    type: nda_pair
+    description: |
+      Mutual NDA between Acme and Vertex (early-stage discussion),
+      then a unilateral NDA from Acme→Vertex (later, with different
+      term length). Same parties, two different scopes — Design 2
+      conflict test.
+    members:
+      - { doc: legal/docs/nda-mutual-001-acme-vertex.md,    role: original,  version_index: 0 }
+      - { doc: legal/docs/nda-unilateral-001-acme-vertex.md, role: original, version_index: 0 }
+
+  - id: thread_vertex_renewal
+    type: email_thread
+    description: |
+      Email thread between Acme and Vertex on contract renewal —
+      seeds context for follow-up dialogue queries.
+    members:
+      - { doc: legal/threads/vertex-renewal-thread.eml,     role: original,  version_index: 0 }
+
+  # ---------------------------------------------------------------------
+  # Healthcare chains
+  # ---------------------------------------------------------------------
+  - id: chain_arjun_singh_encounters
+    type: patient_encounter_chain
+    description: |
+      Multi-visit chain for Arjun Singh at Apollo Pune. Spans 5 docs:
+      initial cardiology consult → CBC + lipid lab panel → discharge
+      summary → follow-up visit → updated lab panel (with one new
+      finding contradicting initial reading).
+    members:
+      - { doc: healthcare/docs/visit-001-arjun-singh-cardio-initial.md,    role: original,  version_index: 0 }
+      - { doc: healthcare/docs/lab-001-arjun-singh-cbc-lipid.md,           role: amendment, version_index: 1 }
+      - { doc: healthcare/docs/discharge-001-arjun-singh.md,               role: amendment, version_index: 2 }
+      - { doc: healthcare/docs/visit-002-arjun-singh-followup.md,          role: amendment, version_index: 3 }
+      - { doc: healthcare/docs/lab-002-arjun-singh-followup-panel.md,      role: amendment, version_index: 4 }
+
+  - id: chain_kavya_reddy_thyroid_pair
+    type: lab_recheck_pair
+    description: |
+      Two thyroid lab panels for Kavya Reddy two weeks apart with
+      contradicting TSH values. Lab v1 says 9.4 (subclinical hypothyroid).
+      Lab v2 (after re-draw) says 3.1 (normal). Design 2 conflict.
+    members:
+      - { doc: healthcare/docs/lab-003-kavya-reddy-thyroid-v1.md,          role: original,  version_index: 0 }
+      - { doc: healthcare/docs/lab-004-kavya-reddy-thyroid-v2.md,          role: amendment, version_index: 1 }
+
+  - id: chain_ramesh_naidu_insurance_appeal
+    type: insurance_claim_appeal
+    description: |
+      Insurance claim initially rejected then approved on appeal —
+      two docs.
+    members:
+      - { doc: healthcare/docs/claim-001-ramesh-naidu-rejected.md,         role: original,  version_index: 0 }
+      - { doc: healthcare/docs/claim-002-ramesh-naidu-approved.md,         role: amendment, version_index: 1 }
+
+  - id: thread_kavya_reddy_referral
+    type: referral_thread
+    description: |
+      Doctor-to-doctor referral thread for Kavya Reddy from GP to
+      endocrinologist — multi-turn dialogue stressor.
+    members:
+      - { doc: healthcare/threads/kavya-reddy-endo-referral.eml,           role: original,  version_index: 0 }
+
+  # ---------------------------------------------------------------------
+  # Mining chains
+  # ---------------------------------------------------------------------
+  - id: chain_noamundi_drilling_revisions
+    type: drilling_report_revisions
+    description: |
+      Drilling report for Noamundi iron-ore block goes through 3
+      revisions over a year. Initial estimate of ore-grade is revised
+      twice as additional core samples come in — Design 2 conflict
+      (numeric ore-grade disagreement across revisions).
+    members:
+      - { doc: mining/docs/drilling-001-noamundi-v1.md,                    role: original,  version_index: 0 }
+      - { doc: mining/docs/drilling-001-noamundi-v2.md,                    role: amendment, version_index: 1 }
+      - { doc: mining/docs/drilling-001-noamundi-v3.md,                    role: amendment, version_index: 2 }
+
+  - id: chain_parsa_env_clearance
+    type: env_clearance_corrigendum
+    description: |
+      Environmental clearance for Parsa coal block — original EC has a
+      mining-cap restriction (12 MTPA) which is amended via a
+      corrigendum (raised to 18 MTPA). Design 2 conflict + Design 3
+      chain (govt corrigenda pattern).
+    members:
+      - { doc: mining/docs/env-clearance-001-parsa-original.md,            role: original,  version_index: 0 }
+      - { doc: mining/docs/env-clearance-001-parsa-corrigendum.md,         role: amendment, version_index: 1 }
+
+  - id: chain_incident_vendor_multihop
+    type: incident_vendor_chain
+    description: |
+      Multi-hop chain — drilling incident at Noamundi (operator: Tata
+      Steel) involves equipment supplied by Mahalaxmi Drilling
+      (subcontractor). DGMS inspection report cross-references the
+      incident.
+    members:
+      - { doc: mining/docs/incident-003-noamundi-vendor-equipment.md,      role: original,  version_index: 0 }
+      - { doc: mining/docs/incident-003-dgms-inspection-report.md,         role: amendment, version_index: 1 }
+
+  # ---------------------------------------------------------------------
+  # Government chains
+  # ---------------------------------------------------------------------
+  - id: chain_pmay_beed_gr_corrigendum
+    type: gr_corrigendum_chain
+    description: |
+      PMAY housing-scheme GR for Beed district — original allocation
+      amount is later revised down via corrigendum. Design 2 +
+      Design 3 stressor (govt corrigenda pattern that flips the amount).
+    members:
+      - { doc: government/docs/gr-001-pmay-beed-original.md,               role: original,  version_index: 0 }
+      - { doc: government/docs/gr-001-pmay-beed-corrigendum.md,            role: amendment, version_index: 1 }
+
+  - id: chain_cidco_tender_bid_pair
+    type: tender_bid_pair
+    description: |
+      CIDCO tender for road-resurfacing in Navi Mumbai with two
+      conflicting bids — eventually one bid is disqualified after RTI
+      complaint by citizen Ramesh Solanki.
+    members:
+      - { doc: government/docs/tender-001-cidco-road-resurfacing.md,       role: original,  version_index: 0 }
+      - { doc: government/docs/tender-001-cidco-bid-decision.md,           role: amendment, version_index: 1 }
+
+  - id: chain_kamla_jadhav_mutation
+    type: mutation_chain
+    description: |
+      Citizen Kamla Jadhav's name added to 7/12 extract after husband's
+      death — original land record + mutation order.
+    members:
+      - { doc: government/docs/7-12-001-kamla-jadhav-original.md,          role: original,  version_index: 0 }
+      - { doc: government/docs/7-12-002-kamla-jadhav-mutation.md,          role: amendment, version_index: 1 }
+
+  # ---------------------------------------------------------------------
+  # Finance chains
+  # ---------------------------------------------------------------------
+  - id: chain_acme_hdfc_loan_addendum
+    type: loan_addendum_chain
+    description: |
+      HDFC Bank term loan to Acme Corp — original + 2 addenda (interest
+      rate revision, then collateral revision). Design 3 chain + Design 2
+      conflict on interest rate.
+    members:
+      - { doc: finance/docs/loan-001-acme-hdfc-original.md,                role: original,  version_index: 0 }
+      - { doc: finance/docs/loan-001-acme-hdfc-addendum-1.md,              role: amendment, version_index: 1 }
+      - { doc: finance/docs/loan-001-acme-hdfc-addendum-2.md,              role: amendment, version_index: 2 }
+
+  - id: chain_acme_complaint_resolution
+    type: complaint_chain
+    description: |
+      Aniket Desai's HDFC complaint — initial complaint + investigation
+      report + resolution.
+    members:
+      - { doc: finance/docs/complaint-001-aniket-desai-initial.md,         role: original,  version_index: 0 }
+      - { doc: finance/docs/complaint-001-aniket-desai-resolution.md,      role: amendment, version_index: 1 }
+
+  - id: chain_datacentre_drawing_revisions
+    type: drawing_chain
+    description: |
+      Architectural drawings for Acme Whitefield Datacentre Phase-2 main
+      building. Architect issues Rev A (initial); Structural raises a
+      load-bearing-wall conflict; Rev B is issued reflecting the
+      structural reposition. Design 3 chain + Design 2 conflict.
+    members:
+      - { doc: construction/docs/drawing-001-arch-datacentre-revA.md, role: original,  version_index: 0 }
+      - { doc: construction/docs/drawing-001-arch-datacentre-revB.md, role: amendment, version_index: 1 }
+      - { doc: construction/docs/drawing-001-arch-datacentre-revC.md, role: amendment, version_index: 2 }
+
+  - id: chain_safety_incident_fall
+    type: incident_chain
+    description: |
+      Worker fall-from-height incident at Acme Whitefield Datacentre site.
+      Incident-report → investigation-report → corrective-action report.
+      Design 3 chain + cross-domain government link (factory inspector).
+    members:
+      - { doc: construction/docs/safety-001-incident-fall-initial.md,       role: original,  version_index: 0 }
+      - { doc: construction/docs/safety-001-incident-fall-investigation.md, role: amendment, version_index: 1 }
+      - { doc: construction/docs/safety-001-incident-fall-corrective.md,    role: amendment, version_index: 2 }
+
+  - id: chain_apollo_maternity_drawings
+    type: drawing_chain
+    description: |
+      Apollo Hospitals Pune Maternity Ward Phase-2 expansion drawings.
+      Architect's drawings only (no structural conflict here — clean
+      revision sequence).
+    members:
+      - { doc: construction/docs/drawing-002-apollo-maternity-revA.md, role: original,  version_index: 0 }
+      - { doc: construction/docs/drawing-002-apollo-maternity-revB.md, role: amendment, version_index: 1 }
+
+
+# ---------------------------------------------------------------------------
+# Conflict pairs — fact_conflicts seeded across the corpus.
+# These specify which docs deliberately disagree, and what predicate
+# the system should resolve.
+# ---------------------------------------------------------------------------
+conflicts:
+  - predicate: payment_terms
+    chain: chain_acme_vertex_msa
+    candidates:
+      - { doc: legal/docs/msa-001-acme-vertex.md,    value: "NET-30", authority: 0.6 }
+      - { doc: legal/docs/msa-001-amendment-1.md,    value: "NET-45", authority: 0.8 }
+      - { doc: legal/docs/msa-001-amendment-2.md,    value: "NET-60", authority: 0.95 }
+    expected_winner: { doc: legal/docs/msa-001-amendment-2.md, value: "NET-60" }
+    expected_rule: chain   # Design 2 — chain-aware supersession
+
+  - predicate: nda_term_years
+    chain: chain_nda_acme_vertex_pair
+    candidates:
+      - { doc: legal/docs/nda-mutual-001-acme-vertex.md,    value: "2 years", authority: 0.7 }
+      - { doc: legal/docs/nda-unilateral-001-acme-vertex.md, value: "5 years", authority: 0.7 }
+    expected_winner: null
+    expected_rule: unresolved   # Both signed; different scopes → surface both
+
+  - predicate: indemnity_cap_usd
+    chain: chain_acme_vertex_msa
+    candidates:
+      - { doc: legal/docs/msa-001-acme-vertex.md,    value: "1,000,000", authority: 0.6 }
+      - { doc: legal/docs/msa-001-side-letter.md,    value: "5,000,000", authority: 0.9 }
+    expected_winner: { doc: legal/docs/msa-001-side-letter.md, value: "5,000,000" }
+    expected_rule: authority   # Side letter signed by both CEOs
+
+  # ---------------------------------------------------------------------
+  # Healthcare conflicts
+  # ---------------------------------------------------------------------
+  - predicate: tsh_mIU_per_L
+    chain: chain_kavya_reddy_thyroid_pair
+    candidates:
+      - { doc: healthcare/docs/lab-003-kavya-reddy-thyroid-v1.md, value: "9.4", authority: 0.7 }
+      - { doc: healthcare/docs/lab-004-kavya-reddy-thyroid-v2.md, value: "3.1", authority: 0.9 }
+    expected_winner: { doc: healthcare/docs/lab-004-kavya-reddy-thyroid-v2.md, value: "3.1" }
+    expected_rule: recency   # Later re-draw with clean protocol takes precedence
+
+  - predicate: blood_pressure_systolic_mmhg
+    chain: chain_arjun_singh_encounters
+    candidates:
+      - { doc: healthcare/docs/visit-001-arjun-singh-cardio-initial.md, value: "168", authority: 0.7 }
+      - { doc: healthcare/docs/visit-002-arjun-singh-followup.md,       value: "132", authority: 0.9 }
+    expected_winner: { doc: healthcare/docs/visit-002-arjun-singh-followup.md, value: "132" }
+    expected_rule: recency   # Post-treatment value supersedes pre-treatment
+
+  # ---------------------------------------------------------------------
+  # Mining conflicts
+  # ---------------------------------------------------------------------
+  - predicate: ore_grade_fe_pct
+    chain: chain_noamundi_drilling_revisions
+    candidates:
+      - { doc: mining/docs/drilling-001-noamundi-v1.md, value: "58.2 %", authority: 0.6 }
+      - { doc: mining/docs/drilling-001-noamundi-v2.md, value: "61.4 %", authority: 0.8 }
+      - { doc: mining/docs/drilling-001-noamundi-v3.md, value: "62.8 %", authority: 0.95 }
+    expected_winner: { doc: mining/docs/drilling-001-noamundi-v3.md, value: "62.8 %" }
+    expected_rule: chain   # Latest revision with most core samples
+
+  - predicate: mining_cap_mtpa
+    chain: chain_parsa_env_clearance
+    candidates:
+      - { doc: mining/docs/env-clearance-001-parsa-original.md,    value: "12 MTPA", authority: 0.7 }
+      - { doc: mining/docs/env-clearance-001-parsa-corrigendum.md, value: "18 MTPA", authority: 0.9 }
+    expected_winner: { doc: mining/docs/env-clearance-001-parsa-corrigendum.md, value: "18 MTPA" }
+    expected_rule: chain   # Corrigendum supersedes original EC
+
+  # ---------------------------------------------------------------------
+  # Government conflicts
+  # ---------------------------------------------------------------------
+  - predicate: pmay_beed_allocation_inr_crore
+    chain: chain_pmay_beed_gr_corrigendum
+    candidates:
+      - { doc: government/docs/gr-001-pmay-beed-original.md,    value: "84 crore", authority: 0.7 }
+      - { doc: government/docs/gr-001-pmay-beed-corrigendum.md, value: "62 crore", authority: 0.9 }
+    expected_winner: { doc: government/docs/gr-001-pmay-beed-corrigendum.md, value: "62 crore" }
+    expected_rule: chain   # Corrigendum supersedes the original GR
+
+  - predicate: cidco_lowest_bid_inr_crore
+    chain: chain_cidco_tender_bid_pair
+    candidates:
+      - { doc: government/docs/tender-001-cidco-road-resurfacing.md, value: "4.28 crore", authority: 0.6 }
+      - { doc: government/docs/tender-001-cidco-bid-decision.md,     value: "5.14 crore", authority: 0.9 }
+    expected_winner: { doc: government/docs/tender-001-cidco-bid-decision.md, value: "5.14 crore" }
+    expected_rule: recency   # Lowest bid disqualified after RTI; second-lowest awarded
+
+  # ---------------------------------------------------------------------
+  # Finance conflicts
+  # ---------------------------------------------------------------------
+  - predicate: acme_loan_interest_rate_pct
+    chain: chain_acme_hdfc_loan_addendum
+    candidates:
+      - { doc: finance/docs/loan-001-acme-hdfc-original.md,   value: "8.85 %", authority: 0.7 }
+      - { doc: finance/docs/loan-001-acme-hdfc-addendum-1.md, value: "9.40 %", authority: 0.9 }
+    expected_winner: { doc: finance/docs/loan-001-acme-hdfc-addendum-1.md, value: "9.40 %" }
+    expected_rule: chain   # Addendum 1 revised the rate; addendum 2 didn't touch rate
+
+  # ---------------------------------------------------------------------
+  # Construction conflicts
+  # ---------------------------------------------------------------------
+  - predicate: datacentre_load_bearing_wall_position
+    chain: chain_datacentre_drawing_revisions
+    candidates:
+      - { doc: construction/docs/drawing-001-arch-datacentre-revA.md,             value: "Grid line C (5.4m from East face)", authority: 0.6 }
+      - { doc: construction/docs/structural-calc-001-datacentre-loadtable.md,     value: "Grid line D (8.1m from East face)", authority: 0.85 }
+      - { doc: construction/docs/drawing-001-arch-datacentre-revB.md,             value: "Grid line D (8.1m from East face)", authority: 0.9 }
+      - { doc: construction/docs/drawing-001-arch-datacentre-revC.md,             value: "Grid line D (8.1m from East face)", authority: 0.95 }
+    expected_winner: { doc: construction/docs/drawing-001-arch-datacentre-revC.md, value: "Grid line D (8.1m from East face)" }
+    expected_rule: chain   # Architect's Rev C aligns with Structural Rev B
+
+  - predicate: incident_001_root_cause_classification
+    chain: chain_safety_incident_fall
+    candidates:
+      - { doc: construction/docs/safety-001-incident-fall-initial.md,       value: "Worker error (failure to clip safety harness)", authority: 0.5 }
+      - { doc: construction/docs/safety-001-incident-fall-investigation.md, value: "PPE non-availability + supervision gap (system failure)", authority: 0.9 }
+      - { doc: construction/docs/safety-001-incident-fall-corrective.md,    value: "Confirmed: PPE non-availability + supervision gap", authority: 0.95 }
+    expected_winner: { doc: construction/docs/safety-001-incident-fall-corrective.md, value: "PPE non-availability + supervision gap" }
+    expected_rule: chain   # Initial report's "worker error" hypothesis was rejected
+
+
+# ---------------------------------------------------------------------------
+# Rare-clause / anomaly stressors — for atomic_units_rarity channel.
+# Each entry points at the doc that *intentionally* contains an outlier.
+# ---------------------------------------------------------------------------
+anomalies:
+  - id: rare_4hr_delivery
+    doc: legal/docs/msa-002-acme-nimbus.md
+    description: |
+      4-hour delivery SLA for production incidents (the corpus norm is
+      24-48h). This is the "rare-clause needle" from arch §10.2.
+    expected_rarity_score: ">0.85"
+
+  - id: rare_mfn_clause
+    doc: legal/docs/license-001-acme-orion-mfn.md
+    description: Most-favored-nation pricing clause (very uncommon outside enterprise SaaS).
+    expected_rarity_score: ">0.80"
+
+  - id: rare_non_compete_36mo
+    doc: legal/docs/employment-001-vikram-kale.md
+    description: |
+      36-month post-termination non-compete (typical is 6-12 months).
+      Atomic-unit rarity should flag this.
+    expected_rarity_score: ">0.85"
+
+  - id: rare_unlimited_liability
+    doc: legal/docs/employment-002-sneha-joshi.md
+    description: |
+      Unlimited personal liability for IP indemnification — very unusual
+      in employment offers.
+    expected_rarity_score: ">0.90"
+
+  # ---------------------------------------------------------------------
+  # Healthcare anomalies — extreme abnormal lab values
+  # ---------------------------------------------------------------------
+  - id: rare_extreme_creatinine
+    doc: healthcare/docs/lab-005-suresh-iyer-renal.md
+    description: |
+      Serum creatinine 7.8 mg/dL (normal range 0.6-1.3). Indicates
+      acute kidney injury — extreme rarity.
+    expected_rarity_score: ">0.95"
+
+  - id: rare_high_potassium_with_ekg
+    doc: healthcare/docs/lab-007-shyam-rajput-hyperkalemia.md
+    description: |
+      Potassium 7.2 mEq/L with peaked T-waves on EKG — life-threatening
+      hyperkalemia.
+    expected_rarity_score: ">0.95"
+
+  - id: rare_handwritten_rx_polypharmacy
+    doc: healthcare/docs/rx-005-priya-iyer-polypharmacy.md
+    description: |
+      6-drug regimen on a single Rx (typical is 1-3 drugs).
+    expected_rarity_score: ">0.80"
+
+  # ---------------------------------------------------------------------
+  # Mining anomalies (extreme operational events)
+  # ---------------------------------------------------------------------
+  - id: rare_fatal_collapse_incident
+    doc: mining/docs/incident-005-jharia-fatal-roof-collapse.md
+    description: |
+      Fatal roof-collapse incident — single most severe event in this
+      corpus. Multi-fatality (3) safety incident; very rare. Atomic-
+      unit rarity should flag this.
+    expected_rarity_score: ">0.95"
+
+  - id: rare_methane_explosion
+    doc: mining/docs/incident-007-bokaro-methane-explosion.md
+    description: |
+      Methane gas explosion at Bokaro coal block — second-order rarity
+      event (no fatalities, but significant property damage and
+      injuries). Combined with the gas-monitoring failure that preceded
+      it, this is a chained-cause anomaly.
+    expected_rarity_score: ">0.90"
+
+  - id: rare_zinc_grade_outlier
+    doc: mining/docs/lab-assay-003-rajpura-zinc-anomaly.md
+    description: |
+      Assay sample shows zinc grade of 28.4% (vs the deposit average
+      of ~5%). Either contamination or a previously-unsampled high-
+      grade vein. Atomic-unit rarity stressor.
+    expected_rarity_score: ">0.90"
+
+  # ---------------------------------------------------------------------
+  # Government anomalies (cross-record outliers + adversarial patterns)
+  # ---------------------------------------------------------------------
+  - id: rare_ration_aadhaar_missing
+    doc: government/docs/welfare-001-ration-card-anomaly-list.md
+    description: |
+      List of ration-card beneficiaries WITHOUT linked Aadhaar — a
+      red-team scenario for set-op queries ("households with ration
+      card AND no Aadhaar"). Rare in the post-Aadhaar-linkage period.
+    expected_rarity_score: ">0.80"
+
+  - id: rare_fir_high_value_dispute
+    doc: government/docs/fir-003-beed-land-dispute-scanned.md
+    description: |
+      FIR for a high-value land dispute (claimed value INR 24 crore).
+      Outlier vs typical FIR values.
+    expected_rarity_score: ">0.85"
+
+  # ---------------------------------------------------------------------
+  # Finance anomalies
+  # ---------------------------------------------------------------------
+  - id: rare_aml_structured_transactions
+    doc: finance/docs/statement-006-suspicious-aml-pattern.md
+    description: |
+      Bank-statement shows 7 transactions of INR 9.5 lakh each on the
+      same day to different beneficiaries — classic structured-deposit
+      AML stressor (each just under the INR 10 lakh CTR reporting
+      threshold).
+    expected_rarity_score: ">0.95"
+
+  - id: rare_billion_dollar_wire
+    doc: finance/threads/wire-004-suspicious-large-transfer.eml
+    description: |
+      Email thread documenting an attempted wire transfer of USD 1.2
+      billion — flagged by AML, ultimately cancelled. Extreme outlier
+      for the corpus.
+    expected_rarity_score: ">0.95"
+
+
+# ---------------------------------------------------------------------------
+# PII stressors — docs that contain synthetic Aadhaar / PAN.
+# The PII handler must redact these in chat output (Design 5 + arch §5.12b).
+# ---------------------------------------------------------------------------
+pii_docs:
+  - doc: legal/docs/employment-001-vikram-kale.md
+    pii_types: [pan, aadhaar]
+    redaction_expected: true
+
+  - doc: legal/docs/employment-002-sneha-joshi.md
+    pii_types: [pan]
+    redaction_expected: true
+
+  # ---------------------------------------------------------------------
+  # Healthcare PII (Aadhaar + PAN in consent forms)
+  # ---------------------------------------------------------------------
+  - doc: healthcare/docs/consent-001-meera-gupta-preop.md
+    pii_types: [aadhaar, pan]
+    redaction_expected: true
+
+  - doc: healthcare/docs/consent-002-arjun-singh-cardiac.md
+    pii_types: [aadhaar]
+    redaction_expected: true
+
+  - doc: healthcare/docs/visit-001-arjun-singh-cardio-initial.md
+    pii_types: [aadhaar]
+    redaction_expected: true
+
+  # ---------------------------------------------------------------------
+  # Government PII (Aadhaar in citizen-facing land records + welfare)
+  # ---------------------------------------------------------------------
+  - doc: government/docs/7-12-002-kamla-jadhav-mutation.md
+    pii_types: [aadhaar]
+    redaction_expected: true
+
+  - doc: government/docs/welfare-002-kamla-jadhav-pmay.md
+    pii_types: [aadhaar]
+    redaction_expected: true
+
+  - doc: government/docs/fir-001-beed-ramesh-solanki-complaint.md
+    pii_types: [aadhaar]
+    redaction_expected: true
+
+  # ---------------------------------------------------------------------
+  # Finance PII (KYC PAN + Aadhaar + account numbers)
+  # ---------------------------------------------------------------------
+  - doc: finance/docs/kyc-001-aniket-desai.md
+    pii_types: [aadhaar, pan]
+    redaction_expected: true
+
+  - doc: finance/docs/kyc-002-neha-kapoor.md
+    pii_types: [pan]
+    redaction_expected: true
+
+  - doc: finance/docs/complaint-001-aniket-desai-initial.md
+    pii_types: [aadhaar, pan]
+    redaction_expected: true

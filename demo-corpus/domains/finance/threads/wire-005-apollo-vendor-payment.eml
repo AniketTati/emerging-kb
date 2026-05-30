@@ -1,0 +1,98 @@
+---
+doc_id: wire-005-apollo-vendor-payment
+doc_type: email_thread
+effective_date: 2025-03-18
+parties: [Apollo Hospitals Pune Pvt Ltd, Siemens Healthineers Pvt Ltd, HDFC Bank Ltd]
+status: live
+---
+
+From: Treasury Apollo <treasury.pune@apollohospitals.in>
+To: Accounts Receivable Siemens <ar.in@siemens-healthineers.com>
+Cc: Apollo Pune CFO <cfo.pune@apollohospitals.in>; Anuradha Kapoor <anuradha.kapoor@hdfcbank.com>
+Subject: AMC Quarterly Payment + CT-Scanner Service Charges — INR 5,84,000 — Wire on 18-Mar-2025
+Date: Tue, 18 Mar 2025 10:18:12 +0530
+Message-ID: <APH-2025031800184228@apollohospitals.in>
+
+Hello Siemens Healthineers AR team,
+
+Please find confirmation of the quarterly AMC + service payment to Siemens Healthineers Private Limited as below:
+
+INVOICE REFERENCE: SH-IN-AMC-2025-Q1-184228
+SERVICES COVERED:
+- Annual Maintenance Contract (AMC) — Q1 Jan-Mar 2025: INR 4,60,000
+- Additional service calls (4 visits during quarter): INR 1,18,000
+- Spare parts (filters, calibration kit): INR 6,000
+- TOTAL: INR 5,84,000
+
+WIRE DETAILS:
+- Sender: Apollo Hospitals Pune Pvt Ltd
+- Sender bank: HDFC Bank, Pune Camp branch (HDFC-CA-4422018842)
+- Beneficiary: Siemens Healthineers Pvt Ltd
+- Beneficiary bank: Citibank N.A., Gurgaon (per your bank details on file)
+- Mode: NEFT
+- Initiated: 18 March 2025 09:42 IST
+- Expected settlement: same day by 14:00 IST (NEFT batch closing)
+
+This payment relates to the CT-scanner (Model SOMATOM Definition Edge, Serial No. SE-218-Apollo-Pune-2024-018) installed at our Apollo Hospitals Pune Camp branch in May 2024. The asset is financed under our HDFC equipment financing loan (HDFC-EQ-LOAN-2024-3318 — see loan-003-apollo-equipment-financing for our internal reference) — the AMC is mandatory per loan covenants.
+
+Please confirm receipt + provide a receipt voucher for our reconciliation.
+
+Best regards,
+Vinod Kalbande
+Treasury Lead — Apollo Hospitals Pune Pvt Ltd
++91 20 4218 4221
+
+---
+
+From: Accounts Receivable Siemens <ar.in@siemens-healthineers.com>
+To: Treasury Apollo <treasury.pune@apollohospitals.in>
+Cc: Apollo Pune CFO <cfo.pune@apollohospitals.in>; Anuradha Kapoor <anuradha.kapoor@hdfcbank.com>
+Subject: RE: AMC Quarterly Payment + CT-Scanner Service Charges — INR 5,84,000 — Wire on 18-Mar-2025
+Date: Tue, 18 Mar 2025 14:22:18 +0530
+Message-ID: <SHIN-2025031800018421@siemens-healthineers.com>
+
+Dear Vinod,
+
+Confirmed receipt of INR 5,84,000 in our Citibank account at 13:42 IST today.
+
+RECEIPT VOUCHER:
+- Voucher #: SH-IN-RV-2025-03-184
+- Invoice cleared: SH-IN-AMC-2025-Q1-184228
+- Mode: NEFT (HDFC → Citi)
+- UTR: HDFCN52025031800184228
+
+AMC OBLIGATIONS — Q2 (Apr-Jun 2025):
+- Quarterly visit scheduled: 18 April 2025 at Apollo Pune Camp branch
+- Calibration: Annual due in May 2025 — separate invoice
+- Spare parts: as required
+
+Your CT-scanner uptime YTD has been excellent — 99.4% over the past 9 months, well above our SLA of 96%. Glad to be your service partner.
+
+Best,
+Sandeep Ramanan
+Accounts Receivable Manager — Siemens Healthineers Pvt Ltd
++91 124 4218 1842
+
+---
+
+From: Anuradha Kapoor <anuradha.kapoor@hdfcbank.com>
+To: Treasury Apollo; Accounts Receivable Siemens; Apollo Pune CFO
+Subject: RE: AMC Quarterly Payment + CT-Scanner Service Charges — INR 5,84,000 — Wire on 18-Mar-2025
+Date: Tue, 18 Mar 2025 16:18:42 +0530
+Message-ID: <CAQ-1842184260@hdfcbank.com>
+
+Confirming HDFC has processed the NEFT transaction. UTR HDFCN52025031800184228 settled at 13:18 IST.
+
+A friendly reminder: Apollo Hospitals Pune Pvt Ltd's quarterly compliance certificate for the HDFC equipment financing loan (HDFC-EQ-LOAN-2024-3318) is due by 30 April 2025. The certificate must include confirmation of:
+(i) AMC contract being current (NOW DONE — this wire confirms it through Q1)
+(ii) Insurance policy renewal (due in November 2025, plenty of time)
+(iii) Asset utilisation metrics
+
+The bank's RM team is available for any clarifications. Q1 FY 2025-26 prepayment received separately (INR 47,61,300 on 22 March 2025) has been credited towards principal — reduces tenure by ~1 month per our calculations.
+
+Have a great rest of the week.
+
+Anuradha Kapoor
+Senior Relationship Manager — Corporate, HDFC Bank
+Pune Camp Branch
++91 124 4218422

@@ -1,0 +1,84 @@
+NURSE HANDOVER NOTE
+Apollo Hospitals Pune — Post-Op Recovery Bay — Bed PR-3
+
+Date: 21 August 2025
+Shift: Day (08:00 21-Aug) → Evening (20:00 21-Aug)
+Off-going: Sr. Priya Kumar, RN
+On-coming: Sr. Reena Mathew, RN
+
+================================================================
+PATIENT: Meera Gupta / MRN APO-2025-008401 / Bed PR-3
+================================================================
+
+PROCEDURE: Laparoscopic Myomectomy (3 fibroids removed) — 20-Aug.
+POD: Day 1.
+
+VITALS THIS SHIFT (stable):
+  - 08:00 — BP 118/72, HR 78, RR 14, SpO2 98%, T 37.0.
+  - 14:00 — BP 116/72, HR 76, RR 14, SpO2 98%, T 37.1.
+  - 19:30 — BP 122/74, HR 74, RR 14, SpO2 98%, T 36.8.
+
+PAIN MANAGEMENT:
+  - Patient transitioned from PCA morphine to oral paracetamol +
+    tramadol PRN at 12:00 today.
+  - 08:00 — pain 4/10. Paracetamol 1 g PO given.
+  - 12:00 — pain 3/10. Tramadol 50 mg PO given.
+  - 16:00 — pain 2/10. Paracetamol 1 g PO given.
+  - 19:30 — pain 1/10. Patient comfortable.
+
+WOUND CARE:
+  - 4 laparoscopic ports (3 mm × 3 + 5 mm × 1). All clean and
+    dry. No bleeding, no erythema, no discharge.
+  - Dressings changed at 12:00.
+
+DRAINS / LINES:
+  - No surgical drains.
+  - IV peripheral line in left forearm — patent. Last fluid:
+    NS at maintenance 75 mL/hr until 16:00 (D/Cd as patient
+    tolerating oral).
+
+ORAL INTAKE:
+  - Started clear liquids at 08:00 — tolerated.
+  - Advanced to soft diet at 13:00 — tolerated well (no nausea,
+    no vomiting).
+  - Total oral intake this shift: ~1500 mL.
+
+BOWEL / BLADDER:
+  - Voiding spontaneously and normally — first void at 10:00,
+    subsequent voids small but normal.
+  - Bowel sounds present in all 4 quadrants. No flatus passed
+    yet.
+
+MOBILITY:
+  - Ambulating with assistance, then independently from 11:00.
+  - 4 short walks around the unit during shift. Tolerated well.
+
+MEDICATIONS:
+  - Paracetamol 1 g PO QID — given on schedule.
+  - Tramadol 50 mg PO Q6H PRN — given at 12:00 only this shift.
+  - Pantoprazole 40 mg PO @ 08:00 — given.
+  - Cefuroxime 500 mg PO @ 08:00 and 20:00 — given.
+  - Ferrous sulfate 200 mg PO @ 12:00 — given.
+
+PATIENT INTERACTIONS:
+  - Patient happy with pain control.
+  - Husband (Rohan) present; family supportive.
+  - Discharge education started — wound care + warning signs.
+    Will continue tomorrow before discharge.
+
+PLANNED FOR EVE SHIFT:
+  - Continue oral diet as tolerated.
+  - Cefuroxime 500 mg @ 20:00.
+  - Final paracetamol dose at 22:00.
+  - Anticipated discharge tomorrow (22-Aug) if continues
+    well overnight.
+
+ESCALATION TRIGGERS:
+  - Fever >38.5°C — call OB-GYN resident.
+  - Increasing abdominal pain — call.
+  - Heavy vaginal bleeding — call.
+  - Signs of port-site infection — call.
+
+Handover complete.
+
+— Sr. Priya Kumar, RN — 20:00 21 Aug 2025

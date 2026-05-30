@@ -1,0 +1,584 @@
+# Mining domain manifest — 50 docs across 9 subtypes.
+#
+# Headline stressors:
+#   - Noamundi drilling-report 3-revision chain (Design 2 + Design 3):
+#     ore-grade % shifts as core samples accumulate.
+#   - Parsa env clearance + corrigendum chain (cap raised 12 → 18 MTPA).
+#   - Multi-hop: incident-003 (Noamundi vendor equipment) + DGMS
+#     inspection report = vendor-fault traceability across two docs.
+#   - Fatal roof collapse (incident-005) + methane explosion (incident-007)
+#     = atomic-unit rarity stressors.
+#   - Marathi+English mixed lease scan = multilingual OCR stressor.
+#   - Mine plan diagrams = ColPali (Wave C) fallback markers.
+#   - Vintage 1987 union agreement scan = old-handwriting OCR stressor.
+
+domain: mining
+description: |
+  50 mining docs across 9 subtypes: drilling reports, mine-lease deeds,
+  safety incidents, env clearances, pollution reports, lab assays,
+  mine plans, union agreements, and shift logs. Multi-revision chains +
+  govt corrigendum + multi-hop vendor-equipment incident + extreme
+  safety events + multilingual scan are all deliberately seeded.
+
+docs:
+
+  # =========================================================================
+  # Drilling reports (8 — 3 chained at Noamundi)
+  # =========================================================================
+
+  - id: drilling-001-noamundi-v1
+    file: demo-corpus/domains/mining/docs/drilling-001-noamundi-v1.md
+    doc_type: drilling_report
+    title: Drilling Report v1 — Noamundi Iron-Ore Block (initial 12-hole survey)
+    parties: [tata_steel_mining, cmpdi_consulting]
+    provider: geo_consultant_ranjan
+    effective_date: "2024-08-12"
+    chain: chain_noamundi_drilling_revisions
+    chain_role: original
+    chain_version: 0
+    authority: 0.6
+    doc_status: superseded
+    stressors:
+      - chain_member
+      - conflict_source_ore_grade
+
+  - id: drilling-001-noamundi-v2
+    file: demo-corpus/domains/mining/docs/drilling-001-noamundi-v2.md
+    doc_type: drilling_report
+    title: Drilling Report v2 — Noamundi (revised after 8 additional holes)
+    parties: [tata_steel_mining, cmpdi_consulting]
+    provider: geo_consultant_ranjan
+    effective_date: "2025-02-04"
+    chain: chain_noamundi_drilling_revisions
+    chain_role: amendment
+    chain_version: 1
+    parent_doc: drilling-001-noamundi-v1
+    authority: 0.8
+    doc_status: superseded
+    stressors: [chain_member]
+
+  - id: drilling-001-noamundi-v3
+    file: demo-corpus/domains/mining/docs/drilling-001-noamundi-v3.md
+    doc_type: drilling_report
+    title: Drilling Report v3 — Noamundi (final mine-plan submission, 32 holes total)
+    parties: [tata_steel_mining, cmpdi_consulting]
+    provider: geo_consultant_ranjan
+    effective_date: "2025-07-22"
+    chain: chain_noamundi_drilling_revisions
+    chain_role: amendment
+    chain_version: 2
+    parent_doc: drilling-001-noamundi-v1
+    authority: 0.95
+    doc_status: live
+    stressors:
+      - chain_winner
+      - conflict_resolution_target
+
+  - id: drilling-002-parsa-coal
+    file: demo-corpus/domains/mining/docs/drilling-002-parsa-coal.md
+    doc_type: drilling_report
+    title: Drilling Report — Parsa Coal Block (initial exploration)
+    parties: [adani_mining, cmpdi_consulting]
+    effective_date: "2024-11-08"
+    authority: 0.9
+    doc_status: live
+
+  - id: drilling-003-bailadila-iron
+    file: demo-corpus/domains/mining/docs/drilling-003-bailadila-iron.md
+    doc_type: drilling_report
+    title: Drilling Report — Bailadila Iron Block (Chhattisgarh, NMDC)
+    parties: [tata_steel_mining, cmpdi_consulting]
+    effective_date: "2025-03-15"
+    authority: 0.9
+    doc_status: live
+
+  - id: drilling-004-bokaro-coal-pre-blast
+    file: demo-corpus/domains/mining/docs/drilling-004-bokaro-coal-pre-blast.md
+    doc_type: drilling_report
+    title: Drilling Report — Bokaro Coal Block (pre-blast bore-hole survey)
+    parties: [tata_steel_mining]
+    effective_date: "2025-09-08"
+    authority: 0.85
+    doc_status: live
+
+  - id: drilling-005-rajpura-zinc-prospect
+    file: demo-corpus/domains/mining/docs/drilling-005-rajpura-zinc-prospect.md
+    doc_type: drilling_report
+    title: Drilling Report — Rajpura Zinc Prospect (Rajasthan)
+    parties: [adani_mining, cmpdi_consulting]
+    effective_date: "2025-05-22"
+    authority: 0.85
+    doc_status: live
+
+  - id: drilling-006-jharia-coal-revival
+    file: demo-corpus/domains/mining/docs/drilling-006-jharia-coal-revival.md
+    doc_type: drilling_report
+    title: Drilling Report — Jharia Coal Block (revival assessment, abandoned 1980s seam)
+    parties: [tata_steel_mining, cmpdi_consulting]
+    effective_date: "2025-01-30"
+    authority: 0.8
+    doc_status: live
+
+  # =========================================================================
+  # Mine-lease deeds (6 — 2 multilingual scanned)
+  # =========================================================================
+
+  - id: lease-deed-001-noamundi
+    file: demo-corpus/domains/mining/docs/lease-deed-001-noamundi.md
+    doc_type: mining_lease
+    title: Mining Lease Deed — Noamundi Iron-Ore Block (Tata Steel Mining, 30-year)
+    parties: [tata_steel_mining]
+    effective_date: "2018-06-15"
+    authority: 0.95
+    doc_status: live
+
+  - id: lease-deed-002-parsa
+    file: demo-corpus/domains/mining/docs/lease-deed-002-parsa.md
+    doc_type: mining_lease
+    title: Mining Lease Deed — Parsa Coal Block (Adani Enterprises, 30-year)
+    parties: [adani_mining]
+    effective_date: "2019-09-21"
+    authority: 0.95
+    doc_status: live
+
+  - id: lease-deed-003-jharia-marathi-scanned
+    file: demo-corpus/domains/mining/docs/lease-deed-003-jharia-marathi-scanned.md
+    doc_type: mining_lease
+    title: Mining Lease Deed — Jharia Coal (vintage 1989 — Marathi+English mixed, scanned)
+    parties: [tata_steel_mining]
+    effective_date: "1989-04-12"
+    authority: 0.5
+    doc_status: archived
+    stressors:
+      - parser_scanned_ocr
+      - multilingual_marathi_english
+
+  - id: lease-deed-004-bokaro
+    file: demo-corpus/domains/mining/docs/lease-deed-004-bokaro.md
+    doc_type: mining_lease
+    title: Mining Lease Deed — Bokaro Coal Block (Tata Steel, 20-year)
+    parties: [tata_steel_mining]
+    effective_date: "2020-03-08"
+    authority: 0.9
+    doc_status: live
+
+  - id: lease-deed-005-rajpura-zinc
+    file: demo-corpus/domains/mining/docs/lease-deed-005-rajpura-zinc.md
+    doc_type: mining_lease
+    title: Mining Lease Deed — Rajpura Zinc (Adani Mining, prospecting + mining 25-year)
+    parties: [adani_mining]
+    effective_date: "2022-11-30"
+    authority: 0.9
+    doc_status: live
+
+  - id: lease-deed-006-bailadila-vintage-scanned
+    file: demo-corpus/domains/mining/docs/lease-deed-006-bailadila-vintage-scanned.md
+    doc_type: mining_lease
+    title: Mining Lease — Bailadila Iron Block (1972 vintage scan — Hindi+English)
+    parties: [tata_steel_mining]
+    effective_date: "1972-08-15"
+    authority: 0.4
+    doc_status: archived
+    stressors:
+      - parser_scanned_ocr
+      - multilingual_hindi_english
+
+  # =========================================================================
+  # Safety incidents (10 — 1 vendor multi-hop + 1 fatal + 1 methane)
+  # =========================================================================
+
+  - id: incident-001-noamundi-fall-from-height
+    file: demo-corpus/domains/mining/docs/incident-001-noamundi-fall-from-height.md
+    doc_type: safety_incident
+    title: Safety Incident — Fall from height (Noamundi, lost-time injury)
+    parties: [tata_steel_mining]
+    provider: safety_officer_naresh
+    effective_date: "2024-12-04"
+    authority: 0.9
+    doc_status: live
+
+  - id: incident-002-parsa-conveyor-pinch
+    file: demo-corpus/domains/mining/docs/incident-002-parsa-conveyor-pinch.md
+    doc_type: safety_incident
+    title: Safety Incident — Conveyor pinch-point near-miss (Parsa coal)
+    parties: [adani_mining]
+    effective_date: "2025-02-18"
+    authority: 0.85
+    doc_status: live
+
+  - id: incident-003-noamundi-vendor-equipment
+    file: demo-corpus/domains/mining/docs/incident-003-noamundi-vendor-equipment.md
+    doc_type: safety_incident
+    title: Safety Incident — Drill-rig hydraulic failure (Noamundi, vendor equipment)
+    parties: [tata_steel_mining, mahalaxmi_drilling]
+    provider: safety_officer_naresh
+    effective_date: "2025-04-09"
+    chain: chain_incident_vendor_multihop
+    chain_role: original
+    chain_version: 0
+    authority: 0.85
+    doc_status: live
+    stressors:
+      - chain_member
+      - multi_hop_vendor_link
+
+  - id: incident-003-dgms-inspection-report
+    file: demo-corpus/domains/mining/docs/incident-003-dgms-inspection-report.md
+    doc_type: safety_incident
+    title: DGMS Inspection Report — Noamundi (post-incident 003 cross-ref)
+    parties: [dgms_directorate, tata_steel_mining, mahalaxmi_drilling]
+    provider: dgms_inspector_singh
+    effective_date: "2025-04-25"
+    chain: chain_incident_vendor_multihop
+    chain_role: amendment
+    chain_version: 1
+    parent_doc: incident-003-noamundi-vendor-equipment
+    authority: 0.95
+    doc_status: live
+    stressors:
+      - chain_member
+      - multi_hop_vendor_link
+
+  - id: incident-004-bokaro-electrocution-near-miss
+    file: demo-corpus/domains/mining/docs/incident-004-bokaro-electrocution-near-miss.md
+    doc_type: safety_incident
+    title: Safety Incident — Electrocution near-miss (Bokaro electrical sub-station)
+    parties: [tata_steel_mining]
+    effective_date: "2025-06-11"
+    authority: 0.85
+    doc_status: live
+
+  - id: incident-005-jharia-fatal-roof-collapse
+    file: demo-corpus/domains/mining/docs/incident-005-jharia-fatal-roof-collapse.md
+    doc_type: safety_incident
+    title: FATAL Safety Incident — Roof collapse, 3 fatalities (Jharia)
+    parties: [tata_steel_mining]
+    effective_date: "2025-07-30"
+    authority: 0.95
+    doc_status: live
+    stressors:
+      - rare_fatal_incident
+
+  - id: incident-006-rajpura-blast-misfire
+    file: demo-corpus/domains/mining/docs/incident-006-rajpura-blast-misfire.md
+    doc_type: safety_incident
+    title: Safety Incident — Controlled blast misfire (Rajpura, no injuries)
+    parties: [adani_mining]
+    effective_date: "2025-08-14"
+    authority: 0.85
+    doc_status: live
+
+  - id: incident-007-bokaro-methane-explosion
+    file: demo-corpus/domains/mining/docs/incident-007-bokaro-methane-explosion.md
+    doc_type: safety_incident
+    title: Safety Incident — Methane gas explosion (Bokaro, 4 injuries, gas-monitoring fail)
+    parties: [tata_steel_mining]
+    effective_date: "2025-10-02"
+    authority: 0.95
+    doc_status: live
+    stressors:
+      - rare_methane_explosion
+
+  - id: incident-008-noamundi-haul-truck-rollover
+    file: demo-corpus/domains/mining/docs/incident-008-noamundi-haul-truck-rollover.md
+    doc_type: safety_incident
+    title: Safety Incident — Haul-truck rollover (Noamundi, driver minor injury)
+    parties: [tata_steel_mining]
+    effective_date: "2025-05-28"
+    authority: 0.85
+    doc_status: live
+
+  - id: incident-009-parsa-dust-exceedance
+    file: demo-corpus/domains/mining/docs/incident-009-parsa-dust-exceedance.md
+    doc_type: safety_incident
+    title: Safety Incident — Respirable dust exceedance (Parsa, occupational health)
+    parties: [adani_mining]
+    effective_date: "2025-06-22"
+    authority: 0.85
+    doc_status: live
+
+  # =========================================================================
+  # Env clearances (4 — 1 corrigendum chain)
+  # =========================================================================
+
+  - id: env-clearance-001-parsa-original
+    file: demo-corpus/domains/mining/docs/env-clearance-001-parsa-original.md
+    doc_type: env_clearance
+    title: Environmental Clearance — Parsa Coal Block (original, 12 MTPA cap)
+    parties: [adani_mining, moefcc_ministry]
+    effective_date: "2022-04-14"
+    chain: chain_parsa_env_clearance
+    chain_role: original
+    chain_version: 0
+    authority: 0.7
+    doc_status: superseded
+    stressors:
+      - chain_member
+      - conflict_source_mining_cap
+
+  - id: env-clearance-001-parsa-corrigendum
+    file: demo-corpus/domains/mining/docs/env-clearance-001-parsa-corrigendum.md
+    doc_type: env_clearance
+    title: Environmental Clearance — Parsa CORRIGENDUM (cap raised to 18 MTPA)
+    parties: [adani_mining, moefcc_ministry]
+    effective_date: "2024-09-20"
+    chain: chain_parsa_env_clearance
+    chain_role: amendment
+    chain_version: 1
+    parent_doc: env-clearance-001-parsa-original
+    authority: 0.9
+    doc_status: live
+    stressors:
+      - chain_winner
+      - conflict_resolution_target
+
+  - id: env-clearance-002-noamundi
+    file: demo-corpus/domains/mining/docs/env-clearance-002-noamundi.md
+    doc_type: env_clearance
+    title: Environmental Clearance — Noamundi Iron-Ore Expansion (30 to 45 MTPA)
+    parties: [tata_steel_mining, moefcc_ministry]
+    effective_date: "2024-07-05"
+    authority: 0.9
+    doc_status: live
+
+  - id: env-clearance-003-rajpura-zinc
+    file: demo-corpus/domains/mining/docs/env-clearance-003-rajpura-zinc.md
+    doc_type: env_clearance
+    title: Environmental Clearance — Rajpura Zinc Prospect (initial EC, prospecting + 5 MTPA mining)
+    parties: [adani_mining, moefcc_ministry]
+    effective_date: "2023-06-12"
+    authority: 0.9
+    doc_status: live
+
+  # =========================================================================
+  # Pollution / emissions quarterly (5)
+  # =========================================================================
+
+  - id: pollution-001-noamundi-q1-2025
+    file: demo-corpus/domains/mining/docs/pollution-001-noamundi-q1-2025.md
+    doc_type: emissions_report
+    title: Emissions Monitoring Report Q1 2025 — Noamundi Iron-Ore (PM10/PM2.5/SOx/NOx)
+    parties: [tata_steel_mining, jharkhand_pollution_board]
+    effective_date: "2025-04-10"
+    authority: 0.9
+    doc_status: live
+
+  - id: pollution-002-noamundi-q2-2025
+    file: demo-corpus/domains/mining/docs/pollution-002-noamundi-q2-2025.md
+    doc_type: emissions_report
+    title: Emissions Monitoring Report Q2 2025 — Noamundi (PM exceedance flagged)
+    parties: [tata_steel_mining, jharkhand_pollution_board]
+    effective_date: "2025-07-12"
+    authority: 0.9
+    doc_status: live
+
+  - id: pollution-003-noamundi-q3-2025
+    file: demo-corpus/domains/mining/docs/pollution-003-noamundi-q3-2025.md
+    doc_type: emissions_report
+    title: Emissions Monitoring Report Q3 2025 — Noamundi (post-mitigation)
+    parties: [tata_steel_mining, jharkhand_pollution_board]
+    effective_date: "2025-10-15"
+    authority: 0.9
+    doc_status: live
+
+  - id: pollution-004-parsa-water-discharge
+    file: demo-corpus/domains/mining/docs/pollution-004-parsa-water-discharge.md
+    doc_type: emissions_report
+    title: Water Discharge Compliance Report — Parsa Coal (annual)
+    parties: [adani_mining, jharkhand_pollution_board]
+    effective_date: "2025-03-31"
+    authority: 0.9
+    doc_status: live
+
+  - id: pollution-005-bokaro-air-quality-annual
+    file: demo-corpus/domains/mining/docs/pollution-005-bokaro-air-quality-annual.md
+    doc_type: emissions_report
+    title: Annual Air-Quality Compliance — Bokaro Coal (CY 2024)
+    parties: [tata_steel_mining, jharkhand_pollution_board]
+    effective_date: "2025-02-28"
+    authority: 0.9
+    doc_status: live
+
+  # =========================================================================
+  # Lab assays (4 — 1 anomaly)
+  # =========================================================================
+
+  - id: lab-assay-001-noamundi-iron
+    file: demo-corpus/domains/mining/docs/lab-assay-001-noamundi-iron.md
+    doc_type: lab_assay
+    title: Iron Ore Assay — Noamundi (32 core samples, Fe/SiO2/Al2O3/P)
+    parties: [tata_steel_mining, cmpdi_consulting]
+    effective_date: "2025-06-15"
+    authority: 0.9
+    doc_status: live
+
+  - id: lab-assay-002-parsa-coal-quality
+    file: demo-corpus/domains/mining/docs/lab-assay-002-parsa-coal-quality.md
+    doc_type: lab_assay
+    title: Coal Quality Assay — Parsa (ash/moisture/calorific value)
+    parties: [adani_mining]
+    effective_date: "2025-04-22"
+    authority: 0.9
+    doc_status: live
+
+  - id: lab-assay-003-rajpura-zinc-anomaly
+    file: demo-corpus/domains/mining/docs/lab-assay-003-rajpura-zinc-anomaly.md
+    doc_type: lab_assay
+    title: Zinc Assay — Rajpura (ANOMALOUS 28.4% Zn sample — possible new vein)
+    parties: [adani_mining, cmpdi_consulting]
+    effective_date: "2025-08-11"
+    authority: 0.9
+    doc_status: live
+    stressors:
+      - rare_zinc_grade_outlier
+
+  - id: lab-assay-004-bailadila-iron-multi-element
+    file: demo-corpus/domains/mining/docs/lab-assay-004-bailadila-iron-multi-element.md
+    doc_type: lab_assay
+    title: Multi-element Assay — Bailadila Iron (Fe/Mn/Ti/V/P trace)
+    parties: [tata_steel_mining, cmpdi_consulting]
+    effective_date: "2025-09-25"
+    authority: 0.9
+    doc_status: live
+
+  # =========================================================================
+  # Mine plans (5 — ColPali markers for diagram retrieval)
+  # =========================================================================
+
+  - id: mine-plan-001-noamundi
+    file: demo-corpus/domains/mining/docs/mine-plan-001-noamundi.md
+    doc_type: mine_plan
+    title: Mine Plan — Noamundi (45 MTPA expansion, with bench geometry diagrams)
+    parties: [tata_steel_mining, cmpdi_consulting]
+    effective_date: "2025-08-14"
+    authority: 0.9
+    doc_status: live
+    stressors:
+      - colpali_diagram_heavy
+
+  - id: mine-plan-002-parsa
+    file: demo-corpus/domains/mining/docs/mine-plan-002-parsa.md
+    doc_type: mine_plan
+    title: Mine Plan — Parsa (18 MTPA, post-corrigendum)
+    parties: [adani_mining, cmpdi_consulting]
+    effective_date: "2024-11-12"
+    authority: 0.9
+    doc_status: live
+    stressors:
+      - colpali_diagram_heavy
+
+  - id: mine-plan-003-rajpura
+    file: demo-corpus/domains/mining/docs/mine-plan-003-rajpura.md
+    doc_type: mine_plan
+    title: Mine Plan — Rajpura Zinc (5 MTPA initial, underground stope diagrams)
+    parties: [adani_mining, cmpdi_consulting]
+    effective_date: "2024-04-18"
+    authority: 0.85
+    doc_status: live
+    stressors:
+      - colpali_diagram_heavy
+
+  - id: mine-plan-004-bokaro
+    file: demo-corpus/domains/mining/docs/mine-plan-004-bokaro.md
+    doc_type: mine_plan
+    title: Mine Plan — Bokaro Coal (open-cast, bench/dump schematics)
+    parties: [tata_steel_mining, cmpdi_consulting]
+    effective_date: "2024-02-26"
+    authority: 0.85
+    doc_status: live
+    stressors:
+      - colpali_diagram_heavy
+
+  - id: mine-plan-005-jharia-revival
+    file: demo-corpus/domains/mining/docs/mine-plan-005-jharia-revival.md
+    doc_type: mine_plan
+    title: Mine Plan — Jharia coal-revival (abandoned-seam recovery, structural diagrams)
+    parties: [tata_steel_mining, cmpdi_consulting]
+    effective_date: "2025-03-21"
+    authority: 0.85
+    doc_status: live
+    stressors:
+      - colpali_diagram_heavy
+
+  # =========================================================================
+  # Union / wage agreements (3 — 1 vintage scan)
+  # =========================================================================
+
+  - id: union-agreement-001-tata-bkmu-2024
+    file: demo-corpus/domains/mining/docs/union-agreement-001-tata-bkmu-2024.md
+    doc_type: union_agreement
+    title: Wage Settlement — Tata Steel Mining ↔ Bharatiya Khanikamgar Union (2024 cycle)
+    parties: [tata_steel_mining]
+    effective_date: "2024-08-30"
+    authority: 0.9
+    doc_status: live
+
+  - id: union-agreement-002-adani-cmwu-2025
+    file: demo-corpus/domains/mining/docs/union-agreement-002-adani-cmwu-2025.md
+    doc_type: union_agreement
+    title: Wage Settlement — Adani Mining ↔ Coal Mine Workers Union (Chhattisgarh) 2025
+    parties: [adani_mining]
+    effective_date: "2025-05-15"
+    authority: 0.9
+    doc_status: live
+
+  - id: union-agreement-003-jharia-vintage-1987-scanned
+    file: demo-corpus/domains/mining/docs/union-agreement-003-jharia-vintage-1987-scanned.md
+    doc_type: union_agreement
+    title: Wage Settlement — Jharia Coal (1987 vintage, scanned typewriter doc, Hindi+English)
+    parties: [tata_steel_mining]
+    effective_date: "1987-12-04"
+    authority: 0.4
+    doc_status: archived
+    stressors:
+      - parser_scanned_ocr
+      - multilingual_hindi_english
+
+  # =========================================================================
+  # Shift logs (5 narrative txt)
+  # =========================================================================
+
+  - id: shift-log-001-noamundi-night
+    file: demo-corpus/domains/mining/docs/shift-log-001-noamundi-night.txt
+    doc_type: shift_log
+    title: Shift Log — Noamundi Night Shift (production + safety narrative)
+    parties: [tata_steel_mining]
+    effective_date: "2025-09-15"
+    authority: 0.6
+    doc_status: live
+
+  - id: shift-log-002-parsa-day
+    file: demo-corpus/domains/mining/docs/shift-log-002-parsa-day.txt
+    doc_type: shift_log
+    title: Shift Log — Parsa Day Shift (loading + dispatch narrative)
+    parties: [adani_mining]
+    effective_date: "2025-07-22"
+    authority: 0.6
+    doc_status: live
+
+  - id: shift-log-003-bokaro-evening
+    file: demo-corpus/domains/mining/docs/shift-log-003-bokaro-evening.txt
+    doc_type: shift_log
+    title: Shift Log — Bokaro Evening (drilling + blasting prep)
+    parties: [tata_steel_mining]
+    effective_date: "2025-08-29"
+    authority: 0.6
+    doc_status: live
+
+  - id: shift-log-004-rajpura-underground
+    file: demo-corpus/domains/mining/docs/shift-log-004-rajpura-underground.txt
+    doc_type: shift_log
+    title: Shift Log — Rajpura Underground Zinc (stope production)
+    parties: [adani_mining]
+    effective_date: "2025-10-05"
+    authority: 0.6
+    doc_status: live
+
+  - id: shift-log-005-jharia-recovery
+    file: demo-corpus/domains/mining/docs/shift-log-005-jharia-recovery.txt
+    doc_type: shift_log
+    title: Shift Log — Jharia (post-fatal-incident shift, restricted operations)
+    parties: [tata_steel_mining]
+    effective_date: "2025-08-02"
+    authority: 0.6
+    doc_status: live

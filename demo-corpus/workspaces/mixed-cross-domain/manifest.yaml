@@ -1,0 +1,176 @@
+# Mixed cross-domain workspace manifest — 40+ docs selected from the
+# 6 single-domain corpora + 4 NEW bridge documents that explicitly
+# synthesize cross-domain content.
+#
+# Headline cross-domain stressors:
+#   - Acme Corp Pvt Ltd appears in Legal (8 contracts), Finance (loan +
+#     statements + audits + KYC + treasury + complaints + wires + profile),
+#     Construction (datacentre Phase-2 client + all related docs).
+#   - HDFC Bank appears in Finance (primary), Construction (Bank Guarantee
+#     + ECB facility agent), Legal (referenced as bank).
+#   - Apollo Hospitals Pune appears in Healthcare (patients + consent
+#     forms), Finance (loan + statements + customer profile), Construction
+#     (maternity Phase-2 client).
+#   - Mahalaxmi Infra appears in Construction (main contractor) AND Mining
+#     (group sister concern Mahalaxmi Equipment in incident-003).
+#   - Priya Iyer name collision: VP Legal Acme (Legal/Finance/Construction)
+#     vs Pune Apollo patient (Healthcare only) — TWO distinct individuals.
+#   - Aniket Desai: HDFC HNW retail customer + President NorthWind India
+#     (an Acme lender) — same individual, different roles.
+#   - Nimbus Tech (Legal) vs Nimbus Finance (Finance) — sister concerns
+#     under same parent (Nimbus Tech Singapore).
+#
+# Bridge documents (NEW, in this workspace only):
+#   - workspace-evaluation-queries.md — the 100-query test suite
+#   - entity-collision-priya-iyer.md — disambiguation guide
+#   - acme-corp-360-view.md — Acme's footprint summary
+#   - hdfc-bank-cross-domain.md — HDFC's footprint summary
+#   - mahalaxmi-cross-domain.md — Mahalaxmi disambiguation
+
+workspace: mixed-cross-domain
+description: |
+  Simulates a real user's workspace where docs from multiple domains are
+  intermixed. Tests cross-domain entity resolution, multi-hop reasoning,
+  PII handling, false-premise defenses, and the 9 design dimensions
+  (chains, conflicts, PII, multilingual, rare anomalies, set-ops, false-
+  premise, authority gating, draft-vs-live).
+
+docs:
+
+  # =========================================================================
+  # NEW Bridge documents (this workspace)
+  # =========================================================================
+
+  - id: workspace-evaluation-queries
+    file: demo-corpus/workspaces/mixed-cross-domain/docs/workspace-evaluation-queries.md
+    doc_type: evaluation_query_suite
+    title: Workspace Evaluation Query Suite (100 queries)
+    parties: []
+    authority: 0.9
+    doc_status: live
+
+  - id: entity-collision-priya-iyer
+    file: demo-corpus/workspaces/mixed-cross-domain/docs/entity-collision-priya-iyer.md
+    doc_type: entity_disambiguation
+    title: Entity Disambiguation — Priya Iyer (Acme VP Legal vs Apollo Pune patient)
+    parties: [acme_corp, apollo_hospitals_pune, nimbus_finance_subsidiary]
+    authority: 0.95
+    doc_status: live
+    stressors: [entity_collision_high_priority]
+
+  - id: acme-corp-360-view
+    file: demo-corpus/workspaces/mixed-cross-domain/docs/acme-corp-360-view.md
+    doc_type: cross_domain_view
+    title: Acme Corp 360° Cross-Domain View
+    parties: [acme_corp]
+    authority: 0.9
+    doc_status: live
+    stressors: [cross_domain_finance]
+
+  - id: hdfc-bank-cross-domain
+    file: demo-corpus/workspaces/mixed-cross-domain/docs/hdfc-bank-cross-domain.md
+    doc_type: cross_domain_view
+    title: HDFC Bank Cross-Domain View
+    parties: [hdfc_bank]
+    authority: 0.9
+    doc_status: live
+    stressors: [cross_domain_finance]
+
+  - id: mahalaxmi-cross-domain
+    file: demo-corpus/workspaces/mixed-cross-domain/docs/mahalaxmi-cross-domain.md
+    doc_type: cross_domain_view
+    title: Mahalaxmi Infra Cross-Domain View (Construction + Mining sister concern)
+    parties: [mahalaxmi_infra]
+    authority: 0.9
+    doc_status: live
+
+  # =========================================================================
+  # Selected docs from LEGAL domain (6 docs)
+  # =========================================================================
+
+  - ref: legal/msa-001-acme-vertex
+  - ref: legal/msa-001-amendment-2
+  - ref: legal/msa-002-acme-nimbus
+  - ref: legal/nda-mutual-001-acme-vertex
+  - ref: legal/license-001-acme-orion-mfn
+  - ref: legal/employment-contract-001-acme
+
+  # =========================================================================
+  # Selected docs from FINANCE domain (8 docs — Acme + HDFC focus)
+  # =========================================================================
+
+  - ref: finance/loan-001-acme-hdfc-original
+  - ref: finance/loan-001-acme-hdfc-addendum-1
+  - ref: finance/loan-001-acme-hdfc-addendum-2
+  - ref: finance/statement-003-acme-hdfc-mar-2025
+  - ref: finance/kyc-003-acme-corporate
+  - ref: finance/treasury-003-acme-fy26-budget-DRAFT
+  - ref: finance/complaint-001-desai-resolution
+  - ref: finance/wire-004-billion-dollar-suspicious
+
+  # =========================================================================
+  # Selected docs from CONSTRUCTION (8 docs — Acme datacentre focus)
+  # =========================================================================
+
+  - ref: construction/drawing-001-arch-datacentre-revA
+  - ref: construction/drawing-001-arch-datacentre-revC
+  - ref: construction/structural-calc-001-datacentre-loadtable
+  - ref: construction/contract-001-acme-mahalaxmi-epc
+  - ref: construction/safety-001-incident-fall-corrective
+  - ref: construction/handover-001-mechanical-completion
+  - ref: construction/drawing-002-apollo-maternity-revB
+  - ref: construction/labour-contract-001-sai-marathi-scan
+
+  # =========================================================================
+  # Selected docs from HEALTHCARE (5 docs — Apollo Pune + Priya Iyer)
+  # =========================================================================
+
+  - ref: healthcare/encounter-005-priya-iyer-pune
+  - ref: healthcare/lab-005-priya-iyer-hypothyroid
+  - ref: healthcare/encounter-001-arjun-singh-visit
+  - ref: healthcare/lab-001-arjun-singh-cbc
+  - ref: healthcare/consent-001-apollo-aadhaar
+
+  # =========================================================================
+  # Selected docs from MINING (4 docs — covers incident + Mahalaxmi link)
+  # =========================================================================
+
+  - ref: mining/incident-003-mahalaxmi-equipment
+  - ref: mining/drilling-noamundi-rev3
+  - ref: mining/parsa-env-corrigendum
+  - ref: mining/dgms-inspection-bokaro
+
+  # =========================================================================
+  # Selected docs from GOVERNMENT (4 docs)
+  # =========================================================================
+
+  - ref: government/pmay-beed-corrigendum
+  - ref: government/cidco-bid-decision
+  - ref: government/welfare-001-ration-card-anomaly-list
+  - ref: government/rti-circular-99999-false-premise
+
+# Total: 5 NEW bridge docs + 35 REFERENCED docs from other domains = 40 docs
+# in the workspace.
+#
+# Notes:
+#   - `ref: domain/doc-id` references existing docs. The mixed-cross-domain
+#     workspace does not duplicate doc bodies — only the bridge docs are NEW.
+#   - At evaluation time, the runtime resolves each `ref:` to the actual
+#     file path via the source domain's manifest. This way the workspace
+#     stays a consistent view + can be re-balanced without copying bytes.
+#   - The actual file paths for referenced docs are:
+#     - legal/* → demo-corpus/domains/legal/docs/ (or threads/ for .eml)
+#     - finance/* → demo-corpus/domains/finance/docs/ (or threads/)
+#     - construction/* → demo-corpus/domains/construction/docs/ (or threads/)
+#     - healthcare/* → demo-corpus/domains/healthcare/docs/
+#     - mining/* → demo-corpus/domains/mining/docs/
+#     - government/* → demo-corpus/domains/government/docs/
+
+cross_domain_stressors:
+  acme_corp_footprint: [legal, finance, construction]
+  hdfc_bank_footprint: [finance, construction, legal]
+  apollo_hospitals_footprint: [healthcare, finance, construction]
+  mahalaxmi_infra_footprint: [construction, mining]
+  nimbus_tech_vs_nimbus_finance: [legal, finance]
+  priya_iyer_name_collision: [legal, finance, construction, healthcare]
+  aniket_desai_employer_swap: [finance]

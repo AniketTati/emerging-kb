@@ -1,0 +1,121 @@
+---
+doc_id: rfi-004-vinyl-spec-clarification
+doc_type: email_thread
+effective_date: 2025-12-08
+parties: [Mahalaxmi Infrastructure Pvt Ltd, Tarkett India, Phoenix MEP Services Pvt Ltd]
+status: live
+---
+
+From: Anand Krishnamurthy <anand.k@mahalaxmiinfra.in>
+To: Rajiv Goyal <rajiv.goyal@tarkett.in>
+Cc: Bharat Sanghavi <bharat.sanghavi@mahalaxmiinfra.in>; Sushil Patil <sushil.patil@phoenixmep.in>; Sanjay Tripathi <sanjay.tripathi@acme.in>
+Subject: RFI-024 — Anti-static vinyl installation clarifications + final acceptance criteria
+Date: Mon, 8 Dec 2025 11:42:18 +0530
+
+Hi Rajiv,
+
+RFI-024 for clarification on the Tarkett iQ Optima ESD vinyl installation that's currently underway on the Acme Whitefield Datacentre site.
+
+QUESTIONS:
+
+1. **Adhesive curing time:** Your spec says 24-48 hrs before any rolling/loading. The site PM wants to commence furniture/UPS unit positioning by 22 Dec. Can we shorten the cure time via climate control (we have AHU running)?
+
+2. **Pre-installation moisture:** What is the maximum allowable concrete substrate moisture content (per BS 8203 or your in-house spec)? We measured 6.2% on East server hall floor and 8.1% on West server hall floor. The vendor told the field crew 4% but I cannot find this in the spec sheet.
+
+3. **Heat-weld vs cold-weld at seams:** Site team is using heat-weld. Per your spec, this is acceptable; however, the workmanship looks inconsistent (some seams shiny, others matte). Can you visit + advise on quality acceptance criteria?
+
+4. **Castor-load testing:** The eventual UPS units (4 × 480 kVA) weigh 1.2 t each + are on castors. Will the floor withstand?
+
+5. **End-of-life recyclability:** You quoted 95% recyclable. Can we get a binding certificate for IGBC LEED documentation?
+
+Please respond by 12 Dec.
+
+Best,
+Anand Krishnamurthy
+Site Engineer, Mahalaxmi Infrastructure
++91 80 4218 4222
+
+---
+
+From: Rajiv Goyal <rajiv.goyal@tarkett.in>
+To: Anand Krishnamurthy
+Cc: Bharat Sanghavi; Sushil Patil; Sanjay Tripathi; Sales India <sales.india@tarkett.in>
+Subject: RE: RFI-024 — Tarkett iQ Optima ESD vinyl — responses
+Date: Wed, 10 Dec 2025 14:22:42 +0530
+
+Anand + team,
+
+Responses to your RFI-024:
+
+1. **Adhesive curing:**
+   - Standard cure: 24-48 hrs at 22-25°C + ≤ 60% humidity
+   - With AHU climate control (which you mentioned): 18-24 hrs is acceptable
+   - Critical: do not commence rolling/positioning for at least 18 hrs even with optimal conditions
+   - Recommendation: 24 hrs full cure before positioning UPS — safer
+
+2. **Substrate moisture:**
+   - Maximum substrate moisture: **4% (capacitance) or 75% RH (calcium chloride)** — per BS 8203 and Tarkett spec
+   - Your East floor at 6.2% is too high; West floor at 8.1% is significantly too high
+   - **DO NOT proceed with installation on these floors yet**. Need to dry to ≤ 4%.
+   - Drying methods: continued AHU + dehumidifiers; allow 2-3 weeks
+   - Field crew misinformation about "4% being okay if recently poured" is incorrect — the moisture testing is the deciding factor regardless of pour age
+
+3. **Heat-weld inconsistency:**
+   - The matte vs shiny variance suggests inconsistent welding temperature / dwell time
+   - I will personally visit the site on **Friday 12 Dec** to inspect + train the crew. Aim for uniform appearance + 100% bond integrity
+   - Quality acceptance: max 20% visual variance + zero open seams; tested via vinyl break-and-pull on sample
+
+4. **Castor-load:** Yes — Tarkett iQ Optima ESD is rated for >2 t per 100mm² castor footprint. UPS units (1.2 t on 4 castors each) = 300 kg per castor — well within rating. No issue.
+
+5. **Recyclability:** Yes, I will send the binding certificate within 2 working days. Tarkett iQ Optima ESD is **95% recyclable + 96% post-consumer recycled content** — among the best in industry.
+
+ACTION REQUIRED:
+- Halt vinyl installation on East + West server halls
+- Test substrate moisture daily
+- Use dehumidifiers + extend AHU run time
+- Don't restart installation until ≤ 4% moisture
+- I'll visit Friday + assist with re-start planning
+
+Tarkett can extend installation warranty if these steps are followed correctly.
+
+Best,
+Rajiv Goyal
+Senior Technical Manager (India)
+Tarkett India Private Limited
++91 80 4218 1842
+
+---
+
+From: Anand Krishnamurthy <anand.k@mahalaxmiinfra.in>
+To: Rajiv Goyal
+Cc: Bharat Sanghavi; Sushil Patil; Sanjay Tripathi; Rakesh Iyer <rakesh.iyer@mahalaxmiinfra.in>
+Subject: RE: RFI-024 — Tarkett iQ Optima ESD vinyl — site implementation
+Date: Wed, 10 Dec 2025 16:42:18 +0530
+
+Rajiv,
+
+Many thanks. We will:
+
+(i) Halt vinyl installation on both floors effective today
+(ii) Schedule dehumidifier rental immediately (12 units due tomorrow)
+(iii) Daily moisture testing; restart when ≤ 4%
+(iv) Welcome you on Friday 12 Dec for the crew training
+
+Sanjay (Acme) — copying for awareness. This may cause a 2-3 week delay on vinyl installation. Full impact is being assessed; we may need a small CO for the dehumidifier rental + extended schedule.
+
+Best,
+Anand
+
+---
+
+From: Sanjay Tripathi <sanjay.tripathi@acme.in>
+To: Anand Krishnamurthy; Rajiv Goyal
+Cc: Bharat Sanghavi; Sushil Patil; Rakesh Iyer
+Subject: RE: RFI-024 — acknowledgement
+Date: Wed, 10 Dec 2025 17:22:18 +0530
+
+Acknowledged. The right call to halt now rather than risk poor installation. Procurement-team acknowledges the schedule risk + will work with Mahalaxmi on the CO. Let's not compromise on quality.
+
+Thanks for the proactive coordination.
+
+Sanjay

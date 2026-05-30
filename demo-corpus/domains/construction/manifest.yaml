@@ -1,0 +1,536 @@
+# Construction domain manifest — 46 docs across 12 subtypes.
+#
+# Headline stressors:
+#   - Acme Whitefield Datacentre drawing chain (Rev A → B → C with the
+#     load-bearing wall conflict between architectural Rev A vs structural
+#     calculation; resolved in Rev B + Rev C).
+#   - Safety incident chain (initial 24h report vs detailed investigation
+#     vs corrective action — root cause classification flips from "worker
+#     error" to "PPE non-availability + supervision gap").
+#   - Multilingual scanned labour contract (Marathi + Hindi + English).
+#   - Aadhaar PII in daily site report + labour contract.
+#   - Cross-domain hooks: Acme Corp (Finance datacentre collateral cited
+#     in loan-001-addendum-2); Apollo Hospitals Pune (Healthcare —
+#     maternity ward Phase-2 drawings); Mahalaxmi Infra (Mining — vendor
+#     on incident-003-mining); CIDCO (Government); MMRDA (Government).
+#   - Authority stressor: draft pre-approval treasury memos vs final
+#     signed versions (treasury-003 DRAFT in Finance).
+
+domain: construction
+description: |
+  46 construction docs across architectural drawings, structural
+  calculations, MEP drawings, BoQs, EPC + subcontract agreements,
+  safety reports + incident chains, daily site reports, RFIs,
+  inspections, change orders, quality + NCR reports, purchase orders,
+  meeting minutes, commissioning, handover, and stakeholder records.
+  Drawing chain + safety incident chain are the two headline stressor
+  patterns; cross-domain hooks to Finance + Healthcare + Government +
+  Mining seeded throughout.
+
+docs:
+
+  # =========================================================================
+  # Architectural + Structural Drawings (8 docs)
+  # =========================================================================
+
+  - id: drawing-001-arch-datacentre-revA
+    file: demo-corpus/domains/construction/docs/drawing-001-arch-datacentre-revA.md
+    doc_type: architectural_drawing
+    title: Architectural Drawing — Acme Datacentre Main Building (Rev A — initial)
+    parties: [acme_corp, deshpande_architects]
+    effective_date: "2025-01-12"
+    chain: chain_datacentre_drawing_revisions
+    chain_role: original
+    chain_version: 0
+    authority: 0.6
+    doc_status: superseded
+    stressors:
+      - chain_member
+      - conflict_source_load_bearing
+
+  - id: structural-calc-001-datacentre-loadtable
+    file: demo-corpus/domains/construction/docs/structural-calc-001-datacentre-loadtable.md
+    doc_type: structural_calculation
+    title: Structural Calculations — Datacentre Load Assessment + Wall Position
+    parties: [acme_corp, sundar_structural]
+    effective_date: "2025-01-22"
+    authority: 0.85
+    doc_status: live
+    stressors: [conflict_resolution_target]
+
+  - id: drawing-001-arch-datacentre-revB
+    file: demo-corpus/domains/construction/docs/drawing-001-arch-datacentre-revB.md
+    doc_type: architectural_drawing
+    title: Architectural Drawing — Acme Datacentre (Rev B — wall repositioned)
+    parties: [acme_corp, deshpande_architects]
+    effective_date: "2025-01-28"
+    chain: chain_datacentre_drawing_revisions
+    chain_role: amendment
+    chain_version: 1
+    parent_doc: drawing-001-arch-datacentre-revA
+    authority: 0.9
+    doc_status: superseded
+
+  - id: drawing-001-arch-datacentre-revC
+    file: demo-corpus/domains/construction/docs/drawing-001-arch-datacentre-revC.md
+    doc_type: architectural_drawing
+    title: Architectural Drawing — Acme Datacentre (Rev C — for construction)
+    parties: [acme_corp, deshpande_architects]
+    effective_date: "2025-03-22"
+    chain: chain_datacentre_drawing_revisions
+    chain_role: amendment
+    chain_version: 2
+    parent_doc: drawing-001-arch-datacentre-revA
+    authority: 0.95
+    doc_status: live
+    stressors: [chain_winner]
+
+  - id: drawing-002-apollo-maternity-revA
+    file: demo-corpus/domains/construction/docs/drawing-002-apollo-maternity-revA.md
+    doc_type: architectural_drawing
+    title: Architectural Drawing — Apollo Pune Maternity Ward Phase-2 (Rev A)
+    parties: [apollo_hospitals_pune, deshpande_architects]
+    effective_date: "2025-02-08"
+    chain: chain_apollo_maternity_drawings
+    chain_role: original
+    chain_version: 0
+    authority: 0.7
+    doc_status: superseded
+
+  - id: drawing-002-apollo-maternity-revB
+    file: demo-corpus/domains/construction/docs/drawing-002-apollo-maternity-revB.md
+    doc_type: architectural_drawing
+    title: Architectural Drawing — Apollo Pune Maternity Ward (Rev B — for construction)
+    parties: [apollo_hospitals_pune, deshpande_architects]
+    effective_date: "2025-03-22"
+    chain: chain_apollo_maternity_drawings
+    chain_role: amendment
+    chain_version: 1
+    parent_doc: drawing-002-apollo-maternity-revA
+    authority: 0.9
+    doc_status: live
+    stressors: [chain_winner]
+
+  - id: drawing-003-mep-layout-datacentre
+    file: demo-corpus/domains/construction/docs/drawing-003-mep-layout-datacentre.md
+    doc_type: mep_drawing
+    title: MEP Coordination Drawing — Datacentre Phase-2 (Phoenix MEP)
+    parties: [acme_corp, phoenix_mep]
+    effective_date: "2025-02-12"
+    authority: 0.9
+    doc_status: live
+
+  - id: drawing-004-structural-foundation-datacentre
+    file: demo-corpus/domains/construction/docs/drawing-004-structural-foundation-datacentre.md
+    doc_type: structural_drawing
+    title: Structural Foundation Drawing — Datacentre (Sundar Structural)
+    parties: [acme_corp, sundar_structural]
+    effective_date: "2025-02-08"
+    authority: 0.95
+    doc_status: live
+
+  - id: drawing-005-pune-metro-station
+    file: demo-corpus/domains/construction/docs/drawing-005-pune-metro-station.md
+    doc_type: architectural_drawing
+    title: Mumbai Metro Line-9 Mira Road Station (Concept Drawing)
+    parties: [mmrda, deshpande_architects]
+    effective_date: "2025-04-14"
+    authority: 0.7
+    doc_status: live
+
+  # =========================================================================
+  # BoQ + Contracts (4 docs)
+  # =========================================================================
+
+  - id: boq-001-datacentre
+    file: demo-corpus/domains/construction/docs/boq-001-datacentre.md
+    doc_type: bill_of_quantities
+    title: Bill of Quantities — Acme Whitefield Datacentre Phase-2
+    parties: [acme_corp, mahalaxmi_infra]
+    effective_date: "2025-02-28"
+    authority: 0.9
+    doc_status: live
+
+  - id: contract-001-acme-mahalaxmi-epc
+    file: demo-corpus/domains/construction/docs/contract-001-acme-mahalaxmi-epc.md
+    doc_type: construction_contract
+    title: EPC Contract — Acme Corp ↔ Mahalaxmi Infra (Datacentre Phase-2)
+    parties: [acme_corp, mahalaxmi_infra]
+    effective_date: "2025-03-08"
+    authority: 0.95
+    doc_status: live
+
+  - id: subcontract-001-phoenix-mep
+    file: demo-corpus/domains/construction/docs/subcontract-001-phoenix-mep.md
+    doc_type: subcontract_agreement
+    title: Sub-contract — Mahalaxmi Infra ↔ Phoenix MEP (MEP works)
+    parties: [mahalaxmi_infra, phoenix_mep]
+    effective_date: "2025-03-22"
+    authority: 0.9
+    doc_status: live
+
+  - id: subcontract-002-sundar-structural
+    file: demo-corpus/domains/construction/docs/subcontract-002-sundar-structural.md
+    doc_type: subcontract_agreement
+    title: Consultancy Agreement — Acme Corp ↔ Sundar Structural Consultants
+    parties: [acme_corp, sundar_structural]
+    effective_date: "2025-01-08"
+    authority: 0.9
+    doc_status: live
+
+  # =========================================================================
+  # Tender + Bid (2 docs)
+  # =========================================================================
+
+  - id: tender-001-cidco-road-package
+    file: demo-corpus/domains/construction/docs/tender-001-cidco-road-package.md
+    doc_type: tender_document
+    title: CIDCO Tender Notice — Navi Mumbai Infrastructure (Sectors 47-49)
+    parties: [cidco_corp]
+    effective_date: "2025-02-12"
+    authority: 0.95
+    doc_status: live
+
+  - id: bid-001-mahalaxmi-cidco-response
+    file: demo-corpus/domains/construction/docs/bid-001-mahalaxmi-cidco-response.md
+    doc_type: bid_response
+    title: Mahalaxmi Infra — Bid Response to CIDCO Tender T-018
+    parties: [mahalaxmi_infra, cidco_corp]
+    effective_date: "2025-03-22"
+    authority: 0.85
+    doc_status: live
+
+  # =========================================================================
+  # Safety incident chain (3 docs) + 2 monthly safety reports
+  # =========================================================================
+
+  - id: safety-001-incident-fall-initial
+    file: demo-corpus/domains/construction/docs/safety-001-incident-fall-initial.md
+    doc_type: safety_incident_report
+    title: Safety Incident — Worker fall from height (initial 24h report)
+    parties: [mahalaxmi_infra, directorate_factories_kar]
+    effective_date: "2025-05-22"
+    chain: chain_safety_incident_fall
+    chain_role: original
+    chain_version: 0
+    authority: 0.5
+    doc_status: superseded
+    stressors:
+      - chain_member
+      - conflict_source_root_cause
+      - pii_aadhaar
+      - pii_residence
+
+  - id: safety-001-incident-fall-investigation
+    file: demo-corpus/domains/construction/docs/safety-001-incident-fall-investigation.md
+    doc_type: safety_incident_report
+    title: Safety Incident — Detailed investigation (root cause re-classified)
+    parties: [mahalaxmi_infra, directorate_factories_kar]
+    effective_date: "2025-06-01"
+    chain: chain_safety_incident_fall
+    chain_role: amendment
+    chain_version: 1
+    parent_doc: safety-001-incident-fall-initial
+    authority: 0.9
+    doc_status: superseded
+    stressors:
+      - chain_member
+      - conflict_resolution_target
+
+  - id: safety-001-incident-fall-corrective
+    file: demo-corpus/domains/construction/docs/safety-001-incident-fall-corrective.md
+    doc_type: safety_incident_report
+    title: Safety Incident — Corrective action report (case closed)
+    parties: [mahalaxmi_infra, acme_corp]
+    effective_date: "2025-06-18"
+    chain: chain_safety_incident_fall
+    chain_role: amendment
+    chain_version: 2
+    parent_doc: safety-001-incident-fall-initial
+    authority: 0.95
+    doc_status: live
+    stressors: [chain_winner]
+
+  - id: safety-002-monthly-safety-report
+    file: demo-corpus/domains/construction/docs/safety-002-monthly-safety-report.md
+    doc_type: safety_report
+    title: Monthly Safety Performance Report — April 2025
+    parties: [mahalaxmi_infra, acme_corp]
+    effective_date: "2025-04-30"
+    authority: 0.85
+    doc_status: live
+
+  - id: safety-003-monthly-safety-report
+    file: demo-corpus/domains/construction/docs/safety-003-monthly-safety-report.md
+    doc_type: safety_report
+    title: Monthly Safety Performance Report — May 2025 (post-incident)
+    parties: [mahalaxmi_infra, acme_corp]
+    effective_date: "2025-05-31"
+    authority: 0.85
+    doc_status: live
+
+  # =========================================================================
+  # Daily site reports (4 docs)
+  # =========================================================================
+
+  - id: daily-001-site-report-08apr2025
+    file: demo-corpus/domains/construction/docs/daily-001-site-report-08apr2025.md
+    doc_type: daily_site_report
+    title: Daily Site Report — 8 April 2025 (Day 8)
+    parties: [mahalaxmi_infra, acme_corp]
+    effective_date: "2025-04-08"
+    authority: 0.7
+    doc_status: live
+
+  - id: daily-002-site-report-22may2025
+    file: demo-corpus/domains/construction/docs/daily-002-site-report-22may2025.md
+    doc_type: daily_site_report
+    title: Daily Site Report — 22 May 2025 (Day 52 — incident day)
+    parties: [mahalaxmi_infra, acme_corp]
+    effective_date: "2025-05-22"
+    authority: 0.7
+    doc_status: live
+    stressors: [pii_aadhaar]
+
+  - id: daily-003-site-report-18jul2025
+    file: demo-corpus/domains/construction/docs/daily-003-site-report-18jul2025.md
+    doc_type: daily_site_report
+    title: Daily Site Report — 18 July 2025 (Day 109 — monsoon)
+    parties: [mahalaxmi_infra, acme_corp]
+    effective_date: "2025-07-18"
+    authority: 0.7
+    doc_status: live
+
+  - id: daily-004-site-report-12oct2025
+    file: demo-corpus/domains/construction/docs/daily-004-site-report-12oct2025.md
+    doc_type: daily_site_report
+    title: Daily Site Report — 12 October 2025 (Day 195 — peak construction)
+    parties: [mahalaxmi_infra, acme_corp]
+    effective_date: "2025-10-12"
+    authority: 0.7
+    doc_status: live
+
+  # =========================================================================
+  # RFI / Email threads (4 docs)
+  # =========================================================================
+
+  - id: rfi-001-foundation-rock
+    file: demo-corpus/domains/construction/threads/rfi-001-foundation-rock.eml
+    doc_type: email_thread
+    title: RFI-007 — Unexpected hard rock at F-18 foundation excavation
+    parties: [mahalaxmi_infra, sundar_structural, acme_corp]
+    effective_date: "2025-04-22"
+    authority: 0.7
+    doc_status: live
+
+  - id: rfi-002-mep-electrical-routing
+    file: demo-corpus/domains/construction/threads/rfi-002-mep-electrical-routing.eml
+    doc_type: email_thread
+    title: RFI-018 — Cable tray penetration through Grid D load-bearing wall
+    parties: [phoenix_mep, sundar_structural, mahalaxmi_infra]
+    effective_date: "2025-08-14"
+    authority: 0.7
+    doc_status: live
+
+  - id: rfi-003-fire-noc-clarification
+    file: demo-corpus/domains/construction/threads/rfi-003-fire-noc-clarification.eml
+    doc_type: email_thread
+    title: RFI — KSFES Fire NOC inspection conditions + action plan
+    parties: [mahalaxmi_infra, deshpande_architects, acme_corp]
+    effective_date: "2025-11-22"
+    authority: 0.7
+    doc_status: live
+
+  - id: rfi-004-vinyl-spec-clarification
+    file: demo-corpus/domains/construction/threads/rfi-004-vinyl-spec-clarification.eml
+    doc_type: email_thread
+    title: RFI-024 — Tarkett anti-static vinyl substrate moisture spec
+    parties: [mahalaxmi_infra, phoenix_mep, acme_corp]
+    effective_date: "2025-12-08"
+    authority: 0.7
+    doc_status: live
+
+  # =========================================================================
+  # Inspection + Quality + Compliance (5 docs)
+  # =========================================================================
+
+  - id: inspection-001-factory-inspector-q2-2025
+    file: demo-corpus/domains/construction/docs/inspection-001-factory-inspector-q2-2025.md
+    doc_type: inspection_report
+    title: Factory Inspector Report — Q2 FY 2025-26 (post-incident follow-up)
+    parties: [mahalaxmi_infra, directorate_factories_kar]
+    effective_date: "2025-06-22"
+    authority: 0.95
+    doc_status: live
+
+  - id: inspection-002-mep-walkdown
+    file: demo-corpus/domains/construction/docs/inspection-002-mep-walkdown.md
+    doc_type: inspection_report
+    title: MEP Walk-Down Inspection — Pre-commissioning (Feb 2026)
+    parties: [acme_corp, phoenix_mep, mahalaxmi_infra]
+    effective_date: "2026-02-12"
+    authority: 0.85
+    doc_status: live
+
+  - id: quality-001-concrete-test-report
+    file: demo-corpus/domains/construction/docs/quality-001-concrete-test-report.md
+    doc_type: quality_report
+    title: Concrete Strength Test Report — July 2025
+    parties: [mahalaxmi_infra]
+    effective_date: "2025-07-22"
+    authority: 0.85
+    doc_status: live
+
+  - id: quality-002-ncr-cable-routing
+    file: demo-corpus/domains/construction/docs/quality-002-ncr-cable-routing.md
+    doc_type: non_conformance_report
+    title: NCR-014 — Cable routing deviation at Grid C-7 (closed)
+    parties: [mahalaxmi_infra, phoenix_mep]
+    effective_date: "2025-10-15"
+    authority: 0.8
+    doc_status: live
+
+  - id: environmental-001-eia-acknowledgement
+    file: demo-corpus/domains/construction/docs/environmental-001-eia-acknowledgement.md
+    doc_type: environmental_report
+    title: KSPCB Consent to Operate — Environmental Compliance
+    parties: [acme_corp]
+    effective_date: "2025-03-04"
+    authority: 0.95
+    doc_status: live
+
+  # =========================================================================
+  # Schedule + Progress (3 docs)
+  # =========================================================================
+
+  - id: schedule-001-project-master-schedule
+    file: demo-corpus/domains/construction/docs/schedule-001-project-master-schedule.md
+    doc_type: project_schedule
+    title: Project Master Schedule — Acme Datacentre Phase-2 (Baseline 1.0)
+    parties: [acme_corp, mahalaxmi_infra]
+    effective_date: "2025-03-15"
+    authority: 0.9
+    doc_status: live
+
+  - id: progress-001-monthly-progress-aug2025
+    file: demo-corpus/domains/construction/docs/progress-001-monthly-progress-aug2025.md
+    doc_type: progress_report
+    title: Monthly Progress Report — August 2025
+    parties: [acme_corp, mahalaxmi_infra]
+    effective_date: "2025-08-31"
+    authority: 0.85
+    doc_status: live
+
+  - id: progress-002-monthly-progress-dec2025
+    file: demo-corpus/domains/construction/docs/progress-002-monthly-progress-dec2025.md
+    doc_type: progress_report
+    title: Monthly Progress Report — December 2025
+    parties: [acme_corp, mahalaxmi_infra]
+    effective_date: "2025-12-31"
+    authority: 0.85
+    doc_status: live
+
+  # =========================================================================
+  # Change orders + Procurement (4 docs)
+  # =========================================================================
+
+  - id: change-order-001-finishes-upgrade
+    file: demo-corpus/domains/construction/docs/change-order-001-finishes-upgrade.md
+    doc_type: change_order
+    title: Change Order CO-005 — Finishes specification upgrade
+    parties: [acme_corp, mahalaxmi_infra]
+    effective_date: "2025-03-12"
+    authority: 0.85
+    doc_status: live
+
+  - id: change-order-002-co-018-fire-noc
+    file: demo-corpus/domains/construction/docs/change-order-002-co-018-fire-noc.md
+    doc_type: change_order
+    title: Change Order CO-018 — Fire NOC compliance works
+    parties: [acme_corp, mahalaxmi_infra]
+    effective_date: "2025-11-26"
+    authority: 0.85
+    doc_status: live
+
+  - id: purchase-order-001-jsw-steel
+    file: demo-corpus/domains/construction/docs/purchase-order-001-jsw-steel.md
+    doc_type: purchase_order
+    title: Purchase Order — JSW Steel TMT bars (82 t for foundations + slabs)
+    parties: [mahalaxmi_infra]
+    effective_date: "2025-04-22"
+    authority: 0.7
+    doc_status: live
+
+  - id: purchase-order-002-schneider-switchgear
+    file: demo-corpus/domains/construction/docs/purchase-order-002-schneider-switchgear.md
+    doc_type: purchase_order
+    title: Purchase Order — Schneider 11 kV switchgear (delayed delivery)
+    parties: [phoenix_mep]
+    effective_date: "2025-05-22"
+    authority: 0.7
+    doc_status: live
+
+  # =========================================================================
+  # Meetings + Commissioning + Handover (5 docs)
+  # =========================================================================
+
+  - id: meeting-001-weekly-coordination
+    file: demo-corpus/domains/construction/docs/meeting-001-weekly-coordination.md
+    doc_type: meeting_minutes
+    title: Weekly Coordination Meeting — Week 25 (Sep 22, 2025)
+    parties: [acme_corp, mahalaxmi_infra, deshpande_architects, sundar_structural, phoenix_mep]
+    effective_date: "2025-09-22"
+    authority: 0.7
+    doc_status: live
+
+  - id: meeting-002-quarterly-executive-review
+    file: demo-corpus/domains/construction/docs/meeting-002-quarterly-executive-review.md
+    doc_type: meeting_minutes
+    title: Quarterly Executive Review — Q3 FY 2025-26 (Oct 22, 2025)
+    parties: [acme_corp, mahalaxmi_infra]
+    effective_date: "2025-10-22"
+    authority: 0.85
+    doc_status: live
+
+  - id: commissioning-001-dg-test-report
+    file: demo-corpus/domains/construction/docs/commissioning-001-dg-test-report.md
+    doc_type: commissioning_report
+    title: Commissioning Test Report — DG Sets (4 × 1.5 MVA Cummins)
+    parties: [acme_corp, phoenix_mep]
+    effective_date: "2026-01-22"
+    authority: 0.95
+    doc_status: live
+
+  - id: punchlist-001-pre-handover
+    file: demo-corpus/domains/construction/docs/punchlist-001-pre-handover.md
+    doc_type: punch_list
+    title: Pre-Handover Punch List — Walk-through 24 Feb 2026
+    parties: [acme_corp, mahalaxmi_infra]
+    effective_date: "2026-02-24"
+    authority: 0.85
+    doc_status: live
+
+  - id: handover-001-mechanical-completion
+    file: demo-corpus/domains/construction/docs/handover-001-mechanical-completion.md
+    doc_type: handover_document
+    title: Mechanical Completion + Handover Certificate — 28 Feb 2026
+    parties: [acme_corp, mahalaxmi_infra]
+    effective_date: "2026-02-28"
+    authority: 0.95
+    doc_status: live
+
+  # =========================================================================
+  # Labour contract (multilingual, scanned) (1 doc)
+  # =========================================================================
+
+  - id: labour-contract-001-sai-marathi-scan
+    file: demo-corpus/domains/construction/docs/labour-contract-001-sai-marathi-scan.md
+    doc_type: labour_contract
+    title: Labour-Supply Sub-Contract — Sai Labour Agency (Marathi + Hindi + English)
+    parties: [mahalaxmi_infra]
+    effective_date: "2025-04-01"
+    authority: 0.85
+    doc_status: live
+    stressors:
+      - multilingual_marathi_hindi
+      - pii_aadhaar

@@ -1,0 +1,128 @@
+From: Aisha Mehta <aisha.mehta@mehta-law.example>
+To: Robert Sharma <robert.sharma@acmecorp.example>
+Cc: Deepa Subramaniam <deepa.subramaniam@orion-consulting.example>
+Subject: Re: Orion-Acme license — final MFN language for sign-off
+Date: Thu, 17 Apr 2025 18:12:09 +0530
+Message-ID: <orion-mfn-005@mehta-law.example>
+In-Reply-To: <orion-mfn-004@orion-consulting.example>
+References: <orion-mfn-001@orion-consulting.example> <orion-mfn-002@acmecorp.example> <orion-mfn-003@mehta-law.example> <orion-mfn-004@orion-consulting.example>
+
+Robert,
+
+The current draft of Section 3 of the license amendment incorporates
+the four protections we discussed:
+
+  1. MFN guarantee on per-user fee (Section 3.1)
+  2. Quarterly CFO-signed certification (Section 3.2)
+  3. 30-day retroactive true-up (Section 3.3)
+  4. Annual audit right (Section 3.4)
+
+This is materially tighter than what Orion offered to their other
+enterprise customers. I have noted in the counsel block that this is
+non-standard and that Orion's CFO has been notified.
+
+Ready for sign-off. Recommend execution this week to lock in pricing
+before Orion's Q2 customer review.
+
+— Aisha
+
+---
+
+From: Deepa Subramaniam <deepa.subramaniam@orion-consulting.example>
+To: Aisha Mehta <aisha.mehta@mehta-law.example>
+Cc: Robert Sharma <robert.sharma@acmecorp.example>
+Subject: Re: Orion-Acme license — landing the MFN clause
+Date: Tue, 15 Apr 2025 11:34:51 -0400
+Message-ID: <orion-mfn-004@orion-consulting.example>
+In-Reply-To: <orion-mfn-003@mehta-law.example>
+References: <orion-mfn-001@orion-consulting.example> <orion-mfn-002@acmecorp.example> <orion-mfn-003@mehta-law.example>
+
+Aisha,
+
+We've signed off on the four-pillar MFN structure. The CFO's
+certification is the biggest concession on our side; this is genuinely
+unusual for us and is being done specifically for Acme given the
+relationship history.
+
+Two requests:
+
+  1. Define "substantially similar usage" in Section 3.1 to mean:
+     (a) within ±15% of named-user count, AND
+     (b) same deployment tier (Enterprise vs Pro).
+
+  2. The audit right (Section 3.4) should be conducted under joint
+     NDA — please add a reasonable confidentiality clause around the
+     auditor's access.
+
+We can execute next week if both of these land.
+
+— Deepa
+
+---
+
+From: Aisha Mehta <aisha.mehta@mehta-law.example>
+To: Robert Sharma <robert.sharma@acmecorp.example>
+Subject: Re: Orion-Acme license — landing the MFN clause
+Date: Sat, 12 Apr 2025 09:18:42 +0530
+Message-ID: <orion-mfn-003@mehta-law.example>
+In-Reply-To: <orion-mfn-002@acmecorp.example>
+References: <orion-mfn-001@orion-consulting.example> <orion-mfn-002@acmecorp.example>
+
+Robert,
+
+To make the MFN clause meaningful (rather than ornamental), we need
+all four pillars below. Anything less and Orion can technically
+charge another customer a lower per-user fee with impunity:
+
+  1. **MFN guarantee** — per-user fee shall not exceed lowest offered
+     to "substantially similar" customers.
+  2. **Certification** — quarterly CFO-signed certificate of
+     compliance.
+  3. **Retroactive true-up** — refund of difference if a lower fee
+     was offered, with 30-day cure window.
+  4. **Audit right** — once per year, confidential.
+
+Suggested draft language attached separately. Will share with
+Orion's counsel today.
+
+— Aisha
+
+---
+
+From: Robert Sharma <robert.sharma@acmecorp.example>
+To: Aisha Mehta <aisha.mehta@mehta-law.example>
+Subject: Re: Orion-Acme license — MFN pricing
+Date: Fri, 04 Apr 2025 21:33:14 +0530
+Message-ID: <orion-mfn-002@acmecorp.example>
+In-Reply-To: <orion-mfn-001@orion-consulting.example>
+
+Aisha,
+
+We need the MFN to be enforceable, not just nominal. Can you draft
+something with teeth — certification + true-up + audit. Orion is
+willing to talk about pricing protection, and I'd rather use the
+leverage now while Orion is in customer-acquisition mode.
+
+— Robert
+
+---
+
+From: Deepa Subramaniam <deepa.subramaniam@orion-consulting.example>
+To: Robert Sharma <robert.sharma@acmecorp.example>
+Subject: Orion-Acme license — MFN pricing
+Date: Tue, 01 Apr 2025 14:00:00 -0400
+Message-ID: <orion-mfn-001@orion-consulting.example>
+
+Robert,
+
+Following our discussion last week, Orion is open to including a
+most-favored-nation pricing clause in the upcoming license amendment.
+
+I'd like to keep the language tight — typically MFN clauses describe
+intent only, not enforcement mechanics. Our preferred shape is a
+one-line statement that Orion will not charge other customers lower
+per-user fees for "substantially similar" usage.
+
+Let me know if your counsel can work with that shape.
+
+— Deepa

@@ -1,0 +1,91 @@
+---
+doc_id: rfi-002-mep-electrical-routing
+doc_type: email_thread
+effective_date: 2025-08-14
+parties: [Phoenix MEP Services Pvt Ltd, Sundar Structural Consultants Pvt Ltd]
+status: live
+---
+
+From: Sushil Patil <sushil.patil@phoenixmep.in>
+To: Murali Sundar <m.sundar@sundarstructural.in>
+Cc: Anand Krishnamurthy <anand.k@mahalaxmiinfra.in>; Rakesh Iyer <rakesh.iyer@mahalaxmiinfra.in>
+Subject: RFI-018: Cable tray penetration through load-bearing wall at Grid D — fire-stopping spec confirmation
+Date: Thu, 14 Aug 2025 10:18:42 +0530
+
+Hi Dr. Sundar,
+
+RFI-018. Need confirmation by 16 Aug.
+
+DESCRIPTION:
+The main electrical busbar + 2 large cable tray runs need to penetrate the internal load-bearing wall at Grid D (architectural Rev C, structural Rev 2). The penetrations are at:
+
+- Penetration 1: Below ceiling level at Grid D-7 — 800 × 400 mm opening for busbar
+- Penetration 2: Cable tray crossing at Grid D-2 — 600 × 200 mm opening
+- Penetration 3: Cable tray crossing at Grid D-12 — 600 × 200 mm opening
+
+QUESTIONS:
+(i) Should the penetrations be lintel-supported or can we use a simple 250mm sleeve?
+(ii) What is the required fire-stop classification for these penetrations? The wall is between two server halls — both fire-rated zones.
+(iii) Do you have a preferred fire-stop product specification or generic spec we should follow?
+
+Note: Per the structural drawings, the wall has lintels above all doors. The above three penetrations are NOT at door locations.
+
+Best,
+Sushil Patil
+Project Manager (MEP), Phoenix MEP Services
++91 80 4218 4225
+
+---
+
+From: Ravi Iyer <r.iyer@sundarstructural.in>
+To: Sushil Patil
+Cc: Murali Sundar; Anand Krishnamurthy; Rakesh Iyer
+Subject: RE: RFI-018 — Cable tray penetration through Grid D wall — RESPONSE
+Date: Fri, 15 Aug 2025 11:18:42 +0530
+
+Sushil,
+
+Murali is travelling; I'll respond on his behalf.
+
+RFI-018 response:
+
+(i) **Lintel:** For penetrations > 500 × 250 mm (i.e., Penetration 1), provide a lintel:
+   - Lintel size: 600 × 300 × 1200 mm (M30 RCC + 4 × 12mm bars top + 4 × 12mm bars bottom + 8mm stirrups @ 150 c/c)
+   - Detail: see Drawing S-006 Detail D5 for typical lintel detail
+
+   For Penetrations 2 + 3 (600 × 200), a sleeve is acceptable IF placed at least 300mm below the slab. The slab itself acts as a load distributor. NO lintel required.
+
+(ii) **Fire-stop classification:** Both server halls are designated as 2-hour fire compartments. Per NBC 2016 Section 13.3 + IS 12777:1989, the fire-stopping must be rated **at least 2 hours (FS-120)**.
+
+(iii) **Recommended product:**
+   - 3M Fire Barrier Sealant CP-25 (or equivalent BIS-certified product)
+   - Application: full annulus around each cable + tray; mineral wool packing followed by intumescent sealant
+   - Inspection requirement: visual inspection per penetration at install + smoke test (qualitative) prior to handover
+
+Please ensure the contractor (Mahalaxmi/Phoenix) provides certified installer + retains test certificate for each penetration. Acme's commissioning team will verify.
+
+Anand — for site coordination, please cast lintel for Penetration 1 in the next slab pour cycle (week of 22 Aug) and provide sleeve formwork for Penetrations 2 + 3.
+
+Best,
+Dr. Ravi Iyer
+Senior Structural Engineer, Sundar Structural Consultants
++91 80 4218 4221
+
+---
+
+From: Anand Krishnamurthy <anand.k@mahalaxmiinfra.in>
+To: Sushil Patil; Ravi Iyer
+Cc: Murali Sundar; Rakesh Iyer
+Subject: RE: RFI-018 — Cable tray penetration — coordination
+Date: Fri, 15 Aug 2025 14:42:18 +0530
+
+Got it.
+
+Coordination plan:
+- Lintel formwork + rebar at Grid D-7 will be set up Monday 18 Aug
+- Cast during slab pour cycle Tuesday 19 Aug + Thursday 21 Aug
+- Sleeve formwork at D-2 + D-12 to be installed by Monday 25 Aug
+
+Phoenix MEP — please ensure your cable tray + busbar deliveries align with this. Confirm.
+
+Anand

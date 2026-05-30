@@ -1,0 +1,75 @@
+NURSE HANDOVER NOTE
+Manipal Hospital Bangalore — ICU Step-Down — Bed 8-S
+
+Date: 29 May 2025
+Shift: Day (08:00 29-May) → Evening (20:00 29-May)
+Off-going: Br. Anil Thomas, RN
+On-coming: Sr. Anjana Gopal, RN
+
+================================================================
+PATIENT: Ramesh Naidu / MRN MNP-2025-104511 / Bed 8-S
+================================================================
+
+DIAGNOSIS:
+  - Acute Inferior STEMI — Day 1 post-primary PCI (RCA stent
+    placed 28-May 16:10).
+  - Successful reperfusion. TIMI 3 flow on final angiogram.
+  - LV EF 48% (mildly reduced) on echo Day 1.
+
+VITALS THIS SHIFT (stable):
+  - 08:00 — BP 124/74, HR 72, RR 14, SpO2 96% RA, T 36.8.
+  - 14:00 — BP 122/72, HR 70, RR 14, SpO2 97% RA.
+  - 19:30 — BP 126/76, HR 74, RR 14, SpO2 97% RA.
+
+CARDIAC RHYTHM: NSR throughout. No arrhythmias on telemetry.
+
+PAIN: None. Day-1 chest pain 0/10. No recurrent pain.
+
+MEDICATIONS GIVEN:
+  - Aspirin 75 mg @ 08:00 — given.
+  - Clopidogrel 75 mg @ 08:00 — given.
+  - Atorvastatin 80 mg deferred to evening dose (per Day-1
+    convention) — give @ 20:00.
+  - Bisoprolol 5 mg @ 08:00 — given (HR was 72, no hypotension).
+  - Ramipril 5 mg @ 08:00 — given.
+  - Metformin 500 mg @ 08:00 and 14:00 — given.
+  - Pantoprazole 40 mg @ 08:00 — given on empty stomach.
+
+LINES / DEVICES:
+  - Right radial artery access site — small puncture. Mild
+    bruising; no bleeding. TR Band still in place from 28-May
+    (per cath lab protocol — to be removed by physician @ 24h
+    post-PCI, so today around 16:00. PHYSICIAN ALREADY NOTIFIED.)
+  - Left antecubital IV — patent.
+  - Continuous telemetry — leads good signal.
+
+INVESTIGATIONS DUE:
+  - Echo Day 3 (planned 30-May).
+  - Repeat troponin not required (downward trend established).
+
+PATIENT INTERACTIONS:
+  - Discussed smoking cessation extensively. Patient is
+    receptive — has agreed to NRT trial. Counseling materials
+    given.
+  - Wife (Lakshmi) is here today and very engaged. Family
+    asking about long-term prognosis — Dr. Suresh (cardio) to
+    speak with them tomorrow AM.
+  - Patient anxious about returning to work; reassured —
+    cardio rehab will be discussed at discharge.
+
+PLANNED FOR EVE SHIFT:
+  - TR Band removal at ~16:00 — done by physician/registrar.
+  - Atorvastatin 80 mg @ 20:00.
+  - Bisoprolol 5 mg held in evening (OD regimen, AM dose).
+  - Ramipril 5 mg held in evening (OD, AM dose).
+  - Aspirin/clopidogrel held in evening (OD, AM dose).
+
+ESCALATION TRIGGERS:
+  - New chest pain / dyspnea / hypotension — call cardio resident.
+  - Bleeding from radial access — call immediately.
+  - Bleeding signs (gum, GI, hematuria) — call.
+  - HR <55 or >110 — call.
+
+Handover complete. Sr. Gopal acknowledged.
+
+— Br. Anil Thomas, RN — 20:00 29 May 2025

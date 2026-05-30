@@ -1,0 +1,579 @@
+# Healthcare domain manifest — 55 docs across 9 subtypes.
+#
+# Headline stressors:
+#   - Arjun Singh 5-doc encounter chain (Design 3)
+#   - Kavya Reddy thyroid lab conflict pair (Design 2 — value disagreement)
+#   - Extreme abnormal labs (atomic_units_rarity channel)
+#   - Aadhaar/PAN PII in consent forms (Design 5 redaction)
+#   - Handwritten Rx scans (Mistral OCR / Gemini VLM parser stress)
+#   - Cross-domain entity collision: Priya Iyer (patient) vs Priya Iyer
+#     (Vertex VP Legal) — same name MUST resolve to separate entities
+
+domain: healthcare
+description: |
+  55 healthcare docs across discharge summaries, lab panels, prescriptions,
+  imaging, insurance claims, referral emails, consent forms, and nurse
+  handover notes. Multi-visit patient chains + lab-value conflicts +
+  abnormal-rarity outliers + PII redaction + cross-domain name collision.
+
+docs:
+
+  # =========================================================================
+  # Arjun Singh patient chain (5 docs)
+  # =========================================================================
+
+  - id: visit-001-arjun-singh-cardio-initial
+    file: demo-corpus/domains/healthcare/docs/visit-001-arjun-singh-cardio-initial.md
+    doc_type: clinical_visit_note
+    title: Initial Cardiology Consult — Arjun Singh (Apollo Pune)
+    parties: [apollo_hospitals_pune]
+    subject: arjun_singh_patient
+    provider: dr_anjali_verma
+    effective_date: "2025-09-15"
+    chain: chain_arjun_singh_encounters
+    chain_role: original
+    chain_version: 0
+    authority: 0.9
+    doc_status: live
+    stressors:
+      - chain_member
+      - pii_aadhaar
+      - conflict_source_blood_pressure
+
+  - id: lab-001-arjun-singh-cbc-lipid
+    file: demo-corpus/domains/healthcare/docs/lab-001-arjun-singh-cbc-lipid.md
+    doc_type: lab_panel
+    title: CBC + Lipid Panel — Arjun Singh (post-initial visit)
+    parties: [apollo_hospitals_pune]
+    subject: arjun_singh_patient
+    effective_date: "2025-09-16"
+    chain: chain_arjun_singh_encounters
+    chain_role: amendment
+    chain_version: 1
+    parent_doc: visit-001-arjun-singh-cardio-initial
+    authority: 0.95
+    doc_status: live
+    stressors: [chain_member]
+
+  - id: discharge-001-arjun-singh
+    file: demo-corpus/domains/healthcare/docs/discharge-001-arjun-singh.md
+    doc_type: discharge_summary
+    title: Discharge Summary — Arjun Singh (3-day cardiology admission)
+    parties: [apollo_hospitals_pune]
+    subject: arjun_singh_patient
+    provider: dr_anjali_verma
+    effective_date: "2025-09-20"
+    chain: chain_arjun_singh_encounters
+    chain_role: amendment
+    chain_version: 2
+    parent_doc: visit-001-arjun-singh-cardio-initial
+    authority: 0.9
+    doc_status: live
+    stressors: [chain_member]
+
+  - id: visit-002-arjun-singh-followup
+    file: demo-corpus/domains/healthcare/docs/visit-002-arjun-singh-followup.md
+    doc_type: clinical_visit_note
+    title: 6-week Follow-up — Arjun Singh
+    parties: [apollo_hospitals_pune]
+    subject: arjun_singh_patient
+    provider: dr_anjali_verma
+    effective_date: "2025-11-04"
+    chain: chain_arjun_singh_encounters
+    chain_role: amendment
+    chain_version: 3
+    parent_doc: visit-001-arjun-singh-cardio-initial
+    authority: 0.9
+    doc_status: live
+    stressors:
+      - chain_member
+      - conflict_resolution_target
+
+  - id: lab-002-arjun-singh-followup-panel
+    file: demo-corpus/domains/healthcare/docs/lab-002-arjun-singh-followup-panel.md
+    doc_type: lab_panel
+    title: Follow-up Lab Panel — Arjun Singh (post-medication adjustment)
+    parties: [apollo_hospitals_pune]
+    subject: arjun_singh_patient
+    effective_date: "2025-11-05"
+    chain: chain_arjun_singh_encounters
+    chain_role: amendment
+    chain_version: 4
+    parent_doc: visit-001-arjun-singh-cardio-initial
+    authority: 0.95
+    doc_status: live
+    stressors: [chain_member]
+
+  # =========================================================================
+  # Other discharge summaries (5 more → 6 total)
+  # =========================================================================
+
+  - id: discharge-002-kavya-reddy
+    file: demo-corpus/domains/healthcare/docs/discharge-002-kavya-reddy.md
+    doc_type: discharge_summary
+    title: Discharge Summary — Kavya Reddy (Manipal Bangalore)
+    parties: [manipal_hospital_bangalore]
+    subject: kavya_reddy_patient
+    provider: dr_suresh_nair
+    effective_date: "2025-06-12"
+    authority: 0.9
+    doc_status: live
+
+  - id: discharge-003-meera-gupta
+    file: demo-corpus/domains/healthcare/docs/discharge-003-meera-gupta.md
+    doc_type: discharge_summary
+    title: Discharge Summary — Meera Gupta (post-op recovery, Apollo Pune)
+    parties: [apollo_hospitals_pune]
+    subject: meera_gupta_patient
+    provider: dr_vikram_shah
+    effective_date: "2025-08-22"
+    authority: 0.9
+    doc_status: live
+
+  - id: discharge-004-ramesh-naidu
+    file: demo-corpus/domains/healthcare/docs/discharge-004-ramesh-naidu.md
+    doc_type: discharge_summary
+    title: Discharge Summary — Ramesh Naidu (acute MI workup, Manipal)
+    parties: [manipal_hospital_bangalore]
+    subject: ramesh_naidu_patient
+    provider: dr_lakshmi_natarajan
+    effective_date: "2025-05-30"
+    authority: 0.9
+    doc_status: live
+
+  - id: discharge-005-priya-iyer-patient
+    file: demo-corpus/domains/healthcare/docs/discharge-005-priya-iyer-patient.md
+    doc_type: discharge_summary
+    title: Discharge Summary — Priya Iyer (patient) (Fortis Escorts)
+    parties: [fortis_escorts_delhi]
+    subject: priya_iyer_patient
+    provider: dr_rashmi_pillai
+    effective_date: "2025-07-18"
+    authority: 0.9
+    doc_status: live
+    stressors:
+      - cross_domain_entity_collision
+
+  - id: discharge-006-suresh-iyer
+    file: demo-corpus/domains/healthcare/docs/discharge-006-suresh-iyer.md
+    doc_type: discharge_summary
+    title: Discharge Summary — Suresh Iyer (AKI admission, Fortis)
+    parties: [fortis_escorts_delhi]
+    subject: suresh_iyer_patient
+    provider: dr_rashmi_pillai
+    effective_date: "2025-10-08"
+    authority: 0.9
+    doc_status: live
+
+  # =========================================================================
+  # Lab panels (9 more → 11 total)
+  # =========================================================================
+
+  - id: lab-003-kavya-reddy-thyroid-v1
+    file: demo-corpus/domains/healthcare/docs/lab-003-kavya-reddy-thyroid-v1.md
+    doc_type: lab_panel
+    title: Thyroid Lab Panel v1 — Kavya Reddy (TSH 9.4, subclinical hypothyroid?)
+    parties: [manipal_hospital_bangalore]
+    subject: kavya_reddy_patient
+    effective_date: "2025-04-02"
+    chain: chain_kavya_reddy_thyroid_pair
+    chain_role: original
+    chain_version: 0
+    authority: 0.7
+    doc_status: live
+    stressors:
+      - conflict_source_tsh_value
+
+  - id: lab-004-kavya-reddy-thyroid-v2
+    file: demo-corpus/domains/healthcare/docs/lab-004-kavya-reddy-thyroid-v2.md
+    doc_type: lab_panel
+    title: Thyroid Lab Panel v2 — Kavya Reddy (TSH 3.1 — repeat after sample protocol fix)
+    parties: [manipal_hospital_bangalore]
+    subject: kavya_reddy_patient
+    effective_date: "2025-04-16"
+    chain: chain_kavya_reddy_thyroid_pair
+    chain_role: amendment
+    chain_version: 1
+    parent_doc: lab-003-kavya-reddy-thyroid-v1
+    authority: 0.9
+    doc_status: live
+    stressors:
+      - conflict_resolution_target
+
+  - id: lab-005-suresh-iyer-renal
+    file: demo-corpus/domains/healthcare/docs/lab-005-suresh-iyer-renal.md
+    doc_type: lab_panel
+    title: Renal Function Panel — Suresh Iyer (creatinine 7.8 mg/dL EXTREME)
+    parties: [fortis_escorts_delhi]
+    subject: suresh_iyer_patient
+    effective_date: "2025-10-02"
+    authority: 0.95
+    doc_status: live
+    stressors:
+      - rare_extreme_creatinine
+    rare_clauses:
+      - { type: creatinine, value: "7.8 mg/dL", typical: "0.6-1.3 mg/dL" }
+
+  - id: lab-006-meera-gupta-preop
+    file: demo-corpus/domains/healthcare/docs/lab-006-meera-gupta-preop.md
+    doc_type: lab_panel
+    title: Pre-op Lab Panel — Meera Gupta (Apollo Pune)
+    parties: [apollo_hospitals_pune]
+    subject: meera_gupta_patient
+    effective_date: "2025-08-18"
+    authority: 0.9
+    doc_status: live
+
+  - id: lab-007-shyam-rajput-hyperkalemia
+    file: demo-corpus/domains/healthcare/docs/lab-007-shyam-rajput-hyperkalemia.md
+    doc_type: lab_panel
+    title: Electrolyte Panel — patient with K+ 7.2 mEq/L (LIFE THREATENING)
+    parties: [manipal_hospital_bangalore]
+    effective_date: "2025-09-22"
+    authority: 0.95
+    doc_status: live
+    stressors:
+      - rare_high_potassium_with_ekg
+    rare_clauses:
+      - { type: potassium, value: "7.2 mEq/L", typical: "3.5-5.1 mEq/L" }
+
+  - id: lab-008-arjun-singh-hba1c
+    file: demo-corpus/domains/healthcare/docs/lab-008-arjun-singh-hba1c.md
+    doc_type: lab_panel
+    title: HbA1c — Arjun Singh (diabetes monitoring)
+    parties: [apollo_hospitals_pune]
+    subject: arjun_singh_patient
+    effective_date: "2025-10-15"
+    authority: 0.9
+    doc_status: live
+
+  - id: lab-009-ramesh-naidu-cardiac
+    file: demo-corpus/domains/healthcare/docs/lab-009-ramesh-naidu-cardiac.md
+    doc_type: lab_panel
+    title: Cardiac Enzymes — Ramesh Naidu (acute MI panel)
+    parties: [manipal_hospital_bangalore]
+    subject: ramesh_naidu_patient
+    effective_date: "2025-05-28"
+    authority: 0.95
+    doc_status: live
+
+  - id: lab-010-priya-iyer-patient-cbc
+    file: demo-corpus/domains/healthcare/docs/lab-010-priya-iyer-patient-cbc.md
+    doc_type: lab_panel
+    title: CBC — Priya Iyer (patient) at Fortis
+    parties: [fortis_escorts_delhi]
+    subject: priya_iyer_patient
+    effective_date: "2025-07-16"
+    authority: 0.9
+    doc_status: live
+    stressors:
+      - cross_domain_entity_collision
+
+  # =========================================================================
+  # Prescriptions (6 — all with scan markers)
+  # =========================================================================
+
+  - id: rx-001-arjun-singh-cardiac
+    file: demo-corpus/domains/healthcare/docs/rx-001-arjun-singh-cardiac.md
+    doc_type: prescription
+    title: Prescription — Arjun Singh (post-discharge cardiac regimen)
+    parties: [apollo_hospitals_pune]
+    subject: arjun_singh_patient
+    provider: dr_anjali_verma
+    effective_date: "2025-09-20"
+    authority: 0.8
+    doc_status: live
+    stressors: [parser_scanned_ocr]
+
+  - id: rx-002-kavya-reddy-levothyroxine
+    file: demo-corpus/domains/healthcare/docs/rx-002-kavya-reddy-levothyroxine.md
+    doc_type: prescription
+    title: Prescription — Kavya Reddy (levothyroxine trial — pre-recheck)
+    parties: [manipal_hospital_bangalore]
+    subject: kavya_reddy_patient
+    provider: dr_suresh_nair
+    effective_date: "2025-04-02"
+    authority: 0.75
+    doc_status: superseded   # Voided after lab-004 normalized
+    stressors: [parser_scanned_ocr]
+
+  - id: rx-003-meera-gupta-postop
+    file: demo-corpus/domains/healthcare/docs/rx-003-meera-gupta-postop.md
+    doc_type: prescription
+    title: Prescription — Meera Gupta (post-op analgesia + prophylaxis)
+    parties: [apollo_hospitals_pune]
+    subject: meera_gupta_patient
+    provider: dr_vikram_shah
+    effective_date: "2025-08-22"
+    authority: 0.8
+    doc_status: live
+    stressors: [parser_scanned_ocr]
+
+  - id: rx-004-ramesh-naidu-statin
+    file: demo-corpus/domains/healthcare/docs/rx-004-ramesh-naidu-statin.md
+    doc_type: prescription
+    title: Prescription — Ramesh Naidu (atorvastatin)
+    parties: [manipal_hospital_bangalore]
+    subject: ramesh_naidu_patient
+    provider: dr_lakshmi_natarajan
+    effective_date: "2025-05-30"
+    authority: 0.8
+    doc_status: live
+    stressors: [parser_scanned_ocr]
+
+  - id: rx-005-priya-iyer-polypharmacy
+    file: demo-corpus/domains/healthcare/docs/rx-005-priya-iyer-polypharmacy.md
+    doc_type: prescription
+    title: Prescription — Priya Iyer (patient) — 6-drug regimen (RARE)
+    parties: [fortis_escorts_delhi]
+    subject: priya_iyer_patient
+    provider: dr_rashmi_pillai
+    effective_date: "2025-07-18"
+    authority: 0.8
+    doc_status: live
+    stressors:
+      - parser_scanned_ocr
+      - rare_handwritten_rx_polypharmacy
+      - cross_domain_entity_collision
+
+  - id: rx-006-suresh-iyer-aki
+    file: demo-corpus/domains/healthcare/docs/rx-006-suresh-iyer-aki.md
+    doc_type: prescription
+    title: Prescription — Suresh Iyer (AKI management)
+    parties: [fortis_escorts_delhi]
+    subject: suresh_iyer_patient
+    provider: dr_rashmi_pillai
+    effective_date: "2025-10-08"
+    authority: 0.8
+    doc_status: live
+    stressors: [parser_scanned_ocr]
+
+  # =========================================================================
+  # Imaging reports (4)
+  # =========================================================================
+
+  - id: imaging-001-arjun-singh-echo
+    file: demo-corpus/domains/healthcare/docs/imaging-001-arjun-singh-echo.md
+    doc_type: imaging_report
+    title: Echocardiogram Report — Arjun Singh
+    parties: [apollo_hospitals_pune]
+    subject: arjun_singh_patient
+    effective_date: "2025-09-17"
+    authority: 0.9
+    doc_status: live
+
+  - id: imaging-002-ramesh-naidu-coronary
+    file: demo-corpus/domains/healthcare/docs/imaging-002-ramesh-naidu-coronary.md
+    doc_type: imaging_report
+    title: Coronary Angiography Report — Ramesh Naidu
+    parties: [manipal_hospital_bangalore]
+    subject: ramesh_naidu_patient
+    effective_date: "2025-05-28"
+    authority: 0.9
+    doc_status: live
+
+  - id: imaging-003-meera-gupta-ultrasound
+    file: demo-corpus/domains/healthcare/docs/imaging-003-meera-gupta-ultrasound.md
+    doc_type: imaging_report
+    title: Pelvic Ultrasound — Meera Gupta (pre-op)
+    parties: [apollo_hospitals_pune]
+    subject: meera_gupta_patient
+    effective_date: "2025-08-15"
+    authority: 0.9
+    doc_status: live
+
+  - id: imaging-004-suresh-iyer-renal-doppler
+    file: demo-corpus/domains/healthcare/docs/imaging-004-suresh-iyer-renal-doppler.md
+    doc_type: imaging_report
+    title: Renal Doppler Ultrasound — Suresh Iyer
+    parties: [fortis_escorts_delhi]
+    subject: suresh_iyer_patient
+    effective_date: "2025-10-03"
+    authority: 0.9
+    doc_status: live
+
+  # =========================================================================
+  # Insurance claims (6)
+  # =========================================================================
+
+  - id: claim-001-ramesh-naidu-rejected
+    file: demo-corpus/domains/healthcare/docs/claim-001-ramesh-naidu-rejected.md
+    doc_type: insurance_claim
+    title: Insurance Claim REJECTED — Ramesh Naidu (Star Health)
+    parties: [star_health_insurance, manipal_hospital_bangalore]
+    subject: ramesh_naidu_patient
+    effective_date: "2025-06-10"
+    chain: chain_ramesh_naidu_insurance_appeal
+    chain_role: original
+    chain_version: 0
+    authority: 0.85
+    doc_status: superseded
+    stressors:
+      - chain_member
+
+  - id: claim-002-ramesh-naidu-approved
+    file: demo-corpus/domains/healthcare/docs/claim-002-ramesh-naidu-approved.md
+    doc_type: insurance_claim
+    title: Insurance Claim APPROVED on Appeal — Ramesh Naidu (Star Health)
+    parties: [star_health_insurance, manipal_hospital_bangalore]
+    subject: ramesh_naidu_patient
+    effective_date: "2025-07-18"
+    chain: chain_ramesh_naidu_insurance_appeal
+    chain_role: amendment
+    chain_version: 1
+    parent_doc: claim-001-ramesh-naidu-rejected
+    authority: 0.95
+    doc_status: live
+    stressors:
+      - chain_winner
+
+  - id: claim-003-meera-gupta-approved
+    file: demo-corpus/domains/healthcare/docs/claim-003-meera-gupta-approved.md
+    doc_type: insurance_claim
+    title: Insurance Claim APPROVED — Meera Gupta (HDFC ERGO)
+    parties: [hdfc_ergo_health, apollo_hospitals_pune]
+    subject: meera_gupta_patient
+    effective_date: "2025-08-25"
+    authority: 0.9
+    doc_status: live
+
+  - id: claim-004-arjun-singh-approved
+    file: demo-corpus/domains/healthcare/docs/claim-004-arjun-singh-approved.md
+    doc_type: insurance_claim
+    title: Insurance Claim APPROVED — Arjun Singh (Star Health)
+    parties: [star_health_insurance, apollo_hospitals_pune]
+    subject: arjun_singh_patient
+    effective_date: "2025-09-25"
+    authority: 0.9
+    doc_status: live
+
+  - id: claim-005-suresh-iyer-rejected
+    file: demo-corpus/domains/healthcare/docs/claim-005-suresh-iyer-rejected.md
+    doc_type: insurance_claim
+    title: Insurance Claim REJECTED — Suresh Iyer (HDFC ERGO, "pre-existing condition")
+    parties: [hdfc_ergo_health, fortis_escorts_delhi]
+    subject: suresh_iyer_patient
+    effective_date: "2025-10-15"
+    authority: 0.85
+    doc_status: live
+
+  - id: claim-006-priya-iyer-patient-partial
+    file: demo-corpus/domains/healthcare/docs/claim-006-priya-iyer-patient-partial.md
+    doc_type: insurance_claim
+    title: Insurance Claim PARTIALLY APPROVED — Priya Iyer (patient)
+    parties: [star_health_insurance, fortis_escorts_delhi]
+    subject: priya_iyer_patient
+    effective_date: "2025-07-25"
+    authority: 0.9
+    doc_status: live
+
+  # =========================================================================
+  # Email referral threads (3)
+  # =========================================================================
+
+  - id: thread-kavya-reddy-endo-referral
+    file: demo-corpus/domains/healthcare/threads/kavya-reddy-endo-referral.eml
+    doc_type: email_thread
+    title: "Referral thread — Kavya Reddy (GP → Endo, Manipal)"
+    parties: [manipal_hospital_bangalore]
+    subject: kavya_reddy_patient
+    effective_date: "2025-03-28..2025-04-02"
+    chain: thread_kavya_reddy_referral
+    authority: 0.7
+    doc_status: live
+
+  - id: thread-arjun-singh-cardio-referral
+    file: demo-corpus/domains/healthcare/threads/arjun-singh-cardio-referral.eml
+    doc_type: email_thread
+    title: "Referral thread — Arjun Singh (GP → Cardiology, Apollo)"
+    parties: [apollo_hospitals_pune]
+    subject: arjun_singh_patient
+    effective_date: "2025-09-10..2025-09-15"
+    authority: 0.7
+    doc_status: live
+
+  - id: thread-suresh-iyer-nephro-referral
+    file: demo-corpus/domains/healthcare/threads/suresh-iyer-nephro-referral.eml
+    doc_type: email_thread
+    title: "Referral thread — Suresh Iyer (urgent nephrology, Fortis)"
+    parties: [fortis_escorts_delhi]
+    subject: suresh_iyer_patient
+    effective_date: "2025-10-01..2025-10-02"
+    authority: 0.7
+    doc_status: live
+
+  # =========================================================================
+  # Consent forms (3 — PII Aadhaar)
+  # =========================================================================
+
+  - id: consent-001-meera-gupta-preop
+    file: demo-corpus/domains/healthcare/docs/consent-001-meera-gupta-preop.md
+    doc_type: consent_form
+    title: Pre-op Surgical Consent — Meera Gupta
+    parties: [apollo_hospitals_pune]
+    subject: meera_gupta_patient
+    effective_date: "2025-08-19"
+    authority: 0.85
+    doc_status: live
+    stressors:
+      - pii_aadhaar
+      - pii_pan
+
+  - id: consent-002-arjun-singh-cardiac
+    file: demo-corpus/domains/healthcare/docs/consent-002-arjun-singh-cardiac.md
+    doc_type: consent_form
+    title: Cardiac Procedure Consent — Arjun Singh
+    parties: [apollo_hospitals_pune]
+    subject: arjun_singh_patient
+    effective_date: "2025-09-17"
+    authority: 0.85
+    doc_status: live
+    stressors:
+      - pii_aadhaar
+
+  - id: consent-003-suresh-iyer-dialysis
+    file: demo-corpus/domains/healthcare/docs/consent-003-suresh-iyer-dialysis.md
+    doc_type: consent_form
+    title: Emergency Dialysis Consent — Suresh Iyer
+    parties: [fortis_escorts_delhi]
+    subject: suresh_iyer_patient
+    effective_date: "2025-10-08"
+    authority: 0.85
+    doc_status: live
+
+  # =========================================================================
+  # Nurse handover notes (3)
+  # =========================================================================
+
+  - id: handover-001-arjun-singh
+    file: demo-corpus/domains/healthcare/docs/handover-001-arjun-singh.txt
+    doc_type: nurse_handover
+    title: Nurse Handover Note — Arjun Singh (night → morning shift)
+    parties: [apollo_hospitals_pune]
+    subject: arjun_singh_patient
+    provider: nurse_priya_kumar
+    effective_date: "2025-09-18"
+    authority: 0.6
+    doc_status: live
+
+  - id: handover-002-ramesh-naidu
+    file: demo-corpus/domains/healthcare/docs/handover-002-ramesh-naidu.txt
+    doc_type: nurse_handover
+    title: Nurse Handover — Ramesh Naidu (ICU step-down)
+    parties: [manipal_hospital_bangalore]
+    subject: ramesh_naidu_patient
+    provider: nurse_anil_thomas
+    effective_date: "2025-05-29"
+    authority: 0.6
+    doc_status: live
+
+  - id: handover-003-meera-gupta
+    file: demo-corpus/domains/healthcare/docs/handover-003-meera-gupta.txt
+    doc_type: nurse_handover
+    title: Nurse Handover — Meera Gupta (post-op recovery room)
+    parties: [apollo_hospitals_pune]
+    subject: meera_gupta_patient
+    provider: nurse_priya_kumar
+    effective_date: "2025-08-22"
+    authority: 0.6
+    doc_status: live

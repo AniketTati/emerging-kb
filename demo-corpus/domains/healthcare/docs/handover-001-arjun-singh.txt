@@ -1,0 +1,71 @@
+NURSE HANDOVER NOTE
+Apollo Hospitals Pune — Cardiology Telemetry — Ward 4-East
+
+Date: 18 September 2025
+Shift: Night (20:00 18-Sep) → Morning (08:00 19-Sep)
+Off-going: Sr. Priya Kumar, RN
+On-coming: Br. Rakesh Menon, RN
+
+================================================================
+PATIENT: Arjun Singh / MRN APO-2025-008842 / Bed 12B
+================================================================
+
+DIAGNOSIS:
+  - New-onset Atrial Fibrillation (Day 4 of admission)
+  - Hypertension, stage 2 (admit BP 168/96; now 138/86)
+  - Type 2 DM (HbA1c 7.8%)
+  - Hyperlipidemia
+  - Family hx of MI
+
+OVERNIGHT EVENTS:
+  - 22:18 — patient reported mild palpitations; HR 96, rhythm
+    still AF on telemetry. No chest pain. No dyspnea.
+    Telemetry recording captured for review. Notified Dr.
+    Bhattacharya (resident) — advised continue current regimen,
+    no acute change required.
+  - 03:30 — vitals stable: BP 134/82, HR 78, RR 16, SpO2 98%,
+    Temp 98.4°F. Patient sleeping.
+  - 06:00 — patient awoke, ate light breakfast at 06:45 (idli,
+    coconut chutney, weak coffee). Took 06:30 doses without
+    issue (telmisartan/chlorthalidone/apixaban/bisoprolol).
+
+MEDICATIONS GIVEN OVERNIGHT:
+  - 20:00 — apixaban 5 mg PO (evening dose) — given on time.
+  - 06:30 — full AM regimen (per chart).
+
+LINES / DEVICES:
+  - Peripheral IV right antecubital — patent, no signs of
+    phlebitis.
+  - Telemetry leads — all attached, signal clean.
+
+INPUT / OUTPUT:
+  - Oral intake: ~1200 mL over shift (per chart).
+  - Urine output: 1450 mL (clear).
+
+INVESTIGATIONS DUE:
+  - Bloods drawn at 06:00 (chemistry + INR for safety — though
+    not strictly required for apixaban).
+  - Repeat lipid + HbA1c not due until tomorrow per protocol.
+
+ESCALATION TRIGGERS DISCUSSED:
+  - New chest pain / dyspnea — call cardio resident immediately.
+  - HR persistently >120 — same.
+  - BP <100/60 or >180/110 — same.
+  - Signs of bleeding (bruising, dark stool, hematuria) — same.
+
+PATIENT-CENTRED CONCERNS:
+  - Patient anxious about long-term anticoagulation — Dr. Verma
+    spoke with him at 21:00, reassuring. Patient slept well
+    after.
+  - Wife (Sonal) staying overnight; very supportive. Will be
+    here for AM rounds.
+
+PLANNED TODAY:
+  - Mobilization with PT.
+  - Dietitian consult at 10:00.
+  - Possible discharge tomorrow (target 20-Sep AM).
+
+Handover complete. Br. Menon acknowledged all details and
+asked clarifying questions re: apixaban administration timing.
+
+— Sr. Priya Kumar, RN — 08:00 19 Sep 2025

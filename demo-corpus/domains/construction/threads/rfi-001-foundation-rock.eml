@@ -1,0 +1,92 @@
+---
+doc_id: rfi-001-foundation-rock
+doc_type: email_thread
+effective_date: 2025-04-22
+parties: [Mahalaxmi Infrastructure Pvt Ltd, Sundar Structural Consultants Pvt Ltd, Acme Corp Pvt Ltd]
+status: live
+---
+
+From: Anand Krishnamurthy <anand.k@mahalaxmiinfra.in>
+To: Murali Sundar <m.sundar@sundarstructural.in>
+Cc: Rakesh Iyer <rakesh.iyer@mahalaxmiinfra.in>; Amit Deshpande <a.deshpande@deshpandearch.in>; Sanjay Tripathi <sanjay.tripathi@acme.in>
+Subject: RFI-007: Unexpected hard rock encountered at footing F-18 excavation; please advise
+Date: Tue, 22 Apr 2025 10:42:18 +0530
+
+Hi Dr. Sundar,
+
+RFI-007. Please respond by EOD today if possible — we are holding F-18 excavation.
+
+DESCRIPTION:
+During foundation excavation for footing F-18 (Grid 5-D), the contractor has encountered **hard rock at a depth of 2.4m** (vs the expected 3.8m as per the geotech report). The rock appears to be sound granite (not weathered gneiss as expected).
+
+ISSUES:
+(i) Should we continue excavation to the originally specified depth of 3.8m, given the hard rock found at 2.4m would require blasting/breaking (cost + schedule impact)?
+
+(ii) Alternatively, can we found the footing at 2.4m depth on the hard rock, with appropriate strip footing redesign (since SBC on sound granite is much higher than the design value of 480 kN/m²)?
+
+(iii) Cost implication of breaking rock (option 1): ~INR 6 lakh + 3-day delay
+    Cost implication of redesign (option 2): ~INR 1 lakh + 1-day delay (if approved quickly)
+
+ATTACHMENTS:
+- F-18 photo showing rock outcrop (jpg)
+- Site survey notes (PDF)
+
+Please advise the preferred approach. Acme team — copying you for awareness; this is a small contingency we are handling within budget tolerance.
+
+Best,
+Anand Krishnamurthy
+Site Engineer (Civil), Mahalaxmi Infrastructure
++91 80 4218 4222
+
+---
+
+From: Murali Sundar <m.sundar@sundarstructural.in>
+To: Anand Krishnamurthy
+Cc: Rakesh Iyer; Amit Deshpande; Sanjay Tripathi; Ravi Iyer <r.iyer@sundarstructural.in>
+Subject: RE: RFI-007 — Foundation F-18 hard rock — RESPONSE
+Date: Tue, 22 Apr 2025 14:42:18 +0530
+
+Anand,
+
+RFI-007 response.
+
+RECOMMENDATION: **Option 2 — found the footing at 2.4m depth on the hard rock with redesign.**
+
+JUSTIFICATION:
+1. Hard granite has much higher SBC (1,800-2,400 kN/m²) than the design SBC of 480 kN/m². There is no engineering reason to go deeper.
+2. The footing can be reduced in size — see attached calculation.
+3. F-18 redesign attached.
+
+REDESIGN SUMMARY (F-18 only):
+- Original footing: 3.0 × 3.0 × 0.6 m at 3.8m depth (RCC M35 + 184 kg rebar)
+- Revised footing: 1.8 × 1.8 × 0.5 m at 2.4m depth (RCC M35 + 84 kg rebar)
+- Cost saving: ~INR 1.4 lakh per footing
+- Schedule: SAVES 1 day
+
+ALERT: Check adjacent footings F-17, F-19, F-25. If similar rock at 2.4m, similar redesign applies. We may need a localised geotech re-test if more than 4 footings show rock at < 3m depth.
+
+I will issue a formal "Drawing Revision" to F-18 footing detail by 14:00 IST tomorrow. Until then, proceed with caution — do not commit any concrete in F-18 until you have the revised drawing.
+
+Best,
+Dr. Murali Sundar
+Principal Structural Engineer, Sundar Structural Consultants Pvt Ltd
++91 80 4218 4220
+
+---
+
+From: Sanjay Tripathi <sanjay.tripathi@acme.in>
+To: Anand Krishnamurthy; Murali Sundar
+Cc: Rakesh Iyer; Amit Deshpande
+Subject: RE: RFI-007 — Foundation F-18 hard rock — Acme acknowledgement
+Date: Tue, 22 Apr 2025 16:42:18 +0530
+
+Approved from Acme side.
+
+Murali — please confirm timeline for the revised drawings. We don't want any compromise on the structural design.
+
+Anand — proceed with Option 2. Cost saving is welcome; document the change order (CO) appropriately.
+
+If similar conditions arise on other footings, please flag immediately.
+
+Sanjay Tripathi
+Acme Procurement

@@ -1,0 +1,698 @@
+# Legal domain manifest — per-doc inventory with intentional stressors,
+# entity references, and gold-for-query mappings.
+#
+# Schema:
+#   - id              : stable doc id used in queries.yaml
+#   - file            : path relative to demo-corpus/
+#   - doc_type        : inferred_doc_type the L2b extractor should land on
+#   - title           : human-readable
+#   - parties         : list of entity_registry ids (from ../entities.yaml)
+#   - chain           : chain_id from entities.yaml (null if standalone)
+#   - chain_role      : original | amendment (matches doc_chain_members.role)
+#   - chain_version   : integer index within the chain
+#   - authority       : source_authority hint (0.0-1.0). Drafts < signed.
+#   - doc_status      : live | draft | superseded | archived | retracted
+#   - jurisdiction    : governing law (Singapore-law contract is a F-mode test)
+#   - stressors       : list of intentional features the eval should exercise
+#   - gold_for        : list of query ids in queries.yaml that cite this doc
+#   - rare_clauses    : optional — rare-clause signatures the rarity scorer
+#                       should pick up
+
+domain: legal
+description: |
+  55 legal docs across 10 subtypes. Most-Favored-Nation clauses,
+  amendment chains, conflict pairs, PII-bearing employment offers,
+  scanned-PDF lease, and cross-domain vendor agreement are all
+  deliberately seeded as stressors.
+
+docs:
+
+  # =========================================================================
+  # MSAs (8) — the spine of the legal corpus
+  # =========================================================================
+
+  - id: msa-001-acme-vertex
+    file: demo-corpus/domains/legal/docs/msa-001-acme-vertex.md
+    doc_type: master_services_agreement
+    title: Master Services Agreement — Acme Corp ↔ Vertex Industries (2024)
+    parties: [acme_corp, vertex_industries]
+    signatories: [robert_sharma, marcus_chen]
+    counsel: [aisha_mehta, jonathan_levin]
+    effective_date: "2024-03-15"
+    chain: chain_acme_vertex_msa
+    chain_role: original
+    chain_version: 0
+    authority: 0.6     # superseded by amendment-2
+    doc_status: superseded
+    jurisdiction: "Delaware, USA"
+    stressors:
+      - chain_member
+      - conflict_source_payment_terms
+      - conflict_source_indemnity_cap
+
+  - id: msa-001-amendment-1
+    file: demo-corpus/domains/legal/docs/msa-001-amendment-1.md
+    doc_type: contract_amendment
+    title: Amendment No. 1 to MSA — Acme/Vertex (2024-Q4)
+    parties: [acme_corp, vertex_industries]
+    signatories: [robert_sharma, marcus_chen]
+    effective_date: "2024-11-20"
+    chain: chain_acme_vertex_msa
+    chain_role: amendment
+    chain_version: 1
+    authority: 0.8
+    doc_status: superseded
+    jurisdiction: "Delaware, USA"
+    parent_doc: msa-001-acme-vertex
+    stressors:
+      - chain_member
+      - conflict_resolution_target
+
+  - id: msa-001-amendment-2
+    file: demo-corpus/domains/legal/docs/msa-001-amendment-2.md
+    doc_type: contract_amendment
+    title: Amendment No. 2 to MSA — Acme/Vertex (2025-Q3)
+    parties: [acme_corp, vertex_industries]
+    signatories: [robert_sharma, marcus_chen]
+    effective_date: "2025-08-01"
+    chain: chain_acme_vertex_msa
+    chain_role: amendment
+    chain_version: 2
+    authority: 0.95
+    doc_status: live           # the current operative version
+    jurisdiction: "Delaware, USA"
+    parent_doc: msa-001-acme-vertex
+    stressors:
+      - chain_winner
+      - conflict_resolution_target
+
+  - id: msa-001-side-letter
+    file: demo-corpus/domains/legal/docs/msa-001-side-letter.md
+    doc_type: side_letter
+    title: Side Letter to MSA — Acme/Vertex (CEO-signed indemnity carve-out)
+    parties: [acme_corp, vertex_industries]
+    signatories: [robert_sharma, marcus_chen]
+    effective_date: "2025-09-10"
+    chain: chain_acme_vertex_msa
+    chain_role: amendment
+    chain_version: 3
+    authority: 0.90
+    doc_status: live
+    jurisdiction: "Delaware, USA"
+    parent_doc: msa-001-acme-vertex
+    stressors:
+      - chain_member
+      - conflict_source_indemnity_cap
+      - authority_resolved_winner
+
+  - id: msa-002-acme-nimbus
+    file: demo-corpus/domains/legal/docs/msa-002-acme-nimbus.md
+    doc_type: master_services_agreement
+    title: Master Services Agreement — Acme Corp ↔ Nimbus Technologies (Singapore law)
+    parties: [acme_corp, nimbus_technologies]
+    signatories: [robert_sharma, kenji_tanaka]
+    effective_date: "2024-06-01"
+    chain: chain_acme_nimbus_sow
+    chain_role: original
+    chain_version: 0
+    authority: 0.9
+    doc_status: live
+    jurisdiction: "Singapore"     # F-mode test: governing_law='Singapore'
+    stressors:
+      - rare_clause_4hr_delivery
+      - jurisdiction_singapore_filter
+    rare_clauses:
+      - { type: delivery_sla, value: "4 hours", typical: "24-48 hours" }
+
+  - id: msa-003-acme-orion
+    file: demo-corpus/domains/legal/docs/msa-003-acme-orion.md
+    doc_type: master_services_agreement
+    title: Master Services Agreement — Acme Corp ↔ Orion Consulting
+    parties: [acme_corp, orion_consulting]
+    signatories: [robert_sharma]
+    effective_date: "2024-09-12"
+    chain: chain_acme_orion_msa
+    chain_role: original
+    chain_version: 0
+    authority: 0.85
+    doc_status: live
+    jurisdiction: "New York, USA"
+    stressors:
+      - chain_member
+
+  - id: msa-004-helios-acme
+    file: demo-corpus/domains/legal/docs/msa-004-helios-acme.md
+    doc_type: master_services_agreement
+    title: Master Services Agreement — Helios Partners ↔ Acme Corp
+    parties: [helios_partners, acme_corp]
+    effective_date: "2025-01-05"
+    chain: null
+    authority: 0.85
+    doc_status: live
+    jurisdiction: "England and Wales"
+    stressors: []
+
+  - id: msa-005-draft-vertex-followon
+    file: demo-corpus/domains/legal/docs/msa-005-draft-vertex-followon.md
+    doc_type: master_services_agreement
+    title: DRAFT — Follow-on MSA between Vertex and Acme (negotiating)
+    parties: [acme_corp, vertex_industries]
+    effective_date: "2026-Q2"     # future-dated, draft
+    chain: null
+    authority: 0.30                # DRAFT — low authority
+    doc_status: draft
+    jurisdiction: "Delaware, USA"
+    stressors:
+      - authority_draft_vs_signed
+
+  # =========================================================================
+  # NDAs (10) — 5 mutual + 5 unilateral
+  # =========================================================================
+
+  - id: nda-mutual-001-acme-vertex
+    file: demo-corpus/domains/legal/docs/nda-mutual-001-acme-vertex.md
+    doc_type: mutual_nda
+    title: Mutual Non-Disclosure Agreement — Acme ↔ Vertex (early discussions)
+    parties: [acme_corp, vertex_industries]
+    signatories: [robert_sharma, marcus_chen]
+    effective_date: "2024-01-08"
+    chain: chain_nda_acme_vertex_pair
+    chain_role: original
+    chain_version: 0
+    authority: 0.7
+    doc_status: live
+    jurisdiction: "Delaware, USA"
+    stressors:
+      - conflict_source_nda_term
+
+  - id: nda-unilateral-001-acme-vertex
+    file: demo-corpus/domains/legal/docs/nda-unilateral-001-acme-vertex.md
+    doc_type: unilateral_nda
+    title: Unilateral NDA — Acme → Vertex (eval-trial data)
+    parties: [acme_corp, vertex_industries]
+    signatories: [robert_sharma, marcus_chen]
+    effective_date: "2024-10-22"
+    chain: chain_nda_acme_vertex_pair
+    chain_role: original
+    chain_version: 0
+    authority: 0.7
+    doc_status: live
+    jurisdiction: "Delaware, USA"
+    stressors:
+      - conflict_unresolved_nda_term
+
+  - id: nda-mutual-002-acme-nimbus
+    file: demo-corpus/domains/legal/docs/nda-mutual-002-acme-nimbus.md
+    doc_type: mutual_nda
+    title: Mutual NDA — Acme ↔ Nimbus Technologies
+    parties: [acme_corp, nimbus_technologies]
+    effective_date: "2024-05-15"
+    authority: 0.85
+    doc_status: live
+    jurisdiction: "Singapore"
+    stressors: []
+
+  - id: nda-mutual-003-acme-orion
+    file: demo-corpus/domains/legal/docs/nda-mutual-003-acme-orion.md
+    doc_type: mutual_nda
+    title: Mutual NDA — Acme ↔ Orion Consulting
+    parties: [acme_corp, orion_consulting]
+    effective_date: "2024-08-30"
+    authority: 0.85
+    doc_status: live
+    jurisdiction: "New York, USA"
+    stressors: []
+
+  - id: nda-mutual-004-helios-vertex
+    file: demo-corpus/domains/legal/docs/nda-mutual-004-helios-vertex.md
+    doc_type: mutual_nda
+    title: Mutual NDA — Helios Partners ↔ Vertex Industries
+    parties: [helios_partners, vertex_industries]
+    effective_date: "2025-03-11"
+    authority: 0.85
+    doc_status: live
+    jurisdiction: "England and Wales"
+    stressors:
+      - rare_clause_perpetual_obligation
+    rare_clauses:
+      - { type: confidentiality_duration, value: "perpetual", typical: "3-5 years" }
+
+  - id: nda-unilateral-002-acme-orion
+    file: demo-corpus/domains/legal/docs/nda-unilateral-002-acme-orion.md
+    doc_type: unilateral_nda
+    title: Unilateral NDA — Acme → Orion (RFP response)
+    parties: [acme_corp, orion_consulting]
+    effective_date: "2024-07-04"
+    authority: 0.75
+    doc_status: live
+    jurisdiction: "New York, USA"
+
+  - id: nda-unilateral-003-vertex-helios
+    file: demo-corpus/domains/legal/docs/nda-unilateral-003-vertex-helios.md
+    doc_type: unilateral_nda
+    title: Unilateral NDA — Vertex → Helios (M&A discussions)
+    parties: [vertex_industries, helios_partners]
+    effective_date: "2025-02-18"
+    authority: 0.85
+    doc_status: live
+    jurisdiction: "Delaware, USA"
+
+  - id: nda-unilateral-004-nimbus-acme
+    file: demo-corpus/domains/legal/docs/nda-unilateral-004-nimbus-acme.md
+    doc_type: unilateral_nda
+    title: Unilateral NDA — Nimbus → Acme (proprietary architecture review)
+    parties: [nimbus_technologies, acme_corp]
+    effective_date: "2024-04-25"
+    authority: 0.80
+    doc_status: live
+    jurisdiction: "Singapore"
+
+  # =========================================================================
+  # Employment offers (8) — 2 with PII, 2 with rare non-compete
+  # =========================================================================
+
+  - id: employment-001-vikram-kale
+    file: demo-corpus/domains/legal/docs/employment-001-vikram-kale.md
+    doc_type: employment_offer
+    title: Employment Offer — Vikram Kale, Senior Software Engineer (Acme)
+    parties: [acme_corp]
+    subject: vikram_kale
+    effective_date: "2025-04-01"
+    authority: 0.9
+    doc_status: live
+    jurisdiction: "India (Karnataka)"
+    stressors:
+      - pii_pan
+      - pii_aadhaar
+      - rare_non_compete_36mo
+    rare_clauses:
+      - { type: non_compete_duration, value: "36 months", typical: "6-12 months" }
+
+  - id: employment-002-sneha-joshi
+    file: demo-corpus/domains/legal/docs/employment-002-sneha-joshi.md
+    doc_type: employment_offer
+    title: Employment Offer — Sneha Joshi, Director of Product (Vertex)
+    parties: [vertex_industries]
+    subject: sneha_joshi
+    effective_date: "2024-12-15"
+    authority: 0.9
+    doc_status: live
+    jurisdiction: "Delaware, USA"
+    stressors:
+      - pii_pan
+      - rare_unlimited_liability
+    rare_clauses:
+      - { type: ip_indemnity, value: "unlimited personal liability", typical: "capped at 12 months salary" }
+
+  - id: employment-003-raghav-menon
+    file: demo-corpus/domains/legal/docs/employment-003-raghav-menon.md
+    doc_type: employment_offer
+    title: Employment Offer — Raghav Menon, VP Engineering (Nimbus)
+    parties: [nimbus_technologies]
+    subject: raghav_menon
+    effective_date: "2025-06-30"
+    authority: 0.9
+    doc_status: live
+    jurisdiction: "Singapore"
+
+  - id: employment-004-deepa-subramaniam
+    file: demo-corpus/domains/legal/docs/employment-004-deepa-subramaniam.md
+    doc_type: employment_offer
+    title: Employment Offer — Deepa Subramaniam, Head of Sales (Orion)
+    parties: [orion_consulting]
+    subject: deepa_subramaniam
+    effective_date: "2025-07-15"
+    authority: 0.9
+    doc_status: live
+    jurisdiction: "New York, USA"
+
+  - id: employment-005-arjun-pillai
+    file: demo-corpus/domains/legal/docs/employment-005-arjun-pillai.md
+    doc_type: employment_offer
+    title: Employment Offer — Arjun Pillai, Principal Architect (Helios)
+    parties: [helios_partners]
+    subject: arjun_pillai
+    effective_date: "2025-05-20"
+    authority: 0.9
+    doc_status: live
+    jurisdiction: "England and Wales"
+
+  - id: employment-006-maya-krishnan
+    file: demo-corpus/domains/legal/docs/employment-006-maya-krishnan.md
+    doc_type: employment_offer
+    title: Employment Offer — Maya Krishnan, Senior Counsel (Lakeview)
+    parties: [lakeview_properties]
+    subject: maya_krishnan
+    effective_date: "2025-08-10"
+    authority: 0.9
+    doc_status: live
+    jurisdiction: "India (Haryana)"
+
+  - id: employment-007-tarun-bhatia
+    file: demo-corpus/domains/legal/docs/employment-007-tarun-bhatia.md
+    doc_type: employment_offer
+    title: Employment Offer — Tarun Bhatia, Director of Marketing (Acme)
+    parties: [acme_corp]
+    subject: tarun_bhatia
+    effective_date: "2025-03-25"
+    authority: 0.9
+    doc_status: live
+    jurisdiction: "India (Haryana)"
+
+  - id: employment-008-leena-rao
+    file: demo-corpus/domains/legal/docs/employment-008-leena-rao.md
+    doc_type: employment_offer
+    title: Employment Offer — Leena Rao, Senior Data Scientist (Vertex)
+    parties: [vertex_industries]
+    subject: leena_rao
+    effective_date: "2025-11-01"
+    authority: 0.9
+    doc_status: live
+    jurisdiction: "Delaware, USA"
+
+  # =========================================================================
+  # Leases (5) — 1 scanned variant
+  # =========================================================================
+
+  - id: lease-001-acme-lakeview
+    file: demo-corpus/domains/legal/docs/lease-001-acme-lakeview.md
+    doc_type: commercial_lease
+    title: Commercial Lease — Acme Corp (Tenant), Lakeview Properties (Lessor) — Gurugram
+    parties: [acme_corp, lakeview_properties]
+    effective_date: "2024-02-01"
+    authority: 0.9
+    doc_status: live
+    jurisdiction: "India (Haryana)"
+
+  - id: lease-002-vertex-india-office
+    file: demo-corpus/domains/legal/docs/lease-002-vertex-india-office.md
+    doc_type: commercial_lease
+    title: Commercial Lease — Vertex Industries India Office, Mumbai
+    parties: [vertex_industries, lakeview_properties]
+    effective_date: "2023-09-10"
+    authority: 0.9
+    doc_status: live
+    jurisdiction: "India (Maharashtra)"
+
+  - id: lease-003-nimbus-singapore
+    file: demo-corpus/domains/legal/docs/lease-003-nimbus-singapore.md
+    doc_type: commercial_lease
+    title: Commercial Lease — Nimbus Technologies Pte Ltd, Cecil Street Singapore
+    parties: [nimbus_technologies]
+    effective_date: "2024-04-01"
+    authority: 0.9
+    doc_status: live
+    jurisdiction: "Singapore"
+
+  - id: lease-004-orion-nyc
+    file: demo-corpus/domains/legal/docs/lease-004-orion-nyc.md
+    doc_type: commercial_lease
+    title: Commercial Lease — Orion Consulting, 200 Park Avenue NYC
+    parties: [orion_consulting]
+    effective_date: "2023-12-15"
+    authority: 0.9
+    doc_status: live
+    jurisdiction: "New York, USA"
+
+  - id: lease-005-scanned-vintage
+    file: demo-corpus/domains/legal/docs/lease-005-scanned-vintage.md
+    doc_type: commercial_lease
+    title: Commercial Lease — vintage 2008 office space (re-discovered scan)
+    parties: [acme_corp]
+    effective_date: "2008-06-15"
+    authority: 0.5
+    doc_status: archived          # historical
+    jurisdiction: "India (Maharashtra)"
+    stressors:
+      - parser_scanned_ocr        # this doc carries a "[ORIGINALLY SCANNED]" marker
+                                  # the demo generator can later replace with an actual scan
+
+  # =========================================================================
+  # Vendor agreements (6) — 1 cross-domain (also appears in Finance)
+  # =========================================================================
+
+  - id: vendor-001-acme-hdfc-services
+    file: demo-corpus/domains/legal/docs/vendor-001-acme-hdfc-services.md
+    doc_type: vendor_agreement
+    title: Vendor Services Agreement — Acme Corp (Vendor), HDFC Bank (Customer)
+    parties: [acme_corp, hdfc_bank]
+    effective_date: "2024-07-12"
+    authority: 0.9
+    doc_status: live
+    jurisdiction: "India (Maharashtra)"
+    stressors:
+      - cross_domain_finance      # HDFC Bank also appears in the Finance corpus
+
+  - id: vendor-002-vertex-acme-saas
+    file: demo-corpus/domains/legal/docs/vendor-002-vertex-acme-saas.md
+    doc_type: vendor_agreement
+    title: Vendor SaaS Agreement — Vertex Industries (Vendor), Acme Corp (Customer)
+    parties: [vertex_industries, acme_corp]
+    effective_date: "2024-03-20"
+    authority: 0.85
+    doc_status: live
+    jurisdiction: "Delaware, USA"
+
+  - id: vendor-003-nimbus-orion
+    file: demo-corpus/domains/legal/docs/vendor-003-nimbus-orion.md
+    doc_type: vendor_agreement
+    title: Vendor Agreement — Nimbus Technologies (Vendor), Orion Consulting (Customer)
+    parties: [nimbus_technologies, orion_consulting]
+    effective_date: "2025-01-22"
+    authority: 0.85
+    doc_status: live
+    jurisdiction: "Singapore"
+
+  - id: vendor-004-acme-helios
+    file: demo-corpus/domains/legal/docs/vendor-004-acme-helios.md
+    doc_type: vendor_agreement
+    title: Vendor Agreement — Acme Corp (Vendor), Helios Partners (Customer)
+    parties: [acme_corp, helios_partners]
+    effective_date: "2024-11-08"
+    authority: 0.85
+    doc_status: live
+    jurisdiction: "England and Wales"
+
+  - id: vendor-005-mehta-acme-counsel
+    file: demo-corpus/domains/legal/docs/vendor-005-mehta-acme-counsel.md
+    doc_type: vendor_agreement
+    title: Engagement Letter — Mehta & Associates (Counsel), Acme Corp (Client)
+    parties: [mehta_law_partners, acme_corp]
+    effective_date: "2024-02-15"
+    authority: 0.85
+    doc_status: live
+    jurisdiction: "India (Maharashtra)"
+
+  # =========================================================================
+  # SOWs (5) — 2 linked to MSA chain
+  # =========================================================================
+
+  - id: sow-001-acme-nimbus
+    file: demo-corpus/domains/legal/docs/sow-001-acme-nimbus.md
+    doc_type: statement_of_work
+    title: SOW No. 1 — Cloud-Infrastructure Buildout (Acme/Nimbus, MSA-002)
+    parties: [acme_corp, nimbus_technologies]
+    effective_date: "2024-06-20"
+    chain: chain_acme_nimbus_sow
+    chain_role: amendment
+    chain_version: 1
+    parent_doc: msa-002-acme-nimbus
+    authority: 0.9
+    doc_status: live
+    jurisdiction: "Singapore"
+
+  - id: sow-002-acme-nimbus
+    file: demo-corpus/domains/legal/docs/sow-002-acme-nimbus.md
+    doc_type: statement_of_work
+    title: SOW No. 2 — Disaster-Recovery Region (Acme/Nimbus, MSA-002)
+    parties: [acme_corp, nimbus_technologies]
+    effective_date: "2025-02-10"
+    chain: chain_acme_nimbus_sow
+    chain_role: amendment
+    chain_version: 2
+    parent_doc: msa-002-acme-nimbus
+    authority: 0.9
+    doc_status: live
+    jurisdiction: "Singapore"
+
+  - id: sow-003-vertex-acme-consulting
+    file: demo-corpus/domains/legal/docs/sow-003-vertex-acme-consulting.md
+    doc_type: statement_of_work
+    title: SOW — Vertex Consulting Engagement (Acme)
+    parties: [vertex_industries, acme_corp]
+    effective_date: "2025-05-05"
+    authority: 0.85
+    doc_status: live
+    jurisdiction: "Delaware, USA"
+
+  - id: sow-004-mehta-acme-litigation
+    file: demo-corpus/domains/legal/docs/sow-004-mehta-acme-litigation.md
+    doc_type: statement_of_work
+    title: SOW — Litigation Defense Engagement (Mehta & Associates → Acme)
+    parties: [mehta_law_partners, acme_corp]
+    effective_date: "2025-06-12"
+    authority: 0.85
+    doc_status: live
+    jurisdiction: "India (Maharashtra)"
+
+  - id: sow-005-orion-acme-strategy
+    file: demo-corpus/domains/legal/docs/sow-005-orion-acme-strategy.md
+    doc_type: statement_of_work
+    title: SOW — Strategy Consulting (Orion → Acme)
+    parties: [orion_consulting, acme_corp]
+    effective_date: "2025-09-01"
+    authority: 0.85
+    doc_status: live
+    jurisdiction: "New York, USA"
+
+  # =========================================================================
+  # Licenses (4) — 1 MFN clause (rare)
+  # =========================================================================
+
+  - id: license-001-acme-orion-mfn
+    file: demo-corpus/domains/legal/docs/license-001-acme-orion-mfn.md
+    doc_type: software_license
+    title: Software License Amendment — Acme/Orion with MFN clause
+    parties: [acme_corp, orion_consulting]
+    effective_date: "2025-04-18"
+    chain: chain_acme_orion_msa
+    chain_role: amendment
+    chain_version: 1
+    parent_doc: msa-003-acme-orion
+    authority: 0.85
+    doc_status: live
+    jurisdiction: "New York, USA"
+    stressors:
+      - rare_mfn_clause
+      - chain_member
+    rare_clauses:
+      - { type: most_favored_nation, value: "MFN pricing", typical: "absent" }
+
+  - id: license-002-vertex-acme-saas
+    file: demo-corpus/domains/legal/docs/license-002-vertex-acme-saas.md
+    doc_type: software_license
+    title: Software License — Vertex SaaS Suite (Acme as Licensee)
+    parties: [vertex_industries, acme_corp]
+    effective_date: "2024-04-02"
+    authority: 0.85
+    doc_status: live
+    jurisdiction: "Delaware, USA"
+
+  - id: license-003-nimbus-helios
+    file: demo-corpus/domains/legal/docs/license-003-nimbus-helios.md
+    doc_type: software_license
+    title: Software License — Nimbus Tech (Licensor), Helios Partners (Licensee)
+    parties: [nimbus_technologies, helios_partners]
+    effective_date: "2025-03-30"
+    authority: 0.85
+    doc_status: live
+    jurisdiction: "Singapore"
+
+  - id: license-004-orion-acme-tools
+    file: demo-corpus/domains/legal/docs/license-004-orion-acme-tools.md
+    doc_type: software_license
+    title: Software License — Orion Analytics Tools (Acme as Licensee)
+    parties: [orion_consulting, acme_corp]
+    effective_date: "2024-10-15"
+    authority: 0.85
+    doc_status: live
+    jurisdiction: "New York, USA"
+
+  # =========================================================================
+  # Side letters (3) — chain amendments
+  # =========================================================================
+
+  - id: side-letter-002-helios-acme
+    file: demo-corpus/domains/legal/docs/side-letter-002-helios-acme.md
+    doc_type: side_letter
+    title: Side Letter — Helios Partners (Indemnity Carve-out under MSA)
+    parties: [helios_partners, acme_corp]
+    effective_date: "2025-02-08"
+    parent_doc: msa-004-helios-acme
+    authority: 0.85
+    doc_status: live
+    jurisdiction: "England and Wales"
+
+  - id: side-letter-003-orion-acme-pricing
+    file: demo-corpus/domains/legal/docs/side-letter-003-orion-acme-pricing.md
+    doc_type: side_letter
+    title: Side Letter — Pricing Adjustment (Orion/Acme)
+    parties: [orion_consulting, acme_corp]
+    effective_date: "2025-07-22"
+    parent_doc: msa-003-acme-orion
+    authority: 0.80
+    doc_status: live
+    jurisdiction: "New York, USA"
+
+  # =========================================================================
+  # Opinion memos (3) — 1 DRAFT (low authority)
+  # =========================================================================
+
+  - id: opinion-001-acme-india-tax
+    file: demo-corpus/domains/legal/docs/opinion-001-acme-india-tax.md
+    doc_type: opinion_memo
+    title: Legal Opinion — India Tax Treatment of Cross-Border SaaS Royalties (Mehta & Associates)
+    parties: [mehta_law_partners, acme_corp]
+    effective_date: "2025-03-20"
+    authority: 0.90
+    doc_status: live
+    jurisdiction: "India (Maharashtra)"
+
+  - id: opinion-002-draft-msa-renewal
+    file: demo-corpus/domains/legal/docs/opinion-002-draft-msa-renewal.md
+    doc_type: opinion_memo
+    title: DRAFT — Counsel Opinion on Acme/Vertex MSA Renewal Risks
+    parties: [stark_levin, vertex_industries]
+    effective_date: "2025-10-05"
+    authority: 0.40            # DRAFT
+    doc_status: draft
+    jurisdiction: "Delaware, USA"
+    stressors:
+      - authority_draft_vs_signed
+
+  - id: opinion-003-singapore-arbitration
+    file: demo-corpus/domains/legal/docs/opinion-003-singapore-arbitration.md
+    doc_type: opinion_memo
+    title: Legal Opinion — Singapore Arbitration Enforceability (Nimbus-Related)
+    parties: [stark_levin, nimbus_technologies]
+    effective_date: "2025-08-15"
+    authority: 0.85
+    doc_status: live
+    jurisdiction: "Singapore"
+
+  # =========================================================================
+  # Email threads (3 .eml — chains)
+  # =========================================================================
+
+  - id: thread-vertex-renewal
+    file: demo-corpus/domains/legal/threads/vertex-renewal-thread.eml
+    doc_type: email_thread
+    title: "Email thread — MSA renewal discussion (Acme ↔ Vertex)"
+    parties: [acme_corp, vertex_industries]
+    effective_date: "2025-09-15..2025-10-04"
+    chain: thread_vertex_renewal
+    authority: 0.6              # informal correspondence
+    doc_status: live
+    jurisdiction: "Delaware, USA"
+    stressors:
+      - email_chain_l0_5
+
+  - id: thread-nimbus-incident
+    file: demo-corpus/domains/legal/threads/nimbus-incident-response.eml
+    doc_type: email_thread
+    title: "Email thread — Production incident response (Nimbus SLA breach claim)"
+    parties: [acme_corp, nimbus_technologies]
+    effective_date: "2025-07-20..2025-07-22"
+    authority: 0.7
+    doc_status: live
+    jurisdiction: "Singapore"
+
+  - id: thread-orion-mfn-negotiation
+    file: demo-corpus/domains/legal/threads/orion-mfn-negotiation.eml
+    doc_type: email_thread
+    title: "Email thread — MFN clause negotiation (Orion ↔ Acme)"
+    parties: [orion_consulting, acme_corp]
+    effective_date: "2025-04-01..2025-04-17"
+    authority: 0.6
+    doc_status: live
+    jurisdiction: "New York, USA"
