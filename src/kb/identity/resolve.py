@@ -57,3 +57,41 @@ class ResolutionResult:
     confidence: float
     method: str  # 'deterministic' | 'embedding' | 'llm_judge' | 'identity'
     created_new: bool
+
+
+async def select_entity_match(
+    candidates,
+    *,
+    judge_same,
+    high_threshold: float = EMBEDDING_HIGH_THRESHOLD,
+    low_threshold: float = EMBEDDING_LOW_THRESHOLD,
+):
+    """I4 — pick the best entity match from top-k nearest-neighbour
+    candidates (sorted DESC by similarity). Pure + unit-testable.
+
+    Args:
+      candidates: list of (entity_id, name, sim), best-first.
+      judge_same: async callable `(candidate_name) -> bool` — asks the LLM
+        judge whether a borderline candidate is the same entity.
+
+    Returns (entity_id, method, confidence) or None. Top-1-only matching
+    silently missed a true match that was the 2nd/3rd neighbour; this walks
+    the list:
+      - first candidate >= high_threshold → auto-match ('embedding')
+      - else each borderline [low, high) candidate is judged (best-sim
+        first); the first the judge confirms wins ('llm_judge')
+      - a candidate below low_threshold stops the walk (sorted desc → nothing
+        further can qualify)
+    """
+    for cand_id, cand_name, sim in candidates:
+        if sim >= high_threshold:
+            return cand_id, "embedding", sim
+        if sim < low_threshold:
+            return None
+        try:
+            same = await judge_same(cand_name)
+        except Exception:  # noqa: BLE001 — judge failure → treat as no-match
+            same = False
+        if same:
+            return cand_id, "llm_judge", sim
+    return None
