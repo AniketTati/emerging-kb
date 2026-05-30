@@ -78,7 +78,7 @@ eval after each task** so you can attribute every change.
 **▶ CURRENT FOCUS — pre-ingest WRITE-PATH BATCH (then ingest `finance` once).**
 Plan: `~/.claude/plans/lets-create-a-plan-peppy-mitten.md`. Batch ALL write-path
 changes first, then run the finance ingest ONCE (finance = most tabular domain;
-868 md table-rows). HEAD `09fe2e9`, tree clean, 32 ingestion tests pass.
+868 md table-rows). HEAD `40becc9`, tree clean, 36 ingestion tests pass.
 
 Ingestion-batch progress (do tasks ONE-AT-A-TIME — see
 `memory/editing-cadence-tooling`; never batch Edit+Bash, never `git stash pop`):
@@ -94,7 +94,13 @@ Ingestion-batch progress (do tasks ONE-AT-A-TIME — see
   one-shot ≤50-doc ingests). 4 tests. `09fe2e9`. *finalization-phase wiring
   (I2 converge / re-extract / reconcile) lands in #19, expanding
   `finalize_corpus_impl` in place.*
-- ⏳ **P1** extraction-side config wiring (task #17)
+- ✅ **P1 (extraction-side)** config wiring. Shared `_resolve_threshold`
+  helper (safe-default fallback, domain from `KB_DEFAULT_DOMAIN`) routes
+  identity (0.92/0.85), auto-promotion (0.80/0.90/0.90), field-convergence
+  similarity (0.85, new `extraction.l2b.vocabulary.similarity_threshold` key),
+  and doc-chain title-sim (0.7/0.8, new `corrigendum_similarity_threshold`
+  key) through `layered_config.resolve_config`. 4 tests. `91824f3`/`03dcdb1`/
+  `40becc9`. *Query-side P1 + FE (table #11, Phase 3) still pending.*
 - ⏳ **#19** corpus-finalization pass: **expand `finalize_corpus_impl`** (I3
   built the entry point + settle-trigger) → wire I2 converger (real
   embedder+judge) + **cold-start re-extraction** + identity reconcile +
@@ -149,7 +155,7 @@ master table below.
 | 8 | **Citation honesty** (kill fake-cite fallback) + **P5** page-range | 2 | ✅ | **C1** grounded aggregate citations (0.00→1.00; `0079118`); **fake-citation fallback killed** (`45d7da3`); **P5** page-range (citation reports `pp. X–Y`; mechanism-tested — not construction-visible, markdown corpus). D6 |
 | 9 | **Q3** strip corpus-specific facts from generator prompt | 2 | ⏳ | after I1/I2/Q1. D5/NFR |
 | 10 | **Q2** collapse 13-mode facade → ~4 honest modes | 2 | ⏳ | D5 |
-| 11 | **P1** wire pipeline to read layered config | 3 | ⏳ | D7 |
+| 11 | **P1** wire pipeline to read layered config | 3 | ◑ | **Extraction-side DONE** (`91824f3`/`03dcdb1`/`40becc9`): identity, promotion, field-sim, doc-chain thresholds via `_resolve_threshold`→`resolve_config`, safe defaults. 4 tests. **Query-side (CRAG 0.5 etc.) + FE Settings still ⏳.** D7 |
 | 12 | **P3** committed, loadable demo-schema artifact | 3 | ⏳ | D7 |
 | 13 | **P1b** define-from-scratch schema + onboarding | 3 | ⏳ | D7 |
 | 14 | **P6** FE: failure reasons + schema version view | 3 | ⏳ | |
