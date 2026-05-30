@@ -1,0 +1,134 @@
+[
+  {
+    "id": "healthcare-q008",
+    "status": "ok_refusal",
+    "stratum": "needle",
+    "old_expected": "(Per consent or admin doc; NABH accreditation reference cited.)",
+    "new_expected": "The provided documents do not contain information about Apollo Hospitals Pune's NABH accreditation status.",
+    "required_facts": [],
+    "evidence_quote": "",
+    "source_docs": [
+      "consent-002-arjun-singh-cardiac",
+      "hdfc-bank-cross-domain",
+      "entity-collision-priya-iyer"
+    ],
+    "suggest_stratum": "negative"
+  },
+  {
+    "id": "healthcare-q011",
+    "status": "ok_refusal",
+    "stratum": "needle",
+    "old_expected": "(Quoted consent language \u2014 short quote permitted per copyright rule.)",
+    "new_expected": "The provided documents do not contain any information about an Apollo MRI consent form or its specific language. The available consent forms are for anticoagulation/cardiac procedures and surgery.",
+    "required_facts": [],
+    "evidence_quote": "",
+    "source_docs": [
+      "hdfc-bank-cross-domain",
+      "consent-002-arjun-singh-cardiac",
+      "consent-001-meera-gupta-preop"
+    ],
+    "suggest_stratum": "negative"
+  },
+  {
+    "id": "healthcare-q018",
+    "status": "ok",
+    "stratum": "chain-aware",
+    "old_expected": "Lab-2 is the current authoritative value; lab-1 is historical baseline. Both should be cited but lab-2 governs current clinical state.",
+    "new_expected": "Lab-002, effective November 5, 2025, is the current lab report for Arjun Singh. It shows updated results compared to lab-001 from September 16, 2025, with improvements in HbA1c (7.1% from 7.8%) and LDL Cholesterol (96 mg/dL from 138 mg/dL).",
+    "required_facts": [],
+    "evidence_quote": "doc_id: lab-001-arjun-singh-cbc-lipid\neffective_date: 2025-09-16  |  doc_id: lab-002-arjun-singh-followup-panel\neffective_date: 2025-11-05  |  | Analyte | Admission (16-Sep) | Current (5-Nov) | \u0394 | Reference |\n|---|---|---|---|---|\n| HbA1c | **7.8 %** | **7.1 %** | \u2193 0.7 | <5.7 normal |\n| LDL Cholesterol | 138 mg/dL | **96 mg/dL** | \u2193 42 | <100 optimal |",
+    "source_docs": [
+      "lab-001-arjun-singh-cbc-lipid",
+      "lab-002-arjun-singh-followup-panel"
+    ]
+  },
+  {
+    "id": "healthcare-q023",
+    "status": "ok_refusal",
+    "stratum": "conflict-resolution",
+    "old_expected": "Treating physician's note dated later prevails. Earlier note may be a differential diagnosis.",
+    "new_expected": "The premise of the question is false. There are no two physicians' notes that give different diagnoses for Arjun Singh. All documents consistently indicate that Arjun Singh was diagnosed with Atrial Fibrillation, Hypertension, Type 2 Diabetes Mellitus, and Dyslipidemia.",
+    "required_facts": [],
+    "evidence_quote": "**Assessment**\n1. **Atrial Fibrillation** \u2014 currently in sinus rhythm; rhythm strategy effective with current regimen.\n2. **Hypertension** \u2014 well-controlled (target <135/85 met).\n3. **Type 2 DM** \u2014 improving (HbA1c 7.1%); on track.\n4. **Dyslipidemia** \u2014 LDL response to atorvastatin 20 mg satisfactory.  |  **Discharge Diagnoses**\n1. **Atrial Fibrillation, paroxysmal** \u2014 rate-controlled.\n2. **Hypert",
+    "source_docs": [
+      "visit-002-arjun-singh-followup",
+      "discharge-001-arjun-singh",
+      "arjun-singh-cardio-referral"
+    ],
+    "suggest_stratum": "negative"
+  },
+  {
+    "id": "healthcare-q025",
+    "status": "ok_refusal",
+    "stratum": "conflict-resolution",
+    "old_expected": "Most recently signed consent applies. Earlier consent is superseded but retained for audit trail.",
+    "new_expected": "The provided documents do not contain information about two consent forms with different terms. The question's premise is false.",
+    "required_facts": [],
+    "evidence_quote": "",
+    "source_docs": [
+      "entity-collision-priya-iyer",
+      "consent-002-arjun-singh-cardiac",
+      "consent-003-suresh-iyer-dialysis"
+    ],
+    "suggest_stratum": "negative"
+  },
+  {
+    "id": "healthcare-q026",
+    "status": "ok_refusal",
+    "stratum": "conflict-resolution",
+    "old_expected": "Clinician annotation prevails for clinical decision-making; lab automated value is a measurement; the annotation typically reflects context (timing, medication, etc.).",
+    "new_expected": "The provided documents do not contain information about a disagreement between lab automated reading and a clinician's annotation, nor do they specify which would prevail in such a scenario.",
+    "required_facts": [],
+    "evidence_quote": "",
+    "source_docs": [
+      "lab-004-kavya-reddy-thyroid-v2",
+      "workspace-evaluation-queries",
+      "entity-collision-priya-iyer"
+    ],
+    "suggest_stratum": "negative"
+  },
+  {
+    "id": "healthcare-q030",
+    "status": "failed_verify",
+    "stratum": "rare-clause",
+    "proposed": "Yes, two patients have diagnostic findings flagged as 'extreme' or 'critical'.\n\n1.  **Shyam Rajput** (MRN: MNP-2025-105881) had a critical serum potassium level of 7.2 mEq/L and a critical eGFR of 18 ",
+    "why": "The answer correctly identifies the critical findings and their values, but it attributes them to specific patients (Shyam Rajput and Suresh Iyer) and their MRN"
+  },
+  {
+    "id": "healthcare-q035",
+    "status": "ok",
+    "stratum": "aggregation",
+    "old_expected": "(Aggregated from lab + encounter; Kavya Reddy confirmed; possibly others.)",
+    "new_expected": "There is 1 patient with hypothyroidism in the corpus. This is Ms. Priya Iyer, who has minor hypothyroidism (TSH 5.8). Kavya Reddy was initially diagnosed with subclinical hypothyroidism (TSH 9.4), but a repeat fasting test showed a normal TSH (3.1), leading to the voiding of her levothyroxine prescription.",
+    "required_facts": [
+      "Priya Iyer (patient at Apollo Hospitals Pune) has minor hypothyroidism (TSH 5.8).",
+      "Kavya Reddy was initially diagnosed with subclinical hypothyroidism (TSH 9.4).",
+      "Kavya Reddy's repeat fasting TSH was normal (3.1 mIU/L).",
+      "Kavya Reddy's levothyroxine prescription was voided because her repeat TSH was normal, indicating no biochemical evidence of hypothyroidism."
+    ],
+    "evidence_quote": "lab-005-priya-iyer-hypothyroid (lab report) \u2014 minor hypothyroidism (TSH 5.8)  |  TSH elevated at 9.4 mIU/L with normal Free T4 \u2192 consistent with subclinical hypothyroidism.  |  TSH now within normal range (3.1 mIU/L) in the fasting sample. Free T4 and Free T3 normal. No biochemical evidence of hypothyroidism.  |  VOIDED on 16-Apr-2025 \u2014 repeat fasting TSH 3.1 (normal). Treatment not started. Couns",
+    "source_docs": [
+      "entity-collision-priya-iyer",
+      "lab-003-kavya-reddy-thyroid-v1",
+      "rx-002-kavya-reddy-levothyroxine",
+      "lab-004-kavya-reddy-thyroid-v2"
+    ]
+  },
+  {
+    "id": "healthcare-q036",
+    "status": "ok",
+    "stratum": "aggregation",
+    "old_expected": "(Aggregated count; cite specific reports.)",
+    "new_expected": "There is 1 lab report in the corpus that shows creatinine levels above the normal range. This is for Suresh Iyer, with a creatinine level of 7.8 mg/dL.",
+    "required_facts": [
+      "Suresh Iyer's lab report (lab-005-suresh-iyer-renal) shows a serum creatinine of 7.8 mg/dL.",
+      "The normal reference range for serum creatinine is 0.6 - 1.3 mg/dL.",
+      "7.8 mg/dL is significantly higher than the normal range."
+    ],
+    "evidence_quote": "| Serum Creatinine | **7.8 mg/dL** | 0.6 - 1.3 | **HHH (critical high)** |  |  What is the extreme creatinine value in the corpus? | Suresh (creatinine 7.8) | Anomaly |",
+    "source_docs": [
+      "lab-005-suresh-iyer-renal",
+      "workspace-evaluation-queries"
+    ]
+  }
+]

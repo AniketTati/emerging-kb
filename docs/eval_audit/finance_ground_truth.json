@@ -1,0 +1,14 @@
+[
+  {
+    "id": "finance-q009",
+    "status": "ok",
+    "stratum": "needle",
+    "old_expected": "Ernst & Young LLP (per 10-K).",
+    "new_expected": "The audit partner for Marigold Pharma's FY 2024-25 audit is not explicitly stated in the provided documents. The documents only mention that Ernst & Young LLP are the statutory auditors and that they issued an unqualified opinion.",
+    "required_facts": [],
+    "evidence_quote": "The Company's statutory auditors (Ernst & Young LLP) have issued an unqualified opinion with one emphasis-of-matter paragraph regarding the contingent earn-out related to the Mehrotra Biologics acquisition (estimated maximum INR 184 crore, payable over FY 2025-26 + FY 2026-27 based on revenue + regulatory milestones).",
+    "source_docs": [
+      "10k-003-marigold-pharma-fy2024"
+    ]
+  }
+]

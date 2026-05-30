@@ -1,0 +1,72 @@
+[
+  {
+    "id": "government-q003",
+    "status": "ok_refusal",
+    "stratum": "needle",
+    "old_expected": "INR 184 crore (excluding GST).",
+    "new_expected": "The CIDCO tender T-018 is not present in the provided documents. The documents refer to CIDCO tender CIDCO/T-2025/NV-RR-014 and CIDCO/T-2025/AH-024, but not T-018.",
+    "required_facts": [],
+    "evidence_quote": "",
+    "source_docs": [
+      "tender-001-cidco-road-resurfacing",
+      "mahalaxmi-cross-domain",
+      "tender-001-cidco-bid-decision"
+    ],
+    "suggest_stratum": "negative"
+  },
+  {
+    "id": "government-q010",
+    "status": "ok",
+    "stratum": "needle",
+    "old_expected": "Office of the District Magistrate, Beed + Maharashtra State Housing Department.",
+    "new_expected": "The General Administration Department (GAD) of the Government of Maharashtra is the consenting authority for the PMAY Beed scheme. This is evidenced by the fact that the original Government Resolution (GR) and its subsequent corrigendum were issued by the GAD, and signed by the Principal Secretary of the GAD.",
+    "required_facts": [],
+    "evidence_quote": "GOVERNMENT OF MAHARASHTRA\n## General Administration Department\n### GOVERNMENT RESOLUTION (\u0936\u093e\u0938\u0928 \u0928\u093f\u0930\u094d\u0923\u092f)\n\n**Mantralaya, Madame Cama Road, Mumbai 400032**\n\n**GR No.:** GAD-PMAY-2024/CR-1832/POL-7\n**Date:** 15 May 2024  |  **A. R. Kulkarni, IAS**\nPrincipal Secretary, General Administration Department\nGovernment of Maharashtra\n15 May 2024  |  GOVERNMENT OF MAHARASHTRA\n## General Administration Departme",
+    "source_docs": [
+      "gr-001-pmay-beed-original",
+      "gr-001-pmay-beed-corrigendum"
+    ]
+  },
+  {
+    "id": "government-q011",
+    "status": "ok_refusal",
+    "stratum": "needle",
+    "old_expected": "The Sector 14 road resurfacing tender (CIDCO) is located in Navi Mumbai.",
+    "new_expected": "The provided documents do not contain information about a Sector 18 road tender (CIDCO). The road resurfacing tender (CIDCO/T-2025/NV-RR-014) is for Navi Mumbai Sector 14, and another tender (CIDCO/T-2025/AH-024) is for affordable housing in Navi Mumbai Sector 22. There is also a mention of Mahalaxmi Infrastructure bidding on a CIDCO Sector 47-49 tender (T-018).",
+    "required_facts": [],
+    "evidence_quote": "Resurfacing of arterial road network in Navi Mumbai Sector 14 comprising:  |  The tender for road resurfacing of Navi Mumbai Sector 14 received 11 bids;  |  Construction of an affordable-housing tower in CIDCO Navi Mumbai sector 22 \u2014 Block H \u2014 comprising:  |  Mahalaxmi has also bid on the CIDCO Sector 47-49 tender (T-018):",
+    "source_docs": [
+      "tender-001-cidco-road-resurfacing",
+      "tender-001-cidco-bid-decision",
+      "rti-001-cidco-tender-disclosure"
+    ],
+    "suggest_stratum": "negative"
+  },
+  {
+    "id": "government-q022",
+    "status": "failed_verify",
+    "stratum": "conflict-resolution",
+    "proposed": "The document \"welfare-001-ration-card-anomaly-list\" is authoritative, stating that there are 3,514 non-Aadhaar linked ration cards in Beed district as of July 2025. The question implies there are two ",
+    "why": "The answer states that the document 'welfare-001-ration-card-anomaly-list' is authoritative and lists 3,514 non-Aadhaar linked ration cards in Beed district as "
+  },
+  {
+    "id": "government-q025",
+    "status": "failed_verify",
+    "stratum": "conflict-resolution",
+    "proposed": "When an old land record and a new mutation register entry disagree on the owner, the new mutation entry takes precedence if it has been legally verified and ordered. For Survey No. 47/3 in Vadi Bhosal",
+    "why": "The answer states that the mutation was confirmed as completed in a Tehsildar meeting on April 5, 2025, but the evidence only states that the mutation was confi"
+  },
+  {
+    "id": "government-q033",
+    "status": "failed_verify",
+    "stratum": "aggregation",
+    "proposed": "The total amount across all government-tender contracts in the corpus is INR 278.39 crore. This is composed of: INR 5.14 crore for the CIDCO tender for Sector 18 road work, INR 62.20 crore for the PMA",
+    "why": "The answer includes a claim about a 'Beed land dispute FIR' for INR 24 crore, but the evidence quote states 'Estimated market value: INR 24 crore' which is not "
+  },
+  {
+    "id": "government-q038",
+    "status": "corpus_lacks_it",
+    "stratum": "long-form",
+    "note": ""
+  }
+]

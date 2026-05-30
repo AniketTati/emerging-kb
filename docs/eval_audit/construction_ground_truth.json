@@ -1,0 +1,65 @@
+[
+  {
+    "id": "construction-q009",
+    "status": "ok_refusal",
+    "stratum": "needle",
+    "old_expected": "3.8 m below FFL to founding on weathered gneiss (per drawing-004-structural-foundation).",
+    "new_expected": "The provided documents do not contain information about a datacentre site at Noamundi. The documents consistently refer to the 'Acme Whitefield Datacentre Phase-2' project located in Whitefield, Bangalore.",
+    "required_facts": [],
+    "evidence_quote": "Project: Acme Whitefield Datacentre Phase-2  |  Site: Acme Whitefield Datacentre Phase-2 (Survey No. 184/2A, Whitefield Main Road, Bangalore)  |  Project: Acme Whitefield Datacentre Phase-2 \u2014 Main Building",
+    "source_docs": [
+      "drawing-004-structural-foundation-datacentre",
+      "rfi-001-foundation-rock",
+      "subcontract-002-sundar-structural"
+    ],
+    "suggest_stratum": "negative"
+  },
+  {
+    "id": "construction-q023",
+    "status": "ok_refusal",
+    "stratum": "conflict-resolution",
+    "old_expected": "Each PO is independently authoritative for its consignment. Different POs for different time periods can have different rates due to market fluctuation. The signed PO controls each delivery.",
+    "new_expected": "The premise of the question is false. There is only one purchase order for steel (purchase-order-001-jsw-steel) and it shows two different unit rates for steel, not two purchase orders with different rates.",
+    "required_facts": [],
+    "evidence_quote": "doc_id: purchase-order-001-jsw-steel  |  | TMT Bar (CRS-coated) | Fe500D | 12 mm | 8.4 | 64,000 | 5,37,600 |  |  | TMT Bar (CRS-coated) | Fe500D | 16 mm | 18.2 | 64,000 | 11,64,800 |  |  | TMT Bar (CRS-coated) | Fe500D | 20 mm | 24.6 | 64,000 | 15,74,400 |  |  | TMT Bar (CRS-coated) | Fe500D | 25 mm | 22.4 | 64,500 | 14,44,800 |  |  | TMT Bar (CRS-coated) | Fe500D | 28 mm | 8.4 | 64,500 | 5,41,800",
+    "source_docs": [
+      "purchase-order-001-jsw-steel",
+      "workspace-evaluation-queries",
+      "entity-collision-priya-iyer"
+    ],
+    "suggest_stratum": "negative"
+  },
+  {
+    "id": "construction-q027",
+    "status": "ok_refusal",
+    "stratum": "rare-clause",
+    "old_expected": "Yes \u2014 Inergen (server halls) + FM-200 (battery room) per MEP drawings + commissioning.",
+    "new_expected": "The provided documents do not contain any drawings with explicit fire-rating for clean-agent suppression systems. While drawing-003-mep-layout-datacentre mentions clean-agent systems for server halls (Inergen) and the battery room (FM-200), it does not specify fire-ratings for these systems or any associated drawings.",
+    "required_facts": [],
+    "evidence_quote": "Fire protection (sprinkler + clean-agent for server halls)  |  Server halls + UPS room | Inergen-based clean-agent system (gas suppression) + VESDA early-warning smoke detection  |  Battery room | FM-200 clean agent",
+    "source_docs": [
+      "drawing-003-mep-layout-datacentre",
+      "commissioning-001-dg-test-report",
+      "subcontract-002-sundar-structural"
+    ],
+    "suggest_stratum": "negative"
+  },
+  {
+    "id": "construction-q034",
+    "status": "ok",
+    "stratum": "aggregation",
+    "old_expected": "There are 4 distinct sub-contractors explicitly mentioned for the Acme datacentre project: Deshpande Architects + Engineers LLP, Sundar Structural Consultants Pvt Ltd, Phoenix MEP Services Pvt Ltd, an",
+    "new_expected": "There are 3 distinct sub-contractors on the Acme datacentre project: Phoenix MEP Services Pvt Ltd, Tata Power Solar, and Sai Labour Agency. The total count is 3.",
+    "required_facts": [
+      "Phoenix MEP Services Pvt Ltd is an approved sub-contractor for MEP work.",
+      "Tata Power Solar is an approved sub-contractor for solar panels.",
+      "Sai Labour Agency is a sub-contractor for labour supply.",
+      "The total number of distinct sub-contractors is 3."
+    ],
+    "evidence_quote": "Mahalaxmi may sub-contract specialty work to:\n- **Phoenix MEP Services Pvt Ltd** (MEP \u2014 approved per Schedule 2)  |  - **Tata Power Solar** (solar panels \u2014 approved per Schedule 2)  |  labour-contract-001-sai-marathi-scan \u2014 Labour-supply sub-contract (Sai Labour Agency)",
+    "source_docs": [
+      "contract-001-acme-mahalaxmi-epc",
+      "mahalaxmi-cross-domain"
+    ]
+  }
+]

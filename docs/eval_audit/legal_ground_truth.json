@@ -1,0 +1,163 @@
+[
+  {
+    "id": "legal-q004",
+    "status": "ok_refusal",
+    "stratum": "needle",
+    "old_expected": "Mumbai, under the Arbitration & Conciliation Act 1996",
+    "new_expected": "The NDA between Acme and Vertex Industries does not specify an arbitration seat. The provided documents include a mutual NDA and a unilateral NDA between Acme and Vertex, neither of which contains an arbitration clause or specifies an arbitration seat. The Master Services Agreement (MSA) between Acme and Vertex does specify an arbitration seat as Wilmington, Delaware, but the question specifically asks about the NDA.",
+    "required_facts": [],
+    "evidence_quote": "doc_id: nda-mutual-001-acme-vertex  |  doc_id: nda-unilateral-001-acme-vertex  |  doc_id: msa-001-acme-vertex  |  9.3 The seat of arbitration shall be Wilmington, Delaware. The language of arbitration shall be English.",
+    "source_docs": [
+      "nda-mutual-001-acme-vertex",
+      "msa-001-acme-vertex",
+      "acme-corp-360-view"
+    ],
+    "suggest_stratum": "negative"
+  },
+  {
+    "id": "legal-q006",
+    "status": "ok",
+    "stratum": "needle",
+    "old_expected": "Indemnity capped at 1.5\u00d7 annual contract value (rare-clause variant)",
+    "new_expected": "The indemnity cap in the Acme-Nimbus MSA is the greater of (i) SGD 2,000,000 or (ii) the fees paid or payable to Nimbus in the twelve (12) months preceding the event giving rise to the claim. This cap applies to IP indemnification under Section 6.1.",
+    "required_facts": [],
+    "evidence_quote": "EXCEPT FOR BREACHES OF SECTION 8 (CONFIDENTIALITY) OR LIABILITY UNDER SECTION 6 (IP INDEMNIFICATION), EACH PARTY'S TOTAL LIABILITY UNDER THIS AGREEMENT SHALL NOT EXCEED THE GREATER OF (i) TWO MILLION SINGAPORE DOLLARS (SGD 2,000,000) OR (ii) THE FEES PAID OR PAYABLE TO NIMBUS IN THE TWELVE (12) MONTHS PRECEDING THE EVENT GIVING RISE TO THE CLAIM.  |  Nimbus shall defend, indemnify, and hold harmle",
+    "source_docs": [
+      "msa-002-acme-nimbus"
+    ]
+  },
+  {
+    "id": "legal-q008",
+    "status": "failed_verify",
+    "stratum": "needle",
+    "proposed": "Robert Sharma, the CEO of Acme Corp Pvt Ltd, signed SOW-003-vertex-acme-consulting on behalf of Acme.",
+    "why": "The evidence confirms Robert Sharma is the CEO of Acme Corp Pvt Ltd, but it does not state that he signed SOW-003-vertex-acme-consulting on behalf of Acme."
+  },
+  {
+    "id": "legal-q010",
+    "status": "ok",
+    "stratum": "needle",
+    "old_expected": "Foreground IP created in deliverables is owned by Acme; Vertex retains background IP and tooling",
+    "new_expected": "The Acme-Vertex MSA (msa-001-acme-vertex) includes an IP indemnification clause (Section 5.3) where Vertex, as the vendor, agrees to defend and indemnify Acme against third-party claims alleging that Acme's authorized use of the Services infringes intellectual property rights. The liability for such claims is capped at the greater of $1,000,000 or the fees paid/payable in the preceding twelve months, as per Section 5.1. However, a subsequent Side Letter (msa-001-side-letter) dated September 10, 2025, specifically increases Vertex's total aggregate liability for IP indemnification claims to $5,000,000 per contract year, overriding the cap in Section 5.1 solely for IP indemnification.",
+    "required_facts": [],
+    "evidence_quote": "EXCEPT FOR BREACHES OF SECTION 7 (CONFIDENTIALITY) OR LIABILITY UNDER SECTION 5.3 (IP INDEMNIFICATION), EACH PARTY'S TOTAL LIABILITY ARISING OUT OF OR IN CONNECTION WITH THIS AGREEMENT SHALL NOT EXCEED THE GREATER OF (i) **ONE MILLION U.S. DOLLARS ($1,000,000)** OR (ii) THE FEES PAID OR PAYABLE BY CUSTOMER TO VENDOR IN THE TWELVE (12) MONTHS PRECEDING THE EVENT GIVING RISE TO THE CLAIM.  |  **Inde",
+    "source_docs": [
+      "msa-001-acme-vertex",
+      "msa-001-side-letter"
+    ]
+  },
+  {
+    "id": "legal-q011",
+    "status": "ok_refusal",
+    "stratum": "needle",
+    "old_expected": "DPDP Act 2023 (Digital Personal Data Protection Act)",
+    "new_expected": "The provided documents do not contain information about a data-protection law referenced in the Acme employee NDA. The documents mention an employment offer letter for Vikram Kale, which includes confidentiality clauses, but it does not reference a specific data-protection law. The `acme-corp-360-view` document lists 'employment-contract-001-acme' as a standard employment contract, but its content is not provided.",
+    "required_facts": [],
+    "evidence_quote": "",
+    "source_docs": [
+      "acme-corp-360-view",
+      "workspace-evaluation-queries",
+      "hdfc-bank-cross-domain"
+    ],
+    "suggest_stratum": "negative"
+  },
+  {
+    "id": "legal-q018",
+    "status": "ok_refusal",
+    "stratum": "chain-aware",
+    "old_expected": "SOW dated <date> issued under the MSA; system should reference current MSA effective version and SOW status.",
+    "new_expected": "The provided documents do not contain any Statement of Work (SOW) under msa-001 that has been superseded. sow-003-vertex-acme-consulting is a live SOW under vendor-002-vertex-acme-saas, not msa-001. The other SOWs (sow-001-acme-nimbus and sow-002-acme-nimbus) are under msa-002-acme-nimbus.",
+    "required_facts": [],
+    "evidence_quote": "doc_id: sow-003-vertex-acme-consulting\ndoc_type: statement_of_work\nparent_doc: vendor-002-vertex-acme-saas\neffective_date: 2025-05-05\nparties: [Vertex Industries Inc., Acme Corp Pvt Ltd]\ngoverning_law: Delaware, USA\nstatus: live  |  doc_id: sow-001-acme-nimbus\ndoc_type: statement_of_work\nchain: chain_acme_nimbus_sow\nparent_doc: msa-002-acme-nimbus\neffective_date: 2024-06-20\nparties: [Acme Corp Pvt",
+    "source_docs": [
+      "sow-003-vertex-acme-consulting",
+      "msa-001-amendment-2",
+      "acme-corp-360-view"
+    ],
+    "suggest_stratum": "negative"
+  },
+  {
+    "id": "legal-q022",
+    "status": "ok",
+    "stratum": "conflict-resolution",
+    "old_expected": "The mutual NDA, executed later, supersedes the unilateral. Mutual = 2-year term, mutual obligations.",
+    "new_expected": "The unilateral NDA (nda-unilateral-001-acme-vertex) governs the terms between Acme and Vertex, as it explicitly states that it \"supplements (and does not supersede) the Mutual Non-Disclosure Agreement between the Parties dated January 8, 2024.\" This indicates that while the mutual NDA (nda-mutual-001-acme-vertex) is still in effect, the unilateral NDA adds specific terms for the evaluation of Vertex's platform against Acme's production workloads.",
+    "required_facts": [],
+    "evidence_quote": "This Unilateral Non-Disclosure Agreement (\"Agreement\") is entered into as of October 22, 2024 by Acme Corp Pvt Ltd (\"Discloser\") in favour of Vertex Industries Inc.\" (\"Recipient\").  |  This Agreement supplements (and does not supersede) the Mutual Non-Disclosure Agreement between the Parties dated January 8, 2024.",
+    "source_docs": [
+      "nda-unilateral-001-acme-vertex",
+      "nda-mutual-001-acme-vertex"
+    ]
+  },
+  {
+    "id": "legal-q025",
+    "status": "ok_refusal",
+    "stratum": "conflict-resolution",
+    "old_expected": "The latest signed addendum is authoritative; system must surface the lineage and the current value.",
+    "new_expected": "The provided documents do not contain two different lease addendums showing different rent values for the Acme Gurugram office. Only one lease document, `lease-001-acme-lakeview`, pertains to the Acme Gurugram office and specifies a monthly rent of INR 27,75,000. The other lease document, `lease-005-scanned-vintage`, is for an archived Mumbai office lease.",
+    "required_facts": [],
+    "evidence_quote": "Monthly rent: INR 27,75,000 (Indian Rupees Twenty-Seven Lakh Seventy-Five Thousand), payable in advance on the first business day of each month.  |  The Lessor leases to the Lessee the office space located at: Plot 47, Sector 18, 8th Floor (entire floor), Gurugram, Haryana 122015, India  |  This LEASE DEED is made and executed on this 15th day of June, 2008 at Mumbai, by and between: Patel Industr",
+    "source_docs": [
+      "lease-001-acme-lakeview",
+      "acme-corp-360-view",
+      "entity-collision-priya-iyer"
+    ],
+    "suggest_stratum": "negative"
+  },
+  {
+    "id": "legal-q026",
+    "status": "ok_refusal",
+    "stratum": "conflict-resolution",
+    "old_expected": "Side letter (later in time) prevails, IF it explicitly amends the indemnity clause; otherwise MSA controls.",
+    "new_expected": "The provided documents do not contain a side letter that modifies the indemnity-cap clause of the Acme-Nimbus MSA. The side letters present in the corpus relate to other MSAs (Helios-Acme, Acme-Vertex, Orion-Acme) and do not pertain to the Acme-Nimbus agreement.",
+    "required_facts": [],
+    "evidence_quote": "doc_id: msa-002-acme-nimbus  |  doc_id: side-letter-002-helios-acme  |  doc_id: msa-001-side-letter  |  doc_id: side-letter-003-orion-acme-pricing",
+    "source_docs": [
+      "msa-002-acme-nimbus",
+      "side-letter-002-helios-acme",
+      "msa-001-side-letter"
+    ],
+    "suggest_stratum": "negative"
+  },
+  {
+    "id": "legal-q032",
+    "status": "ok",
+    "stratum": "rare-clause",
+    "old_expected": "Yes \u2014 the Acme-Orion licence includes a perpetual obligation to maintain audit-trail records of usage.",
+    "new_expected": "Yes, the Master Services Agreement (MSA) between Acme Corp Pvt Ltd and Orion Consulting Group LLC creates a perpetual obligation. Specifically, Section 3.2 of the MSA states that Orion retains ownership of its Background IP but grants Acme a \"perpetual, royalty-free license\" to use this Background IP as embedded in the Work Product.",
+    "required_facts": [],
+    "evidence_quote": "Orion retains ownership of its pre-existing methodologies, frameworks, and tools (\"**Background IP**\") used in creating the Work Product, and grants Acme a perpetual, royalty-free license to use such Background IP solely as embedded in the Work Product.",
+    "source_docs": [
+      "msa-003-acme-orion"
+    ]
+  },
+  {
+    "id": "legal-q033",
+    "status": "ok_refusal",
+    "stratum": "rare-clause",
+    "old_expected": "Pre-arbitration mediation clauses exist in some contracts (atypical); system should surface specific occurrences.",
+    "new_expected": "The provided documents do not contain any clauses requiring binding mediation before arbitration.",
+    "required_facts": [],
+    "evidence_quote": "",
+    "source_docs": [
+      "msa-002-acme-nimbus",
+      "opinion-003-singapore-arbitration",
+      "msa-001-acme-vertex"
+    ],
+    "suggest_stratum": "negative"
+  },
+  {
+    "id": "legal-q036",
+    "status": "failed_verify",
+    "stratum": "aggregation",
+    "proposed": "There are 2 Acme contracts with arbitration seated in Mumbai and 1 contract with arbitration seated in Delhi. The total is 3 contracts.",
+    "why": "The evidence quotes do not mention any Acme contracts with arbitration seated in Mumbai or Delhi, nor do they provide a total count of 3 contracts."
+  },
+  {
+    "id": "legal-q037",
+    "status": "failed_verify",
+    "stratum": "aggregation",
+    "proposed": "The total contract value across all live Acme MSAs is $1,000,000 (Acme-Vertex MSA) + $2,000,000 (Acme-Nimbus MSA) + Fees paid in the twelve (12) months preceding the claim (Acme-Orion MSA). The Acme-V",
+    "why": "The answer incorrectly states that the total contract value is the sum of the liability caps, and it also incorrectly states that the liability caps are fixed a"
+  }
+]

@@ -1,0 +1,408 @@
+domain: government
+citation_remaps:
+- id: government-q001
+  old_citations:
+  - pmay-beed-gr-original
+  new_citations:
+  - gr-001-pmay-beed-original
+  method: fuzzy+llm
+  evidence: An allocation of **INR 84,00,00,000 (Indian Rupees Eighty-Four Crore)** is hereby sanctioned
+    for the implementation of PMAY-G in Beed district for FY 2024-25.
+  grounded_answer: The original allocation for the PMAY Beed scheme in the GR was INR 84,00,00,000 (Indian
+    Rupees Eighty-Four Crore).
+- id: government-q002
+  old_citations:
+  - welfare-001-ration-card-anomaly-list
+  new_citations:
+  - welfare-001-ration-card-anomaly-list
+  method: fuzzy
+  evidence: Rajshree Patil, IAS — District Magistrate, Beed
+  grounded_answer: Rajshree Patil, IAS
+- id: government-q003
+  old_citations:
+  - tender-001-cidco-road-package
+  new_citations:
+  - tender-001-cidco-road-resurfacing
+  method: fuzzy
+  evidence: 'Mahalaxmi has also bid on the CIDCO Sector 47-49 tender (T-018):
+
+    - tender-001-cidco-road-package — Tender notice
+
+    - bid-001-mahalaxmi-cidco-response — Mahalaxmi''s bid response (INR 176.42 cr)'
+  grounded_answer: The CIDCO tender T-018 has an estimated value of INR 176.42 crore, which is Mahalaxmi
+    Infrastructure Pvt Ltd's bid response for the CIDCO Sector 47-49 tender.
+- id: government-q004
+  old_citations:
+  - land-7-12-survey-47-3
+  new_citations:
+  - 7-12-004-survey-103-1
+  method: fuzzy
+  evidence: Total area | 1 हेक्टर 24 आर / 1 hectare 24 ares (1.24 ha)
+  grounded_answer: The area of Survey No. 47/3 at Vadi Bhosalewadi, Beed is 1 hectare 24 ares (1.24 ha).
+- id: government-q005
+  old_citations:
+  - fir-land-dispute-24-cr
+  new_citations:
+  - fir-003-beed-land-dispute-scanned
+  method: fuzzy+llm
+  evidence: 'FIR No.: 0271/2025'
+  grounded_answer: The FIR on the 24-crore land dispute is FIR No. 0271/2025.
+- id: government-q006
+  old_citations:
+  - mutation-kamla-jadhav-47-3
+  new_citations:
+  - 7-12-002-kamla-jadhav-mutation
+  method: fuzzy+llm
+  evidence: The legal heirs have filed an application (filed 28 October 2024, reference Mutation/2024/4892)
+    requesting mutation of the 7/12 extract per their respective shares.
+  grounded_answer: The legal heirs of Vasantrao Bapu Jadhav, namely Smt. Kamla Jadhav (widow), Shri Sandeep
+    Jadhav (son), and Smt. Sunita Patil (daughter), filed an application for the mutation.
+- id: government-q009
+  old_citations:
+  - cidco-bid-decision
+  new_citations:
+  - tender-001-cidco-bid-decision
+  method: fuzzy+llm
+  evidence: 'Decision Date: 12 June 2025'
+  grounded_answer: The CIDCO bid decision was made on 12 June 2025.
+- id: government-q010
+  old_citations:
+  - pmay-beed-gr-original
+  new_citations:
+  - gr-001-pmay-beed-original
+  method: fuzzy+llm
+  evidence: 'The Pradhan Mantri Awas Yojana (Gramin) scheme of the Government of India aims to provide
+    pucca housing units to eligible rural households across the country. The State of Maharashtra implements
+    PMAY-G in coordination with district administrations. Each year the State Cabinet allocates the matching '
+  grounded_answer: The Government of Maharashtra, General Administration Department, is the consenting
+    authority for the PMAY Beed scheme.
+- id: government-q011
+  old_citations:
+  - tender-001-cidco-road-package
+  new_citations:
+  - tender-001-cidco-road-resurfacing
+  method: fuzzy+llm
+  evidence: 'Resurfacing of arterial road network in Navi Mumbai Sector 14 comprising:
+
+
+    - Length: 8.4 km of arterial roads.
+
+    - Surface area: ~84,000 sq m.
+
+    - Specifications: 50mm DBM (Dense Bituminous Macadam) base + 40mm BC (Bituminous Concrete) wearing
+    course.
+
+    - Includes: drainage rehabilitation, road markings, '
+  grounded_answer: The Sector 14 road tender (CIDCO) is for the resurfacing of the arterial road network
+    in Navi Mumbai Sector 14.
+- id: government-q012
+  old_citations:
+  - pmay-beed-corrigendum
+  - pmay-beed-gr-original
+  new_citations:
+  - gr-001-pmay-beed-corrigendum
+  - gr-001-pmay-beed-original
+  method: fuzzy+llm
+  evidence: 'In supersession of the allocation announced in the original GR dated 15 May 2024 (which sanctioned
+    INR 84 crore for 5,200 estimated households), the Government hereby orders:
+
+    (i) The revised allocation under PMAY-G for Beed district for FY 2024-25 is hereby fixed at **INR
+    62,20,00,000 (Indian Rupees'
+  grounded_answer: The current PMAY Beed allocation for FY 2024-25 is INR 62.20 crore, revised from an
+    original allocation of INR 84 crore.
+- id: government-q013
+  old_citations:
+  - pmay-beed-gr-original
+  - pmay-beed-corrigendum
+  new_citations:
+  - gr-001-pmay-beed-original
+  - gr-001-pmay-beed-corrigendum
+  method: fuzzy+llm
+  evidence: 'An allocation of **INR 84,00,00,000 (Indian Rupees Eighty-Four Crore)** is hereby sanctioned
+    for the implementation of PMAY-G in Beed district for FY 2024-25.
+
+
+    (iii) The benefit shall reach approximately **5,200 eligible households** in Beed district, at an
+    average per-household allocation of approx'
+  grounded_answer: The PMAY Beed allocation for FY 2024-25 was initially sanctioned at INR 84 crore on
+    May 15, 2024, for an estimated 5,200 eligible households. This was later revised downwards to INR
+    62.20 crore on August 22, 2024, to cover 3,840 verified eligible households. The revision was due
+    to re-verification i
+- id: government-q014
+  old_citations:
+  - tender-001-cidco-road-package
+  - cidco-bid-decision
+  new_citations:
+  - tender-001-cidco-road-resurfacing
+  - tender-001-cidco-bid-decision
+  method: fuzzy+llm
+  evidence: 'Tender Reference: CIDCO/T-2025/NV-RR-014
+
+    Date of issue: 20 March 2025
+
+    Last date for bid submission: 25 April 2025 17:00 IST
+
+    ...
+
+    Financial evaluation: Lowest qualifying bid (L1) to be awarded the work.
+
+
+    Initial intent was to award to L1 (ABC Construction Pvt Ltd) at INR 4.28 crore.
+
+    ...
+
+    Following the '
+  grounded_answer: 'The CIDCO tender process begins with the issuance of a tender notice, such as for
+    road resurfacing in Navi Mumbai Sector 14 (CIDCO/T-2025/NV-RR-014). Bidders submit technical and financial
+    bids, with the lowest qualifying bid (L1) typically being awarded the work. In this case, ABC Construction
+    Pvt '
+- id: government-q015
+  old_citations:
+  - mutation-kamla-jadhav-47-3
+  new_citations:
+  - 7-12-002-kamla-jadhav-mutation
+  method: fuzzy+llm
+  evidence: 'DOC 7-12-001-kamla-jadhav-original: "Name / नाव: Vasantrao Bapu Jadhav (वसंतराव बापू जाधव)...
+    Inherited by Vasantrao Bapu Jadhav (on father''s death) | Mutation #1992/0188... NOTE: Owner Vasantrao
+    Bapu Jadhav is deceased as of 18 September 2024..."
+
+    DOC 7-12-002-kamla-jadhav-mutation: "Mutation of nam'
+  grounded_answer: 'The Kamla Jadhav mutation chain on Survey 47/3 begins with Vasantrao Bapu Jadhav as
+    the original owner (Mutation #1992/0188). Following his death on September 18, 2024, the land was
+    mutated on December 4, 2024, to his legal heirs: Smt. Kamla Jadhav (widow), Shri Sandeep Jadhav (son),
+    and Smt. Sunita'
+- id: government-q016
+  old_citations:
+  - pmay-beed-gr-original
+  - pmay-beed-corrigendum
+  new_citations:
+  - gr-001-pmay-beed-original
+  - gr-001-pmay-beed-corrigendum
+  method: fuzzy+llm
+  evidence: 'In supersession of the allocation announced in the original GR dated 15 May 2024 (which sanctioned
+    INR 84 crore for 5,200 estimated households), the Government hereby orders:
+
+
+    (i) The revised allocation under PMAY-G for Beed district for FY 2024-25 is hereby fixed at **INR
+    62,20,00,000 (Indian Rupee'
+  grounded_answer: No, the original PMAY Beed GR is not fully authoritative. A corrigendum issued on August
+    22, 2024, supersedes the allocation amount stated in the original GR, revising it from INR 84 crore
+    to INR 62.20 crore. All other provisions of the original GR remain unchanged.
+- id: government-q017
+  old_citations:
+  - cidco-bid-decision
+  new_citations:
+  - tender-001-cidco-bid-decision
+  method: fuzzy+llm
+  evidence: 'Initial intent was to award to L1 (ABC Construction Pvt Ltd) at INR 4.28 crore.
+
+
+    (i) ABC Construction did have a 2022 PWD blacklist that is within the 5-year exclusion period (per
+    the tender''s eligibility criteria).
+
+
+    (ii) The "no blacklist" declaration in the bid was a misrepresentation by ABC Const'
+  grounded_answer: The CIDCO bid decision states that the L1 bidder, ABC Construction Pvt Ltd, was initially
+    intended to be awarded the contract at INR 4.28 crore. However, following an RTI complaint and investigation,
+    it was found that ABC Construction had a 2022 PWD blacklist within the 5-year exclusion period and
+    m
+- id: government-q019
+  old_citations:
+  - pmay-beed-gr-original
+  - pmay-beed-corrigendum
+  new_citations:
+  - gr-001-pmay-beed-original
+  - gr-001-pmay-beed-corrigendum
+  method: fuzzy+llm
+  evidence: 'In supersession of the allocation announced in the original GR dated 15 May 2024 (which sanctioned
+    INR 84 crore for 5,200 estimated households), the Government hereby orders: (i) The revised allocation
+    under PMAY-G for Beed district for FY 2024-25 is hereby fixed at INR 62,20,00,000 (Indian Rupees S'
+  grounded_answer: If the PMAY Beed corrigendum is voided, the original allocation of INR 84 crore for
+    5,200 estimated households would revert.
+- id: government-q020
+  old_citations:
+  - pmay-beed-corrigendum
+  - pmay-beed-gr-original
+  new_citations:
+  - gr-001-pmay-beed-corrigendum
+  - gr-001-pmay-beed-original
+  method: fuzzy+llm
+  evidence: The corrigendum supersedes the allocation amount stated in the original GR. The current operative
+    allocation is INR 62.20 crore (not INR 84 crore).
+  grounded_answer: The corrigendum (dated 22 August 2024) supersedes the allocation amount stated in the
+    original GR. The current operative allocation is INR 62.20 crore, not INR 84 crore.
+- id: government-q021
+  old_citations:
+  - mutation-kamla-jadhav-47-3
+  - land-7-12-survey-47-3
+  new_citations:
+  - 7-12-002-kamla-jadhav-mutation
+  - 7-12-004-survey-103-1
+  method: fuzzy+llm
+  evidence: 'DOC 7-12-001-kamla-jadhav-original: "Owner / नाव: Vasantrao Bapu Jadhav (वसंतराव बापू जाधव)"
+    and "NOTE: Owner Vasantrao Bapu Jadhav is deceased as of 18 September 2024 (death certificate filed
+    with the District Magistrate''s office). Mutation of name to legal heirs is pending and will be subject
+    to s'
+  grounded_answer: The original land record (7/12 extract) for Survey No. 47/3 shows Vasantrao Bapu Jadhav
+    as the owner, but notes that he is deceased and mutation to legal heirs is pending. The mutation order
+    (mutation register) subsequently adds Smt. Kamla Jadhav (widow) and two other heirs in equal shares,
+    removing
+- id: government-q023
+  old_citations:
+  - cidco-bid-decision
+  new_citations:
+  - tender-001-cidco-bid-decision
+  method: fuzzy+llm
+  evidence: 'Award to: Sterling Infra Pvt Ltd (L2 bidder, after L1 disqualification)
+
+    Awarded Value: INR 5.14 crore (Sterling Infra Pvt Ltd''s revised bid)
+
+    ...
+
+    (i) Disqualification of ABC Construction Pvt Ltd from this tender. The L1 bid (INR 4.28 crore) is
+    rejected.
+
+    (ii) The work is to be re-awarded to the next e'
+  grounded_answer: The L2 bidder, Sterling Infra Pvt Ltd, won the CIDCO tender with a bid of INR 5.14
+    crore after the L1 bidder, ABC Construction Pvt Ltd (INR 4.28 crore), was disqualified due to misrepresentation
+    regarding a past blacklist.
+- id: government-q024
+  old_citations:
+  - fir-land-dispute-24-cr
+  new_citations:
+  - fir-003-beed-land-dispute-scanned
+  method: fuzzy+llm
+  evidence: 'Estimated market value: INR 24 crore (per government land circular rates + comparable transactions).
+
+
+    What is the value of the 24-cr land dispute FIR? | INR 24 cr'
+  grounded_answer: The FIR states the value as INR 24 crore. The police investigation report is not available
+    in the provided documents to determine if it revises the value to INR 18 crore. Therefore, based on
+    the available information, the FIR's value of INR 24 crore prevails.
+- id: government-q025
+  old_citations:
+  - mutation-kamla-jadhav-47-3
+  - land-7-12-survey-47-3
+  new_citations:
+  - 7-12-002-kamla-jadhav-mutation
+  - 7-12-004-survey-103-1
+  method: fuzzy+llm
+  evidence: 'The owner Vasantrao Bapu Jadhav is deceased as of 18 September 2024 (death certificate filed
+    with the District Magistrate''s office). Mutation of name to legal heirs is pending and will be subject
+    to separate order. (7-12-001-kamla-jadhav-original)
+
+
+    In exercise of powers conferred upon me under the M'
+  grounded_answer: When an old land record (7/12 extract) shows a deceased owner and a new mutation register
+    entry updates the ownership, the new mutation order supersedes the old record. The mutation order,
+    issued by the Tehsildar, legally removes the deceased owner's name and adds the legal heirs in their
+    respective
+- id: government-q029
+  old_citations:
+  - fir-land-dispute-24-cr
+  new_citations:
+  - fir-003-beed-land-dispute-scanned
+  method: fuzzy+llm
+  evidence: 'Estimated market value: INR 24 crore (per government land circular rates + comparable transactions).'
+  grounded_answer: Yes, there is an FIR related to a land dispute valued at INR 24 crore.
+- id: government-q030
+  old_citations:
+  - cidco-bid-decision
+  new_citations:
+  - tender-001-cidco-bid-decision
+  method: fuzzy+llm
+  evidence: CIDCO investigation (May - June 2025) confirmed the blacklist + misrepresentation. ABC Construction
+    disqualified from the tender (tender-001-cidco-bid-decision dated 12 June 2025); fresh 5-year blacklist;
+    CBI/ACB reference made.
+  grounded_answer: Yes, ABC Construction Pvt Ltd was disqualified from the CIDCO/T-2025/NV-RR-014 tender
+    after an RTI investigation confirmed they had misrepresented their blacklist status. The L1 bid from
+    ABC Construction was rejected, and the contract was re-awarded to Sterling Infra Pvt Ltd (L2 bidder).
+- id: government-q036
+  old_citations:
+  - pmay-beed-gr-original
+  - pmay-beed-corrigendum
+  new_citations:
+  - gr-001-pmay-beed-original
+  - gr-001-pmay-beed-corrigendum
+  method: fuzzy
+  evidence: ''
+  grounded_answer: ''
+- id: government-q039
+  old_citations:
+  - cidco-bid-decision
+  new_citations:
+  - tender-001-cidco-bid-decision
+  method: fuzzy
+  evidence: ''
+  grounded_answer: I am sorry, but the provided documents do not contain information about CIDCO T-018.
+    The documents discuss CIDCO/T-2025/NV-RR-014, which is a different tender.
+citation_remaps_needs_review:
+- id: government-q008
+  old_citations:
+  - land-7-12-1989-marathi-scan
+  fuzzy_proposal: []
+  llm_proposal:
+  - workspace-evaluation-queries
+  grounded_answer: The 1989 7/12 record is in Marathi only.
+- id: government-q026
+  old_citations:
+  - rti-circular-99999-false-premise
+  fuzzy_proposal: []
+  llm_proposal:
+  - rti-004-non-existent-circular
+  - workspace-evaluation-queries
+  grounded_answer: The document 'rti-004-non-existent-circular' explicitly states that "No circular bearing
+    reference 'GAD/CIR/2024/99999' has been issued by the General Administration Department (GAD), Government
+    of Maharashtra, on the subject of 'Migration policy for state employees' or any other subject." It
+    furthe
+- id: government-q027
+  old_citations:
+  - land-7-12-1989-marathi-scan
+  fuzzy_proposal: []
+  llm_proposal:
+  - workspace-evaluation-queries
+  grounded_answer: The "Read the Marathi-only 7/12 from 1989" query in the GOVERNMENT section of the WORKSPACE
+    EVALUATION QUERY SUITE is designed to test Multilingual OCR for Marathi-only government records.
+- id: government-q033
+  old_citations: []
+  fuzzy_proposal: []
+  llm_proposal:
+  - workspace-evaluation-queries
+  - gr-001-pmay-beed-original
+  - gr-001-pmay-beed-corrigendum
+  - mahalaxmi-cross-domain
+  - acme-corp-360-view
+  grounded_answer: The total amount across all government-tender contracts in the corpus is INR 62.20
+    crore for the PMAY Beed allocation, INR 5.14 crore for the CIDCO tender (L2 bidder), INR 24 crore
+    for a land dispute FIR, and INR 176.42 crore for Mahalaxmi's bid on the CIDCO T-018 tender.
+- id: government-q034
+  old_citations: []
+  fuzzy_proposal: []
+  llm_proposal:
+  - 7-12-001-kamla-jadhav-original
+  - 7-12-008-survey-44-1-disputed
+  - 7-12-010-survey-115-3
+  grounded_answer: 'There are three distinct land parcels referenced in the corpus: Survey No. 47/3, Survey
+    No. 44/1, and Survey No. 115/3.'
+- id: government-q038
+  old_citations:
+  - land-7-12-1989-marathi-scan
+  fuzzy_proposal: []
+  llm_proposal:
+  - 7-12-001-kamla-jadhav-original
+  grounded_answer: The 7/12 extract for Survey No. 47/3 in Vadi Bhosalewadi village (Beed taluka, Beed
+    district) shows that the land (1.24 hectares irrigated, used for sugarcane and bajra) was held by
+    the deceased Vasantrao Bapu Jadhav. The mutation of ownership to his legal heirs (including widow
+    Kamla Jadhav) is pen
+answer_corrections_for_review:
+- id: government-q022
+  current_expected: The latest-dated, signed welfare audit is authoritative. Earlier counts are interim.
+  corpus_says: The document "RATION-CARD-WITHOUT-LINKED-AADHAAR ANOMALY LIST — BEED DISTRICT" from the
+    Department of Food, Civil Supplies and Consumer Protection — Government of Maharashtra, dated 28 July
+    2025, states that there are 3,514 ration cards in Beed district without linked Aadhaar. This document
+    is the m
+  discrepancy: The provided document does not contain information about two different RTI responses or
+    which one is authoritative. It only presents a single welfare audit report.
+  suggested_citations:
+  - welfare-001-ration-card-anomaly-list
+genuine_gaps: []

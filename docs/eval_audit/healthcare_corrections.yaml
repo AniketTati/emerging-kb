@@ -1,0 +1,441 @@
+domain: healthcare
+citation_remaps:
+- id: healthcare-q001
+  old_citations:
+  - encounter-001-arjun-singh-visit
+  new_citations:
+  - visit-002-arjun-singh-followup
+  method: fuzzy
+  evidence: Episodic palpitations and exertional breathlessness for the past 6 weeks, worse over the last
+    10 days. New episode of "racing heart" lasting ~45 minutes during his evening walk three days ago,
+    which resolved spontaneously.
+  grounded_answer: Arjun Singh's chief complaint at his initial encounter was episodic palpitations and
+    exertional breathlessness for the past 6 weeks, which had worsened over the last 10 days. He also
+    reported a new episode of "racing heart" lasting approximately 45 minutes three days prior, which
+    resolved spontaneou
+- id: healthcare-q002
+  old_citations:
+  - lab-kavya-reddy-thyroid-rev2
+  new_citations:
+  - lab-004-kavya-reddy-thyroid-v2
+  method: fuzzy+llm
+  evidence: TSH now within normal range (3.1 mIU/L) in the fasting sample. Free T4 and Free T3 normal.
+    No biochemical evidence of hypothyroidism.
+  grounded_answer: Kavya Reddy's latest TSH on her lab report dated April 16, 2025, is 3.1 mIU/L, which
+    is within the normal range.
+- id: healthcare-q005
+  old_citations:
+  - discharge-arjun-singh
+  new_citations:
+  - discharge-001-arjun-singh
+  method: fuzzy+llm
+  evidence: Dr. Anjali Verma, MD — Senior Cardiologist, Apollo Pune — 20 Sep 2025
+  grounded_answer: Dr. Anjali Verma, MD, Senior Cardiologist at Apollo Pune, signed Arjun Singh's discharge
+    summary.
+- id: healthcare-q006
+  old_citations:
+  - rx-arjun-singh-followup
+  new_citations:
+  - visit-002-arjun-singh-followup
+  method: fuzzy+llm
+  evidence: Continue all current medications. Continue Apixaban 5 mg BID — anticoagulation indicated regardless
+    of current rhythm (still CHA₂DS₂-VASc = 2).
+  grounded_answer: Arjun Singh's follow-up plan was to continue all current medications, including Apixaban
+    5 mg BID.
+- id: healthcare-q008
+  old_citations:
+  - consent-arjun-singh-aadhaar
+  new_citations:
+  - consent-002-arjun-singh-cardiac
+  method: fuzzy
+  evidence: No direct appearance in Healthcare, Mining, Government — but their corporate customers are
+    in those domains)
+  grounded_answer: The provided documents do not contain information about Apollo Hospitals Pune's NABH
+    accreditation status.
+- id: healthcare-q009
+  old_citations:
+  - encounter-kavya-reddy
+  new_citations:
+  - discharge-002-kavya-reddy
+  method: fuzzy
+  evidence: 'I have requested baseline TSH + Free T4 + Anti-TPO (sample drawn this morning at our clinic;
+    reports to be available later today). Patient already scheduled with you for Wed 2-Apr.
+
+
+    Patient''s contact: +91 98xxxx xxxx5; Manipal MRN MNP-2025-104732.
+
+
+    Best,
+
+    Mukund Krishnan, MBBS
+
+    KP Family Clinic, White'
+  grounded_answer: KP Family Clinic, Whitefield, Bangalore
+- id: healthcare-q010
+  old_citations:
+  - lab-arjun-singh-2
+  new_citations:
+  - lab-001-arjun-singh-cbc-lipid
+  method: fuzzy
+  evidence: 'Sample drawn: 5 Nov 2025, 07:02'
+  grounded_answer: Arjun Singh's lab-2 was drawn on November 5, 2025.
+- id: healthcare-q012
+  old_citations:
+  - encounter-001-arjun-singh-visit
+  - lab-arjun-singh-1
+  - discharge-arjun-singh
+  - followup-arjun-singh
+  - lab-arjun-singh-2
+  new_citations:
+  - visit-002-arjun-singh-followup
+  - lab-001-arjun-singh-cbc-lipid
+  - discharge-001-arjun-singh
+  - visit-002-arjun-singh-followup
+  - lab-001-arjun-singh-cbc-lipid
+  method: fuzzy
+  evidence: ''
+  grounded_answer: ''
+- id: healthcare-q013
+  old_citations:
+  - lab-kavya-reddy-thyroid-rev1
+  - lab-kavya-reddy-thyroid-rev2
+  new_citations:
+  - lab-004-kavya-reddy-thyroid-v2
+  - lab-004-kavya-reddy-thyroid-v2
+  method: fuzzy+llm
+  evidence: 'TSH now within normal range (3.1 mIU/L) in the fasting sample. Free T4 and Free T3 normal.
+    No biochemical evidence of hypothyroidism.
+
+
+    The earlier elevated reading (9.4 mIU/L on 2-Apr) appears to have been spuriously elevated, most likely
+    due to post-prandial sampling. Repeat in true fasting state h'
+  grounded_answer: Yes, Kavya Reddy's thyroid function improved. A repeat fasting TSH test showed a normal
+    TSH level of 3.1 mIU/L, down from an initial elevated reading of 9.4 mIU/L, which was likely spurious
+    due to post-prandial sampling. Consequently, levothyroxine treatment was deemed unnecessary.
+- id: healthcare-q014
+  old_citations:
+  - followup-arjun-singh
+  - rx-arjun-singh-followup
+  new_citations:
+  - visit-002-arjun-singh-followup
+  - visit-002-arjun-singh-followup
+  method: fuzzy+llm
+  evidence: '1. Continue all current medications. Continue Apixaban 5 mg BID — anticoagulation indicated
+    regardless of current rhythm (still CHA₂DS₂-VASc = 2).
+
+    2. Continue lifestyle interventions; weight target 75 kg by end-2025.
+
+    3. Repeat clinical follow-up in 3 months (early February 2026).
+
+    4. Holter monitor p'
+  grounded_answer: Arjun Singh's current treatment plan involves continuing all current medications, including
+    Apixaban 5 mg BID. He is also advised to continue lifestyle interventions with a weight target of
+    75 kg by end-2025. A repeat clinical follow-up is scheduled in 3 months (early February 2026), and
+    a Holter mo
+- id: healthcare-q017
+  old_citations:
+  - lab-kavya-reddy-thyroid-rev2
+  new_citations:
+  - lab-004-kavya-reddy-thyroid-v2
+  method: fuzzy+llm
+  evidence: 'TSH now **within normal range** (3.1 mIU/L) in the fasting sample. Free T4 and Free T3 normal.
+    **No biochemical evidence of hypothyroidism.**
+
+
+    The earlier elevated reading (9.4 mIU/L on 2-Apr) appears to have been spuriously elevated, most likely
+    due to post-prandial sampling. Repeat in true fasting'
+  grounded_answer: Yes, Kavya Reddy's TSH has normalized. A repeat fasting sample on April 16, 2025, showed
+    her TSH at 3.1 mIU/L, which is within the normal range (0.4 - 4.0 mIU/L). This superseded an earlier
+    elevated reading of 9.4 mIU/L, which was likely spurious due to post-prandial sampling.
+- id: healthcare-q018
+  old_citations:
+  - lab-arjun-singh-1
+  - lab-arjun-singh-2
+  new_citations:
+  - lab-001-arjun-singh-cbc-lipid
+  - lab-001-arjun-singh-cbc-lipid
+  method: fuzzy
+  evidence: '## Labs Reviewed (drawn yesterday — see lab-002)
+
+
+    Repeat panel (lab-002-arjun-singh-followup-panel) showed:
+
+    - HbA1c down from 7.8% → 7.1%.
+
+    - LDL down from 138 → 96 mg/dL.
+
+    - Creatinine stable at 1.0 mg/dL.
+
+    - LFT normal; eGFR 90.'
+  grounded_answer: The most current lab results are from lab-002, which was drawn on November 5, 2025.
+    These results are considered current and supersede any previous lab findings.
+- id: healthcare-q019
+  old_citations:
+  - lab-kavya-reddy-thyroid-rev1
+  - lab-kavya-reddy-thyroid-rev2
+  new_citations:
+  - lab-004-kavya-reddy-thyroid-v2
+  - lab-004-kavya-reddy-thyroid-v2
+  method: fuzzy+llm
+  evidence: 'Reason for repeat: Initial panel (lab-003 dated 2 April 2025) showed elevated TSH (9.4 mIU/L)
+    but sample was drawn ~35 min after food intake. Per protocol, repeat in true fasting state was recommended
+    before initiating treatment.
+
+
+    TSH now **within normal range** (3.1 mIU/L) in the fasting sample. Fr'
+  grounded_answer: The initial lab report (lab-003 dated April 2, 2025) showed an elevated TSH of 9.4
+    mIU/L, suggesting subclinical hypothyroidism and recommending a levothyroxine trial. However, this
+    result was superseded by a repeat panel (lab-004 dated April 16, 2025) which showed a normal TSH of
+    3.1 mIU/L in a fas
+- id: healthcare-q021
+  old_citations:
+  - lab-arjun-singh-1
+  - lab-arjun-singh-2
+  new_citations:
+  - lab-001-arjun-singh-cbc-lipid
+  - lab-001-arjun-singh-cbc-lipid
+  method: fuzzy
+  evidence: '| H2 | What was Kavya Reddy''s TSH level on her latest lab? | TSH = 3.1 (vs earlier 9.4)
+    | Conflict (resolved by chain) |'
+  grounded_answer: The query H2 in the healthcare section of the workspace evaluation queries states that
+    Kavya Reddy's TSH level on her latest lab was 3.1, which is current, compared to an earlier value
+    of 9.4.
+- id: healthcare-q022
+  old_citations:
+  - lab-kavya-reddy-thyroid-rev2
+  - lab-kavya-reddy-thyroid-rev1
+  new_citations:
+  - lab-004-kavya-reddy-thyroid-v2
+  - lab-004-kavya-reddy-thyroid-v2
+  method: fuzzy+llm
+  evidence: 'TSH now within normal range (3.1 mIU/L) in the fasting sample. Free T4 and Free T3 normal.
+    No biochemical evidence of hypothyroidism.
+
+
+    The earlier elevated reading (9.4 mIU/L on 2-Apr) appears to have been spuriously elevated, most likely
+    due to post-prandial sampling. Repeat in true fasting state h'
+  grounded_answer: Kavya Reddy's true thyroid status is normal, with a TSH of 3.1 mIU/L. The earlier elevated
+    TSH of 9.4 mIU/L was likely a spurious result due to post-prandial sampling.
+- id: healthcare-q023
+  old_citations:
+  - encounter-001-arjun-singh-visit
+  - followup-arjun-singh
+  new_citations:
+  - visit-002-arjun-singh-followup
+  - visit-002-arjun-singh-followup
+  method: fuzzy
+  evidence: 'Diagnoses to bear in mind: HTN (on amlodipine 5 mg), Type 2 DM (on metformin 500 BD; HbA1c
+    Jun-2025: 7.4%), hyperlipidemia (on atorvastatin 10 mg).
+
+
+    ---DOC: discharge-001-arjun-singh---
+
+    **Day 2 (16-Sep):** Labs reviewed (CBC + lipid + thyroid + HbA1c). Thyroid function normal (excluded
+    as AF cause).'
+  grounded_answer: 'Dr. M. Krishnan''s referral note (arjun-singh-cardio-referral) lists Arjun Singh''s
+    Type 2 Diabetes Mellitus HbA1c as 7.4% in June 2025. However, Dr. Anjali Verma''s discharge summary
+    (discharge-001-arjun-singh) states his HbA1c as 7.8% on Day 2 of admission (September 16, 2025). The
+    discharge summary '
+- id: healthcare-q028
+  old_citations:
+  - lab-kavya-reddy-thyroid-rev1
+  new_citations:
+  - lab-004-kavya-reddy-thyroid-v2
+  method: fuzzy
+  evidence: 'Mukund,
+
+
+    Thanks for the referral. I''ll see her this afternoon — labs are back
+
+    already (TSH 9.4, Free T4 1.0, Anti-TPO negative). Will work her up
+
+    for subclinical hypothyroidism but want to recheck before initiating
+
+    therapy.'
+  grounded_answer: Yes, Kavya Reddy had a TSH level of 9.4 mIU/L on April 2, 2025.
+- id: healthcare-q032
+  old_citations:
+  - encounter-001-arjun-singh-visit
+  - followup-arjun-singh
+  new_citations:
+  - visit-002-arjun-singh-followup
+  - visit-002-arjun-singh-followup
+  method: fuzzy+llm
+  evidence: Saw Mr. Singh this morning. As suspected — new-onset AF. BP elevated (168/96 mmHg). Admitting
+    for telemetry + medication initiation + echo. CHA₂DS₂-VASc = 2; starting apixaban + rate control.
+    Will send you the full discharge summary on his way out. Expecting 3-5 day admission. — Anjali (arjun-singh-
+  grounded_answer: 'Arjun Singh had three encounters with Dr. Anjali Verma: an initial consultation on
+    September 15, 2025, an admission for 5 days (September 15-20, 2025) which is considered a single encounter,
+    and a 6-week follow-up visit on November 4, 2025.'
+- id: healthcare-q037
+  old_citations:
+  - encounter-001-arjun-singh-visit
+  - lab-arjun-singh-1
+  - discharge-arjun-singh
+  - followup-arjun-singh
+  - lab-arjun-singh-2
+  new_citations:
+  - visit-002-arjun-singh-followup
+  - lab-001-arjun-singh-cbc-lipid
+  - discharge-001-arjun-singh
+  - visit-002-arjun-singh-followup
+  - lab-001-arjun-singh-cbc-lipid
+  method: fuzzy+llm
+  evidence: Mr. Arjun Singh, a 54-year-old male, presented with episodic palpitations and exertional breathlessness
+    for 6 weeks, diagnosed as new-onset atrial fibrillation. He also had uncontrolled hypertension (168/96
+    mmHg), Type 2 Diabetes Mellitus (HbA1c 7.4%), and hyperlipidemia. He was admitted for telemet
+  grounded_answer: 'Arjun Singh is a 54-year-old male who presented with new-onset atrial fibrillation,
+    uncontrolled hypertension, Type 2 Diabetes Mellitus, and hyperlipidemia. He was admitted for telemetry,
+    medication adjustments including anticoagulation with Apixaban, and rate control. During his hospital
+    stay, his '
+- id: healthcare-q040
+  old_citations:
+  - rx-arjun-singh-followup
+  new_citations:
+  - visit-002-arjun-singh-followup
+  method: fuzzy+llm
+  evidence: 'Discharge Medications:
+
+    1. Telmisartan 40 mg PO once daily (morning).
+
+    2. Chlorthalidone 12.5 mg PO once daily (morning).
+
+    3. Apixaban 5 mg PO twice daily — anticoagulation; counsel on bleeding signs.
+
+    4. Bisoprolol 2.5 mg PO once daily (morning).
+
+    5. Atorvastatin 20 mg PO once daily (night).
+
+    6. Metformi'
+  grounded_answer: For chronic-disease patients, the medication regimen recommendations include Telmisartan
+    40 mg, Chlorthalidone 12.5 mg, Apixaban 5 mg twice daily, Bisoprolol 2.5 mg, Atorvastatin 20 mg, Metformin
+    500 mg twice daily, and Sitagliptin 50 mg. These are for conditions such as atrial fibrillation, hyperte
+citation_remaps_needs_review:
+- id: healthcare-q003
+  old_citations:
+  - lab-suresh-creatinine-extreme
+  fuzzy_proposal: []
+  llm_proposal:
+  - lab-005-suresh-iyer-renal
+  - suresh-iyer-nephro-referral
+  - discharge-006-suresh-iyer
+  grounded_answer: Suresh Iyer's most recent creatinine value is 7.8 mg/dL, recorded on October 2, 2025.
+- id: healthcare-q004
+  old_citations:
+  - lab-shyam-potassium-critical
+  fuzzy_proposal: []
+  llm_proposal:
+  - workspace-evaluation-queries
+  - lab-007-shyam-rajput-hyperkalemia
+  grounded_answer: Shyam's potassium level was 7.2 mEq/L, which is a critical value.
+- id: healthcare-q015
+  old_citations:
+  - insurance-ramesh-denial
+  - insurance-ramesh-appeal
+  - insurance-ramesh-resolution
+  fuzzy_proposal: []
+  llm_proposal:
+  - workspace-evaluation-queries
+  - claim-001-ramesh-naidu-rejected
+  - claim-002-ramesh-naidu-approved
+  grounded_answer: 'Ramesh''s insurance appeal chain involves three documents: an initial claim denial,
+    an appeal, and a resolution approving the claim.'
+- id: healthcare-q016
+  old_citations:
+  - insurance-ramesh-resolution
+  fuzzy_proposal: []
+  llm_proposal:
+  - claim-002-ramesh-naidu-approved
+  grounded_answer: Ramesh Naidu's insurance appeal was approved, with a net payable amount of INR 4,28,500.
+- id: healthcare-q026
+  old_citations: []
+  fuzzy_proposal: []
+  llm_proposal:
+  - lab-004-kavya-reddy-thyroid-v2
+  grounded_answer: The clinician's annotation prevails. The earlier recommended trial of levothyroxine
+    (per lab-003) is superseded by the repeat result, and the patient was instructed not to commence levothyroxine.
+- id: healthcare-q029
+  old_citations:
+  - lab-shyam-potassium-critical
+  fuzzy_proposal: []
+  llm_proposal:
+  - workspace-evaluation-queries
+  grounded_answer: Shyam had life-threatening potassium levels (K+ = 7.2 mmol/L).
+- id: healthcare-q031
+  old_citations:
+  - lab-suresh-creatinine-extreme
+  fuzzy_proposal: []
+  llm_proposal:
+  - lab-005-suresh-iyer-renal
+  grounded_answer: Mr. Suresh Iyer has a serum creatinine of 7.8 mg/dL.
+- id: healthcare-q033
+  old_citations: []
+  fuzzy_proposal: []
+  llm_proposal:
+  - entity-collision-priya-iyer
+  - workspace-evaluation-queries
+  - hdfc-bank-cross-domain
+  - acme-corp-360-view
+  - rx-005-priya-iyer-polypharmacy
+  grounded_answer: 'There are two distinct patients named Priya Iyer in the healthcare corpus. One is
+    a patient at Apollo Hospitals Pune (DOB 1994-09-04) and the other is a patient at Fortis Escorts Heart
+    Institute (DOB 1994-09-04). These are the same individual, as confirmed by the matching date of birth
+    and the fact '
+- id: healthcare-q034
+  old_citations: []
+  fuzzy_proposal: []
+  llm_proposal:
+  - consent-001-meera-gupta-preop
+  - consent-002-arjun-singh-cardiac
+  grounded_answer: 'There are two consent forms in the corpus that explicitly mention Aadhaar: ''consent-001-meera-gupta-preop''
+    and ''consent-002-arjun-singh-cardiac''.'
+- id: healthcare-q035
+  old_citations: []
+  fuzzy_proposal: []
+  llm_proposal:
+  - lab-003-kavya-reddy-thyroid-v1
+  - entity-collision-priya-iyer
+  grounded_answer: Two patients, Kavya Reddy and Priya Iyer, have hypothyroidism.
+- id: healthcare-q036
+  old_citations: []
+  fuzzy_proposal: []
+  llm_proposal:
+  - workspace-evaluation-queries
+  grounded_answer: The document mentions that Suresh had an extreme creatinine value of 7.8.
+- id: healthcare-q039
+  old_citations:
+  - consent-arjun-singh-aadhaar
+  - intake-rural-marathi
+  fuzzy_proposal:
+  - consent-002-arjun-singh-cardiac
+  llm_proposal:
+  - workspace-evaluation-queries
+  - consent-001-meera-gupta-preop
+  grounded_answer: The Apollo Pune consent form requires Aadhaar, PAN, signature, and medical history.
+    The rural patient's intake form is in a mix of Marathi and English.
+answer_corrections_for_review: []
+genuine_gaps:
+- id: healthcare-q011
+  expected: (Quoted consent language — short quote permitted per copyright rule.)
+  note: neither fuzzy nor LLM located this fact
+- id: healthcare-q020
+  expected: (System should look for follow-up docs in Suresh's record; if absent, note that follow-up
+    is recommended but not yet documented.)
+  note: neither fuzzy nor LLM located this fact
+- id: healthcare-q024
+  expected: Resolution (later) supersedes denial. Current status per resolution doc.
+  note: neither fuzzy nor LLM located this fact
+- id: healthcare-q025
+  expected: Most recently signed consent applies. Earlier consent is superseded but retained for audit
+    trail.
+  note: neither fuzzy nor LLM located this fact
+- id: healthcare-q027
+  expected: Yes — Shyam (K+ = 7.2 mmol/L, life-threatening) and Suresh (creatinine 7.8 mg/dL, severe renal
+    compromise).
+  note: neither fuzzy nor LLM located this fact
+- id: healthcare-q030
+  expected: Multiple — see Shyam (potassium), Suresh (creatinine), and Kavya (initial TSH).
+  note: neither fuzzy nor LLM located this fact
+- id: healthcare-q038
+  expected: (Summary including urgency, immediate management, follow-up.)
+  note: neither fuzzy nor LLM located this fact

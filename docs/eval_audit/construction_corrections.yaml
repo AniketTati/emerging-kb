@@ -1,0 +1,97 @@
+domain: construction
+citation_remaps:
+- id: construction-q006
+  old_citations:
+  - drawing-001-arch-datacentre-revC
+  new_citations:
+  - drawing-001-arch-datacentre-revC
+  method: fuzzy
+  evidence: 'Site: Acme Whitefield Datacentre Phase-2 (Survey No. 184/2A, Whitefield Main Road, Bangalore)'
+  grounded_answer: The project site is located at Acme Whitefield Datacentre Phase-2, specifically at
+    Survey No. 184/2A, Whitefield Main Road, Bangalore.
+- id: construction-q009
+  old_citations:
+  - drawing-004-structural-foundation-datacentre
+  new_citations:
+  - drawing-004-structural-foundation-datacentre
+  method: fuzzy
+  evidence: ''
+  grounded_answer: I am sorry, but the provided documents do not contain information about the structural
+    foundation depth at the Noamundi datacentre site. The documents refer to the Acme Whitefield Datacentre
+    Phase-2 in Bangalore.
+- id: construction-q011
+  old_citations:
+  - contract-001-acme-mahalaxmi-epc
+  new_citations:
+  - contract-001-acme-mahalaxmi-epc
+  method: fuzzy+llm
+  evidence: 'PPE (व्यक्तिगत सुरक्षा उपकरणे) / Personal Protective Equipment: महालक्ष्मी इन्फ्रा (साइट
+    on)वर पुरवेल / shall be provided by Mahalaxmi Infra on site. साई लेबर एजन्सी कामगारांना PPE वापरण्याची
+    उपलब्धता सुनिश्चित करेल / Sai Labour Agency shall ensure workers'' compliance with PPE usage.
+
+
+    Primary root c'
+  grounded_answer: Mahalaxmi Infrastructure is responsible for providing Personal Protective Equipment
+    (PPE) on site for the Acme Whitefield Datacentre Phase-2 project. The labour agency, Sai Labour Agency,
+    must ensure workers' compliance with PPE usage. A detailed investigation into a worker fall incident
+    at the site
+- id: construction-q023
+  old_citations:
+  - purchase-order-001-jsw-steel
+  new_citations:
+  - purchase-order-001-jsw-steel
+  method: fuzzy
+  evidence: 'What is the current position of the load-bearing wall? | Grid line D (per drawing-001-revC)
+    — NOT Grid C from Rev A | Chain
+
+    C2 | What was the root cause of the May 2025 worker fall? | PPE non-availability + supervision gap
+    (per investigation; NOT worker error from initial) | Chain (revised RC)
+
+    C3 | '
+  grounded_answer: The question "Two purchase orders show different unit rates for steel. Which is authoritative?"
+    is a test query designed to evaluate the system's ability to handle conflicts and determine authority.
+    The expected answer is that the system should identify the authoritative document based on a chain
+    of
+- id: construction-q028
+  old_citations:
+  - safety-001-incident-fall-corrective
+  new_citations:
+  - safety-001-incident-fall-corrective
+  method: fuzzy
+  evidence: 'Investigation start: 23 May 2025
+
+    Report date: 1 June 2025'
+  grounded_answer: The investigation into the fall incident of Mr. Dinesh Kumar started on May 23, 2025,
+    and the report was dated June 1, 2025, which is more than one month.
+citation_remaps_needs_review:
+- id: construction-q034
+  old_citations: []
+  fuzzy_proposal: []
+  llm_proposal:
+  - acme-corp-360-view
+  grounded_answer: 'There are four distinct sub-contractors on the Acme datacentre project: Mahalaxmi
+    Infrastructure Pvt Ltd (Main Contractor), Deshpande Architects + Engineers LLP (Architect), Sundar
+    Structural Consultants Pvt Ltd (Structural Engineer), and Phoenix MEP Services Pvt Ltd (MEP Engineer).'
+answer_corrections_for_review:
+- id: construction-q032
+  current_expected: 1 lost-time injury (Mr. Dinesh Kumar, 22 May 2025). No fatalities. 4 first-aid only
+    incidents in April.
+  corpus_says: 1 lost-time injury (Mr. Dinesh Kumar, 22 May 2025). No fatalities. 6 first-aid only incidents
+    in April.
+  discrepancy: The expected answer states 4 first-aid only incidents in April, but the document 'safety-002-monthly-safety-report'
+    states 6 first-aid only incidents in April.
+  suggested_citations:
+  - safety-001-incident-fall-initial
+  - safety-002-monthly-safety-report
+- id: construction-q037
+  current_expected: '(Multi-paragraph: contract Mar 2025; construction April 2025 - Feb 2026; one safety
+    incident in May handled exceptionally; mechanical completion Feb 2026; DLP runs till Feb 2027.)'
+  corpus_says: The contract was executed on March 8, 2025, with an effective date of April 1, 2025. Construction
+    ran from April 2025 to February 2026 (11 months). Mechanical Completion and handover occurred on February
+    28, 2026. The Defects Liability Period (DLP) runs until February 28, 2027.
+  discrepancy: The expected answer mentions 'one safety incident in May handled exceptionally', but the
+    provided documents do not contain any information about safety incidents.
+  suggested_citations:
+  - contract-001-acme-mahalaxmi-epc
+  - handover-001-mechanical-completion
+genuine_gaps: []

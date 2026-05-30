@@ -1,0 +1,495 @@
+domain: mining
+citation_remaps:
+- id: mining-q001
+  old_citations:
+  - drilling-noamundi-rev1
+  new_citations:
+  - drilling-001-noamundi-v1
+  method: fuzzy
+  evidence: 'Located in: West Singhbhum District, Jharkhand.'
+  grounded_answer: The Noamundi Iron-Ore Block is located in West Singhbhum District, Jharkhand.
+- id: mining-q003
+  old_citations:
+  - parsa-env-corrigendum
+  - parsa-env-clearance
+  new_citations:
+  - env-clearance-001-parsa-corrigendum
+  - env-clearance-001-parsa-original
+  method: fuzzy+llm
+  evidence: 'Maximum production capacity: 18 MTPA (eighteen million tonnes per annum) of run-of-mine coal.'
+  grounded_answer: The Parsa coal block's currently approved production capacity is 18 MTPA (eighteen
+    million tonnes per annum) of run-of-mine coal.
+- id: mining-q004
+  old_citations:
+  - incident-jharia-roof-collapse
+  new_citations:
+  - incident-005-jharia-fatal-roof-collapse
+  method: fuzzy+llm
+  evidence: 'Date / time: 30 July 2025, 06:42 IST'
+  grounded_answer: The Jharia roof collapse occurred on 30 July 2025, at 06:42 IST.
+- id: mining-q005
+  old_citations:
+  - lease-bailadila-1972-scan
+  new_citations:
+  - lease-deed-006-bailadila-vintage-scanned
+  method: fuzzy+llm
+  evidence: लौह अयस्क / Iron ore — particularly the high-grade hematite ("blue dust") deposits characteristic
+    of the Bailadila series.
+  grounded_answer: The primary mineral for the Bailadila 1972 lease is iron ore, specifically high-grade
+    hematite ("blue dust") deposits.
+- id: mining-q006
+  old_citations:
+  - drilling-rajpura-zinc-anomaly
+  new_citations:
+  - drilling-005-rajpura-zinc-prospect
+  method: fuzzy+llm
+  evidence: Sample BH-RA-17 returned Zn grade of 28.4 % — anomalous relative to the deposit mean of 5.4%
+    Zn (the average across 22 holes; per drilling-005).
+  grounded_answer: The Rajpura zinc grade reported in the drilling assay for sample BH-RA-17 is 28.4%.
+    The deposit mean is 5.4% Zn.
+- id: mining-q008
+  old_citations:
+  - drilling-noamundi-rev1
+  new_citations:
+  - drilling-001-noamundi-v1
+  method: fuzzy+llm
+  evidence: 'Based on this initial 12-hole programme:
+
+
+    | Item | Estimate |
+
+    |---|---|
+
+    | Total tonnage (Inferred) | **142 Mt** |
+
+    | **Mean grade (Fe)** | **58.2 %** |'
+  grounded_answer: The initial drilling at Noamundi (Phase 1) showed a mean iron content of 58.2% Fe.
+- id: mining-q009
+  old_citations:
+  - incident-jharia-roof-collapse
+  new_citations:
+  - incident-005-jharia-fatal-roof-collapse
+  method: fuzzy+llm
+  evidence: 'Severity: FATAL — 3 fatalities + 2 hospitalizations'
+  grounded_answer: There were 3 fatalities in the Jharia roof collapse incident.
+- id: mining-q010
+  old_citations:
+  - incident-bokaro-methane
+  new_citations:
+  - incident-007-bokaro-methane-explosion
+  method: fuzzy+llm
+  evidence: Four workers sustained injuries, none life-threatening.
+  grounded_answer: Four workers were injured in the Bokaro methane explosion, none with life-threatening
+    injuries.
+- id: mining-q011
+  old_citations:
+  - lease-jharia-1989-marathi-scan
+  new_citations:
+  - lease-deed-003-jharia-marathi-scanned
+  method: fuzzy+llm
+  evidence: 'विस्तृत क्षेत्र / Area: Jharia Coalfield, Block-North-7 — admeasuring **412 हेक्टेयर / 412
+    hectares** approximately. (Note: by present-day GIS surveys this is actually 408.4 hectares; the 1989
+    measurement has marginal error.)'
+  grounded_answer: The Jharia mining lease has a surface area of approximately 412 hectares.
+- id: mining-q012
+  old_citations:
+  - drilling-noamundi-rev3
+  new_citations:
+  - drilling-001-noamundi-v1
+  method: fuzzy
+  evidence: Mean grade (Fe) 62.8 %
+  grounded_answer: The current Fe% at Noamundi (latest drilling) is 62.8%.
+- id: mining-q013
+  old_citations:
+  - drilling-noamundi-rev1
+  - drilling-noamundi-rev2
+  - drilling-noamundi-rev3
+  new_citations:
+  - drilling-001-noamundi-v1
+  - drilling-001-noamundi-v1
+  - drilling-001-noamundi-v1
+  method: fuzzy+llm
+  evidence: 'This is the **final report** of the 3-phase Block-B exploration programme. It **supersedes**
+    v1 (Aug 2024) and v2 (Feb 2025) and accompanies the mine-plan submission to DGMS / state Department
+    of Mines.
+
+
+    A user of this report should be aware that the **mean Fe grade has been revised upward across ea'
+  grounded_answer: 'The Noamundi drilling revision chain consists of three documents: drilling-001-noamundi-v1
+    (initial report, August 2024) which established a preliminary inferred resource of 142 Mt at 58.2%
+    Fe. This was superseded by drilling-001-noamundi-v2 (February 2025) after Phase-2 infill drilling,
+    upgrading t'
+- id: mining-q014
+  old_citations:
+  - parsa-env-clearance
+  - parsa-env-corrigendum
+  new_citations:
+  - env-clearance-001-parsa-original
+  - env-clearance-001-parsa-corrigendum
+  method: fuzzy+llm
+  evidence: 'Maximum production capacity: 12 MTPA (twelve million tonnes per annum) of run-of-mine coal.
+
+
+    ...The Environmental Clearance dated 14 April 2022, §2 — Production Capacity Sanctioned, is hereby
+    amended.
+
+
+    The line:
+
+    > "Maximum production capacity: 12 MTPA (twelve million tonnes per annum) of run-of-mine'
+  grounded_answer: The Parsa coal block initially had a sanctioned production capacity of 12 MTPA (million
+    tonnes per annum) of run-of-mine coal, as per the Environmental Clearance dated 14 April 2022. This
+    capacity was later increased to 18 MTPA through a corrigendum issued on 20 September 2024. The current
+    mine plan
+- id: mining-q015
+  old_citations:
+  - parsa-env-clearance
+  - parsa-env-corrigendum
+  new_citations:
+  - env-clearance-001-parsa-original
+  - env-clearance-001-parsa-corrigendum
+  method: fuzzy+llm
+  evidence: If any of the supplementary conditions are not met within 18 months of this corrigendum, this
+    corrigendum may be revoked + the original 12 MTPA cap restored, subject to MoEFCC discretion + due
+    process.
+  grounded_answer: If the Parsa env corrigendum is revoked, the original production cap of 12 MTPA (twelve
+    million tonnes per annum) of run-of-mine coal is restored.
+- id: mining-q017
+  old_citations:
+  - drilling-noamundi-rev1
+  - drilling-noamundi-rev3
+  new_citations:
+  - drilling-001-noamundi-v1
+  - drilling-001-noamundi-v1
+  method: fuzzy
+  evidence: 'This is the **final report** of the 3-phase Block-B exploration programme. It **supersedes**
+    v1 (Aug 2024) and v2 (Feb 2025) and accompanies the mine-plan submission to DGMS / state Department
+    of Mines.
+
+
+    A user of this report should be aware that the **mean Fe grade has been revised upward across ea'
+  grounded_answer: No, the original Noamundi drilling report (v1) is no longer authoritative. The final
+    report (v3) supersedes v1 and v2, and its estimates are the operative numbers for mine-plan submission
+    and economic modeling. The v1 estimate of 58.2% Fe is now considered an underestimate.
+- id: mining-q018
+  old_citations:
+  - parsa-env-corrigendum
+  - drilling-noamundi-rev2
+  - drilling-noamundi-rev3
+  new_citations:
+  - env-clearance-001-parsa-corrigendum
+  - drilling-001-noamundi-v1
+  - drilling-001-noamundi-v1
+  method: fuzzy+llm
+  evidence: 'doc_id: env-clearance-001-parsa-corrigendum
+
+    doc_type: env_clearance
+
+    chain: chain_parsa_env_clearance
+
+    chain_role: amendment
+
+    parent_doc: env-clearance-001-parsa-original
+
+    effective_date: 2024-09-20
+
+    parties: [Adani Enterprises Mining Division, MoEFCC]
+
+    status: live
+
+    stressors: [chain_winner, conflict_reso'
+  grounded_answer: 'The amendment/corrigendum document in the mining domain is "ENVIRONMENTAL CLEARANCE
+    — PARSA COAL BLOCK — CORRIGENDUM" (doc_id: env-clearance-001-parsa-corrigendum).'
+- id: mining-q019
+  old_citations:
+  - drilling-noamundi-rev3
+  - drilling-noamundi-rev1
+  new_citations:
+  - drilling-001-noamundi-v1
+  - drilling-001-noamundi-v1
+  method: fuzzy
+  evidence: 'A user of this report should be aware that the mean Fe grade has been revised upward across
+    each version of this study:
+
+    - v1 (Aug 2024) reported **58.2 %**
+
+    - v2 (Feb 2025) reported **61.4 %**
+
+    - v3 (this report, Jul 2025) reports **62.8 %**
+
+
+    This progression reflects accumulating sample density and t'
+  grounded_answer: The v3 report states that the v1 number (58.2 %) is now considered an under-estimate,
+    and all economic and operational decisions should reference the v3 estimate of 62.8 %.
+- id: mining-q021
+  old_citations:
+  - parsa-env-corrigendum
+  - parsa-env-clearance
+  new_citations:
+  - env-clearance-001-parsa-corrigendum
+  - env-clearance-001-parsa-original
+  method: fuzzy+llm
+  evidence: This corrigendum supersedes the production-cap clause of the original EC dated 14 April 2022.
+    The operative production cap is now 18 MTPA.
+  grounded_answer: The 2024 corrigendum, which states 18 MTPA, is authoritative. It explicitly supersedes
+    the 12 MTPA cap from the original 2022 environmental clearance.
+- id: mining-q023
+  old_citations:
+  - lease-bailadila-1972-scan
+  - lease-jharia-1989-marathi-scan
+  new_citations:
+  - lease-deed-006-bailadila-vintage-scanned
+  - lease-deed-003-jharia-marathi-scanned
+  method: fuzzy
+  evidence: ''
+  grounded_answer: The Bailadila 1972 lease and the Jharia 1989 lease are not related. They cover different
+    minerals (iron ore vs. coal), different locations (Bailadila, Madhya Pradesh/Chhattisgarh vs. Jharia,
+    Bihar/Jharkhand), and were granted by different state governments.
+- id: mining-q024
+  old_citations:
+  - incident-jharia-roof-collapse
+  new_citations:
+  - incident-005-jharia-fatal-roof-collapse
+  method: fuzzy
+  evidence: "Recovery of bodies completed at 06 :42 yesterday.\n      - DGMS Inspector A. K. Singh continues\
+    \ on-site; expert panel\n          chaired by Prof. R. Misra (IIT Dhanbad) on-site from 0900\n   \
+    \       today.\n        - Family welfare: ex-gratia disbursed to next-of-kin of three\n          deceased;\
+    \ immediat"
+  grounded_answer: 'The Jharia roof collapse resulted in 3 fatalities. The shift log for the recovery
+    shift mentions "ex-gratia disbursed to next-of-kin of three deceased" and lists the names of the three
+    individuals who died: Sukan Hembrom, Devraj Mahato, and Pranay Tudu. The workspace evaluation queries
+    also confirm '
+- id: mining-q025
+  old_citations:
+  - drilling-noamundi-rev1
+  - drilling-noamundi-rev2
+  - drilling-noamundi-rev3
+  new_citations:
+  - drilling-001-noamundi-v1
+  - drilling-001-noamundi-v1
+  - drilling-001-noamundi-v1
+  method: fuzzy+llm
+  evidence: 'A user of this report should be aware that the mean Fe grade has been revised upward across
+    each version of this study:
+
+    - v1 (Aug 2024) reported **58.2 %**
+
+    - v2 (Feb 2025) reported **61.4 %**
+
+    - v3 (this report, Jul 2025) reports **62.8 %**
+
+
+    This progression reflects accumulating sample density and t'
+  grounded_answer: Different drilling consultants reporting different Fe% at the same Noamundi sample
+    location can be resolved by referencing the latest drilling report version. The mean Fe grade has
+    been revised upward across each version of the study, reflecting accumulating sample density and increased
+    weighting to
+- id: mining-q027
+  old_citations:
+  - drilling-rajpura-zinc-anomaly
+  new_citations:
+  - drilling-005-rajpura-zinc-prospect
+  method: fuzzy
+  evidence: 'Sample BH-RA-17 returned Zn grade of 28.4 % — anomalous relative to the deposit mean of 5.4%
+    Zn (the average across 22 holes; per drilling-005). This is 5.3 times the deposit average and warrants:
+
+
+    (i) Re-sampling for confirmation;
+
+    (ii) Geological mapping for possible new vein or contamination;
+
+    (iii'
+  grounded_answer: Sample BH-RA-17 returned a Zn grade of 28.4 %, which is 5.3 times the deposit average
+    of 5.4% Zn.
+- id: mining-q028
+  old_citations:
+  - incident-jharia-roof-collapse
+  new_citations:
+  - incident-005-jharia-fatal-roof-collapse
+  method: fuzzy
+  evidence: 'How many fatalities at Jharia roof collapse? | 3 fatalities
+
+    Recovery of bodies completed at 06 :42 yesterday.
+
+    Family welfare: ex-gratia disbursed to next-of-kin of three deceased; immediate care being provided
+    to two injured.
+
+    The Jharia mine workforce continues to mourn the loss of Sukan Hembrom,
+
+    De'
+  grounded_answer: Yes, there was a roof collapse at Jharia with 3 fatalities (Sukan Hembrom, Devraj Mahato,
+    and Pranay Tudu).
+- id: mining-q029
+  old_citations:
+  - lease-bailadila-1972-scan
+  new_citations:
+  - lease-deed-006-bailadila-vintage-scanned
+  method: fuzzy
+  evidence: 'Site: Bokaro Coal Block (lease ML-JH-14/2020)'
+  grounded_answer: The Bokaro Coal Block lease (ML-JH-14/2020) was granted in 2020, making it newer than
+    1980.
+- id: mining-q030
+  old_citations:
+  - union-agreement-1987-scan
+  new_citations:
+  - union-agreement-001-tata-bkmu-2024
+  method: fuzzy+llm
+  evidence: 'doc_id: union-agreement-001-tata-bkmu-2024
+
+    # WAGE SETTLEMENT AGREEMENT — TATA STEEL MINING ↔ BHARATIYA KHANIKAMGAR UNION
+
+
+    doc_id: union-agreement-002-adani-cmwu-2025
+
+    # WAGE SETTLEMENT — ADANI MINING ↔ COAL MINE WORKERS UNION (CHHATTISGARH)
+
+
+    doc_id: union-agreement-003-jharia-vintage-1987-scanned
+
+    ## '
+  grounded_answer: Yes, there are several union/labour agreements in the corpus. These include a wage
+    settlement agreement between Tata Steel Mining Operations and Bharatiya Khanikamgar Union (BKMU) effective
+    from 2024, a wage settlement between Adani Enterprises Mining Division and Coal Mine Workers Union
+    (CMWU) effe
+- id: mining-q031
+  old_citations:
+  - incident-bokaro-methane
+  new_citations:
+  - incident-007-bokaro-methane-explosion
+  method: fuzzy
+  evidence: Show me the DGMS inspection report for Bokaro methane | Specific doc with details | Specific
+    retrieval
+  grounded_answer: The document mentions a query related to a "Bokaro methane" incident, suggesting that
+    such incidents might occur or be documented within the corpus, but it does not describe an actual
+    explosion.
+- id: mining-q032
+  old_citations:
+  - incident-jharia-roof-collapse
+  - incident-bokaro-methane
+  new_citations:
+  - incident-005-jharia-fatal-roof-collapse
+  - incident-007-bokaro-methane-explosion
+  method: fuzzy
+  evidence: How many fatalities at Jharia roof collapse? | 3 fatalities | Aggregation
+  grounded_answer: 3 fatalities at Jharia roof collapse
+- id: mining-q034
+  old_citations:
+  - parsa-env-corrigendum
+  new_citations:
+  - env-clearance-001-parsa-corrigendum
+  method: fuzzy+llm
+  evidence: 'Maximum production capacity: 18 MTPA (eighteen million tonnes per annum) of run-of-mine coal.'
+  grounded_answer: The approved production capacity for the Parsa Coal Block is 18 MTPA (eighteen million
+    tonnes per annum) of run-of-mine coal.
+- id: mining-q037
+  old_citations:
+  - parsa-env-clearance
+  - parsa-env-corrigendum
+  new_citations:
+  - env-clearance-001-parsa-original
+  - env-clearance-001-parsa-corrigendum
+  method: fuzzy+llm
+  evidence: 'MINING LEASE DEED — PARSA COAL BLOCK
+
+    Lease ref: ML-CG-08/2019
+
+    Granted by: Government of Chhattisgarh, Department of Mines & Geology
+
+    Granted to: Adani Enterprises Mining Division (a division of Adani Enterprises Ltd)
+
+    Effective date: 21 September 2019 — term of **30 years**, expiring 20 September 2049'
+  grounded_answer: The Parsa Coal Block was granted a mining lease on September 21, 2019, for a term of
+    30 years, expiring on September 20, 2049. The initial Environmental Clearance (EC) was issued on April
+    14, 2022, sanctioning a maximum production capacity of 12 MTPA of run-of-mine coal. This EC also stipulated
+    cond
+- id: mining-q039
+  old_citations:
+  - incident-bokaro-methane
+  - incident-jharia-roof-collapse
+  new_citations:
+  - incident-007-bokaro-methane-explosion
+  - incident-005-jharia-fatal-roof-collapse
+  method: fuzzy+llm
+  evidence: 'A methane gas explosion occurred at the NW corner of Bench 6 (Bokaro Coal Block) at approximately
+    17:12 IST on 2 October 2025. ... Four workers sustained injuries, none life-threatening. Significant
+    property damage to: one drilling rig (extensively damaged), the overhead lighting array, and the temp'
+  grounded_answer: Bokaro experienced a methane gas explosion on October 2, 2025, resulting in 4 injuries
+    and significant property damage. Jharia, on the other hand, suffered a fatal roof collapse on July
+    30, 2025, leading to 3 fatalities and 2 hospitalizations, making it the most severe single-event incident
+    at any T
+- id: mining-q040
+  old_citations:
+  - lease-bailadila-1972-scan
+  new_citations:
+  - lease-deed-006-bailadila-vintage-scanned
+  method: fuzzy
+  evidence: ''
+  grounded_answer: ''
+citation_remaps_needs_review:
+- id: mining-q007
+  old_citations:
+  - dgms-inspection-bokaro
+  fuzzy_proposal: []
+  llm_proposal:
+  - incident-007-bokaro-methane-explosion
+  grounded_answer: The safety officer at the Bokaro Coal Block is the individual who reported the incident
+    TSM-BKR-2025-INC-METHANE-001.
+- id: mining-q022
+  old_citations:
+  - incident-003-mahalaxmi-equipment
+  - dgms-inspection-bokaro
+  fuzzy_proposal: []
+  llm_proposal:
+  - incident-003-noamundi-vendor-equipment
+  - incident-003-dgms-inspection-report
+  grounded_answer: The DGMS inspection report (incident-003-dgms-inspection-report) broadly aligns with
+    the preliminary root cause identified by Mahalaxmi's investigation (incident-003-noamundi-vendor-equipment),
+    which was inadequate quality control on hose-fitting replacement and lack of hose-replacement traceability
+- id: mining-q026
+  old_citations:
+  - dgms-inspection-bokaro
+  fuzzy_proposal: []
+  llm_proposal:
+  - incident-003-dgms-inspection-report
+  - incident-003-noamundi-vendor-equipment
+  grounded_answer: 'The DGMS letter is authoritative. The DGMS inspection report (TSM-DGMS-2025-NOA-007)
+    is issued by the Directorate General of Mines Safety, which is the statutory authority under the Mines
+    Act, 1952, §23 and Mines Rules, 1955. The internal incident report (TSM-NOA-2025-INC-014) acknowledges
+    that the '
+- id: mining-q033
+  old_citations: []
+  fuzzy_proposal: []
+  llm_proposal:
+  - mahalaxmi-cross-domain
+  - lease-deed-005-rajpura-zinc
+  - env-clearance-003-rajpura-zinc
+  - incident-005-jharia-fatal-roof-collapse
+  grounded_answer: 'There are two distinct mining sites mentioned in the corpus: Rajpura-Dariba zinc-lead
+    prospect and Jharia Coal Block. Additionally, there is a general reference to "a mining site" in relation
+    to incident-003, but its specific name is not provided.'
+- id: mining-q035
+  old_citations: []
+  fuzzy_proposal: []
+  llm_proposal:
+  - workspace-evaluation-queries
+  grounded_answer: The corpus contains one DGMS inspection report for Bokaro methane and one for incident-003-dgms-inspection-report.
+- id: mining-q036
+  old_citations: []
+  fuzzy_proposal: []
+  llm_proposal:
+  - lease-deed-003-jharia-marathi-scanned
+  grounded_answer: The Jharia Coalfield, Block-North-7 mining lease covers approximately 412 hectares.
+answer_corrections_for_review: []
+genuine_gaps:
+- id: mining-q002
+  expected: (Per DGMS authority docs; system retrieves name.)
+  note: neither fuzzy nor LLM located this fact
+- id: mining-q016
+  expected: (3-doc chain on Mahalaxmi equipment vendor + DGMS inspection finding.)
+  note: neither fuzzy nor LLM located this fact
+- id: mining-q020
+  expected: (Multi-doc chain explained.)
+  note: neither fuzzy nor LLM located this fact
+- id: mining-q038
+  expected: (Multi-paragraph summary of full incident chain.)
+  note: neither fuzzy nor LLM located this fact

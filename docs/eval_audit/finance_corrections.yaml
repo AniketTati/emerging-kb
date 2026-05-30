@@ -1,0 +1,64 @@
+domain: finance
+citation_remaps: []
+citation_remaps_needs_review:
+- id: finance-q034
+  old_citations: []
+  fuzzy_proposal: []
+  llm_proposal:
+  - hdfc-bank-cross-domain
+  - wire-003-singapore-cross-border
+  grounded_answer: There are 4 wire transactions in finance domain threads that involve HDFC Bank, and
+    1 wire transaction involving Kotak Mahindra Bank.
+answer_corrections_for_review:
+- id: finance-q005
+  current_expected: 7 years (per loan-002-northwind-hdfc).
+  corpus_says: The tenor of the NorthWind USD 80M ECB facility is 5 years.
+  discrepancy: The expected answer states 7 years, but the document clearly specifies a total tenure of
+    5 years.
+  suggested_citations:
+  - loan-002-northwind-hdfc
+- id: finance-q009
+  current_expected: Ernst & Young LLP (per 10-K).
+  corpus_says: The document states that Ernst & Young LLP are the statutory auditors for Marigold Pharma
+    Limited and have issued an unqualified opinion for FY 2024-25, but it does not specify the name of
+    the audit partner.
+  discrepancy: The document identifies the audit firm but does not name the specific audit partner, which
+    is what the question asks for.
+  suggested_citations:
+  - 10k-003-marigold-pharma-fy2024
+- id: finance-q024
+  current_expected: Internal threshold (INR 5 lakh) is the OPERATIVE compliance trigger; regulatory minimum
+    is INR 10 lakh. Bank applies the tighter internal threshold for review while regulatory reporting
+    follows the IN
+  corpus_says: The PMLA rule states an INR 10,00,000 threshold. Federal Bank's internal compliance bulletin
+    (FED-COMP-2024-08) tightened its internal review threshold to INR 5,00,000 per cash deposit. The document
+    does not explicitly state which is 'operative' in the sense of regulatory reporting versus internal
+    r
+  discrepancy: The expected answer states that the internal threshold is the 'OPERATIVE compliance trigger'
+    and that 'regulatory reporting follows the INR 10 lakh PMLA threshold', which is implied but not explicitly
+    stated as 'operative' in the document. The document also refers to 'Federal Bank' not 'HDFC'.
+  suggested_citations:
+  - statement-006-suspicious-aml-pattern
+- id: finance-q035
+  current_expected: Approximately INR 1.4-1.8 crore per year (per profile-001-acme-corporate).
+  corpus_says: The document states the annual fee income to HDFC from Acme is INR 84 lakh (FY 2024-25
+    estimate).
+  discrepancy: The expected answer states approximately INR 1.4-1.8 crore per year, while the document
+    states INR 84 lakh (which is 0.84 crore) per year.
+  suggested_citations:
+  - profile-001-acme-corporate
+- id: finance-q037
+  current_expected: (Multi-paragraph summary of revenue, profit, AUM, loan book, dividend, key risks.)
+  corpus_says: ''
+  discrepancy: audit_parse_failed
+  suggested_citations:
+  - 10k-001-northwind-capital-fy2024
+- id: finance-q038
+  current_expected: '(Comparison table: revenue, EBITDA, PAT, total assets, dividend, key risks.)'
+  corpus_says: ''
+  discrepancy: audit_parse_failed
+  suggested_citations:
+  - 10k-001-northwind-capital-fy2024
+  - 10k-002-solaris-industries-fy2024
+  - 10k-003-marigold-pharma-fy2024
+genuine_gaps: []

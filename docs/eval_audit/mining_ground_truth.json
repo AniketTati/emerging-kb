@@ -1,0 +1,93 @@
+[
+  {
+    "id": "mining-q002",
+    "status": "ok_refusal",
+    "stratum": "needle",
+    "old_expected": "(Per DGMS authority docs; system retrieves name.)",
+    "new_expected": "The provided documents do not state who the DGMS Director General is. They mention A. K. Singh as an Inspector of Mines for the DGMS Dhanbad Region.",
+    "required_facts": [],
+    "evidence_quote": "**Issued by:** Directorate General of Mines Safety (DGMS)\n**Inspector:** A. K. Singh, Inspector of Mines (Dhanbad Region)  |  **A. K. Singh**\nInspector of Mines, DGMS Dhanbad Region\nDirectorate General of Mines Safety\nHirapur, Dhanbad 826001",
+    "source_docs": [
+      "incident-003-dgms-inspection-report",
+      "incident-005-jharia-fatal-roof-collapse",
+      "incident-003-noamundi-vendor-equipment"
+    ],
+    "suggest_stratum": "negative"
+  },
+  {
+    "id": "mining-q007",
+    "status": "ok",
+    "stratum": "needle",
+    "old_expected": "(Per DGMS inspection or mine staff register.)",
+    "new_expected": "Naresh Soren is the Safety Officer for Tata Steel Mining Operations at the Noamundi Iron-Ore Block and is also the lead investigator for the Jharia underground roof collapse incident. The Safety Officer for Bokaro Operations reported the methane explosion incident, but their name is not specified in the documents.",
+    "required_facts": [],
+    "evidence_quote": "Reported by: Safety Officer, Bokaro Operations  |  Signed: Safety Officer, Bokaro Operations \u2014 5 Oct 2025  |  Interviews with: Naresh Soren (Safety Officer, Tata Steel), Manish Deshmukh (Chief Mining Engineer, Tata Steel), Vinod Kumar (Field Supervisor, Mahalaxmi Drilling).  |  Reported by: Naresh Soren, Safety Officer  |  Investigated by: Naresh Soren + Manish Deshmukh (Chief Mining Engineer)  | ",
+    "source_docs": [
+      "incident-007-bokaro-methane-explosion",
+      "incident-003-dgms-inspection-report",
+      "incident-005-jharia-fatal-roof-collapse",
+      "incident-003-noamundi-vendor-equipment"
+    ]
+  },
+  {
+    "id": "mining-q022",
+    "status": "ok_refusal",
+    "stratum": "conflict-resolution",
+    "old_expected": "DGMS finding prevails for regulatory purposes (statutory authority). Mahalaxmi's internal investigation may differ; both should be cited but DGMS is authoritative.",
+    "new_expected": "The documents state that the DGMS finding broadly aligns with the contractor-maintenance-failure root cause identified by Tata Steel Mining's investigation, indicating agreement rather than disagreement on the root cause of incident-003.",
+    "required_facts": [],
+    "evidence_quote": "Cross-reference: DGMS inspection 25 April 2025 \u2014 see incident-003-dgms-inspection-report. The DGMS finding broadly aligns with the contractor-maintenance-failure root cause identified here.",
+    "source_docs": [
+      "incident-003-noamundi-vendor-equipment",
+      "incident-003-dgms-inspection-report",
+      "mahalaxmi-cross-domain"
+    ],
+    "suggest_stratum": "negative"
+  },
+  {
+    "id": "mining-q034",
+    "status": "ok",
+    "stratum": "aggregation",
+    "old_expected": "(Sum of approved MTPA across all coal blocks; per current/latest approvals.)",
+    "new_expected": "The combined approved capacity across all coal blocks is 19.5 MTPA. This includes 18 MTPA for Parsa Coal Block and 1.5 MTPA for the Jharia Coal Block (sealed-section revival proposal).",
+    "required_facts": [
+      "Parsa Coal Block has an approved production capacity of 18 MTPA.",
+      "The Jharia Coal Block (sealed-section revival proposal) has a steady-state production target of 1.5 MTPA.",
+      "The total combined capacity is 18 MTPA + 1.5 MTPA = 19.5 MTPA."
+    ],
+    "evidence_quote": "\"Maximum production capacity: 18 MTPA (eighteen million tonnes per annum) of run-of-mine coal.\" (env-clearance-001-parsa-corrigendum)  |  \"Phase 3 Y5+ | 1.5 (steady state) | Room-and-pillar\" (mine-plan-005-jharia-revival)",
+    "source_docs": [
+      "env-clearance-001-parsa-corrigendum",
+      "mine-plan-005-jharia-revival"
+    ]
+  },
+  {
+    "id": "mining-q035",
+    "status": "ok",
+    "stratum": "aggregation",
+    "old_expected": "(Count from L1 manifest filter.)",
+    "new_expected": "There is 1 DGMS inspection report in the corpus. It is `incident-003-dgms-inspection-report`.",
+    "required_facts": [
+      "The document `incident-003-dgms-inspection-report` is a DGMS inspection report.",
+      "There are no other DGMS inspection reports explicitly mentioned or identified in the corpus."
+    ],
+    "evidence_quote": "doc_id: incident-003-dgms-inspection-report\ndoc_type: safety_incident\nchain: chain_incident_vendor_multihop\nchain_role: amendment\nparent_doc: incident-003-noamundi-vendor-equipment\neffective_date: 2025-04-25\nparties: [DGMS, Tata Steel Mining Operations, Mahalaxmi Drilling & Geo-Services]\nstatus: live\nstressors: [chain_member, multi_hop_vendor_link]\n---\n\n# DGMS INSPECTION REPORT \u2014 Noamundi Iron-Ore",
+    "source_docs": [
+      "incident-003-dgms-inspection-report",
+      "workspace-evaluation-queries"
+    ]
+  },
+  {
+    "id": "mining-q036",
+    "status": "failed_verify",
+    "stratum": "aggregation",
+    "proposed": "The total acreage covered by all mining leases is 1,648 hectares. This is derived from the following leases: Noamundi Iron-Ore Block (1,148 hectares), Rajpura-Dariba Zinc-Lead Prospect (488 hectares),",
+    "why": "The sum of the provided lease areas (1,148 + 488 + 412 = 2,048 hectares) does not equal the stated total acreage of 1,648 hectares, and the answer includes a le"
+  },
+  {
+    "id": "mining-q038",
+    "status": "corpus_lacks_it",
+    "stratum": "long-form",
+    "note": ""
+  }
+]

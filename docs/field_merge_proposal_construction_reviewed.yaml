@@ -1,0 +1,170 @@
+workspace_id: c0000000-0000-0000-0000-000000000001
+# Reviewed 2026-05-28 — dropped 8 conceptually-wrong groups from the raw
+# LLM proposal. Kept the 27 safe synonym merges (the Bug D fix). See
+# RCA_AND_PATH_TO_90_PERCENT.md §RC1.
+doctypes:
+  architectural_drawing:
+    groups: []
+  change_order:
+    groups:
+    - canonical: change_order_date
+      variants:
+      - change_order_date
+      - date_of_change
+      reason: Both fields refer to the date when the change order was issued.
+    - canonical: change_order_type
+      variants:
+      - change_order_type
+      - type_of_change
+      reason: Both fields describe the category or nature of the change order.
+    - canonical: cumulative_variations_percentage
+      variants:
+      - cumulative_variations_percentage
+      - cumulative_variations_to_date_percentage
+      reason: Both fields represent the cumulative percentage of variations to date.
+    - canonical: total_cost_inr
+      variants:
+      - total_cost_inr
+      - total_cost_premium
+      reason: Both fields represent the total monetary cost associated with the change
+        order. (Bug D fix — q033)
+  daily_site_report:
+    groups:
+    # DROPPED: project_day ← project_total_days, total_project_days
+    #   "Day N of project" is not the same as "total planned duration".
+    - canonical: site
+      variants:
+      - site
+      - site_name
+      reason: Both fields refer to the name of the construction site.
+    - canonical: weather
+      variants:
+      - weather
+      - weather_conditions
+      - weather_description
+      reason: These fields all describe the weather conditions for the day.
+    - canonical: project_manager_signed
+      variants:
+      - project_manager_signed
+      - signed_by_pm
+      reason: Both fields capture the name of the project manager who signed the report.
+    - canonical: site_engineer_signed
+      variants:
+      - site_engineer_signed
+      - signed_by_site_engineer
+      reason: Both fields capture the name of the site engineer who signed the report.
+  inspection_report:
+    groups:
+    - canonical: inspection_date
+      variants:
+      - inspection_date
+      - walk_down_date
+      reason: Walk-down IS the inspection in construction parlance.
+    - canonical: project
+      variants:
+      - project
+      - site
+      reason: Project name and site name are synonyms in this corpus.
+  meeting_minutes:
+    groups:
+    - canonical: date
+      variants:
+      - date
+      - meeting_date
+      reason: Both 'date' and 'meeting_date' refer to the date the meeting took place.
+  progress_report:
+    groups:
+    - canonical: overall_status
+      variants:
+      - overall_status
+      - project_status
+      reason: Both fields describe the overall status of the project.
+    - canonical: prepared_by
+      variants:
+      - prepared_by
+      - report_prepared_by
+      reason: Both fields indicate the person who prepared the report.
+    # DROPPED: report_date ← effective_date  (write-date != effective-date)
+    - canonical: safety_near_misses_captured
+      variants:
+      - safety_near_misses_captured
+      - near_misses_captured_in_august
+      reason: Month-suffix variant is the same count concept (Bug D fragmentation).
+    # DROPPED: reporting_period_end ← effective_date  (same collision)
+  purchase_order:
+    groups:
+    - canonical: po_date
+      variants:
+      - po_date
+      - buyer_authoriser_date
+      reason: Both fields refer to the date the purchase order was issued or authorized.
+    # DROPPED: total_inr ← sub_total_inr  (pre-tax vs post-tax)
+    - canonical: gst_amount_inr
+      variants:
+      - gst_amount_inr
+      - total_gst_amount
+      reason: Both fields refer to the total amount of GST applied in INR.
+    - canonical: accepted_vendor_date
+      variants:
+      - accepted_vendor_date
+      - vendor_acceptance_date
+      reason: Both fields refer to the date when the purchase order was accepted by
+        the vendor.
+    - canonical: accepted_vendor_name
+      variants:
+      - accepted_vendor_name
+      - vendor_acceptor
+      reason: Both fields refer to the name of the person who accepted the purchase
+        order for the vendor.
+    # DROPPED: buyer  ← parties   (parties is buyer+vendor pair)
+    # DROPPED: vendor ← parties   (same)
+  rfi_response:
+    groups:
+    - canonical: rfi_date
+      variants:
+      - rfi_date
+      - request_date
+      reason: Both fields refer to the date when the RFI was initiated.
+    - canonical: response_date
+      variants:
+      - response_date
+      - rfi_response_date
+      reason: Both fields refer to the date when the RFI was responded to.
+    - canonical: requestor_company
+      variants:
+      - requestor_company
+      - rfi_initiator_company
+      - rfi_sender_company
+      reason: All three fields refer to the company that initiated/sent the RFI.
+    - canonical: requestor_name
+      variants:
+      - requestor_name
+      - rfi_initiator_name
+      - rfi_sender_name
+      reason: All three fields refer to the name of the person who initiated/sent the RFI.
+    - canonical: respondent_company
+      variants:
+      - respondent_company
+      - rfi_responder_company
+      reason: Both fields refer to the company that responded to the RFI.
+    - canonical: respondent_name
+      variants:
+      - respondent_name
+      - rfi_responder_name
+      reason: Both fields refer to the name of the person who responded to the RFI.
+  safety_incident_report:
+    groups:
+    - canonical: incident_date
+      variants:
+      - incident_date
+      - date_of_incident
+      reason: Both fields capture the date when the incident occurred.
+    - canonical: incident_time
+      variants:
+      - incident_time
+      - time_of_incident
+      reason: Both fields capture the time when the incident occurred.
+  safety_report:
+    groups: []
+    # DROPPED: period ← report_period_start, report_period_end  (start != end)
+    # DROPPED: signed_by ← date_signed  (name != date)

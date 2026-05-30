@@ -1,0 +1,319 @@
+domain: legal
+citation_remaps:
+- id: legal-q004
+  old_citations:
+  - nda-mutual-001-acme-vertex
+  new_citations:
+  - nda-mutual-001-acme-vertex
+  method: fuzzy
+  evidence: The seat of arbitration shall be Wilmington, Delaware. The language of arbitration shall be
+    English.
+  grounded_answer: The arbitration seat for the NDA between Acme and Vertex Industries is Wilmington,
+    Delaware.
+- id: legal-q006
+  old_citations:
+  - msa-002-acme-nimbus
+  new_citations:
+  - msa-002-acme-nimbus
+  method: fuzzy
+  evidence: ''
+  grounded_answer: I cannot answer this question as the provided documents do not contain information
+    about an "Acme-Nimbus MSA" or its indemnity cap. The documents mention an "msa-002-acme-nimbus" but
+    do not provide details on its indemnity cap.
+- id: legal-q008
+  old_citations:
+  - sow-001-acme-vertex
+  new_citations:
+  - sow-003-vertex-acme-consulting
+  method: fuzzy
+  evidence: 'Key signatories from Acme:
+
+    - Mr. Rakesh Sundaram (CEO) — signs all major commercial contracts
+
+    - Ms. Priya Iyer (VP Legal) — signs / countersigns / witnesses; see entity-collision-priya-iyer for
+    disambiguation with Apollo patient'
+  grounded_answer: Ms. Priya Iyer, VP Legal at Acme Corp Pvt Ltd, is listed as a signatory for the SOW
+    under msa-001. She signs, countersigns, or witnesses major commercial contracts.
+- id: legal-q009
+  old_citations:
+  - lease-001-acme-lakeview
+  new_citations:
+  - lease-001-acme-lakeview
+  method: fuzzy
+  evidence: ''
+  grounded_answer: I am sorry, but I cannot find the lease tenure for the Acme Gurugram office in the
+    provided documents. The document "lease-005-scanned-vintage" refers to a lease for an office in Mumbai,
+    not Gurugram, and is also an archived document superseded by a current lease for Gurugram that is
+    not provided.
+- id: legal-q018
+  old_citations:
+  - sow-001-acme-vertex
+  - msa-001-amendment-2
+  new_citations:
+  - sow-003-vertex-acme-consulting
+  - msa-001-amendment-2
+  method: fuzzy
+  evidence: '| msa-001-acme-vertex | Vertex Industries | Customer (Acme = service buyer) | Payment terms
+    NET-30 → NET-60 chain |
+
+    | msa-001-amendment-1 | Vertex Industries | Customer | Payment chain |
+
+    | msa-001-amendment-2 | Vertex Industries | Customer | Payment chain (winner) |'
+  grounded_answer: The Vertex SOW under msa-001 has a payment terms chain from NET-30 to NET-60.
+- id: legal-q025
+  old_citations:
+  - lease-001-acme-lakeview
+  new_citations:
+  - lease-001-acme-lakeview
+  method: fuzzy+llm
+  evidence: 'This document is a synthesis. The authoritative source for any specific fact about Acme is
+    the individual referenced document. (acme-corp-360-view)
+
+
+    Monthly rent: INR 27,75,000 (Indian Rupees Twenty-Seven Lakh Seventy-Five Thousand), payable in advance
+    on the first business day of each month. (lease'
+  grounded_answer: The authoritative lease addendum for the Acme Gurugram office is lease-001-acme-lakeview,
+    which states a monthly rent of INR 27,75,000. The document acme-corp-360-view explicitly states that
+    it is a synthesis and not an authoritative source for specific facts.
+- id: legal-q026
+  old_citations:
+  - msa-002-acme-nimbus
+  - side-letter-acme-nimbus
+  new_citations:
+  - msa-002-acme-nimbus
+  - side-letter-002-helios-acme
+  method: fuzzy
+  evidence: '1.1 Solely for purposes of indemnification under Section 5.3 of the MSA (IP indemnification),
+    and notwithstanding the cap in Section 5.1:
+
+
+    > Vertex''s total aggregate liability for IP indemnification claims arising out of the Services shall
+    be capped at **five million U.S. dollars ($5,000,000)** in t'
+  grounded_answer: The side letter (msa-001-side-letter) prevails, increasing the IP indemnification cap
+    to $5,000,000 per contract year, notwithstanding the lower cap in Section 5.1 of the MSA.
+- id: legal-q038
+  old_citations:
+  - msa-001-amendment-2
+  - nda-mutual-001-acme-vertex
+  - sow-001-acme-vertex
+  new_citations:
+  - msa-001-amendment-2
+  - nda-mutual-001-acme-vertex
+  - sow-003-vertex-acme-consulting
+  method: fuzzy
+  evidence: "Where she appears in this corpus:\n- Legal domain:\n  - msa-001-acme-vertex (signatory)\n\
+    \  - msa-001-amendment-2 (signatory)\n  - nda-mutual-001-acme-vertex (signatory)\n  - employment-contract-001-acme\
+    \ (HR document mentioning her as approval authority)\n  - legal-opinion-001-acme (drafted by her departme"
+  grounded_answer: 'Ms. Priya Iyer, VP Legal at Acme Corp Pvt Ltd, has signed or countersigned three contracts:
+    msa-001-acme-vertex, msa-001-amendment-2, and nda-mutual-001-acme-vertex. She also witnessed subcontract-002-sundar-structural.'
+- id: legal-q039
+  old_citations:
+  - msa-002-acme-nimbus
+  new_citations:
+  - msa-002-acme-nimbus
+  method: fuzzy
+  evidence: 'Acme is a counterparty in 8 contracts in the legal domain: msa-002-acme-nimbus | Nimbus Technologies
+    | Customer | 4-hour delivery SLA (rare clause)
+
+
+    We acknowledge the 4-hour SLA breach. The full RCA will be circulated within 48 hours. Per MSA Section
+    2.4, the 15% service credit will be applied auto'
+  grounded_answer: Acme's obligations under the Acme-Nimbus MSA are not explicitly detailed in the provided
+    documents. However, the documents indicate that Acme is the customer in this agreement, and the MSA
+    includes a 4-hour delivery SLA for Severity-1 incidents. If Nimbus Technologies breaches this SLA,
+    Acme is enti
+citation_remaps_needs_review:
+- id: legal-q005
+  old_citations:
+  - employment-contract-001-acme
+  fuzzy_proposal: []
+  llm_proposal:
+  - employment-001-vikram-kale
+  grounded_answer: After probation, either Party may terminate this employment with sixty (60) days' written
+    notice or payment of salary in lieu of notice. During probation, either Party may terminate this employment
+    with fifteen (15) days' notice.
+- id: legal-q012
+  old_citations:
+  - legal/threads/side-letter-acme-orion.eml
+  fuzzy_proposal: []
+  llm_proposal:
+  - vertex-renewal-thread
+  grounded_answer: 'The email subject of the second message in the legal-side-letter email thread is "Re:
+    MSA renewal — preliminary terms ahead of Q4 board."'
+- id: legal-q031
+  old_citations:
+  - employment-contract-001-acme
+  fuzzy_proposal: []
+  llm_proposal:
+  - employment-001-vikram-kale
+  grounded_answer: Yes, the employment offer letter for Vikram Kale includes a 36-month non-compete clause,
+    which applies during his employment and for thirty-six months following its termination.
+- id: legal-q035
+  old_citations: []
+  fuzzy_proposal: []
+  llm_proposal:
+  - acme-corp-360-view
+  grounded_answer: 'Acme is a counterparty in 8 contracts in the legal domain: msa-001-acme-vertex, msa-001-amendment-1,
+    msa-001-amendment-2, msa-002-acme-nimbus, nda-mutual-001-acme-vertex, license-001-acme-orion-mfn,
+    sow-001-acme-vertex, and employment-contract-001-acme.'
+answer_corrections_for_review:
+- id: legal-q001
+  current_expected: Ms. Priya Iyer (DOB 1979-03-12; distinct from the Pune Apollo patient also named Priya
+    Iyer)
+  corpus_says: The document states that Priya Iyer is the VP Legal of Vertex Industries Inc., not Acme
+    Corp Pvt Ltd. The CEO of Acme Corp Pvt Ltd is Robert Sharma.
+  discrepancy: The expected answer incorrectly identifies Priya Iyer as the VP Legal of Acme Corp Pvt
+    Ltd, whereas the document states she is the VP Legal of Vertex Industries Inc.
+  suggested_citations:
+  - msa-001-acme-vertex
+- id: legal-q002
+  current_expected: 8 March 2018
+  corpus_says: The effective date of the original Acme-Vertex MSA is March 15, 2024.
+  discrepancy: The expected answer states the effective date is March 8, 2018, but the document clearly
+    states it is March 15, 2024.
+  suggested_citations:
+  - msa-001-acme-vertex
+- id: legal-q003
+  current_expected: Indian law, Delhi jurisdiction
+  corpus_says: The governing law of the Acme-Vertex MSA is the laws of the State of Delaware, USA, and
+    the seat of arbitration is Wilmington, Delaware.
+  discrepancy: The expected answer states Indian law, Delhi jurisdiction, but the document specifies Delaware,
+    USA law and Wilmington, Delaware jurisdiction for arbitration.
+  suggested_citations:
+  - msa-001-acme-vertex
+- id: legal-q007
+  current_expected: 5 years, renewable for 5-year terms by mutual consent
+  corpus_says: The initial term is three (3) years from the Effective Date.
+  discrepancy: The expected answer states a 5-year term, but the document specifies a 3-year initial term.
+  suggested_citations:
+  - license-001-acme-orion-mfn
+- id: legal-q010
+  current_expected: Foreground IP created in deliverables is owned by Acme; Vertex retains background
+    IP and tooling
+  corpus_says: The provided documents do not contain information about the IP-ownership clause stance
+    in the Acme-Vertex MSA. While there is a side letter that discusses an increased liability cap for
+    IP indemnification claims, it does not detail the IP-ownership clause itself.
+  discrepancy: The provided document (msa-001-acme-vertex) does not contain any clauses or sections detailing
+    the ownership of Foreground IP or Background IP created in deliverables. It only mentions IP indemnification
+    in Section 5.3.
+  suggested_citations:
+  - msa-001-acme-vertex
+- id: legal-q019
+  current_expected: Mutual NDA dated <later date> supersedes the earlier unilateral; current effective
+    NDA is the mutual one.
+  corpus_says: The Unilateral Non-Disclosure Agreement dated October 22, 2024, supplements and does not
+    supersede the Mutual Non-Disclosure Agreement dated January 8, 2024. Therefore, both are effective.
+  discrepancy: The expected answer states that the mutual NDA supersedes the unilateral one, making the
+    mutual one the current effective NDA. However, the unilateral NDA explicitly states it 'supplements
+    (and does not supersede)' the mutual NDA, meaning both are currently effective.
+  suggested_citations:
+  - nda-mutual-001-acme-vertex
+  - nda-unilateral-001-acme-vertex
+- id: legal-q021
+  current_expected: 'Per Amendment 2 (current): <amended cap>. Original MSA had a different cap which
+    has been superseded.'
+  corpus_says: 'The original MSA (msa-001-acme-vertex) states in Section 5.1 that each party''s total
+    liability, with exceptions, shall not exceed the greater of (i) $1,000,000 or (ii) the fees paid or
+    payable in the twelve months preceding the event. Amendment 2 (msa-001-amendment-2) does not mention
+    or amend this '
+  discrepancy: The expected answer claims Amendment 2 has an amended cap, but Amendment 2 does not mention
+    or amend the indemnity cap. The original MSA specifies the cap.
+  suggested_citations:
+  - msa-001-amendment-2
+  - msa-001-acme-vertex
+- id: legal-q022
+  current_expected: The mutual NDA, executed later, supersedes the unilateral. Mutual = 2-year term, mutual
+    obligations.
+  corpus_says: The Unilateral Non-Disclosure Agreement, effective October 22, 2024, supplements and does
+    not supersede the Mutual Non-Disclosure Agreement dated January 8, 2024. Therefore, both NDAs govern.
+  discrepancy: The expected answer states the mutual NDA supersedes the unilateral NDA, but the unilateral
+    NDA explicitly states it 'supplements (and does not supersede)' the mutual NDA.
+  suggested_citations:
+  - nda-mutual-001-acme-vertex
+  - nda-unilateral-001-acme-vertex
+- id: legal-q023
+  current_expected: Multiple termination periods exist (30 / 60 / 90 day) across contracts; each contract
+    is independently authoritative.
+  corpus_says: The document 'msa-002-acme-nimbus' specifies a 90-day termination notice period for convenience.
+    The other documents do not specify termination notice periods.
+  discrepancy: The expected answer claims multiple termination periods (30/60/90 days), but the provided
+    documents only specify a 90-day notice period in one contract and do not mention other notice periods.
+  suggested_citations:
+  - msa-001-amendment-2
+  - msa-002-acme-nimbus
+  - license-001-acme-orion-mfn
+- id: legal-q030
+  current_expected: Reviewed; the Acme-Vertex contracts cap liability; the Acme-Nimbus MSA has uncapped
+    liability for gross negligence / wilful misconduct (rare carve-out).
+  corpus_says: The Acme-Nimbus MSA caps liability at the greater of SGD 2,000,000 or the fees paid/payable
+    in the preceding 12 months, except for breaches of confidentiality or IP indemnification, which are
+    also subject to this cap. There is no mention of uncapped liability for gross negligence or wilful
+    misconduc
+  discrepancy: The expected answer claims uncapped liability for gross negligence/wilful misconduct in
+    the Acme-Nimbus MSA, but the document explicitly caps all liability, including for confidentiality
+    breaches and IP indemnification, with no carve-out for gross negligence or wilful misconduct.
+  suggested_citations:
+  - msa-002-acme-nimbus
+- id: legal-q032
+  current_expected: Yes — the Acme-Orion licence includes a perpetual obligation to maintain audit-trail
+    records of usage.
+  corpus_says: I cannot answer this question. None of the provided documents contain information about
+    any Acme contract creating a perpetual obligation.
+  discrepancy: The provided document does not mention any perpetual obligation to maintain audit-trail
+    records of usage. The MFN clause includes audit rights for the licensee, but this is not a perpetual
+    obligation on the licensor to maintain audit-trail records of usage.
+  suggested_citations:
+  - license-001-acme-orion-mfn
+- id: legal-q033
+  current_expected: Pre-arbitration mediation clauses exist in some contracts (atypical); system should
+    surface specific occurrences.
+  corpus_says: The document specifies that any dispute shall be referred to and finally resolved by arbitration
+    administered by the Singapore International Arbitration Centre (SIAC) under the SIAC Rules then in
+    force. It does not mention any requirement for binding mediation before arbitration.
+  discrepancy: The expected answer suggests the system should surface specific occurrences of pre-arbitration
+    mediation clauses, but the provided document does not contain any such clauses.
+  suggested_citations:
+  - msa-002-acme-nimbus
+- id: legal-q037
+  current_expected: (Sum of contract values where stated; some contracts are subscription-based without
+    a fixed total, which should be noted as such.)
+  corpus_says: The documents do not state a total contract value for either MSA. MSA-001-amendment-2 mentions
+    annual fees exceeding $750,000 for a volume discount, and MSA-002-acme-nimbus mentions a liability
+    cap of SGD 2,000,000 or fees paid/payable in the preceding 12 months, but neither specifies a total
+    contra
+  discrepancy: The expected answer implies that contract values might be stated or that some are subscription-based
+    without a fixed total, but the provided documents do not state a total contract value for any of the
+    MSAs. They only refer to 'Fees' and 'annual Fees' without a fixed total contract value.
+  suggested_citations:
+  - msa-001-amendment-2
+  - msa-002-acme-nimbus
+- id: legal-q040
+  current_expected: '(Comparison table: payment terms / SLA / indemnity cap / IP ownership / governing
+    law / arbitration seat / term / termination.)'
+  corpus_says: ''
+  discrepancy: audit_parse_failed
+  suggested_citations:
+  - msa-001-amendment-2
+  - msa-002-acme-nimbus
+  - license-001-acme-orion-mfn
+- id: legal-q048
+  current_expected: Standard background-check provision exists, but no specific criminal-record-disclosure
+    clause is present.
+  corpus_says: The Acme employment contract includes a clause for immediate termination if an employee
+    is convicted of a criminal offense.
+  discrepancy: null
+  suggested_citations:
+  - employment-001-vikram-kale
+genuine_gaps:
+- id: legal-q011
+  expected: DPDP Act 2023 (Digital Personal Data Protection Act)
+  note: neither fuzzy nor LLM located this fact
+- id: legal-q036
+  expected: (Computed count from each contract's arbitration clause.)
+  note: neither fuzzy nor LLM located this fact
+- id: legal-q041
+  expected: (Multi-paragraph summary of the opinion's conclusions.)
+  note: neither fuzzy nor LLM located this fact
+- id: legal-q042
+  expected: (Multi-paragraph summary.)
+  note: neither fuzzy nor LLM located this fact
