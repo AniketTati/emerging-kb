@@ -105,7 +105,7 @@ async def run_batched(
     async def _do(offset: int, batch: list[T]) -> None:
         async with sem:
             try:
-                out = await batch_call(batch)
+                out = await with_retry(lambda: batch_call(batch), label="batch_call")
                 if not isinstance(out, list) or len(out) != len(batch):
                     raise ValueError(
                         f"batch arity mismatch: got "
@@ -120,7 +120,10 @@ async def run_batched(
                     "batch call failed (%s); falling back to per-item for "
                     "%d items", exc, len(batch),
                 )
-                out = list(await asyncio.gather(*(item_call(it) for it in batch)))
+                out = list(await asyncio.gather(*(
+                    with_retry(lambda it=it: item_call(it), label="item_call")
+                    for it in batch
+                )))
             for j, r in enumerate(out):
                 results[offset + j] = r
 
