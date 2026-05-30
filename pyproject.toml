@@ -50,6 +50,7 @@ dependencies = [
     # token-aware splitter built on the same recursive-paragraph-
     # backoff pattern we'd otherwise hand-roll, but battle-tested.
     "llama-index-core>=0.12.0",
+    "sentence-transformers>=5.5.1",
 ]
 
 [dependency-groups]

@@ -995,16 +995,21 @@ class Orchestrator:
         # downstream faithfulness gate still catches hallucinations.
         # The LLM also self-refuses cleanly when snippets really don't
         # answer the question (Q16-style out-of-corpus asks).
-        # Phase 1.5 — CRAG refusal now applies uniformly across ALL
-        # modes, not just H. Previously, non-H modes (E/F/S/T/C/A/D/M/K)
-        # generated from low-CRAG retrieval anyway, which silently
-        # produced hallucinated answers when the specialized mode's
-        # retrieval missed. Users expect "refuse on bad retrieval" to
-        # be a system-wide guarantee, not an H-mode quirk.
-        #
-        # Q-mode and I-mode short-circuit before CRAG so they're
-        # unaffected by this change.
-        force_refuse = crag_score < self._crag_threshold
+        # Phase 1.5 REVERTED (v11 eval regression analysis): uniform
+        # CRAG refusal scored 26% correct vs 34% baseline because
+        # non-H modes (E, M, S, T, C, A, K) routinely PRODUCED
+        # correct answers despite low CRAG scores. CRAG judges by
+        # 3 BM25/dense snippets and doesn't fairly score the
+        # mode-specific retrieval (mentions_exact for E, sub_entities
+        # for C/A, chain-filtered for K, RAPTOR for S). Forcing
+        # refusal turned ~15 previously-correct answers into blank
+        # refusals.
+        # Reverting to the original H-mode-only force_refuse. If we
+        # want to add per-mode thresholds later, that's a separate
+        # change with per-mode calibration on eval data.
+        force_refuse = (
+            crag_score < self._crag_threshold and plan.mode == "H"
+        )
 
         # ---- R1 — Design 2 conflict resolution ----
         # Run REGARDLESS of force_refuse — the detected conflicts are
@@ -1182,15 +1187,19 @@ class Orchestrator:
                     model_id=faithfulness.model_id,
                 )
             else:
-                # Phase 1.6 — fill answer with refusal text instead of
-                # leaving the model's last (low-faith) answer in place
-                # AND being marked refused. Either show a clean refusal
-                # OR keep the answer with a badge — not both.
-                from kb.query.generate import refusal_answer_for
+                # Phase 1.6 partially reverted (v13 eval): for
+                # faithfulness_gate_refused, KEEP the model's answer
+                # visible (just flip refused=True). Pre-fix Phase 1.6
+                # overwrote it with the refusal template, but the
+                # answer in this path is non-blank — overwriting
+                # destroyed correct-but-low-faith content (q044). The
+                # UI's existing refusal badge already signals low
+                # confidence. Other refusal paths (insufficient_evidence,
+                # no_hits, parse_error, etc.) still get the template
+                # text because their original answer field is blank.
                 generation = generation.model_copy(update={
                     "refused": True,
                     "refusal_reason": "faithfulness_gate_refused",
-                    "answer": refusal_answer_for("faithfulness_gate_refused"),
                 })
 
         # Wave A close-up — sentence-level HHEM exposure (architecture

@@ -497,10 +497,20 @@ class LLMPlanner:
             q_payload=plan.q_payload, notes=plan.notes,
             model_id=self._model,
         )
-        # Phase 2.4 — K-mode chain-aware override.
-        plan = await self._maybe_route_to_k_mode(
-            query, plan, conn=conn, workspace_id=workspace_id,
-        )
+        # Phase 2.4 K-mode override DISABLED after v11 eval regression.
+        # The single-token overlap heuristic was too greedy — queries
+        # like "main contractor for the Acme datacentre" matched the
+        # chain title "chain_datacentre_drawing_revisions" via the
+        # token "datacentre" and got routed to K-mode, which then
+        # filtered out all non-chain hits including the right answer.
+        # The LLM classifier already catches chain_aware intent for
+        # genuine chain queries; the override added noise without
+        # adding signal. If we want to add it back, it needs a
+        # stronger signal (e.g. explicit version/revision keywords +
+        # multi-token overlap).
+        # plan = await self._maybe_route_to_k_mode(
+        #     query, plan, conn=conn, workspace_id=workspace_id,
+        # )
         return await self._maybe_augment_q(
             query, plan, conn=conn, workspace_id=workspace_id,
         )

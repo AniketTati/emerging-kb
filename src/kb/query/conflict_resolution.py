@@ -596,12 +596,14 @@ def build_conflict_prompt_block(
 
     Returns "" when there's nothing to surface.
     """
-    # Phase 2.3 — render as a structured XML-style block. The generator
-    # system prompt references this tag by name and is instructed to
-    # USE the resolved winners rather than re-derive the resolution
-    # from snippets. Pre-fix the block was inline narrative prose,
-    # which the LLM often skipped past (q020, q023 in construction
-    # v10 were both failures to use a present conflict_block).
+    # Phase 2.3 compact form (v13 eval revision): render as one-line
+    # entries inside a <conflict_resolution> tag. The original 6-line-
+    # per-conflict format blew the prompt for q015 (30 detected
+    # conflicts × 6 lines = 180 line block) and the generator returned
+    # malformed JSON. The compact form preserves the structural tag
+    # (so the slim generator prompt's "use the conflict_resolution
+    # block" rule still applies) but stays roughly the same size as
+    # v10's inline prose.
     lines: list[str] = []
     for r in resolutions:
         if r.resolution == "consensus":
@@ -612,22 +614,14 @@ def build_conflict_prompt_block(
         )
         if r.resolution == "unresolved":
             lines.append(
-                f'  <conflict predicate="{r.predicate}" status="unresolved">\n'
-                f'    Sources disagree: {loser_doc_values}.\n'
-                f'    Action: surface BOTH values in the answer; do not pick one.\n'
-                f'  </conflict>'
+                f'  <conflict pred="{r.predicate}" status="unresolved" '
+                f'sources="{loser_doc_values}" />'
             )
         else:
             lines.append(
-                f'  <conflict predicate="{r.predicate}" status="resolved" '
-                f'rule="{r.resolution}">\n'
-                f'    Winner: "{r.picked_value}" (from doc {picked_doc[:8]}).\n'
-                f'    Superseded: {loser_doc_values}.\n'
-                f'    Action: cite the winner as authoritative. Mention\n'
-                f'    superseded values only when they shed light on the\n'
-                f'    disagreement (e.g. "the prior version said X but\n'
-                f'    the latest revision changes it to Y").\n'
-                f'  </conflict>'
+                f'  <conflict pred="{r.predicate}" status="resolved" '
+                f'rule="{r.resolution}" winner="{r.picked_value}" '
+                f'won_by="{picked_doc[:8]}" superseded="{loser_doc_values}" />'
             )
     if not lines:
         return ""

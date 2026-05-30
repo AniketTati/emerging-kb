@@ -177,6 +177,141 @@ class MxBaiReranker:
 
 
 # ---------------------------------------------------------------------------
+# BGEReranker — BAAI/bge-reranker-v2-m3 (lighter + faster than mxbai-large-v2)
+# ---------------------------------------------------------------------------
+
+
+class BGEReranker:
+    """`BAAI/bge-reranker-v2-m3` cross-encoder via sentence-transformers.
+
+    Smaller (~568MB) + faster than mxbai-large-v2 (~1.5GB) at similar
+    quality on English; better on multilingual (Marathi labour contracts
+    in the construction corpus benefit). Cross-encoder rerank is the
+    fix for the construction eval's retrieval-miss queries (q006 site
+    address, q009 foundation depth, q011 PPE clause, q025 fire-stop) —
+    those failures are not "right doc not in top-30" but "right doc not
+    in top-10" because the initial BM25/dense ranking is keyword-biased.
+
+    Performance notes:
+      - On Mac Apple Silicon (M1/M2/M3), `device='mps'` is 5-10x faster
+        than CPU. Probed automatically via `KB_RERANK_DEVICE` env var
+        (default 'auto'). 'auto' tries mps → cuda → cpu in order.
+      - The reranker only sees the top `KB_RERANK_POOL` candidates
+        (default 20). RRF gave us top-30 to choose from; rerank picks
+        the best 10. We can shrink the pool to cap latency at the cost
+        of recall. 20 is the empirical sweet spot.
+
+    Decision identical to MxBaiReranker: lazy-loaded class-level
+    singleton; import / load failure → passthrough.
+    """
+
+    _model = None  # class-level singleton
+
+    _MODEL_NAME = "BAAI/bge-reranker-v2-m3"
+
+    @staticmethod
+    def _resolve_device(requested: str) -> str:
+        """Pick the best available torch device. 'auto' → mps → cuda → cpu."""
+        if requested != "auto":
+            return requested
+        try:
+            import torch  # type: ignore[import-not-found]
+            if torch.backends.mps.is_available():
+                return "mps"
+            if torch.cuda.is_available():
+                return "cuda"
+        except Exception:
+            pass
+        return "cpu"
+
+    async def rerank(
+        self, query: str, hits: list[Hit], top_k: int,
+    ) -> list[Hit]:
+        if not hits:
+            return []
+        if BGEReranker._model is None:
+            try:
+                import sentence_transformers as st  # type: ignore[import-not-found]
+                if st is None:
+                    return hits[:top_k]
+                device = self._resolve_device(
+                    os.environ.get("KB_RERANK_DEVICE") or "auto"
+                )
+                # max_length defaults to BGE's native 512 tokens — we
+                # need the full window to catch signals that live
+                # deeper in a chunk (e.g. the site address line in an
+                # EPC contract section header). Tune via
+                # KB_RERANK_MAX_LENGTH to trade latency for recall.
+                try:
+                    max_len = int(
+                        os.environ.get("KB_RERANK_MAX_LENGTH") or "512"
+                    )
+                except ValueError:
+                    max_len = 512
+                BGEReranker._model = st.CrossEncoder(
+                    self._MODEL_NAME, device=device, max_length=max_len,
+                )
+            except ImportError:
+                return hits[:top_k]
+            except Exception:
+                return hits[:top_k]
+
+        # Latency cap — only rerank the top N candidates (RRF gave us 30;
+        # we score the best 20 by default and keep the rest in original
+        # order beyond the rerank window). Env-tunable.
+        try:
+            pool = int(os.environ.get("KB_RERANK_POOL") or "20")
+        except ValueError:
+            pool = 20
+        pool = max(top_k, min(pool, len(hits)))
+        head = hits[:pool]
+        tail = hits[pool:]
+
+        try:
+            # No pre-truncation — let the BGE tokenizer handle it via
+            # max_length. The signal we care about (e.g. site address,
+            # PPE clause references) may live anywhere in the chunk.
+            # KB_RERANK_CHAR_CAP can re-enable truncation if latency
+            # becomes a problem at scale.
+            cap_str = os.environ.get("KB_RERANK_CHAR_CAP") or ""
+            if cap_str:
+                try:
+                    char_cap = int(cap_str)
+                except ValueError:
+                    char_cap = None
+            else:
+                char_cap = None
+            if char_cap:
+                pairs = [(query, (h.snippet or "")[:char_cap]) for h in head]
+            else:
+                pairs = [(query, h.snippet or "") for h in head]
+            scores = BGEReranker._model.predict(pairs, batch_size=len(pairs))
+        except Exception:
+            return hits[:top_k]
+
+        ranked = sorted(
+            zip(head, scores, strict=True),
+            key=lambda t: float(t[1]),
+            reverse=True,
+        )
+        # Take top_k from the reranked pool. If pool < top_k we'd never
+        # get here (pool >= top_k guaranteed above), but if the caller
+        # wants more than we reranked, fall back to original-order tail.
+        out: list[Hit] = []
+        for hit, sc in ranked[:top_k]:
+            out.append(Hit(
+                id=hit.id,
+                kind=hit.kind,
+                score=float(sc),
+                snippet=hit.snippet,
+                metadata={**hit.metadata, "rerank": "bge"},
+            ))
+        if len(out) < top_k:
+            out.extend(tail[: top_k - len(out)])
+        return out
+
+
+# ---------------------------------------------------------------------------
 # Factory — KB_RERANKER selector
 # ---------------------------------------------------------------------------
 
@@ -184,9 +319,9 @@ class MxBaiReranker:
 def make_reranker() -> Reranker:
     """Pick a reranker based on `KB_RERANKER`.
 
-    Values: cohere | mxbai | identity | auto (default auto).
-    auto probes KB_COHERE_API_KEY → Identity. mxbai is opt-in only
-    (decision #2 — heavy local dep, don't auto-load).
+    Values: cohere | bge | mxbai | identity | auto (default auto).
+    auto probes KB_COHERE_API_KEY → Identity. bge / mxbai are opt-in
+    only (heavy local deps, don't auto-load).
     """
     selector = (os.environ.get("KB_RERANKER") or "auto").lower()
 
@@ -204,6 +339,9 @@ def make_reranker() -> Reranker:
             )
         return CohereReranker(api_key=api_key)
 
+    if selector == "bge":
+        return BGEReranker()
+
     if selector == "mxbai":
         return MxBaiReranker()
 
@@ -212,5 +350,5 @@ def make_reranker() -> Reranker:
 
     raise ValueError(
         f"Unknown KB_RERANKER value: {selector!r} "
-        f"(expected 'cohere', 'mxbai', 'identity', or 'auto')"
+        f"(expected 'cohere', 'bge', 'mxbai', 'identity', or 'auto')"
     )

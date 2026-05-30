@@ -211,6 +211,15 @@ def compile_plan(
     ]
     params: list = [workspace_id]
 
+    # Auto-inject soft-delete filters per table. Without these, Q-mode
+    # silently counts logically-deleted rows (e.g. canonical_entities
+    # losers from the dedup pipeline → wrong-by-double-counting).
+    _SOFT_DELETE_PREDICATES = {
+        "canonical_entities": '"merged_into" IS NULL',
+    }
+    if table in _SOFT_DELETE_PREDICATES:
+        where_parts.append(f"{table_sql}.{_SOFT_DELETE_PREDICATES[table]}")
+
     for f in plan.filters:
         fragment, fparams = _filter_clause(table, f)
         where_parts.append(fragment)

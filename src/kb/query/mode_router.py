@@ -736,7 +736,10 @@ async def _route_q_mode(
 
     # Synthesize the single aggregate Hit.
     if result.status == "ok":
-        snippet = _format_aggregate_snippet(result.column_names, result.rows)
+        snippet = _format_aggregate_snippet(
+            result.column_names, result.rows,
+            plan=plan.q_payload,
+        )
         return [Hit(
             id=audit_id,
             kind="aggregate",
@@ -763,17 +766,62 @@ def _format_aggregate_snippet(
     column_names: tuple[str, ...] | list[str],
     rows: tuple[tuple, ...] | list[tuple],
     *,
+    plan: dict[str, Any] | None = None,
     max_rows: int = 5,
 ) -> str:
-    """Human-readable rendering of the aggregate result. Powers the
-    generator's answer template ("Across 18 contracts, total cap $X")
-    when KB_QUERY_LLM=identity. The Gemini generator gets the same
-    snippet + can paraphrase."""
+    """Human-readable rendering of the aggregate result for the generator.
+
+    Includes the Q-plan's context (what was aggregated, doctype + field
+    filters) so the generator knows the units/currency/semantics. Pre-fix
+    the snippet was just `total=4418400` — the generator then had to
+    GUESS whether that's USD, INR, or rupees, and which column matches
+    the user's question. q033 wrong-rendered as `$4,418,400` from this
+    ambiguity; q036 picked AVG when the user wanted MAX.
+
+    Two improvements over the bare snippet:
+      1. Surface the plan context (FROM, doctype, field, aggregations) so
+         currency tag flows through (e.g. `total_cost_inr` → INR).
+      2. Annotate column aliases with their aggregation op (`MAX(...)`,
+         `AVG(...)`) so the generator can match the user's question to
+         the right column ('peak' → MAX column, not AVG).
+    """
     if not rows:
         return f"Aggregate query returned no rows. Columns: {list(column_names)}."
     cols = list(column_names)
     head_rows = rows[:max_rows]
-    lines = [f"Aggregate result over {len(rows)} row(s):"]
+
+    lines: list[str] = []
+
+    if plan and isinstance(plan, dict):
+        from_table = plan.get("from") or plan.get("from_table") or "?"
+        # Build a one-line query summary so the LLM sees the semantic
+        # context rather than just bare numbers.
+        agg_strs = []
+        for agg in plan.get("aggregations") or []:
+            op = (agg or {}).get("op") or "?"
+            field = (agg or {}).get("field") or "?"
+            alias = (agg or {}).get("alias") or ""
+            if alias:
+                agg_strs.append(f"{op}({field}) AS {alias}")
+            else:
+                agg_strs.append(f"{op}({field})")
+        filter_strs = []
+        for f in plan.get("filters") or []:
+            field = (f or {}).get("field") or "?"
+            op = (f or {}).get("op") or "?"
+            val = (f or {}).get("value")
+            if isinstance(val, list):
+                val_repr = "[" + ", ".join(repr(v) for v in val) + "]"
+            else:
+                val_repr = repr(val)
+            filter_strs.append(f"{field} {op} {val_repr}")
+        lines.append(
+            f"Aggregate query: {', '.join(agg_strs) or '?'} "
+            f"OVER {from_table}"
+            + (f" WHERE {' AND '.join(filter_strs)}" if filter_strs else "")
+        )
+
+    lines.append(f"Result over {len(rows)} row(s):")
     for r in head_rows:
         pairs = []
         for c, v in zip(cols, r):
@@ -781,6 +829,55 @@ def _format_aggregate_snippet(
         lines.append("  " + ", ".join(pairs))
     if len(rows) > max_rows:
         lines.append(f"  ... ({len(rows) - max_rows} more rows in CSV artifact)")
+
+    # Hint the generator about column meanings — helps with peak vs avg etc.
+    if plan and plan.get("aggregations"):
+        hint_pairs = []
+        for agg in plan.get("aggregations") or []:
+            op = (agg or {}).get("op") or ""
+            alias = (agg or {}).get("alias") or ""
+            field = (agg or {}).get("field") or ""
+            if alias and op:
+                # Suggest semantic meaning from op.
+                meaning = {
+                    "MAX": "highest / peak / maximum",
+                    "MIN": "lowest / earliest / minimum",
+                    "AVG": "average / mean",
+                    "SUM": "total / cumulative",
+                    "COUNT": "count of rows",
+                    "COUNT_DISTINCT": "count of distinct values",
+                }.get(op, op.lower())
+                hint_pairs.append(f"  {alias} = {meaning} of {field}")
+        if hint_pairs:
+            lines.append("Column meanings (use the right column for the question):")
+            lines.extend(hint_pairs)
+
+    # Currency / unit hint — proposed_fields stores `value_currency` per
+    # row; when the aggregation hits an `*_inr` / `_usd` field_name the
+    # generator should render with that currency, not invent $.
+    if plan:
+        field_filter = next(
+            (f for f in (plan.get("filters") or [])
+             if (f or {}).get("field") == "field_name"),
+            None,
+        )
+        if field_filter:
+            val = field_filter.get("value")
+            field_names = [val] if isinstance(val, str) else (val or [])
+            currency_hint = None
+            for fn in field_names:
+                fn_lower = str(fn).lower()
+                if fn_lower.endswith("_inr") or "rupee" in fn_lower:
+                    currency_hint = "INR (Indian Rupees) — use ₹ or 'INR', NEVER $"
+                    break
+                if fn_lower.endswith("_usd") or "dollar" in fn_lower:
+                    currency_hint = "USD — use $"
+                    break
+                if fn_lower.endswith("_eur"):
+                    currency_hint = "EUR — use €"
+                    break
+            if currency_hint:
+                lines.append(f"Currency: {currency_hint}")
     return "\n".join(lines)
 
 

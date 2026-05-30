@@ -602,8 +602,29 @@ async def run_all_channels(
         "bm25_chunks": "bm25_chunks_channel",
         "bm25_raptor": "bm25_raptor_channel",
         "mentions_exact": "mentions_exact_channel",
-        # Phase 2.5 — surface files by field-name token match.
-        "field_name_exact": "field_name_exact_channel",
+        # Phase 2.5 DISABLED after v11 eval regression analysis.
+        #
+        # The field_name_exact channel matched any proposed_fields.field_name
+        # containing a query token. For queries like "main contractor",
+        # this surfaced `contractor_cin`, `main_contractor_address`,
+        # `main_load_bearing_wall_dimensions` etc. — fields whose
+        # NAMES contained "main" or "contractor" but whose VALUES
+        # were a CIN code, an address, and a wall dimension
+        # respectively. RRF treats channels equal-weight by rank
+        # (not score), so these synthetic hits at rank 1-2 of their
+        # channel landed in top-3 post-fusion. CRAG correctly judged
+        # them irrelevant (0.0), forcing refusal on previously-correct
+        # queries (construction q003, q005, q007, q015, q044).
+        #
+        # The channel works when the VALUE is the answer
+        # (`indemnification cap` → `25000000`) but fails when many
+        # field names share the query token. Surgically: the
+        # architecture is fundamentally a field-NAME match,
+        # not a field-VALUE match. To revive it, retrieval needs to
+        # know whether the value answers the query — that requires a
+        # separate LLM call OR a much tighter exact-match heuristic.
+        # Leaving the function defined for future tightening.
+        # "field_name_exact": "field_name_exact_channel",
         "sub_entities_rarity": "sub_entities_rarity_channel",
     }
     vec_channels = {

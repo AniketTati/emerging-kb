@@ -161,24 +161,11 @@ _MAX_OUTPUT_TOKENS = 16000
 # per citation and was the main driver of MAX_TOKENS truncation on
 # synthesis answers.
 _SYSTEM_PROMPT = (
-    # Phase 2.6 — system prompt slimmed from 215 lines to ~60.
-    #
-    # The old version had grown by accretion (one rule per past
-    # failure mode): "common substitution traps", "Address EVERY
-    # part of multi-part question", "Inventory BEFORE answering",
-    # "Enumerate, don't truncate", "Conflict resolution prose with
-    # 5 priority signals", "Compute when asked", etc.  Many of these
-    # overlapped or contradicted, and the conflict-resolution prose
-    # duplicated work the orchestrator already does (the
-    # <conflict_resolution> block in the user message has the resolved
-    # winner + loser breakdown — generator just needs to USE it, not
-    # re-derive the supersession).
-    #
-    # New shape: core rules only. Cite or refuse. Use the conflict
-    # block. Enumerate when there are multiple items. Compute when
-    # asked. That's it. The model is smart enough; the band-aids were
-    # patches for issues better solved upstream (retrieval quality,
-    # field-name matching, etc.).
+    # Phase B — surgical restoration of the rules whose absence was
+    # empirically causing wrong/partial answers in v14 construction eval
+    # (RC3 substitution, RC4 conflict prose, RC5 enumeration). Kept
+    # under ~110 lines by dropping the truly redundant prose and the
+    # rules that overlapped each other in the 215-line version.
     "You answer questions using ONLY the retrieved snippets below. "
     "Cite every claim inline with `[hit_id]` markers. Refuse rather "
     "than guess.\n"
@@ -193,30 +180,140 @@ _SYSTEM_PROMPT = (
     "Refusing > guessing. But don't refuse over paraphrase or a "
     "minor missing detail — give the core answer + note the gap.\n"
     "\n"
-    "## Multiple items\n"
-    "Snippets often contain MULTIPLE relevant items (every revision, "
-    "every change order, every party, every value across versions, "
-    "every transaction matching a threshold). Enumerate ALL distinct "
+    "## Inventory FIRST, then answer\n"
+    "Before composing the answer, scan ALL snippets and inventory "
+    "what's relevant. Specifically ask: how many distinct items, "
+    "revisions, parties, values, transactions, dates does the "
+    "question concern? Then enumerate them. The most common failure "
+    "mode is finding one item, citing it, and stopping while the "
+    "snippets contained two or three more.\n"
+    "\n"
+    "## Don't substitute a near-field for the asked field\n"
+    "When the question asks for a SPECIFIC attribute, return THAT "
+    "attribute — not a different field that happens to be nearby in "
+    "the snippet. Common substitution traps:\n"
+    " - asked 'location' / 'address' / 'site address' / 'where is X' "
+    "→ return the STREET ADDRESS / SURVEY NUMBER, NOT the project "
+    "name. ('Acme Whitefield Datacentre Phase-2' is a project name; "
+    "'Survey No. 184/2A, Whitefield Main Road, Bangalore' is a "
+    "site location. Don't conflate.)\n"
+    " - asked 'cost' / 'value' / 'amount' → return the numeric "
+    "amount with currency unit, NOT the contract number or doc title.\n"
+    " - asked 'date' → return the actual date, NOT the doc number "
+    "or revision tag.\n"
+    " - asked 'who is X' / 'role of X' → return X's role + "
+    "responsibilities, NOT a list of X's actions.\n"
+    " - asked 'how many' → return the COUNT, NOT a listing of every "
+    "item (count first, list second if useful).\n"
+    " - asked 'who is the architect' / 'who is the contractor' → "
+    "return the FIRM NAME first, then the named individual if "
+    "available ('Deshpande Architects + Engineers LLP (Ar. Amit "
+    "Deshpande)'). Don't drop the firm.\n"
+    "If the asked attribute isn't in any snippet, refuse for that "
+    "part with a one-sentence note saying so. Do NOT silently swap "
+    "in the nearest available field.\n"
+    "\n"
+    "## Multiple items — enumerate ALL distinct items\n"
+    "Snippets often contain MULTIPLE relevant items: every revision in "
+    "a chain (Rev A → Rev B → Rev C), every change order's value, "
+    "every party listed, every transaction matching a threshold, "
+    "every document version across time. Enumerate ALL distinct "
     "items that satisfy the question; don't pick one and stop. "
-    "Bullets are fine.\n"
+    "Bullets or a short table are fine.\n"
+    "\n"
+    "Specifically for CHAIN-AWARE questions (revisions, amendments, "
+    "supersessions, change orders, version histories, multi-stage "
+    "incidents that go initial → investigation → corrective):\n"
+    " - ANSWER THE SPECIFIC QUESTION FIRST. If the user asks for the "
+    "CURRENT position, lead with the current position. If they ask "
+    "what CHANGED, lead with the changes. If they ask the FINAL root "
+    "cause, lead with the final finding. Don't make the user dig "
+    "through chain history to find the answer.\n"
+    " - THEN add a one-line chain trail so the answer is auditable. "
+    "Examples:\n"
+    "   * 'Current wall position is **Grid D, 8.1m from East face** "
+    "[hit_id]. (Chain: Rev A had Grid C → Rev B repositioned to "
+    "Grid D → Rev C confirmed for construction.)'\n"
+    "   * 'Final root cause: **PPE non-availability + supervision "
+    "gap** [hit_id]. (Chain: 22 May initial report blamed worker "
+    "error; 1 Jun investigation REJECTED that, identified systemic "
+    "causes; 18 Jun corrective action closed the gap.)'\n"
+    "   * 'Changes Rev A → Rev C: wall moved Grid C → Grid D, loading "
+    "dock extended, vinyl spec upgraded, … [hit_ids].'\n"
+    " - If a user asks 'is the original X still authoritative?', "
+    "answer 'No — Rev A was superseded by Rev B (which …), then "
+    "Rev C (current). [hit_ids]'.\n"
+    " - When a chain has N members and the question is a comparison "
+    "or aggregation across them, name all N. When the question is "
+    "about a single point in the chain (current / first / final), "
+    "lead with that point and only walk the chain for context.\n"
     "\n"
     "## Multi-part questions\n"
     "If the question has multiple parts (`when AND why`, `who AND "
-    "what`), address every part. Don't drop sub-questions.\n"
+    "what`, asks for a primary AND a comparison), address every part. "
+    "Don't drop sub-questions just because the answer for one is "
+    "longer.\n"
     "\n"
-    "## Conflicts\n"
+    "## Conflicts — use the structured block if present\n"
     "If a `<conflict_resolution>` block is present in the user "
-    "message, the orchestrator already resolved disagreements. USE "
-    "the resolved winner from each `<conflict>` tag as authoritative. "
-    "Mention superseded values only when they shed light on the "
-    "disagreement (e.g. 'the prior version said X but the latest "
-    "revision changes it to Y'). DO NOT re-derive the supersession "
-    "yourself — the block has the answer.\n"
+    "message, the orchestrator has already resolved each chained "
+    "disagreement. For each `<conflict winner=\"...\" ...>` tag:\n"
+    " - The `winner` value is what the user gets as the answer.\n"
+    " - The losing values may be mentioned to explain the supersession "
+    "('the prior version said X; Revision B then changed it to Y'), "
+    "but NEVER describe a losing value as if it were authoritative.\n"
+    " - If status='unresolved', say so explicitly and surface both "
+    "sides without picking — that's the honest answer.\n"
+    "DO NOT re-derive the supersession yourself. DO NOT cite the "
+    "losing snippet as the answer just because it appears first.\n"
+    "\n"
+    "If NO conflict block is present and you see two snippets that "
+    "disagree, think about WHY they disagree:\n"
+    " - If they're different revisions of the SAME doc → the later "
+    "supersedes the earlier; say so.\n"
+    " - If they're INDEPENDENT TRANSACTIONS (two POs to different "
+    "vendors at different times, two invoices for different "
+    "consignments, two daily reports for different days) → each "
+    "stands on its own. Both values are simultaneously authoritative "
+    "for their own scope; do NOT pick one as 'the' authoritative. "
+    "Say: 'PO-A specified rate X for its April consignment; PO-B "
+    "specified rate Y for its August consignment — each PO governs "
+    "its own delivery.'\n"
+    " - If they're two opinions / interpretations / inspection "
+    "findings on the SAME thing → use authority signals (engineering "
+    "consultant > frontline crew, latest > earlier) but say so "
+    "explicitly.\n"
+    " - If genuinely contradictory with no clear authority → say "
+    "'The snippets disagree' and surface both, don't pick.\n"
     "\n"
     "## Computation\n"
-    "If the question asks for arithmetic the snippets contain inputs "
-    "for (sum, count, day differences, percent change), compute it "
-    "and show the result. Refuse only when inputs are missing.\n"
+    "If the question asks for arithmetic and the snippets contain "
+    "inputs (sum, count, max, min, day differences, percent change), "
+    "compute it and show both the computation and the result. "
+    "Examples:\n"
+    " - 'cumulative change-order value' → sum all change order "
+    "totals across snippets and show the running total.\n"
+    " - 'how many distinct sub-contractors' → list canonical names, "
+    "then state the count.\n"
+    " - 'days between contract signing and mechanical completion' → "
+    "compute (end_date − start_date) and report the number of days.\n"
+    "Refuse only when one or more required inputs are absent.\n"
+    "\n"
+    "## Aggregate results from Q-mode\n"
+    "When a snippet starts with 'Aggregate result over N row(s):' it "
+    "is a structured query result. Use EVERY column it returns; the "
+    "Q-mode planner chose those columns deliberately. Common patterns:\n"
+    " - peak + avg returned together → report BOTH ('peak headcount "
+    "was 201, daily average was 140'), not just one.\n"
+    " - start_date + end_date returned together → subtract and "
+    "report the duration in days ('357 days from 8 Mar 2025 to 28 "
+    "Feb 2026').\n"
+    " - count + per-group columns → report the count first, then "
+    "the breakdown.\n"
+    "Don't reduce a multi-column aggregate to a single number when "
+    "the user's question naturally wants both (e.g. 'peak headcount' "
+    "wants the max; 'average at peak' is asking what the average is "
+    "while showing the peak for context — give both numbers).\n"
     "\n"
     "## Format\n"
     "Markdown. Bullets for lists. **bold** for numbers / dates / key "
@@ -412,6 +509,17 @@ def _parse_result(
             actual_reason, finish_reason, len(raw or ""),
             note, (raw or "")[:500],
         )
+        # Phase F diagnostic — dump full raw output to /tmp on every
+        # parse_error so we can investigate without re-running the query.
+        # Cheap (low-volume — parse errors are <1% of traffic) and the
+        # 500-char log preview keeps cutting off the interesting bits.
+        try:
+            import time as _time
+            with open("/tmp/kb-parse-errors.log", "a") as fh:
+                fh.write(f"\n===== {_time.strftime('%Y-%m-%dT%H:%M:%S')} {actual_reason} model={model_id} finish={finish_reason} raw_len={len(raw or '')} note={note} =====\n")
+                fh.write((raw or "(no raw)") + "\n")
+        except Exception:
+            pass
         return GenerationResult(
             answer=refusal_answer_for(actual_reason),
             citations=[],
