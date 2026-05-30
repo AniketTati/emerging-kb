@@ -166,17 +166,29 @@ def _extract_unit_types(query: str) -> tuple[str, ...]:
 
 
 # Chain-view cues for K-mode.
+_VALID_CHAIN_VIEWS = frozenset({"current_version", "all_versions", "history_only"})
+
+
 def _infer_chain_view(query: str) -> str:
     q = (query or "").lower()
     if any(k in q for k in (
         "history", "all versions", "evolved", "over time", "every version",
+        # C3 — chain-WALK phrasings: the user wants the whole sequence, not
+        # just the current revision. "walk the chain", "initial vs
+        # investigation vs corrective", "from initial through corrective",
+        # "from filing to ...", "trace the ...", "summarise ... through".
+        "walk the", "trace the", "through corrective", "from initial",
+        "from filing", "initial vs", "vs investigation", "vs corrective",
+        "across versions", "each version", "all revisions",
+        # C3 — supersession questions ("is revA still authoritative?")
+        # need BOTH the original and the current to answer.
+        "still authoritative", "still valid", "superseded",
     )):
         return "all_versions"
     if any(k in q for k in (
         "previous", "earlier", "history only", "before the current",
     )):
         return "history_only"
-    # Default: current_version
     return "current_version"
 
 
@@ -356,7 +368,7 @@ _ROUTING_SYSTEM_PROMPT = (
 _GEMINI_SYSTEM_PROMPT = _ROUTING_SYSTEM_PROMPT
 
 
-def _parse_plan_json(raw: str, intent: IntentResult) -> Plan:
+def _parse_plan_json(raw: str, intent: IntentResult, query: str = "") -> Plan:
     """Tolerant parser. Falls back to identity mapping on parse failure."""
     text = (raw or "").strip()
     if text.startswith("```"):
@@ -393,10 +405,18 @@ def _parse_plan_json(raw: str, intent: IntentResult) -> Plan:
         return tuple(str(v) for v in val if isinstance(v, str) and v.strip())
 
     chain_view = data.get("chain_view")
-    if chain_view is not None and not isinstance(chain_view, str):
+    if not isinstance(chain_view, str):
         chain_view = None
-    if mode == "K" and not chain_view:
-        chain_view = "current_version"
+    # C3 — the Gemini planner frequently fills chain_view with a TOPIC /
+    # doc-type string ("safety incident-fall") rather than a view enum.
+    # mode_router then coerces that invalid value to current_version, whose
+    # filter DROPS the historical chain members (the chain-walk questions
+    # cited the wrong, non-chain docs as a result). When chain_view is
+    # absent OR not a valid enum, infer the view from the query phrasing.
+    if mode == "K" and (
+        not chain_view or chain_view not in _VALID_CHAIN_VIEWS
+    ):
+        chain_view = _infer_chain_view(query)
 
     return Plan(
         mode=mode,
@@ -486,7 +506,7 @@ class LLMPlanner:
                 model_id=self._model,
             )
 
-        plan = _parse_plan_json(raw_text, intent)
+        plan = _parse_plan_json(raw_text, intent, query)
         # Re-attach model id on the routing result.
         plan = Plan(
             mode=plan.mode, intent=plan.intent,
