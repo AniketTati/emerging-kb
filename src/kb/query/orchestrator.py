@@ -271,6 +271,39 @@ _POST_FUSION_TOP_K = 30
 _POST_RERANK_TOP_K = 10
 
 
+def grounding_gate_refuses(
+    faithfulness_verdict: str | None,
+    crag_score: float,
+    crag_threshold: float,
+) -> bool:
+    """C2 — decide whether the answer should be refused on grounding.
+
+    Refuse when EITHER:
+      - the faithfulness gate already returned 'refused', OR
+      - the answer is 'low_confidence' AND retrieval did not support it
+        (CRAG below threshold).
+
+    The second clause makes the two weak gates AGREE instead of cancel:
+    an out-of-corpus / false-premise question retrieves weakly-related
+    docs (low CRAG) and the generator answers a plausible substitute that
+    the faithfulness gate scores low (`low_confidence`); pre-C2 that
+    shipped because only a 'refused' verdict triggered an abstain. A
+    low_confidence answer backed by STRONG retrieval (a paraphrase of a
+    real passage) still ships — that's the deliberate low_confidence band.
+
+    Conservative by design: uses a strict `<` on CRAG so an answer sitting
+    exactly at the neutral default (0.5 == threshold) is NOT force-refused
+    — catching those reliably needs entity-grounded relevance detection,
+    not a threshold, and a looser bound here over-refuses real answers.
+    """
+    if faithfulness_verdict == "refused":
+        return True
+    return (
+        faithfulness_verdict == "low_confidence"
+        and crag_score < crag_threshold
+    )
+
+
 class SearchResult(BaseModel):
     """`/search` response shape — retrieval inspector, no generation."""
 
@@ -1157,7 +1190,20 @@ class Orchestrator:
                 "regenerations": regenerations,
             })
 
-        if faithfulness.verdict == "refused" and not generation.refused:
+        # C2 — relevance/grounding refusal across modes. An out-of-corpus
+        # or false-premise question retrieves weakly-related docs and the
+        # generator answers a plausible substitute (asked "Noamundi", it
+        # answers "Acme Whitefield"). The faithfulness gate scores that
+        # low (≈0.2-0.35 → 'low_confidence'), but pre-C2 only verdict
+        # =='refused' triggered a refusal, so the hallucination shipped.
+        # Make the two weak gates AGREE instead of cancel: refuse a
+        # low_confidence answer when retrieval ALSO didn't support it
+        # (CRAG below threshold). A low_confidence answer backed by STRONG
+        # retrieval (paraphrase of a real passage) still ships — that case
+        # is the deliberate low_confidence band.
+        if grounding_gate_refuses(
+            faithfulness.verdict, crag_score, self._crag_threshold,
+        ) and not generation.refused:
             # Out of retries. Two behaviors depending on whether the
             # retrieval was confident:
             #   - CRAG was HIGH + generator returned an answer: the

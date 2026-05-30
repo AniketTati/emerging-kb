@@ -98,7 +98,8 @@ actually moves retrieval.
 |---|---|---|
 | **M1** — per-stage harness + Cohere reranker | ✅ done (`0fef654`) | Phase-0 baseline set; query ~25s→~13s. `docs/M1_STAGE_EVAL.md` |
 | **C1** — aggregation (mode Q) citations not grounded to source docs | ✅ done | aggregation `cite` **0.00 → 1.00**; overall `cite` 0.75 → 0.83; `lost_generation` 8 → 4. `construction_after_c1.*` |
-| **C2** — negative-refusal (Q5 relevance gate) | ⏳ next | target: negative `refuse` 0.00 → ~1.0 |
+| **C2** — negative-refusal (Q5 relevance gate) | ◑ largely done | negative `refuse` **0.00 → 0.67**; overall `refuse` 0.57 → 0.86; refuse✓ 4→6, **no over-refusal**. Residual q009 → C2b. `construction_after_c2.*` |
+| **C2b** — entity-grounded relevance (q009-class) | ⏳ pending | refuse when the asked entity/premise isn't in the retrieved docs (CRAG sits at neutral 0.5 default + faith in paraphrase band → threshold can't separate). Part of deeper Q5/A1. |
 | **I1** — classify-before-chunk + clause/row chunker | ⏸ deferred | benefit shows on tabular domains, not construction |
 | (other roadmap tasks below) | ⏳ pending | — |
 
