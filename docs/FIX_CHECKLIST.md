@@ -143,10 +143,25 @@ master table below.
 | 32 | **A1** query decomposition (agentic) | 6 | ⏳ | |
 | 33 | **E1** grow + hold-out eval | 6 | ⏳ | (variance/averaging caveat noted above) |
 
-> **Sub-items spun off** (tracked so they're not lost): **C2b** — entity-grounded
-> relevance for the q009-class (asked entity/premise absent from retrieved docs;
-> CRAG sits at the neutral 0.5 default so a threshold can't separate it). Folds
-> into #6 Q5 / #32 A1.
+> **Sub-items spun off** (tracked so they're not lost):
+> - **C2b** — entity-grounded relevance for the q009-class (asked entity/premise
+>   absent from retrieved docs; CRAG sits at the neutral 0.5 default so a
+>   threshold can't separate it). Folds into #6 Q5 / #32 A1.
+> - **C3 — mode-K real chain retrieval** (diagnosed; folds into **#10 Q2** /
+>   K-mode). The `lost_generation` cluster (q014/q017/q038) is NOT a citation
+>   bug: `_route_k_mode` is a **filter, not a retriever** — it only keeps hits
+>   already surfaced and never fetches the *other* members of a chain. For
+>   "walk/summarise the chain" questions the planner also leaves
+>   `chain_view=current_version`, so historical members (initial/investigation,
+>   revA/revB) are dropped and non-chain docs (safety-003) get cited. Fix =
+>   (a) planner picks `all_versions` for chain-walk intent, (b) mode K *fetches*
+>   all members of the chains present in the hits. Chains ARE registered in
+>   `doc_chain_members` (safety-001, drawing-001) — detection is fine; retrieval
+>   isn't. *(version_index also mis-set: revB & revC both =1; investigation &
+>   corrective both =1 — minor backfill.)*
+> - **q025** (conflict) — borderline: mode-H CRAG `force_refuse` at crag≈0.5
+>   flips refuse↔ship run-to-run; when it ships it cites the wrong doc. Hard
+>   case; folds into #5 Q1 / #6 Q5. Not a C2 regression.
 
 > **Phase-0 baseline** (50 Q, `construction_phase0.*`): `r@10=0.93 r@30=0.97
 > mrr=0.82 rerank_ret=1.00 cite=0.75 faith=0.66 refuse=0.57` ·
