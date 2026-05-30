@@ -473,6 +473,54 @@ async def apply_proposal(workspace_id: str, proposal_path: Path) -> int:
                     # treatment per table.
                     for loser in losers:
                         async with conn.transaction():
+                            # relationships UNIQUE(workspace_id, subject, object, predicate)
+                            # AND CHECK (subject <> object).
+                            # Drop survivor<->loser direct edges first to avoid self-loops.
+                            await conn.execute(
+                                """
+                                DELETE FROM relationships
+                                 WHERE workspace_id = %s::uuid
+                                   AND ((subject_entity_id = %s::uuid AND object_entity_id = %s::uuid)
+                                     OR (subject_entity_id = %s::uuid AND object_entity_id = %s::uuid))
+                                """,
+                                (workspace_id, survivor, loser, loser, survivor),
+                            )
+                            # Drop loser-edges that would collide with survivor-edges after repoint.
+                            await conn.execute(
+                                """
+                                DELETE FROM relationships loser
+                                 USING relationships keep
+                                 WHERE loser.workspace_id = %s::uuid
+                                   AND loser.subject_entity_id = %s::uuid
+                                   AND keep.workspace_id = loser.workspace_id
+                                   AND keep.subject_entity_id = %s::uuid
+                                   AND keep.object_entity_id = loser.object_entity_id
+                                   AND keep.predicate = loser.predicate
+                                """,
+                                (workspace_id, loser, survivor),
+                            )
+                            await conn.execute(
+                                """
+                                DELETE FROM relationships loser
+                                 USING relationships keep
+                                 WHERE loser.workspace_id = %s::uuid
+                                   AND loser.object_entity_id = %s::uuid
+                                   AND keep.workspace_id = loser.workspace_id
+                                   AND keep.object_entity_id = %s::uuid
+                                   AND keep.subject_entity_id = loser.subject_entity_id
+                                   AND keep.predicate = loser.predicate
+                                """,
+                                (workspace_id, loser, survivor),
+                            )
+                            await conn.execute(
+                                """
+                                DELETE FROM relationships
+                                 WHERE workspace_id = %s::uuid
+                                   AND subject_entity_id = %s::uuid
+                                   AND object_entity_id = %s::uuid
+                                """,
+                                (workspace_id, loser, loser),
+                            )
                             await conn.execute(
                                 """
                                 UPDATE relationships SET subject_entity_id = %s::uuid
@@ -486,6 +534,61 @@ async def apply_proposal(workspace_id: str, proposal_path: Path) -> int:
                                  WHERE object_entity_id = %s::uuid
                                 """,
                                 (survivor, loser),
+                            )
+                            # graph_edges has UNIQUE(workspace_id, src, dst, edge_kind)
+                            # AND CHECK (src <> dst).
+                            # Before repointing, drop any edges that would either:
+                            #   - collide with an existing survivor edge, OR
+                            #   - become a self-loop after repointing.
+                            # Co-mention edges are idempotent — no info lost.
+
+                            # Drop any direct survivor <-> loser edges first
+                            # (these would become self-loops after repointing).
+                            await conn.execute(
+                                """
+                                DELETE FROM graph_edges
+                                 WHERE workspace_id = %s::uuid
+                                   AND ((src_entity_id = %s::uuid AND dst_entity_id = %s::uuid)
+                                     OR (src_entity_id = %s::uuid AND dst_entity_id = %s::uuid))
+                                """,
+                                (workspace_id, survivor, loser, loser, survivor),
+                            )
+                            await conn.execute(
+                                """
+                                DELETE FROM graph_edges loser
+                                 USING graph_edges keep
+                                 WHERE loser.workspace_id = %s::uuid
+                                   AND loser.src_entity_id = %s::uuid
+                                   AND keep.workspace_id = loser.workspace_id
+                                   AND keep.src_entity_id = %s::uuid
+                                   AND keep.dst_entity_id = loser.dst_entity_id
+                                   AND keep.edge_kind = loser.edge_kind
+                                """,
+                                (workspace_id, loser, survivor),
+                            )
+                            await conn.execute(
+                                """
+                                DELETE FROM graph_edges loser
+                                 USING graph_edges keep
+                                 WHERE loser.workspace_id = %s::uuid
+                                   AND loser.dst_entity_id = %s::uuid
+                                   AND keep.workspace_id = loser.workspace_id
+                                   AND keep.dst_entity_id = %s::uuid
+                                   AND keep.src_entity_id = loser.src_entity_id
+                                   AND keep.edge_kind = loser.edge_kind
+                                """,
+                                (workspace_id, loser, survivor),
+                            )
+                            # Also drop loser-to-loser self-edges that would
+                            # become survivor self-loops after repointing.
+                            await conn.execute(
+                                """
+                                DELETE FROM graph_edges
+                                 WHERE workspace_id = %s::uuid
+                                   AND src_entity_id = %s::uuid
+                                   AND dst_entity_id = %s::uuid
+                                """,
+                                (workspace_id, loser, loser),
                             )
                             await conn.execute(
                                 """
