@@ -714,43 +714,21 @@ async def contextualize_file_impl(file_id: str) -> None:
     # in-flight Anthropic/Gemini calls per doc. Same shape as §5.10 decision
     # #8 for the Summarizer (Semaphore at the worker, not the adapter).
     import os as _os
-    from kb.llm_batching import run_batched
     contextualizer = make_contextualizer()
     concurrency = int(_os.environ.get("KB_CONTEXTUAL_CONCURRENCY") or 8)
-    batch_size = int(_os.environ.get("KB_CONTEXTUAL_BATCH_SIZE") or 12)
+    semaphore = asyncio.Semaphore(concurrency)
 
-    chunk_texts = [ctext for _, ctext in chunk_rows]
-
-    async def _ctx_one(text: str):
-        return await contextualizer.contextualize(
-            doc_text=doc_text, chunk_text=text,
-        )
-
-    # S1 — batch N chunks per call (doc_text sent once) when the adapter
-    # supports it; run_batched falls back to per-chunk on any batch failure.
-    try:
-        if hasattr(contextualizer, "contextualize_batch"):
-            async def _ctx_batch(texts: list[str]):
-                return await contextualizer.contextualize_batch(
-                    doc_text=doc_text, chunk_texts=texts,
-                )
-            ctx_results = await run_batched(
-                chunk_texts, batch_call=_ctx_batch, item_call=_ctx_one,
-                batch_size=batch_size, max_concurrency=concurrency,
+    async def _contextualize_one(chunk_id: str, chunk_text: str):
+        async with semaphore:
+            result = await contextualizer.contextualize(
+                doc_text=doc_text, chunk_text=chunk_text,
             )
-        else:
-            sem = asyncio.Semaphore(concurrency)
+            return chunk_id, chunk_text, result
 
-            async def _bounded(text: str):
-                async with sem:
-                    return await _ctx_one(text)
-            ctx_results = list(await asyncio.gather(*(
-                _bounded(t) for t in chunk_texts
-            )))
-        results = [
-            (chunk_rows[i][0], chunk_texts[i], ctx_results[i])
-            for i in range(len(chunk_rows))
-        ]
+    try:
+        results = await asyncio.gather(*(
+            _contextualize_one(cid, ctext) for cid, ctext in chunk_rows
+        ))
     except ContextualizationError as exc:
         await _mark_failed(
             db_url, file_id, str(workspace_id),
