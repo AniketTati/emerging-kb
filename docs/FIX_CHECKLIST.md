@@ -112,7 +112,7 @@ master table below.
 | 1 | **M1** per-stage harness (+Cohere reranker) | 0 | ✅ | `0fef654`. Phase-0 baseline; query ~25s→13s. `docs/M1_STAGE_EVAL.md`, D9 |
 | 2 | **I1** classify-before-chunk + clause/row chunker | 1 | ✅ | `kb.classification` pre-chunk classifier (vocab-constrained) wired into chunk_file_impl → bank_statement chunks row-aware. 6 tests. Clause chunking still hier-backed (markdown-limited; PDF follow-up). D2 |
 | 3 | **I2** field convergence (EDC) | 1 | ◑ | converger `converge_clusters_semantic` (embed-block + judge merge) done + 5 tests; corpus-pass wiring in #19. D3 |
-| 4 | **I4** identity resolution (top-k) | 1 | ⏳ | D4 |
+| 4 | **I4** identity resolution (top-k) | 1 | ✅ | top-k via pure `select_entity_match` (KB_IDENTITY_TOPK=5); embedder-failure parks file (no silent dup entities). 6 tests. Reconcile-sweep + judge_batch → #19. D4 |
 | 5 | **Q1** conflict across independent docs | 2 | ⏳ | depends I2+I4. D8 |
 | 6 | **Q5** faithfulness (claim-decomp + span verify) | 2 | ◑ | **C2** did the relevance-gate/override slice (negative refuse 0.00→0.67, no over-refusal; `6ae2571`). **Remaining:** claim-decomposition + span verification (D6); **C2b** entity-grounded q009 case. |
 | 7 | **P2** answer confidence signal + reason | 2 | ✅ | `derive_answer_confidence` (high/med/low + reason from faithfulness+CRAG); auto-set on every ChatResult via validator → exposed on `/chat`; FE confidence badge in `AnswerCard.tsx`. 5 tests. (FE wired, not browser-verified.) D6 |
@@ -132,7 +132,7 @@ master table below.
 | 21 | **Q7** per-turn cost cap | 4 | ⏳ | |
 | 22 | **Cheap bugs** (`/tmp` dump, etc.) | 4 | ⏳ | |
 | 23 | **S1** batch per-chunk/entity LLM calls | 5 | ⏳ | #1 100k blocker |
-| 24 | **S3** `mentions_exact` trigram index | 5 | ⏳ | |
+| 24 | **S3** `mentions_exact` trigram index | 5 | ✅ | migration 0049: `CREATE EXTENSION pg_trgm` + GIN `gin_trgm_ops` on `lower(mention_text)`. Applied + verified on running DB. |
 | 25 | **S2** identity-resolution throughput | 5 | ⏳ | |
 | 26 | **I6** chain detection O(N²)→bounded | 5 | ⏳ | |
 | 27 | **I3** corpus RAPTOR incremental + auto-trigger | 5 | ⏳ | |
