@@ -73,6 +73,26 @@ uv run python scripts/run_stage_eval.py --domain construction --ids construction
 Outputs a per-question CSV + summary JSON under `eval_out/` (gitignored;
 snapshot good baselines into `docs/eval_baselines/`).
 
+## Testing cadence (how much to run per fix)
+
+Don't run all 50 after every small fix — it's slow and burns the Cohere trial
+budget (~10 rerank/min, ~1000/mo). Scale the test to the change:
+
+- **Small fix → affected queries only.** Run M1 with `--ids <the questions the
+  fix targets>` (or `--stratified` for one stratum). Fast, cheap.
+- **Spillover check (judgment).** If the change touches **shared / cross-cutting
+  code** that could move *other* queries — e.g. the orchestrator refusal gate
+  (all modes), the reranker, the generator prompt — also run the
+  plausibly-affected slice, not just the target. (Heuristic: mode-local change →
+  that mode's stratum; pipeline-wide change → broader slice.)
+- **Full 50 → after a substantial fix or a batch of small ones** (milestone):
+  confirm aggregate movement + catch regressions, then snapshot a new baseline
+  into `docs/eval_baselines/`.
+
+Worked example: **C1** (mode-Q only) → the aggregation `--ids` subset suffices.
+**C2** (refusal logic across *all* modes → real spillover risk) → full 50 was
+justified.
+
 ## Dev-loop policy (how we iterate without re-ingesting constantly)
 
 - **Query-path tasks** (most of the roadmap) need **no re-ingestion** — change

@@ -78,7 +78,10 @@ eval after each task** so you can attribute every change.
 **Operating mode:** construction only (`c0000000-…001`, 46 docs ingested);
 other 5 domains not ingested yet — deferred until construction build is done.
 Measurement-driven: re-run the M1 per-stage eval after each task and record the
-delta here. Reranker = Cohere `rerank-v3.5`.
+delta here. **Testing cadence:** small fix → only the **affected queries**
+(`--ids`), plus a spillover slice if the change is cross-cutting; **full 50 only
+after a substantial fix or a batch** (then snapshot a new baseline). See
+`docs/M1_STAGE_EVAL.md` → "Testing cadence". Reranker = Cohere `rerank-v3.5`.
 
 > **Eval is stochastic** (LLM intent/planner/rewriter + Cohere rerank vary
 > run-to-run). A ±1–2-question wobble on a stratum is **noise** — only
