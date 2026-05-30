@@ -1356,23 +1356,37 @@ async def extract_mentions_file_impl(file_id: str) -> None:
     # Use the joined contextual_text as both doc context AND chunk text. The
     # contextual prefix from 3b already gives intra-doc context; a few-chunk
     # join would help but adds cost without clear win at Wave A scale.
-    async def _extract_one(cc_id: str, cc_text: str, chunk_id: str, chunk_text: str):
-        async with semaphore:
-            try:
-                result = await extractor.extract(
-                    doc_text=cc_text, chunk_text=cc_text
-                )
-                return cc_id, chunk_id, chunk_text, result
-            except MentionExtractionError:
-                # Single-chunk failure shouldn't fail the whole file —
-                # log and return empty so other chunks proceed.
-                traceback.print_exc()
-                return cc_id, chunk_id, chunk_text, None
+    # S1 — extract mentions for N chunks per LLM call (run_batched) when the
+    # adapter supports it; falls back to per-chunk on any batch failure.
+    # Per-chunk failures degrade to None (a bad chunk must not abort the file).
+    from kb.llm_batching import run_batched as _run_batched
 
-    results = await asyncio.gather(*(
-        _extract_one(cc_id, cc_text, chunk_id, chunk_text)
-        for cc_id, cc_text, chunk_id, chunk_text in chunks
-    ))
+    async def _extract_text(cc_text: str):
+        try:
+            return await extractor.extract(doc_text=cc_text, chunk_text=cc_text)
+        except Exception:
+            traceback.print_exc()
+            return None
+
+    _cc_texts = [cc_text for (_, cc_text, _, _) in chunks]
+    if hasattr(extractor, "extract_batch"):
+        async def _extract_batch(texts: list[str]):
+            return await extractor.extract_batch(doc_text="", chunk_texts=texts)
+        _batch_size = int(os.environ.get("KB_MENTIONS_BATCH_SIZE") or 10)
+        _res_list = await _run_batched(
+            _cc_texts, batch_call=_extract_batch, item_call=_extract_text,
+            batch_size=_batch_size, max_concurrency=concurrency,
+        )
+    else:
+        async def _bounded(cc_text: str):
+            async with semaphore:
+                return await _extract_text(cc_text)
+        _res_list = list(await asyncio.gather(*(_bounded(t) for t in _cc_texts)))
+
+    results = [
+        (chunks[i][0], chunks[i][2], chunks[i][3], _res_list[i])
+        for i in range(len(chunks))
+    ]
 
     # Phase 3: atomic DB write — DELETE existing + INSERT all new in one tx.
     total_inserted = 0

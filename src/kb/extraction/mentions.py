@@ -116,6 +116,17 @@ class IdentityMentionExtractor:
             output_token_count=0,
         )
 
+    async def extract_batch(
+        self, *, doc_text: str, chunk_texts: list[str]
+    ) -> list[MentionExtractionResult]:
+        return [
+            MentionExtractionResult(
+                mentions=[], model_id="identity",
+                input_token_count=0, output_token_count=0,
+            )
+            for _ in chunk_texts
+        ]
+
 
 # ---------------------------------------------------------------------------
 # Shared helpers — JSON parsing + filtering against ONTONOTES_18
@@ -266,6 +277,78 @@ class GeminiMentionExtractor:
             input_token_count=getattr(usage, "prompt_token_count", 0) or 0,
             output_token_count=getattr(usage, "candidates_token_count", 0) or 0,
         )
+
+    async def extract_batch(
+        self, *, doc_text: str, chunk_texts: list[str]
+    ) -> list[MentionExtractionResult]:
+        """S1 — extract mentions from N chunks in ONE call. Returns a JSON
+        array of EXACTLY N `{"mentions": [...]}` objects (chunk order), each
+        parsed by the per-chunk `_parse_mentions_json`. Raises on arity/parse
+        mismatch so `run_batched` cleanly falls back to per-chunk `extract`."""
+        if not chunk_texts:
+            return []
+        model = os.environ.get("KB_MENTIONS_MODEL") or self._model
+        from google.genai import types
+
+        numbered = "\n\n".join(
+            f"[CHUNK {i + 1}]\n{t}" for i, t in enumerate(chunk_texts)
+        )
+        prompt = (
+            f"Extract named mentions from EACH of the {len(chunk_texts)} "
+            f"numbered chunks below, using ONLY the OntoNotes-18 types. "
+            f"Return ONLY a JSON array of EXACTLY {len(chunk_texts)} objects, "
+            f"in chunk order, each of the form "
+            f'{{"mentions": [{{"text": "...", "type": "ORG", "start": 0, '
+            f'"end": 7, "confidence": 0.95}}]}} — one object per chunk "'
+            f"(empty mentions list if a chunk has none).\n\n{numbered}"
+        )
+        try:
+            response = await self._client.aio.models.generate_content(
+                model=model,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    system_instruction=_SYSTEM_PROMPT,
+                    max_output_tokens=_MAX_OUTPUT_TOKENS,
+                    response_mime_type="application/json",
+                    thinking_config=types.ThinkingConfig(thinking_budget=0),
+                ),
+            )
+        except Exception as exc:
+            raise MentionExtractionError(
+                f"Gemini mention extract_batch failed: {exc}"
+            ) from exc
+
+        raw = ""
+        candidates = getattr(response, "candidates", None) or []
+        if candidates:
+            parts = getattr(getattr(candidates[0], "content", None), "parts", None) or []
+            for part in parts:
+                if getattr(part, "text", None):
+                    raw = part.text
+                    break
+        text = raw.strip()
+        if text.startswith("```"):
+            lines = text.splitlines()
+            text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
+        try:
+            arr = json.loads(text)
+        except (json.JSONDecodeError, TypeError) as exc:
+            raise MentionExtractionError(
+                f"mention batch parse failed: {exc}"
+            ) from exc
+        if not isinstance(arr, list) or len(arr) != len(chunk_texts):
+            raise MentionExtractionError(
+                f"mention batch arity "
+                f"{len(arr) if isinstance(arr, list) else '?'} "
+                f"!= {len(chunk_texts)}"
+            )
+        return [
+            MentionExtractionResult(
+                mentions=_parse_mentions_json(json.dumps(obj)),
+                model_id=model,
+            )
+            for obj in arr
+        ]
 
 
 # ---------------------------------------------------------------------------
