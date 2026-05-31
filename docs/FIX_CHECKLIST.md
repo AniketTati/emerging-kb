@@ -107,6 +107,44 @@ edits closed it:
   faithfulness-gate lever; then the two cheap UI wins (degraded_extractions in
   Needs-Review; Schema Studio "Apply changes" button).
 
+**▶▶ Q5/D6 — LLM FAITHFULNESS GATE built + wired + validated — `e49839d`,
+`3be41f4`.** ⚠️ **Premise correction:** the brief said the gate is a "no-op
+IdentityGate" — it is NOT. `make_faithfulness_gate()` already defaults
+`auto→heuristic` (changed after IdentityGate let invented entities through),
+`KB_FAITHFULNESS_GATE` is unset → the LIVE gate is **`heuristic-jaccard-v1`**.
+The real problem is the OPPOSITE of the brief: weak Jaccard token-overlap
+**under-scores grounded answers → over-refusal** (a correct "9.4%" answer scored
+**0.15**, exactly on the refuse cliff). (The stale `test_b3_unit` "auto→Identity"
+failures are the test asserting the *old* default.)
+- **D6 fix (`e49839d`)** new `LLMFaithfulnessGate`: claim-decomposition
+  (`split_sentences`) + ONE batched per-claim entailment call on a lite LLM →
+  per-claim supported→1.0/not→0.0 averaged → `verdict_from_score` (HHEM bands,
+  since entailment scores like NLI not Jaccard). Provider-neutral (injected
+  `JsonLLMClient`); fail-safe PASSES on LLM error/unparseable verdicts (never
+  refuse a good answer on a judge hiccup); refuses only real no-evidence /
+  unsupported claims. 13 unit tests (fake client).
+- **Wiring (`3be41f4`)** `KB_FAITHFULNESS_GATE=llm` → `_make_faithfulness_llm_client`
+  (provider follows `KB_PLANNER`/keys, model defaults to LITE
+  `gemini-2.5-flash-lite`, override `KB_FAITHFULNESS_MODEL`); no key → degrades
+  to heuristic. `auto` stays heuristic in code (measured rollout). 3 factory
+  tests (16 in file). b3 suite unchanged (same 4 pre-existing failures).
+- **🎯 VALIDATED on the real lite model + full in-process pipeline (ws `f2b2…`):**
+  fabricated "5.0%" vs the 9.4% evidence → **refused** (catches hallucination);
+  the correct "9.4%" answer heuristic scored 0.15 → LLM **0.5 low_confidence /
+  medium** — it SHIPS instead of hiding at the cliff. Per-claim judging is real
+  (affirms the core rate claim, docks ungrounded add-on claims like an
+  effective-date not in the cited snippet). `gemini-2.5-flash-lite` confirmed
+  valid (no errors). **Per-affected-question signal (the trustworthy kind per
+  the variance caveat) = clear win.**
+- **TO ACTIVATE LIVE:** set `KB_FAITHFULNESS_GATE=llm` + restart the native API
+  (it reads env at launch; `--reload` won't pick up a new env). **Remaining:**
+  rigorous over-refusal number = full/multi-run finance eval under llm vs
+  heuristic (E1-style; small single runs are swamped by ±2-Q variance) — then
+  decide whether to flip the code default `auto→llm` (degrades to heuristic
+  without a key, so CI stays safe). Citation-attribution (q012 sibling-source)
+  is the OTHER half of row #6, still open — the per-claim gate is the
+  groundwork (each claim verified vs its cited source).
+
 **▶ FINANCE INGEST COMPLETE (46/46 ready, ws `f0000000`).** Staged ingest
 (statements → chains → full corpus) surfaced + fixed 5 real bugs: I1 never
 wired into chunk_file_impl (`1d4b803`); schema-bootstrap races under concurrent
@@ -661,7 +699,7 @@ master table below.
 | 3 | **I2** field convergence (EDC) | 1 | ✅ | converger `converge_clusters_semantic` + `field_judge` wired as corpus pass `converge_workspace_fields_impl` (#19, `79fee41`). 5+3 tests. D3 |
 | 4 | **I4** identity resolution (top-k) | 1 | ✅ | top-k `select_entity_match` (per-doc) + post-ingest `reconcile_workspace_entities_impl` sweep on shared `merge_entity_group` (#19, `e4afbac`). 6+3 tests. D4 |
 | 5 | **Q1** conflict across independent docs | 2 | ⏳ | depends I2+I4. D8 |
-| 6 | **Q5** faithfulness (claim-decomp + span verify) | 2 | ◑ | **C2** did the relevance-gate/override slice (negative refuse 0.00→0.67, no over-refusal; `6ae2571`). **Remaining:** claim-decomposition + span verification (D6); **C2b** entity-grounded q009 case. |
+| 6 | **Q5** faithfulness (claim-decomp + span verify) | 2 | ◑ | **C2** relevance-gate/override (`6ae2571`). **D6 claim-decomp + entailment DONE** — `LLMFaithfulnessGate` on a lite LLM (`e49839d`/`3be41f4`), replaces the heuristic-Jaccard gate that was over-refusing (correct 9.4% scored 0.15→cliff; LLM→0.5 ships, catches fabricated 5.0%). Activate `KB_FAITHFULNESS_GATE=llm`. **Remaining:** full-eval over-refusal number + flip default; **citation-attribution** (q012 sibling-source); **C2b** q009. |
 | 7 | **P2** answer confidence signal + reason | 2 | ✅ | `derive_answer_confidence` (high/med/low + reason from faithfulness+CRAG); auto-set on every ChatResult via validator → exposed on `/chat`; FE confidence badge in `AnswerCard.tsx`. 5 tests. (FE wired, not browser-verified.) D6 |
 | 8 | **Citation honesty** (kill fake-cite fallback) + **P5** page-range | 2 | ✅ | **C1** grounded aggregate citations (0.00→1.00; `0079118`); **fake-citation fallback killed** (`45d7da3`); **P5** page-range (citation reports `pp. X–Y`; mechanism-tested — not construction-visible, markdown corpus). D6 |
 | 9 | **Q3** strip corpus-specific facts from generator prompt | 2 | ✅ | `1527db4`. Replaced construction-corpus few-shot facts in the generator system prompt (Acme Whitefield / Survey No. 184/2A; Deshpande Architects; Grid C→D; headcount 201/140; 8 Mar 2025) with domain-neutral schematic placeholders — NFR §3 (no domain values hardcoded). D5/NFR |
