@@ -582,20 +582,44 @@ async def chunk_file_impl(file_id: str) -> None:
                 (str(workspace_id),),
             )
 
-            # Resolve chunker config from chunker_configs (per-doc-type
-            # runtime config table, migration 0041) with fallback to
-            # built-in defaults. At chunk time `inferred_doc_type` is
-            # usually NULL (the LLM classifies later), so MIME-based
-            # routing carries us until then.
+            # Read raw_pages for this file (before chunker selection: the
+            # pre-chunk classifier below needs the doc text).
+            page_rows = await read_pages_for_chunking(conn, file_id=file_id)
+
+            # I1 — classify BEFORE chunking so doc_type-aware chunkers actually
+            # engage (bank_statement → row_per_leaf, contracts → clause).
+            # files.inferred_doc_type is NULL at chunk time, so without this we
+            # silently fall back to MIME/hierarchical routing — which on a
+            # markdown bank_statement lumps transactions into fixed-size windows
+            # instead of one chunk per row. The classifier is constrained to the
+            # router's known vocabulary; kv_tables later refines doc_type via
+            # open-vocab + frontmatter. Best-effort: any failure falls back to
+            # MIME-based routing.
+            if not inferred_doc_type and page_rows:
+                try:
+                    from kb.classification import make_doc_type_classifier
+                    from kb.domain.fields import update_file_inferred_doc_type
+                    _doc_text = "\n\n".join(t for _, t in page_rows)
+                    _classified = await make_doc_type_classifier().classify(
+                        text=_doc_text,
+                    )
+                    if _classified and _classified != "unknown":
+                        inferred_doc_type = _classified
+                        await update_file_inferred_doc_type(
+                            conn, file_id=file_id, doc_type=_classified,
+                        )
+                except Exception:  # noqa: BLE001 — classify is best-effort
+                    traceback.print_exc()
+
+            # Resolve chunker config from chunker_configs (per-doc-type runtime
+            # config table, migration 0041) with fallback to built-in defaults,
+            # using the just-classified doc_type (or MIME routing if unknown).
             chunker_config = await select_chunker(
                 conn,
                 workspace_id=str(workspace_id),
                 doc_type=inferred_doc_type,
                 mime_type=mime_type,
             )
-
-            # Read raw_pages for this file.
-            page_rows = await read_pages_for_chunking(conn, file_id=file_id)
 
     if not page_rows:
         await _mark_failed(
