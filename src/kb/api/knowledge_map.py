@@ -238,11 +238,23 @@ class KMConflict(BaseModel):
     notes: str | None
 
 
+class KMDegradedDoc(BaseModel):
+    """FIX 3 — a doc whose extraction was degraded (text-rich but produced no
+    body fields / table rows). Surfaced so a failed extraction can't hide
+    behind a healthy-looking `ready` status."""
+    file_id: str
+    file_name: str | None
+    doc_type: str | None
+    coverage: dict[str, Any]
+
+
 class KMNeedsReviewResponse(BaseModel):
     anomalies: list[KMAnomaly] = Field(default_factory=list)
     anomalies_total: int = 0
     conflicts: list[KMConflict] = Field(default_factory=list)
     conflicts_total: int = 0
+    degraded_extractions: list[KMDegradedDoc] = Field(default_factory=list)
+    degraded_extractions_total: int = 0
     emerging_fields_total: int = 0
     synonym_proposals_total: int = 0
 
@@ -326,6 +338,34 @@ async def get_needs_review(
     )
     conflicts_total = int((await cur.fetchone())[0])
 
+    # FIX 3 — degraded extractions (text-rich docs that yielded no body
+    # content). These reached `ready` but shouldn't be trusted as complete.
+    cur = await conn.execute(
+        "SELECT id::text, name, inferred_doc_type, extraction_coverage "
+        "FROM files "
+        "WHERE workspace_id = %s AND extraction_degraded "
+        "  AND lifecycle_state <> 'deleted' "
+        "ORDER BY updated_at DESC, id "
+        "LIMIT %s",
+        (workspace_id, anomaly_limit),
+    )
+    degraded_extractions: list[KMDegradedDoc] = []
+    for r in await cur.fetchall():
+        degraded_extractions.append(KMDegradedDoc(
+            file_id=str(r[0]),
+            file_name=str(r[1]) if r[1] is not None else None,
+            doc_type=str(r[2]) if r[2] is not None else None,
+            coverage=dict(r[3]) if isinstance(r[3], dict) else {},
+        ))
+
+    cur = await conn.execute(
+        "SELECT count(*) FROM files "
+        "WHERE workspace_id = %s AND extraction_degraded "
+        "  AND lifecycle_state <> 'deleted'",
+        (workspace_id,),
+    )
+    degraded_total = int((await cur.fetchone())[0])
+
     # Emerging fields — inferred_schema_fields not yet promoted.
     cur = await conn.execute(
         "SELECT count(*) FROM inferred_schema_fields "
@@ -343,6 +383,8 @@ async def get_needs_review(
         anomalies_total=anomalies_total,
         conflicts=conflicts,
         conflicts_total=conflicts_total,
+        degraded_extractions=degraded_extractions,
+        degraded_extractions_total=degraded_total,
         emerging_fields_total=emerging_total,
         synonym_proposals_total=0,
     )
