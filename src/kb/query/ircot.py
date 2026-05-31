@@ -199,11 +199,23 @@ class GeminiReformulator:
 
 
 def make_default_reformulator() -> Reformulator:
-    """KB_REFORMULATOR ∈ {identity, gemini, auto}; default auto."""
+    """KB_REFORMULATOR ∈ {identity, gemini, auto}; default auto.
+
+    Q6 fix: read `KB_GEMINI_API_KEY` — the canonical key var every other query
+    component uses (crag.py, rewriter.py). The old code read `GEMINI_API_KEY` /
+    `GOOGLE_API_KEY`, which are unset in this deploy, so `auto` silently fell
+    through to the IdentityReformulator (a no-op) and the whole escalate-before-
+    refuse IRCoT path never actually reformulated — it ran but did nothing.
+    Legacy names kept as fallbacks for compatibility.
+    """
     mode = (os.environ.get("KB_REFORMULATOR") or "auto").lower().strip()
     if mode == "identity":
         return IdentityReformulator()
-    key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    key = (
+        os.environ.get("KB_GEMINI_API_KEY")
+        or os.environ.get("GEMINI_API_KEY")
+        or os.environ.get("GOOGLE_API_KEY")
+    )
     if mode == "gemini":
         return GeminiReformulator(api_key=key)
     # auto

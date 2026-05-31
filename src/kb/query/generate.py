@@ -534,17 +534,11 @@ def _parse_result(
             actual_reason, finish_reason, len(raw or ""),
             note, (raw or "")[:500],
         )
-        # Phase F diagnostic — dump full raw output to /tmp on every
-        # parse_error so we can investigate without re-running the query.
-        # Cheap (low-volume — parse errors are <1% of traffic) and the
-        # 500-char log preview keeps cutting off the interesting bits.
-        try:
-            import time as _time
-            with open("/tmp/kb-parse-errors.log", "a") as fh:
-                fh.write(f"\n===== {_time.strftime('%Y-%m-%dT%H:%M:%S')} {actual_reason} model={model_id} finish={finish_reason} raw_len={len(raw or '')} note={note} =====\n")
-                fh.write((raw or "(no raw)") + "\n")
-        except Exception:
-            pass
+        # (Removed a Phase-F diagnostic that appended every parse_error's full
+        # raw output to a hard-coded /tmp/kb-parse-errors.log in the request
+        # path — Q-cheap-bug. The logger.warning above already carries the
+        # reason/finish/raw-preview for observability; a server writing to a
+        # fixed /tmp file per request is a left-in debug artifact.)
         return GenerationResult(
             answer=refusal_answer_for(actual_reason),
             citations=[],
