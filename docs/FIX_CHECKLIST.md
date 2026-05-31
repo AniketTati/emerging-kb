@@ -418,6 +418,10 @@ master table below.
 | 31 | **R1** retrieval recall — measure (M1) then improve | 6 | ⏳ | M1 ready; construction retrieval already strong |
 | 32 | **A1** query decomposition (agentic) | 6 | ⏳ | |
 | 33 | **E1** grow + hold-out eval | 6 | ⏳ | (variance/averaging caveat noted above) |
+| 34 | **DQ1** narrative-doc field extraction (read body, not frontmatter) | 1 | ⏳ | **NEW (data-quality audit).** 0/13 loan/10-K/treasury docs captured a key numeric term (rate/principal/revenue/EBITDA) as a structured field — doc_root holds only YAML frontmatter. The §2.2 "structured data conforming to schema" promise is half-delivered (tables strong, prose weak). Extraction must read the document BODY for schema fields on narrative doctypes. Highest-value structured-layer gap. |
+| 35 | **DQ2** identity merge + noise filter | 5 | ⏳ | **NEW.** Under-merge (`HDFC BANK`≠`HDFC`; `Apollo Hospitals`≠`…Pune`); noise entities (doc-IDs/ref-numbers/email-domains/rate-benchmarks as ORG/PRODUCT). Tune merge thresholds + add an entity-type/noise gate at mention extraction. Overlaps I4/S2. |
+| 36 | **DQ3** mention resolution coverage | 5 | ⏳ | **NEW.** Only 47% of 5877 mentions resolve to a canonical entity → half the entity graph is disconnected; weakens scoped/entity queries. |
+| 37 | **DQ4** unit_type canonicalization | 1 | ⏳ | **NEW.** `transactionlisting` vs `transaction_listing` + overlapping `*_by_category` buckets fragment the same concept → query splitting. Extend `singularize_unit_type`/normalization to merge case+underscore variants. |
 
 > **Sub-items spun off** (tracked so they're not lost):
 > - **C2b** — entity-grounded relevance for the q009-class (asked entity/premise
