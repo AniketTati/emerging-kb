@@ -144,6 +144,25 @@ master-detail modal — `listSchemas` → drill into `listSchemaVersions` (versi
 kind post/put/rollback, parent, timestamp). Verified live (auto:* → v1/post),
 no console errors. 30 FE tests green, `tsc` clean.
 
+**▶ FINANCE M1 BASELINE (first ever) — snapshot `docs/eval_baselines/finance_phase0.*`.**
+50 verified Qs, in-process orchestrator, Cohere rerank. **Headline: retrieval is
+NOT the bottleneck on finance either — the loss is generation+citation, same as
+construction.** OVERALL scor=37/50 · r@10=0.95 r@30=0.99 rerank_ret=1.00 (→ 0
+retrieval losses, 0 rerank losses) · mrr=0.78 · cite=0.78 · faith=0.57 ·
+refuse=1.00. Localisation: ok=29, **lost_generation=8**, refused_correct=4,
+unscorable=9. **All 8 generation losses had good retrieval (r@30=1.00 except one
+0.5) but cite=0** — the answer didn't ground/cite correctly. Faithfulness on
+those 8 was mostly `skipped` (the default IdentityFaithfulnessGate is a no-op →
+it can't catch wrong-but-confident answers; ties to the b3 factory-default and
+to Q5). **Refusal works on finance** (adversarial 4/4 refuse✓, refuse=1.00 —
+unlike construction's negative-refusal gap; C2's relevance gate is paying off).
+Weakest strata: **aggregation** (numeric Q-mode: r@10=0.75, cite=0.50) and
+**long-form/negative** (cite 0.50/0.00). **Architect read → prioritise:** (1) Q5
+citation/span-verification + the generator (the cite=0 generation losses, the
+"cited or it didn't happen" NFR); (2) consider defaulting the faithfulness gate
+off Identity so wrong answers get caught; (3) aggregation Q-mode quality. R1
+(retrieval) stays LOW priority — finance r@30=0.99.
+
 **▶ P1 QUERY-SIDE (core) DONE — `f51a87f`/`9ddf557`.** The query pipeline now
 reads its two highest-value thresholds through layered config instead of
 hardcoded constants: the **CRAG refuse gate** (`retrieval.crag.threshold`, the
