@@ -48,6 +48,7 @@ import {
   humanizeSchemaName, categorizeSchema, DOMAINS, VISIBLE_DOMAINS,
   relativeTime, type SchemaDomain,
 } from "@/lib/schema-helpers";
+import { SchemaCreateActions } from "./SchemaImportWizard";
 
 
 type TabKey = "catalog" | "review" | "history" | "entities";
@@ -118,19 +119,22 @@ function KnowledgeMapShell() {
               🔥 {stats.pending_review} pending
             </button>
           )}
-          <button
-            type="button"
-            onClick={() => {
-              downloadSchemaExportYaml().catch((err) => {
-                console.error("export.yaml failed", err);
-              });
-            }}
-            className="ml-auto flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md text-zinc-600 hover:text-zinc-900 hover:bg-zinc-100 cursor-pointer"
-            title="Download all active schemas as YAML"
-          >
-            <Download className="w-3.5 h-3.5" strokeWidth={1.75} />
-            Export YAML
-          </button>
+          <div className="ml-auto flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => {
+                downloadSchemaExportYaml().catch((err) => {
+                  console.error("export.yaml failed", err);
+                });
+              }}
+              className="flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md text-zinc-600 hover:text-zinc-900 hover:bg-zinc-100 cursor-pointer"
+              title="Download all active schemas as YAML"
+            >
+              <Download className="w-3.5 h-3.5" strokeWidth={1.75} />
+              Export YAML
+            </button>
+            <SchemaCreateActions onChanged={() => getKnowledgeMapStats().then(setStats).catch(() => {})} />
+          </div>
         </header>
 
         {/* Sticky tab strip */}

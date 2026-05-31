@@ -1165,6 +1165,81 @@ export async function downloadSchemaExportYaml(): Promise<void> {
   URL.revokeObjectURL(url);
 }
 
+// ---------------------------------------------------------------------------
+// Schema import — POST /schemas/import.yaml (P3). The from-scratch wizard and
+// the "load a domain schema" flow (P1b) both funnel through this one atomic
+// endpoint: the wizard builds a SchemaImportDoc in local state and POSTs it as
+// JSON (JSON is valid YAML, so the server's yaml.safe_load parses it); the
+// load-a-file flow POSTs raw YAML text. No per-row idempotency-keyed mutations.
+// ---------------------------------------------------------------------------
+
+export type SchemaImportField = {
+  name: string;
+  type?: "string" | "number" | "boolean" | "date" | "datetime";
+  description?: string;
+  required?: boolean;
+};
+
+export type SchemaImportEntity = {
+  name: string;
+  description?: string;
+  fields?: SchemaImportField[];
+};
+
+export type SchemaImportRelationship = {
+  name: string;
+  from: string;
+  to: string;
+  kind: "contains" | "part_of" | "references" | "associates" | "attribute_link";
+  cardinality?: "one_to_one" | "one_to_many" | "many_to_many";
+};
+
+export type SchemaImportSchema = {
+  name: string;
+  description?: string;
+  entities?: SchemaImportEntity[];
+  relationships?: SchemaImportRelationship[];
+};
+
+export type SchemaImportDoc = { schemas: SchemaImportSchema[] };
+
+export type SchemaImportItem = {
+  name: string;
+  schema_id: string;
+  action: "created" | "updated";
+  current_version: number;
+  entities: number;
+  fields: number;
+  relationships: number;
+};
+
+export type SchemaImportResponse = { imported: SchemaImportItem[] };
+
+/** POST a raw YAML document (paste / file upload) to the import endpoint. */
+export async function importSchemaYaml(
+  yamlText: string,
+): Promise<SchemaImportResponse> {
+  const resp = await fetch(`${KB_API_URL}/schemas/import.yaml`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-yaml", ...workspaceHeaders() },
+    body: yamlText,
+  });
+  return _handle<SchemaImportResponse>(resp);
+}
+
+/** POST a structured import doc (the wizard's local state) as JSON. The server
+ *  reads the raw body and yaml.safe_load()s it — JSON parses fine. */
+export async function importSchemaDoc(
+  doc: SchemaImportDoc,
+): Promise<SchemaImportResponse> {
+  const resp = await fetch(`${KB_API_URL}/schemas/import.yaml`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...workspaceHeaders() },
+    body: JSON.stringify(doc),
+  });
+  return _handle<SchemaImportResponse>(resp);
+}
+
 export async function postChat(
   query: string,
   opts: {
