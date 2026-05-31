@@ -93,6 +93,16 @@ async def insert_mention(
     `source_*` columns are the worker-resolved position in the ORIGINAL
     `chunks.text` — set when the resolver finds the snippet (citations
     UI uses this for exact highlighting)."""
+    # Sanitize LLM-reported confidence: the extractor occasionally emits a
+    # value outside [0,1] (e.g. a percentage like 95, or a stray >1), which
+    # violates extracted_mentions_confidence_check and would crash the whole
+    # mention insert → park the doc at mentions_extracting. Clamp to [0,1];
+    # NULL on any non-numeric value.
+    if confidence is not None:
+        try:
+            confidence = max(0.0, min(1.0, float(confidence)))
+        except (TypeError, ValueError):
+            confidence = None
     cur = await conn.execute(
         "INSERT INTO extracted_mentions "
         "(contextual_chunk_id, file_id, workspace_id, mention_text, "
