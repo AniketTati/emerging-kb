@@ -1529,9 +1529,19 @@ async def extract_mentions_file_impl(file_id: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def extract_kv_tables_file_impl(file_id: str) -> None:
+async def extract_kv_tables_file_impl(
+    file_id: str, *, force: bool = False,
+) -> None:
     """KV+Tables collapse — ONE LLM call covers L2b (classify+propose) AND
     L3 (atomic_units) for this file.
+
+    `force=True` (FIX 9 corpus re-extract): re-run KV+Tables against an
+    ALREADY `ready` file using its CACHED chunks (no re-parse/re-chunk), to
+    re-discover body fields under the current extraction rules (FIX 1/2/3/4/5).
+    In force mode this does NOT transition lifecycle or defer the downstream
+    tasks — the re-extract orchestrator calls schema-entities itself — and a
+    transient-empty re-run is non-destructive (existing fields/children are
+    preserved, the doc is just flagged degraded).
 
     Pipeline before this task: mentions_extracting (mentions written) →
     fields_extracting (this task) → entities_extracting (skipping the
@@ -1610,17 +1620,22 @@ async def extract_kv_tables_file_impl(file_id: str) -> None:
             # KV+Tables runs in the fields_extracting slot. Anything past
             # it (units_extracting / entities_extracting / ready / failed
             # / deleted) means an earlier ingest already processed this
-            # file — no-op.
-            if lifecycle_state in (
-                "units_extracting",
-                "entities_extracting",
-                "ready",
-                "failed",
-                "deleted",
-            ):
-                return
-            if lifecycle_state != "fields_extracting":
-                return
+            # file — no-op. FIX 9: force re-extract runs on a `ready` file
+            # (cached chunks); only genuinely dead files are skipped.
+            if force:
+                if lifecycle_state in ("failed", "deleted"):
+                    return
+            else:
+                if lifecycle_state in (
+                    "units_extracting",
+                    "entities_extracting",
+                    "ready",
+                    "failed",
+                    "deleted",
+                ):
+                    return
+                if lifecycle_state != "fields_extracting":
+                    return
 
             workspace_id_str = str(workspace_id)
             await conn.execute(
@@ -1838,6 +1853,31 @@ async def extract_kv_tables_file_impl(file_id: str) -> None:
             if candidate and candidate != "unknown":
                 doc_type = candidate
                 break
+
+    # FIX 9 — non-destructive force re-extract. A transient-empty re-run must
+    # NOT wipe the doc's existing proposed_fields / children (the #19 bug
+    # class). FIX 2's retry makes this rare, but if it still returns nothing,
+    # preserve existing data and just record degraded coverage, then bail
+    # (no transition, no defers).
+    if force and not payload.scalars and not any(t.rows for t in payload.tables):
+        async with open_connection(db_url) as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    "SELECT set_config('app.workspace_id', %s, true)",
+                    (workspace_id_str,),
+                )
+                await set_extraction_coverage(
+                    conn,
+                    file_id=file_id,
+                    coverage={
+                        "body_fields": 0, "frontmatter_fields": 0,
+                        "table_rows": 0, "text_rich": bool(chunks),
+                        "model_id": payload.model_id, "degraded": True,
+                        "force_reextract_empty": True,
+                    },
+                    degraded=bool(chunks),
+                )
+        return
 
     # Phase 3: atomic write across files / proposed_fields /
     # inferred_schema_fields / schema_fields / atomic_units.
@@ -2282,25 +2322,52 @@ async def extract_kv_tables_file_impl(file_id: str) -> None:
             # Lifecycle: jump straight to entities_extracting, skipping
             # the legacy units_extracting slot (the L3 plugin call no
             # longer happens — KV+Tables ate that work).
-            await transition_lifecycle(
-                conn,
-                workspace_id=workspace_id_str,
-                file_id=file_id,
-                to_state="entities_extracting",
-                event="kv_tables_extracted",
-                payload={
-                    "doc_type": doc_type,
-                    "scalar_count": n_proposed,
-                    "n_clusters": len(clusters),
-                    "promotions": promotion_count,
-                    "table_count": len(payload.tables),
-                    "row_count": total_rows,
-                    "unit_types": distinct_unit_types,
-                    "model_id": payload.model_id,
-                    "input_tokens": payload.input_token_count,
-                    "output_tokens": payload.output_token_count,
-                },
-            )
+            if force:
+                # FIX 9 — re-extract: stay `ready`, just audit. The
+                # orchestrator runs schema-entities next; downstream tasks
+                # are NOT re-deferred from here.
+                await record_lifecycle_event(
+                    conn,
+                    file_id=file_id,
+                    workspace_id=workspace_id_str,
+                    from_state="ready",
+                    to_state="ready",
+                    event="kv_tables_reextracted",
+                    payload={
+                        "doc_type": doc_type,
+                        "scalar_count": n_proposed,
+                        "row_count": total_rows,
+                        "model_id": payload.model_id,
+                    },
+                )
+            else:
+                # Lifecycle: jump straight to entities_extracting, skipping
+                # the legacy units_extracting slot (the L3 plugin call no
+                # longer happens — KV+Tables ate that work).
+                await transition_lifecycle(
+                    conn,
+                    workspace_id=workspace_id_str,
+                    file_id=file_id,
+                    to_state="entities_extracting",
+                    event="kv_tables_extracted",
+                    payload={
+                        "doc_type": doc_type,
+                        "scalar_count": n_proposed,
+                        "n_clusters": len(clusters),
+                        "promotions": promotion_count,
+                        "table_count": len(payload.tables),
+                        "row_count": total_rows,
+                        "unit_types": distinct_unit_types,
+                        "model_id": payload.model_id,
+                        "input_tokens": payload.input_token_count,
+                        "output_tokens": payload.output_token_count,
+                    },
+                )
+
+    # FIX 9 — in force re-extract the orchestrator drives schema-entities
+    # synchronously and the graph layers are already built; don't re-defer.
+    if force:
+        return
 
     # Chain extract_schema_entities_file + extract_triples_file in
     # parallel — same downstream wiring as the legacy atomic_units task.
@@ -4697,6 +4764,13 @@ async def reextract_workspace_schema_entities_impl(
     summary = {"files": len(file_ids), "reextracted": 0}
     for fid in file_ids:
         try:
+            # FIX 9 — re-run KV+Tables FIRST (open-vocab: re-discovers body
+            # fields under the current rules — per-doc storage, retry,
+            # coverage, count-based promotion, canonical names — from cached
+            # chunks), THEN schema-driven extraction (rebuilds the doc_root
+            # merging the refreshed proposed_fields + lineage). Pre-fix this
+            # only re-ran schema-entities, so new body fields were never found.
+            await extract_kv_tables_file_impl(fid, force=True)
             await extract_schema_entities_file_impl(fid, force=True)
             summary["reextracted"] += 1
         except Exception:  # noqa: BLE001 — one bad file can't block the rest
