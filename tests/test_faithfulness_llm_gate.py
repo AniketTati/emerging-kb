@@ -146,3 +146,40 @@ async def test_unparseable_verdicts_fail_safe_passes():
     r = await gate.assess("The rate is 9.4%.", ["grounding snippet"])
     assert r.verdict == "pass"
     assert "unparseable" in (r.notes or "")
+
+
+# ----- factory wiring -----
+
+
+def test_factory_llm_selector_builds_llm_gate(monkeypatch):
+    monkeypatch.setenv("KB_FAITHFULNESS_GATE", "llm")
+    monkeypatch.setenv("KB_GEMINI_API_KEY", "x")
+    monkeypatch.setenv("KB_PLANNER", "auto")
+    monkeypatch.delenv("KB_FAITHFULNESS_MODEL", raising=False)
+    from kb.query.faithfulness import make_faithfulness_gate
+    g = make_faithfulness_gate()
+    assert isinstance(g, LLMFaithfulnessGate)
+    assert "flash-lite" in g.model_id  # lite default
+
+
+def test_factory_llm_degrades_to_heuristic_without_key(monkeypatch):
+    monkeypatch.setenv("KB_FAITHFULNESS_GATE", "llm")
+    monkeypatch.delenv("KB_GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("KB_ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("KB_PLANNER", "auto")
+    from kb.query.faithfulness import (
+        HeuristicFaithfulnessGate,
+        make_faithfulness_gate,
+    )
+    g = make_faithfulness_gate()
+    assert isinstance(g, HeuristicFaithfulnessGate)
+
+
+def test_factory_faithfulness_model_override(monkeypatch):
+    monkeypatch.setenv("KB_GEMINI_API_KEY", "x")
+    monkeypatch.setenv("KB_PLANNER", "auto")
+    monkeypatch.setenv("KB_FAITHFULNESS_MODEL", "gemini-2.5-flash")
+    from kb.query.faithfulness import _make_faithfulness_llm_client
+    c = _make_faithfulness_llm_client()
+    assert c is not None
+    assert c.model_id == "gemini-2.5-flash"

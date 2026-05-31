@@ -506,6 +506,38 @@ class LLMFaithfulnessGate:
 # ---------------------------------------------------------------------------
 
 
+def _make_faithfulness_llm_client() -> JsonLLMClient | None:
+    """Build the lite JSON-LLM client for the LLM faithfulness gate.
+
+    Provider follows the same selection as the planner (KB_PLANNER / keys),
+    but the model defaults to a LITE tier — this gate runs once per answered
+    query post-generation, so latency/cost matter. Override the model via
+    KB_FAITHFULNESS_MODEL. Returns None when no provider key is available
+    (the factory then degrades to the heuristic gate)."""
+    from kb.query.llm_client import AnthropicJsonClient, GeminiJsonClient
+
+    selector = (os.environ.get("KB_PLANNER") or "auto").lower()
+    if selector == "auto":
+        if os.environ.get("KB_GEMINI_API_KEY"):
+            selector = "gemini"
+        elif os.environ.get("KB_ANTHROPIC_API_KEY"):
+            selector = "anthropic"
+        else:
+            selector = "identity"
+    model = os.environ.get("KB_FAITHFULNESS_MODEL")
+    if selector == "gemini" and os.environ.get("KB_GEMINI_API_KEY"):
+        return GeminiJsonClient(
+            api_key=os.environ["KB_GEMINI_API_KEY"],
+            model=model or "gemini-2.5-flash-lite",
+        )
+    if selector == "anthropic" and os.environ.get("KB_ANTHROPIC_API_KEY"):
+        return AnthropicJsonClient(
+            api_key=os.environ["KB_ANTHROPIC_API_KEY"],
+            model=model or "claude-haiku-4-5-20251001",
+        )
+    return None
+
+
 def make_faithfulness_gate() -> FaithfulnessGate:
     """Pick a gate based on `KB_FAITHFULNESS_GATE`.
 
@@ -517,6 +549,10 @@ def make_faithfulness_gate() -> FaithfulnessGate:
                   any cited snippet)
       hhem      → HHEMFaithfulnessGate (~600MB local model, real
                   per-sentence entailment scoring)
+      llm       → LLMFaithfulnessGate (claim-decomposition + per-claim
+                  entailment via a lite LLM, default gemini-2.5-flash-lite;
+                  set KB_FAITHFULNESS_MODEL to override). Degrades to
+                  heuristic when no LLM key is configured.
       auto      → heuristic. We used to default to identity but that
                   let the chat surface invent details about made-up
                   entities ("Zorblax-9000 contract" got a full answer
@@ -533,7 +569,14 @@ def make_faithfulness_gate() -> FaithfulnessGate:
         return HeuristicFaithfulnessGate()
     if selector == "hhem":
         return HHEMFaithfulnessGate()
+    if selector == "llm":
+        client = _make_faithfulness_llm_client()
+        if client is None:
+            # No LLM key available — degrade to the heuristic gate rather
+            # than silently disabling faithfulness checking entirely.
+            return HeuristicFaithfulnessGate()
+        return LLMFaithfulnessGate(client)
     raise ValueError(
         f"Unknown KB_FAITHFULNESS_GATE value: {selector!r} "
-        f"(expected 'identity', 'heuristic', 'hhem', or 'auto')"
+        f"(expected 'identity', 'heuristic', 'hhem', 'llm', or 'auto')"
     )
