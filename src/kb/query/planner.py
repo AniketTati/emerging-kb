@@ -165,6 +165,44 @@ def _extract_unit_types(query: str) -> tuple[str, ...]:
     return tuple(hits)
 
 
+def _normalize_unit_key(s: str) -> str:
+    """Fold a unit_type / concept term to a comparison key: lowercase,
+    strip all non-alphanumerics, drop a trailing plural 's'. So
+    'transaction_listing' / 'transactionlisting' / 'Transaction Listings'
+    all → 'transactionlisting'."""
+    base = re.sub(r"[^a-z0-9]+", "", (s or "").lower())
+    if len(base) > 3 and base.endswith("s"):
+        base = base[:-1]
+    return base
+
+
+def _resolve_unit_types(
+    requested: tuple[str, ...], known: set[str],
+) -> tuple[str, ...]:
+    """Map planner-emitted unit_type terms to the workspace's ACTUAL
+    stored unit_types, tolerating the camelCase/snake_case fragmentation
+    and singular/plural drift the corpus carries — e.g. the user term
+    'transaction' must reach stored 'transaction_listing' +
+    'transactionlisting' + 'major_transaction', not get dropped.
+
+    A stored type matches a requested term when their normalized keys are
+    equal, or (for keys ≥5 chars, to avoid 'row'⊂'borrower' noise) one
+    normalized key contains the other as a substring. Returns the matched
+    stored types (deduped, order-stable); empty when nothing matches, so
+    the caller still downgrades to H rather than filtering on a ghost type."""
+    known_norm = {k: _normalize_unit_key(k) for k in known}
+    out: list[str] = []
+    for req in requested:
+        rn = _normalize_unit_key(req)
+        if not rn:
+            continue
+        for k, kn in known_norm.items():
+            if kn == rn or (len(rn) >= 5 and rn in kn) or (len(kn) >= 5 and kn in rn):
+                if k not in out:
+                    out.append(k)
+    return tuple(out)
+
+
 # Chain-view cues for K-mode.
 _VALID_CHAIN_VIEWS = frozenset({"current_version", "all_versions", "history_only"})
 
@@ -723,9 +761,7 @@ class LLMPlanner:
                     (workspace_id,),
                 )
                 known = {r[0] for r in await cur.fetchall()}
-                kept = tuple(
-                    ut for ut in plan.unit_types if ut in known
-                )
+                kept = _resolve_unit_types(plan.unit_types, known)
                 if not kept:
                     # Drop unit_types + downgrade to H (preserve other
                     # plan fields). Annotate notes for observability.
@@ -748,11 +784,10 @@ class LLMPlanner:
                         ),
                         model_id=plan.model_id,
                     )
-                elif kept != plan.unit_types:
-                    # Some were valid — keep just those.
-                    dropped = tuple(
-                        ut for ut in plan.unit_types if ut not in known
-                    )
+                elif set(kept) != set(plan.unit_types):
+                    # Resolved the planner's terms to the workspace's
+                    # actual stored unit_types (fragmentation / plural
+                    # tolerance) — e.g. 'transaction' → the real set.
                     plan = Plan(
                         mode=plan.mode,
                         intent=plan.intent,
@@ -766,8 +801,8 @@ class LLMPlanner:
                         q_payload=plan.q_payload,
                         notes=(
                             (plan.notes + " · " if plan.notes else "")
-                            + f"unit_types_validated: dropped "
-                            + f"{list(dropped)} not in workspace"
+                            + f"unit_types_resolved: {list(plan.unit_types)} "
+                            + f"→ {list(kept)}"
                         ),
                         model_id=plan.model_id,
                     )

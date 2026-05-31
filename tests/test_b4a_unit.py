@@ -41,6 +41,7 @@ from kb.query.planner import (
     Plan,
     _infer_chain_view,
     _parse_plan_json,
+    _resolve_unit_types,
     default_mode_for_intent,
     make_planner,
 )
@@ -801,6 +802,31 @@ async def test_route_f_mode_applies_field_predicate():
     assert len(out) == 1
     assert out[0].id == "h1"
     assert out[0].metadata["mode_applied"] == "F"
+
+
+# ----- unit_type concept resolution (fragmentation tolerance) -----
+
+
+def test_resolve_unit_types_expands_fragmented_concept():
+    known = {
+        "transaction_listing", "transactionlisting", "major_transaction",
+        "wire_transfer_transaction", "message", "borrower",
+    }
+    # 'transaction' must reach BOTH spelling variants + the other kinds.
+    got = set(_resolve_unit_types(("transaction",), known))
+    assert {"transaction_listing", "transactionlisting", "major_transaction",
+            "wire_transfer_transaction"} <= got
+    # plural form resolves identically
+    assert set(_resolve_unit_types(("transactions",), known)) == got
+
+
+def test_resolve_unit_types_exact_and_no_ghost_match():
+    known = {"message", "borrower", "linked_account"}
+    assert _resolve_unit_types(("message",), known) == ("message",)
+    # 'row' must NOT substring-match 'borrower' (the >=5 guard)
+    assert _resolve_unit_types(("row",), known) == ()
+    # a concept absent from the workspace resolves to nothing → caller downgrades
+    assert _resolve_unit_types(("clause",), known) == ()
 
 
 # ----- F-mode canonical name mapping (query half of FIX 4) -----
