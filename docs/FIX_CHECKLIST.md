@@ -341,9 +341,9 @@ master table below.
 | 17 | **I7** transient-failure retry + visibility | 4 | ◑ | retry done: is_transient+with_retry in llm_batching; run_batched + parse_file_impl retry transient 429/timeout/5xx. 5 tests. Part 2 (degraded-rate visibility event) optional, not blocking. |
 | 18 | **OCR per-page escalation** | 4 | ⏳ | D1 |
 | 19 | **Q4** per-channel DB connections | 4 | ⏳ | |
-| 20 | **Q6** IRCoT: fix env-var or delete | 4 | ⏳ | |
+| 20 | **Q6** IRCoT: fix env-var or delete | 4 | ✅ | `7510cd2`. 'Fix and keep': `make_default_reformulator` read GEMINI_API_KEY/GOOGLE_API_KEY (both unset) → fell to Identity no-op; now reads canonical `KB_GEMINI_API_KEY` (matches crag/rewriter), verified → GeminiReformulator. |
 | 21 | **Q7** per-turn cost cap | 4 | ⏳ | |
-| 22 | **Cheap bugs** (`/tmp` dump, etc.) | 4 | ⏳ | |
+| 22 | **Cheap bugs** (`/tmp` dump, etc.) | 4 | ✅ | `7510cd2`. Removed the hard-coded `/tmp/kb-parse-errors.log` per-request dump in `generate.py` (logger.warning already covers it). Q6 env-var + citation-fallback (#8) were the other listed cheap bugs; OCR-escalation tracked separately as #18. |
 | 23 | **S1** batch per-chunk/entity LLM calls | 5 | ✅ | `kb/llm_batching.run_batched` + batched contextualize/mentions/triples; I2/I4 judges use the same primitive. Tests in `test_s1_batching.py`. (#1 100k blocker — cleared.) |
 | 24 | **S3** `mentions_exact` trigram index | 5 | ✅ | migration 0049: `CREATE EXTENSION pg_trgm` + GIN `gin_trgm_ops` on `lower(mention_text)`. Applied + verified on running DB. |
 | 25 | **S2** identity-resolution throughput | 5 | ⏳ | |
