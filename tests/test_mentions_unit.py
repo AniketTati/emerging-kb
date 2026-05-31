@@ -48,6 +48,27 @@ class TestNoiseGate:
     def test_keeps_real_entities(self, real):
         assert is_noise_mention_text(real, "ORG") is False
 
+    @pytest.mark.parametrize("text,mtype", [
+        ("Sonia", "PERSON"),                 # a benchmark word, but a person name
+        ("Sonia Gandhi", "PERSON"),
+        ("Prime Rate Capital Management", "ORG"),  # benchmark as prefix, real org
+        ("Boeing 747-400", "PRODUCT"),       # hyphen+digit, but a real product
+        ("COVID-19", "EVENT"),
+        ("AK-47", "PRODUCT"),
+        ("Section 80-IB", "LAW"),
+    ])
+    def test_keeps_real_entities_of_other_types(self, text, mtype):
+        # review #2/#3 — the content gate must not drop legitimate entities of
+        # types it isn't meant to police (only ORG doc-IDs / ORG+PRODUCT
+        # benchmarks are noise).
+        assert is_noise_mention_text(text, mtype) is False
+
+    def test_benchmark_still_dropped_when_dominant(self):
+        # The benchmark cases must still be caught for ORG/PRODUCT.
+        assert is_noise_mention_text("HDFC MCLR", "PRODUCT") is True
+        assert is_noise_mention_text("1Y MCLR", "ORG") is True
+        assert is_noise_mention_text("repo rate", "ORG") is True
+
     def test_numeric_temporal_types_exempt(self):
         # A DATE/MONEY value is real content, not a doc-ID — never gated.
         assert is_noise_mention_text("2024-01-15", "DATE") is False

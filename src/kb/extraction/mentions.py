@@ -151,11 +151,22 @@ _DIGIT_RUN_RE = _re.compile(r"^\d{4,}$")
 # url / email-domain markers.
 _URL_RE = _re.compile(r"(?://)|@|\b[\w-]+\.(?:com|org|net|io|co|ai|gov|edu|in)\b", _re.I)
 # rate benchmarks stored as ORG/PRODUCT (e.g. "HDFC MCLR", "1Y MCLR", "LIBOR").
-_BENCHMARK_RE = _re.compile(
-    r"\b(?:mclr|libor|sofr|euribor|sonia|eonia|repo rate|reverse repo|"
-    r"base rate|prime rate|t-bill|treasury yield)\b",
+# Matched only when the benchmark term DOMINATES the text (it is the suffix of
+# a short span), so 'HDFC MCLR' / 'repo rate' / 'LIBOR' are caught but a real
+# org like 'Prime Rate Capital Management' (benchmark as a prefix, with a
+# non-benchmark tail) is NOT. A plain substring search nuked those.
+_BENCHMARK_SUFFIX_RE = _re.compile(
+    r"(?:^|\s)(?:mclr|libor|sofr|euribor|sonia|eonia|repo rate|reverse repo|"
+    r"base rate|prime rate|t-bill|treasury yield)$",
     _re.I,
 )
+
+# Types the LLM commonly over-applies to identifiers / benchmarks. The
+# content gate is SCOPED to these (plus unknown type) so it never drops a
+# legitimately hyphenated/benchmark-worded entity of another type — a PERSON
+# 'Sonia', a PRODUCT 'Boeing 747-400'/'AK-47', an EVENT 'COVID-19'.
+_REFCODE_TYPES = frozenset({"ORG"})            # doc-IDs masquerade as ORG
+_BENCHMARK_TYPES = frozenset({"ORG", "PRODUCT"})  # rate benchmarks as ORG/PRODUCT
 
 
 # Numeric / temporal types where digit-bearing content is EXPECTED (a real
@@ -175,18 +186,28 @@ def is_noise_mention_text(text: str | None, mention_type: str | None = None) -> 
     '2024-01-15' is real content, not a doc-ID)."""
     if not text or not text.strip():
         return True
-    if mention_type and mention_type.strip().upper() in _GATE_EXEMPT_TYPES:
+    mt = mention_type.strip().upper() if mention_type else None
+    if mt in _GATE_EXEMPT_TYPES:
         return False
     t = text.strip()
-    compact = t.replace(" ", "")
-    if _REF_CODE_RE.match(compact):
-        return True
-    if _DIGIT_RUN_RE.match(compact):
-        return True
+    # URL / email-domain markers — high precision, applied to any type.
     if _URL_RE.search(t):
         return True
-    if _BENCHMARK_RE.search(t):
+    # Bare long digit run (account / reference number) — any type.
+    if _DIGIT_RUN_RE.match(t):
         return True
+    # Reference code (digit-bearing alnum with internal separators) — match the
+    # RAW text (NOT space-stripped) so a spaced multiword name keeps its space
+    # and passes, and only for unknown/ORG types so a hyphenated PRODUCT/EVENT
+    # ('Boeing 747-400', 'COVID-19', 'AK-47') is never dropped.
+    if (mt is None or mt in _REFCODE_TYPES) and _REF_CODE_RE.match(t):
+        return True
+    # Rate benchmark — only when the benchmark term dominates (suffix of a
+    # short <=3-token span) and only for unknown/ORG/PRODUCT types, so a real
+    # org/person whose name merely contains a benchmark word survives.
+    if (mt is None or mt in _BENCHMARK_TYPES) and len(t.split()) <= 3:
+        if _BENCHMARK_SUFFIX_RE.search(t):
+            return True
     return False
 
 
