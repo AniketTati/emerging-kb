@@ -134,7 +134,24 @@ new route) and ran the **native** API on :8000 via `./scripts/dev_api.sh`
 (reads `dev_env`, correct reranker). Native API + UI dev server (:3000) are the
 live stack now. `docker start knowledgebaseservice-api-1` to revert.
 
-**NEXT: P6 — FE surface failure reasons + schema version history.**
+**▶ P6 DONE (FE surfacing) — `2bcfb0a`.** (a) Failed-file reasons: FilesTable's
+expanded detail now renders WHY a file failed — `error_class` / `message` /
+collapsible traceback off the `to_state:"failed"` lifecycle payload (was a bare
+"failed" badge). Pure exported `failureReasonFrom()` + 4 vitest cases (finance
+has 0 failed docs → unit-tested rather than live; verified a *ready* file shows
+no banner). (b) Schema version view: a "Versions" header action opens a
+master-detail modal — `listSchemas` → drill into `listSchemaVersions` (version#,
+kind post/put/rollback, parent, timestamp). Verified live (auto:* → v1/post),
+no console errors. 30 FE tests green, `tsc` clean.
+
+**▶ P1b/P3/P6 PHASE COMPLETE.** UI discovery + user-schema ability delivered:
+schema import endpoint+loader+demo artifact (P3 ✅), define-from-scratch wizard +
+one-step import (P1b ◑ — "+config" bundle coupled to P1), failure-reason +
+version-history FE surfaces (P6 ✅). **Suggested NEXT (sr-architect):** the
+cheapest high-value move is now **P1 query-side config wiring** (unblocks P1b's
+"+config" and the domain-swap promise) AND/OR **reranker + M1 on finance** —
+finance has never been eval'd (`finance/queries.yaml` 52 Qs ready, zero
+baseline); native API is already up with a correct reranker env this session.
 
 ---
 
@@ -259,7 +276,7 @@ master table below.
 | 11 | **P1** wire pipeline to read layered config | 3 | ◑ | **Extraction-side DONE** (`91824f3`/`03dcdb1`/`40becc9`): identity, promotion, field-sim, doc-chain thresholds via `_resolve_threshold`→`resolve_config`, safe defaults. 4 tests. **Query-side (CRAG 0.5 etc.) + FE Settings still ⏳.** D7 |
 | 12 | **P3** committed, loadable demo-schema artifact | 3 | ✅ | D7 |
 | 13 | **P1b** define-from-scratch schema + onboarding | 3 | ◑ | `2f24a1a`. Schema-studio "New schema" 4-step wizard (entities+fields+relationships) + "Import YAML" loader, both via atomic POST /schemas/import.yaml; verified live (both create schemas end-to-end). **Remaining:** "+config" one-click bundle — coupled to P1 config wiring (row 11). D7 |
-| 14 | **P6** FE: failure reasons + schema version view | 3 | ⏳ | |
+| 14 | **P6** FE: failure reasons + schema version view | 3 | ✅ | `2bcfb0a`. (a) FilesTable expanded detail surfaces failed-file `error_class`/`message`/traceback from the failed lifecycle event (pure `failureReasonFrom`, 4 tests; no live failed files in finance). (b) "Versions" modal in Schema Studio: list schemas → drill into immutable version history (verified live, auto:* show v1/post). |
 | 15 | **P4 + F1** schema-change re-extraction loop | 3 | ⏳ | |
 | 16 | **I5** contextualization cost cap/cache | 4 | ⏳ | |
 | 17 | **I7** transient-failure retry + visibility | 4 | ◑ | retry done: is_transient+with_retry in llm_batching; run_batched + parse_file_impl retry transient 429/timeout/5xx. 5 tests. Part 2 (degraded-rate visibility event) optional, not blocking. |
