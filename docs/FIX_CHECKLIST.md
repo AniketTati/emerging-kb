@@ -144,6 +144,16 @@ master-detail modal — `listSchemas` → drill into `listSchemaVersions` (versi
 kind post/put/rollback, parent, timestamp). Verified live (auto:* → v1/post),
 no console errors. 30 FE tests green, `tsc` clean.
 
+**▶ Q-BATCH MEASURED WIN (finance, snapshot `docs/eval_baselines/finance_after_qbatch.*`).**
+Cumulative effect of this session's query fixes — CRAG best-snippet relevance
+(`7bd2073`), IRCoT env-var fix so it actually reformulates (`7510cd2`),
+auto_merge config (`8bda0fa`), Q3 neutral generator prompt (`1527db4`) — vs the
+phase0 baseline: **ok 29→32, lost_generation 8→5, cite 0.78→0.86**; adversarial
+refusal held 4/4; **3 questions fixed (q028 rare-clause, q035 aggregation, q039
+long-form), 0 regressed.** The remaining 5 generation losses are the
+citation-attribution cases needing **Q5** span/claim-verification (prefer the
+authoritative source). Net session query progress is real and regression-free.
+
 **▶ CRAG OVER-REFUSAL FIX + Q5 CITATION DIAGNOSIS (`7bd2073`).** Diagnosed the 8
 finance generation losses live: **5 were over-refusals** (gold retrieved, CRAG
 force-refused) — root cause CRAG **averaged** relevance over top-3, so one
