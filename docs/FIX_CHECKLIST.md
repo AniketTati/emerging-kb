@@ -100,7 +100,21 @@ chunks, contextual_chunks, embeddings [0 missing], per-doc RAPTOR root, mentions
 doc_root parent), corpus RAPTOR (3 nodes), 2 chains (5 members). Ingestion data
 COMPLETE + INTEGRITY-VERIFIED. (Remaining = consolidation under-merge quality,
 eval-coupled — NOT a completeness gap.)
-**NEXT: UI discovery + user-schema ability (P1b/P3/P6).**
+**▶ P3 DONE (schema import + loader + demo artifact).** Added the inverse of
+`GET /schemas/export.yaml`: `POST /schemas/import.yaml` (`5a0930c`) parses the
+export YAML (or a hand-authored equivalent) and upserts each schema's full
+subtree via `restore_subtree` (the rollback engine), bumping a version per
+touched schema — new names created, existing active names updated in place;
+relationships accepted (export omits them). Validation runs in Python first
+(field types / rel kinds / cardinalities / from-to resolvability) → clean 400,
+no txn poisoning. Plus `scripts/load_schema.py` (one-step loader) + a real
+inverse-importable `demo-corpus/domains/finance/schema.yaml` (11 entity types =
+9 doc types + Organization + Person, 67 fields, 8 relationships) (`7537ace`).
+10 tests (create / round-trip / in-place update + field-drop / 5×400 / demo-
+artifact drift guard). `kind` stays `put` (schema_versions CHECK allows only
+post/put/rollback — no migration). This unblocks P1b's one-step domain load.
+
+**NEXT: UI discovery + user-schema ability (P1b → P6).**
 
 ---
 
@@ -223,7 +237,7 @@ master table below.
 | 9 | **Q3** strip corpus-specific facts from generator prompt | 2 | ⏳ | after I1/I2/Q1. D5/NFR |
 | 10 | **Q2** collapse 13-mode facade → ~4 honest modes | 2 | ⏳ | D5 |
 | 11 | **P1** wire pipeline to read layered config | 3 | ◑ | **Extraction-side DONE** (`91824f3`/`03dcdb1`/`40becc9`): identity, promotion, field-sim, doc-chain thresholds via `_resolve_threshold`→`resolve_config`, safe defaults. 4 tests. **Query-side (CRAG 0.5 etc.) + FE Settings still ⏳.** D7 |
-| 12 | **P3** committed, loadable demo-schema artifact | 3 | ⏳ | D7 |
+| 12 | **P3** committed, loadable demo-schema artifact | 3 | ✅ | D7 |
 | 13 | **P1b** define-from-scratch schema + onboarding | 3 | ⏳ | D7 |
 | 14 | **P6** FE: failure reasons + schema version view | 3 | ⏳ | |
 | 15 | **P4 + F1** schema-change re-extraction loop | 3 | ⏳ | |
