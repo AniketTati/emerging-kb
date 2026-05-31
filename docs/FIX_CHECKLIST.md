@@ -78,7 +78,7 @@ eval after each task** so you can attribute every change.
 **▶ CURRENT FOCUS — pre-ingest WRITE-PATH BATCH (then ingest `finance` once).**
 Plan: `~/.claude/plans/lets-create-a-plan-peppy-mitten.md`. Batch ALL write-path
 changes first, then run the finance ingest ONCE (finance = most tabular domain;
-868 md table-rows). HEAD `40becc9`, tree clean, 36 ingestion tests pass.
+868 md table-rows). HEAD `e41e5cd`, tree clean, 135 batch tests pass.
 
 Ingestion-batch progress (do tasks ONE-AT-A-TIME — see
 `memory/editing-cadence-tooling`; never batch Edit+Bash, never `git stash pop`):
@@ -101,10 +101,16 @@ Ingestion-batch progress (do tasks ONE-AT-A-TIME — see
   and doc-chain title-sim (0.7/0.8, new `corrigendum_similarity_threshold`
   key) through `layered_config.resolve_config`. 4 tests. `91824f3`/`03dcdb1`/
   `40becc9`. *Query-side P1 + FE (table #11, Phase 3) still pending.*
-- ⏳ **#19** corpus-finalization pass: **expand `finalize_corpus_impl`** (I3
-  built the entry point + settle-trigger) → wire I2 converger (real
-  embedder+judge) + **cold-start re-extraction** + identity reconcile +
-  corpus RAPTOR
+- ✅ **#19** corpus-finalization pass — `finalize_corpus_impl` now runs the
+  full ordered sequence after settle: **(1) field convergence**
+  (`converge_workspace_fields_impl` + `kb.extraction.field_judge`, EDC merge,
+  injectable embed/judge) → **(2) cold-start re-extraction**
+  (`reextract_workspace_schema_entities_impl` + `extract_schema_entities_file_impl(force=True)`
+  — stays `ready`, no identity re-chain) → **(3) identity reconcile**
+  (`reconcile_workspace_entities_impl` + shared `kb.identity.merge.merge_entity_group`,
+  also now used by the dedup script) → **(4) corpus RAPTOR**. 4 slices,
+  `a4bec8d`/`79fee41`/`e4afbac`/`e41e5cd`. 13 new tests (fake embed/judge/
+  extractor); 135 batch tests green. *Live validation at the finance ingest (#20).*
 - ⏳ **#20** pre-ingest gate → ingest finance once → M1 finance baseline
 - ⏸ **I6** chain detection (deferred to scale; no-op at 46 docs)
 
@@ -147,8 +153,8 @@ master table below.
 |---|---|---|---|---|
 | 1 | **M1** per-stage harness (+Cohere reranker) | 0 | ✅ | `0fef654`. Phase-0 baseline; query ~25s→13s. `docs/M1_STAGE_EVAL.md`, D9 |
 | 2 | **I1** classify-before-chunk + clause/row chunker | 1 | ✅ | `kb.classification` pre-chunk classifier (vocab-constrained) wired into chunk_file_impl → bank_statement chunks row-aware. 6 tests. Clause chunking still hier-backed (markdown-limited; PDF follow-up). D2 |
-| 3 | **I2** field convergence (EDC) | 1 | ◑ | converger `converge_clusters_semantic` (embed-block + judge merge) done + 5 tests; corpus-pass wiring in #19. D3 |
-| 4 | **I4** identity resolution (top-k) | 1 | ✅ | top-k via pure `select_entity_match` (KB_IDENTITY_TOPK=5); embedder-failure parks file (no silent dup entities). 6 tests. Reconcile-sweep + judge_batch → #19. D4 |
+| 3 | **I2** field convergence (EDC) | 1 | ✅ | converger `converge_clusters_semantic` + `field_judge` wired as corpus pass `converge_workspace_fields_impl` (#19, `79fee41`). 5+3 tests. D3 |
+| 4 | **I4** identity resolution (top-k) | 1 | ✅ | top-k `select_entity_match` (per-doc) + post-ingest `reconcile_workspace_entities_impl` sweep on shared `merge_entity_group` (#19, `e4afbac`). 6+3 tests. D4 |
 | 5 | **Q1** conflict across independent docs | 2 | ⏳ | depends I2+I4. D8 |
 | 6 | **Q5** faithfulness (claim-decomp + span verify) | 2 | ◑ | **C2** did the relevance-gate/override slice (negative refuse 0.00→0.67, no over-refusal; `6ae2571`). **Remaining:** claim-decomposition + span verification (D6); **C2b** entity-grounded q009 case. |
 | 7 | **P2** answer confidence signal + reason | 2 | ✅ | `derive_answer_confidence` (high/med/low + reason from faithfulness+CRAG); auto-set on every ChatResult via validator → exposed on `/chat`; FE confidence badge in `AnswerCard.tsx`. 5 tests. (FE wired, not browser-verified.) D6 |
