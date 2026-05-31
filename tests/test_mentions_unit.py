@@ -63,6 +63,23 @@ class TestNoiseGate:
         # benchmarks are noise).
         assert is_noise_mention_text(text, mtype) is False
 
+    @pytest.mark.parametrize("docid,mtype", [
+        ("LN-2026-001-v1", "PRODUCT"),   # slipped the gate before (typed PRODUCT)
+        ("LN-2026-001-v2", "LAW"),       # ...and LAW
+        ("INV-2024-001", "ORG"),
+        ("REF/123/456", "WORK_OF_ART"),
+    ])
+    def test_multi_segment_docid_dropped_any_type(self, docid, mtype):
+        # review (live ingest) #3 — a 3+-segment code is a doc-ID regardless of
+        # the type the LLM assigned it.
+        assert is_noise_mention_text(docid, mtype) is True
+
+    def test_single_separator_product_kept(self):
+        # ...but a one-separator hyphenated PRODUCT/EVENT name survives.
+        assert is_noise_mention_text("Boeing 747-400", "PRODUCT") is False
+        assert is_noise_mention_text("AK-47", "PRODUCT") is False
+        assert is_noise_mention_text("COVID-19", "EVENT") is False
+
     def test_benchmark_still_dropped_when_dominant(self):
         # The benchmark cases must still be caught for ORG/PRODUCT.
         assert is_noise_mention_text("HDFC MCLR", "PRODUCT") is True

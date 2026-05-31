@@ -146,6 +146,13 @@ import re as _re
 _REF_CODE_RE = _re.compile(
     r"^(?=.*\d)[A-Za-z0-9]+(?:[\-_/#:.][A-Za-z0-9]+)+$"
 )
+# A digit-bearing code with >=2 internal separators (>=3 segments) is a
+# doc-ID / reference number regardless of entity type — 'LN-2026-001-v1',
+# 'INV-2024-001'. Gated for ALL types (a real PRODUCT/EVENT name like
+# 'Boeing 747-400'/'COVID-19'/'AK-47' has at most one separator).
+_MULTISEG_CODE_RE = _re.compile(
+    r"^(?=.*\d)[A-Za-z0-9]+(?:[\-_/#:.][A-Za-z0-9]+){2,}$"
+)
 # bare long digit run (account/reference number): 12345, 000123456.
 _DIGIT_RUN_RE = _re.compile(r"^\d{4,}$")
 # url / email-domain markers.
@@ -195,6 +202,10 @@ def is_noise_mention_text(text: str | None, mention_type: str | None = None) -> 
         return True
     # Bare long digit run (account / reference number) — any type.
     if _DIGIT_RUN_RE.match(t):
+        return True
+    # Multi-segment doc-ID (>=3 separator-joined segments) — any type, since a
+    # real product/event name has at most one separator.
+    if _MULTISEG_CODE_RE.match(t):
         return True
     # Reference code (digit-bearing alnum with internal separators) — match the
     # RAW text (NOT space-stripped) so a spaced multiword name keeps its space
