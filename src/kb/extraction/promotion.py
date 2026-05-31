@@ -208,26 +208,48 @@ async def converge_clusters_semantic(
     return merged
 
 
+# FIX 5 — count-based promotion. The design intent is "a field that repeats
+# 2–3 times across docs of a type is a real field." The old rule AND-ed an
+# 80% prevalence gate, which dominates at small N: `interest_rate_all_in` in
+# 3/6 loans (prevalence 0.50) was rejected though it genuinely repeats. The
+# new rule promotes a type-stable field seen in ≥ promote_count docs OR at
+# high prevalence (so the first doc of a type still seeds the schema), with
+# stability / value_type_confidence still gating noise.
+DEFAULT_PROMOTION_COUNT = 2
+
+
 @dataclass
 class PromotionThresholds:
     prevalence: float = 0.80
     stability: float = 0.90
     value_type_confidence: float = 0.90
     min_docs: int = DEFAULT_PROMOTION_MIN_DOCS
+    promote_count: int = DEFAULT_PROMOTION_COUNT
 
     @classmethod
     def from_env(cls) -> "PromotionThresholds":
         return cls(
             min_docs=int(os.environ.get("KB_PROMOTION_MIN_DOCS") or DEFAULT_PROMOTION_MIN_DOCS),
+            promote_count=int(
+                os.environ.get("KB_PROMOTION_COUNT") or DEFAULT_PROMOTION_COUNT
+            ),
         )
 
 
 def should_promote(cluster: FieldCluster, thresholds: PromotionThresholds) -> bool:
+    # Noise gates still apply: an absolute floor + type consistency.
+    if cluster.n_docs_observed < thresholds.min_docs:
+        return False
+    if cluster.stability < thresholds.stability:
+        return False
+    if cluster.value_type_confidence < thresholds.value_type_confidence:
+        return False
+    # Promote when the field REPEATS enough times (count-based, the designed
+    # rule) OR clears the prevalence bar (keeps first-doc schema seeding:
+    # 1/1 docs = prevalence 1.0).
     return (
-        cluster.n_docs_observed >= thresholds.min_docs
-        and cluster.prevalence >= thresholds.prevalence
-        and cluster.stability >= thresholds.stability
-        and cluster.value_type_confidence >= thresholds.value_type_confidence
+        cluster.n_docs_observed >= thresholds.promote_count
+        or cluster.prevalence >= thresholds.prevalence
     )
 
 

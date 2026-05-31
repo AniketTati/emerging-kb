@@ -186,9 +186,13 @@ def test_cluster_fields_stability_with_mixed_types():
 
 
 def test_should_promote_threshold_arithmetic():
+    # FIX 5 — count-based promotion. min_docs is the absolute floor (1),
+    # promote_count is the "repeats enough times" bar (2); prevalence is now
+    # an OR alternative (keeps first-doc seeding), not a dominating AND-gate.
     thresholds = PromotionThresholds(prevalence=0.8, stability=0.9,
-                                     value_type_confidence=0.9, min_docs=5)
-    # Passes all thresholds
+                                     value_type_confidence=0.9, min_docs=1,
+                                     promote_count=2)
+    # High prevalence (e.g. first doc of a type) → promoted.
     good = FieldCluster(
         canonical_name="vendor", description="", value_type="text",
         n_docs_observed=8, prevalence=0.95, stability=1.0,
@@ -196,21 +200,49 @@ def test_should_promote_threshold_arithmetic():
     )
     assert should_promote(good, thresholds) is True
 
-    # Prevalence too low
-    low_prev = FieldCluster(
-        canonical_name="vendor", description="", value_type="text",
-        n_docs_observed=8, prevalence=0.5, stability=1.0,
+    # THE FIX 5 WIN: low prevalence but repeats ≥ promote_count → promoted.
+    # (interest_rate_all_in in 3/6 loans, prevalence 0.50, used to be rejected.)
+    repeats_low_prev = FieldCluster(
+        canonical_name="interest_rate_all_in", description="", value_type="number",
+        n_docs_observed=3, prevalence=0.5, stability=1.0,
         value_type_confidence=1.0,
     )
-    assert should_promote(low_prev, thresholds) is False
+    assert should_promote(repeats_low_prev, thresholds) is True
 
-    # Too few docs (below min_docs=5)
-    few_docs = FieldCluster(
-        canonical_name="vendor", description="", value_type="text",
-        n_docs_observed=3, prevalence=1.0, stability=1.0,
+    # Noise: seen once, low prevalence, below promote_count → rejected.
+    one_off = FieldCluster(
+        canonical_name="random_field", description="", value_type="text",
+        n_docs_observed=1, prevalence=0.16, stability=1.0,
         value_type_confidence=1.0,
     )
-    assert should_promote(few_docs, thresholds) is False
+    assert should_promote(one_off, thresholds) is False
+
+    # Type-unstable field still gated even when it repeats.
+    unstable = FieldCluster(
+        canonical_name="amount", description="", value_type="number",
+        n_docs_observed=4, prevalence=0.5, stability=0.5,
+        value_type_confidence=0.5,
+    )
+    assert should_promote(unstable, thresholds) is False
+
+
+def test_should_promote_count_threshold_tunable():
+    # Raising promote_count makes a 2-doc field no longer auto-promote.
+    cluster = FieldCluster(
+        canonical_name="fee", description="", value_type="number",
+        n_docs_observed=2, prevalence=0.3, stability=1.0,
+        value_type_confidence=1.0,
+    )
+    assert should_promote(
+        cluster,
+        PromotionThresholds(prevalence=0.8, stability=0.9,
+                            value_type_confidence=0.9, min_docs=1, promote_count=2),
+    ) is True
+    assert should_promote(
+        cluster,
+        PromotionThresholds(prevalence=0.8, stability=0.9,
+                            value_type_confidence=0.9, min_docs=1, promote_count=3),
+    ) is False
 
 
 def test_value_type_mapping_to_schema_type():

@@ -2097,6 +2097,14 @@ async def extract_kv_tables_file_impl(file_id: str) -> None:
                 default=thresholds.value_type_confidence,
                 doc_type=doc_type,
             )
+            # FIX 5 — count-based promotion bar (seen ≥ N docs → promote).
+            thresholds.promote_count = int(await _resolve_threshold(
+                conn,
+                key="extraction.l2b.auto_promotion.promote_count",
+                workspace_id=workspace_id_str,
+                default=float(thresholds.promote_count),
+                doc_type=doc_type,
+            ))
             promotion_count = 0
             schema_entity_id: str | None = None
             for cluster in clusters:
@@ -4455,6 +4463,11 @@ async def converge_workspace_fields_impl(
                     workspace_id=workspace_id,
                     default=thresholds.value_type_confidence, doc_type=doc_type,
                 )
+                thresholds.promote_count = int(await _resolve_threshold(
+                    conn, key="extraction.l2b.auto_promotion.promote_count",
+                    workspace_id=workspace_id,
+                    default=float(thresholds.promote_count), doc_type=doc_type,
+                ))
 
                 schema_entity_id: str | None = None
                 for cluster in converged:

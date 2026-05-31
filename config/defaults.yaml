@@ -42,7 +42,12 @@ extraction:
   # L2b — emergent field discovery + auto-promotion (Phase 5b).
   l2b:
     auto_promotion:
-      # All four must be cleared to auto-promote.
+      # FIX 5 — count-based promotion. A type-stable field promotes when it
+      # is seen in >= promote_count docs (the designed "repeats 2-3 times"
+      # rule) OR clears prevalence_threshold (keeps first-doc schema seeding).
+      # stability/value_type_confidence still gate noisy fields; prevalence is
+      # no longer a dominating AND-gate.
+      promote_count: 2
       prevalence_threshold: 0.80
       stability_threshold: 0.90
       value_type_confidence: 0.90
