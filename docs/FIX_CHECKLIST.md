@@ -114,7 +114,27 @@ inverse-importable `demo-corpus/domains/finance/schema.yaml` (11 entity types =
 artifact drift guard). `kind` stays `put` (schema_versions CHECK allows only
 post/put/rollback — no migration). This unblocks P1b's one-step domain load.
 
-**NEXT: UI discovery + user-schema ability (P1b → P6).**
+**▶ P1b DONE (schema onboarding from the UI) — `2f24a1a`.** Schema Studio now
+has two header actions, both funneling through the single atomic
+`POST /schemas/import.yaml` (no per-row idempotency-keyed mutations): a 4-step
+**"New schema"** wizard (schema → entities & fields → relationships → review;
+builds a `SchemaImportDoc` and POSTs it as JSON — JSON ⊂ YAML) and an **"Import
+YAML"** loader (paste / upload a .yaml). New FE client fns `importSchemaYaml` /
+`importSchemaDoc` + types; self-contained `SchemaImportWizard.tsx` (own modal)
+leaves the 2213-line `page.tsx` untouched but for header wiring. `tsc` clean;
+3 vitest tests (26 FE green). **Verified live** against the native API (had to
+swap the stale docker API — it predated the route, 405): both flows create
+schemas end-to-end (`[created] … v2 — N entities, M fields, K rels`), no console
+errors; test schemas cleaned up after. **Remaining for full P1b done-when:** the
+"+config" one-click bundle (load schema *and* domain config in one step) — that
+half is coupled to **P1** (config wiring, row 11, query-side still pending), not
+to the schema flow.
+**⚠ Env change this session:** stopped the stale docker `…-api-1` (405 on the
+new route) and ran the **native** API on :8000 via `./scripts/dev_api.sh`
+(reads `dev_env`, correct reranker). Native API + UI dev server (:3000) are the
+live stack now. `docker start knowledgebaseservice-api-1` to revert.
+
+**NEXT: P6 — FE surface failure reasons + schema version history.**
 
 ---
 
@@ -238,7 +258,7 @@ master table below.
 | 10 | **Q2** collapse 13-mode facade → ~4 honest modes | 2 | ⏳ | D5 |
 | 11 | **P1** wire pipeline to read layered config | 3 | ◑ | **Extraction-side DONE** (`91824f3`/`03dcdb1`/`40becc9`): identity, promotion, field-sim, doc-chain thresholds via `_resolve_threshold`→`resolve_config`, safe defaults. 4 tests. **Query-side (CRAG 0.5 etc.) + FE Settings still ⏳.** D7 |
 | 12 | **P3** committed, loadable demo-schema artifact | 3 | ✅ | D7 |
-| 13 | **P1b** define-from-scratch schema + onboarding | 3 | ⏳ | D7 |
+| 13 | **P1b** define-from-scratch schema + onboarding | 3 | ◑ | `2f24a1a`. Schema-studio "New schema" 4-step wizard (entities+fields+relationships) + "Import YAML" loader, both via atomic POST /schemas/import.yaml; verified live (both create schemas end-to-end). **Remaining:** "+config" one-click bundle — coupled to P1 config wiring (row 11). D7 |
 | 14 | **P6** FE: failure reasons + schema version view | 3 | ⏳ | |
 | 15 | **P4 + F1** schema-change re-extraction loop | 3 | ⏳ | |
 | 16 | **I5** contextualization cost cap/cache | 4 | ⏳ | |
