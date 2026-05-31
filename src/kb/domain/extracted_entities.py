@@ -95,6 +95,21 @@ async def update_lineage(
     )
 
 
+async def update_extracted_entity_fields(
+    conn: Connection, *, entity_id: str, fields: dict[str, Any],
+) -> None:
+    """Overwrite an extracted_entity's `fields` jsonb. Used by the force
+    re-extract path to refresh a PRESERVED doc_root with freshly-extracted
+    per-doc fields when no new LLM parent instance was produced — so a
+    re-extract still propagates newly-discovered (non-promoted) body fields
+    to the queryable record. (Worker runs as superuser; `fields` is otherwise
+    immutable for kb_app per the 0017 GRANT.)"""
+    await conn.execute(
+        "UPDATE extracted_entities SET fields = %s::jsonb WHERE id = %s",
+        (json.dumps(fields), entity_id),
+    )
+
+
 async def update_entity_rarity(
     conn: Connection, *, entity_id: str, rarity_score: float | None,
 ) -> None:

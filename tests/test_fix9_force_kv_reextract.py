@@ -61,6 +61,18 @@ async def _child_count(db_url: str, ws: str, file_id: str) -> int:
         return (await cur.fetchone())[0]
 
 
+async def _doc_root_fields(db_url: str, ws: str, file_id: str) -> dict:
+    async with await psycopg.AsyncConnection.connect(db_url) as conn:
+        await conn.execute("SELECT set_config('app.workspace_id', %s, true)", (ws,))
+        cur = await conn.execute(
+            "SELECT fields FROM extracted_entities "
+            "WHERE file_id = %s AND unit_type IS NULL LIMIT 1",
+            (file_id,),
+        )
+        row = await cur.fetchone()
+        return row[0] if row and isinstance(row[0], dict) else {}
+
+
 async def _lifecycle_state(db_url: str, ws: str, file_id: str) -> str:
     async with await psycopg.AsyncConnection.connect(db_url) as conn:
         await conn.execute("SELECT set_config('app.workspace_id', %s, true)", (ws,))
@@ -176,3 +188,53 @@ async def test_force_reextract_with_no_tables_preserves_children(
     monkeypatch.setattr(kv_mod, "make_kv_tables_extractor", _fake_kv(no_tables))
     await extract_kv_tables_file_impl(file_id, force=True)
     assert await _child_count(db_url_superuser, workspace, file_id) == 2
+
+
+async def test_force_reextract_refreshes_doc_root_with_new_fields(
+    db_url_superuser, monkeypatch,
+):
+    """M1 — when no field is promoted (no LLM doc_root instance), a force
+    re-extract must still propagate NEWLY-discovered per-doc fields onto the
+    preserved doc_root, not leave it stale."""
+    workspace = str(uuid.uuid4())
+    file_id, _chunks, _cc = await _seed_file_at_fields_extracting(
+        db_url_superuser, workspace, label="narrative",
+    )
+    import kb.extraction.kv_tables as kv_mod
+    from kb.workers.tasks import (
+        extract_kv_tables_file_impl,
+        extract_schema_entities_file_impl,
+    )
+    monkeypatch.setenv("KB_DATABASE_URL", db_url_superuser)
+
+    # First ingest: only field_a (no tables, nothing promoted) → the doc_root
+    # is created from per-doc fields via the FIX 1/8 fallback.
+    first = KVTablesPayload(
+        doc_type="loan_agreement",
+        scalars=[KVScalar(name="field_a", value="1", value_type="number",
+                          source_chunk=0)],
+        model_id="fake",
+    )
+    monkeypatch.setattr(kv_mod, "make_kv_tables_extractor", _fake_kv(first))
+    await extract_kv_tables_file_impl(file_id)
+    await extract_schema_entities_file_impl(file_id)
+    await _set_ready(db_url_superuser, workspace, file_id)
+    root0 = await _doc_root_fields(db_url_superuser, workspace, file_id)
+    assert "field_a" in root0 and "field_b" not in root0
+
+    # Force re-extract discovers a NEW field_b (still nothing promoted).
+    second = KVTablesPayload(
+        doc_type="loan_agreement",
+        scalars=[
+            KVScalar(name="field_a", value="1", value_type="number", source_chunk=0),
+            KVScalar(name="field_b", value="9.4", value_type="number", source_chunk=0),
+        ],
+        model_id="fake",
+    )
+    monkeypatch.setattr(kv_mod, "make_kv_tables_extractor", _fake_kv(second))
+    await extract_kv_tables_file_impl(file_id, force=True)
+    await extract_schema_entities_file_impl(file_id, force=True)
+
+    root1 = await _doc_root_fields(db_url_superuser, workspace, file_id)
+    assert root1.get("field_b") == 9.4   # newly-discovered field reached doc_root
+    assert "field_a" in root1            # original preserved

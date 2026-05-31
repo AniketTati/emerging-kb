@@ -2438,6 +2438,7 @@ async def extract_schema_entities_file_impl(
         read_active_schemas_for_doctype,
         read_contextual_chunks_for_extraction,
         read_schema_entities_with_fields,
+        update_extracted_entity_fields,
         update_lineage,
     )
     from kb.domain.fields import (
@@ -2704,7 +2705,7 @@ async def extract_schema_entities_file_impl(
                 and not doc_root_instance_inserted
             ):
                 cur = await conn.execute(
-                    "SELECT id::text, schema_entity_id::text "
+                    "SELECT id::text, schema_entity_id::text, fields "
                     "FROM extracted_entities "
                     "WHERE file_id = %s AND unit_type IS NULL LIMIT 1",
                     (file_id,),
@@ -2723,8 +2724,23 @@ async def extract_schema_entities_file_impl(
                     inserted.append((eid, doc_root_entity_id))
                     total_inserted += 1
                 else:
-                    # Preserve the existing parent; make sure the lineage
-                    # pass still sees it so children FK correctly.
+                    # M1 — preserve the existing parent (keeps its richer
+                    # prior fields, the #19 guarantee) BUT refresh it with
+                    # freshly-extracted per-doc fields, so a re-extract
+                    # propagates newly-discovered non-promoted body fields to
+                    # the queryable record instead of leaving the doc_root
+                    # stale. Existing values win only for keys this run didn't
+                    # produce; fresh values override on overlap.
+                    existing_fields = (
+                        existing_root[2] if isinstance(existing_root[2], dict) else {}
+                    )
+                    merged_fields = {**existing_fields, **base_doc_root_fields}
+                    if merged_fields != existing_fields:
+                        await update_extracted_entity_fields(
+                            conn,
+                            entity_id=existing_root[0],
+                            fields=merged_fields,
+                        )
                     inserted.append((existing_root[0], existing_root[1]))
 
             # Pick up children KV+Tables already wrote so the lineage

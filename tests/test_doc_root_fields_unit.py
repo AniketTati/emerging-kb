@@ -83,6 +83,18 @@ class TestBuildDocRootFields:
     def test_empty_input(self):
         assert build_doc_root_fields([]) == {}
 
+    def test_decimal_numeric_is_coerced_to_float(self):
+        # value_numeric is a Postgres `numeric` → psycopg returns Decimal,
+        # which json.dumps can't serialize. The builder must coerce to float.
+        from decimal import Decimal
+        fields = build_doc_root_fields(
+            [_row("interest_rate", value_text="9.40", value_numeric=Decimal("9.4"))]
+        )
+        assert fields == {"interest_rate": 9.4}
+        assert isinstance(fields["interest_rate"], float)
+        import json
+        json.dumps(fields)  # must not raise
+
     def test_mixed_document(self):
         fields = build_doc_root_fields(
             [

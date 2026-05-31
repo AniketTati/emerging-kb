@@ -153,7 +153,14 @@ def build_doc_root_fields(rows: list[dict]) -> dict:
             continue
         numeric = row.get("value_numeric")
         if numeric is not None:
-            out[name] = numeric
+            # value_numeric is a Postgres `numeric` → psycopg returns it as a
+            # Decimal, which json.dumps can't serialize when this dict is
+            # written to the doc_root `fields` jsonb. Coerce to float (jsonb
+            # stores numbers as float anyway).
+            try:
+                out[name] = float(numeric)
+            except (TypeError, ValueError):
+                out[name] = numeric
             continue
         text = row.get("value_text")
         if text is None or str(text).strip() == "":
