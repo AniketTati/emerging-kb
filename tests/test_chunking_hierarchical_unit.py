@@ -114,9 +114,10 @@ def test_hierarchical_preserves_page_numbers():
 # ===========================================================================
 
 
-def test_row_per_leaf_each_row_becomes_one_leaf():
-    """Each non-empty line of input becomes a level-0 leaf chunk; the
-    file gets a single root and one or more mid groupings."""
+def test_row_per_leaf_blocks_rows_into_leaves():
+    """FIX 6 — leaves are BLOCKS of `rows_per_mid` consecutive rows (kept
+    intact), not one-per-row. 4 rows at block size 2 → 2 block leaves under
+    the root, no per-row explosion and no intermediate mid layer."""
     pages = _make_pages(
         "Date,Amount,Description\n"
         "2024-01-15,4.50,Coffee\n"
@@ -129,24 +130,30 @@ def test_row_per_leaf_each_row_becomes_one_leaf():
     mids = [c for c in chunks if c.node_level == 1]
     roots = [c for c in chunks if c.node_level == 2]
 
-    assert len(leaves) == 4  # 4 non-empty lines
     assert len(roots) == 1
-    assert len(mids) == 2     # 4 leaves / 2 rows_per_mid
+    assert len(mids) == 0           # no separate mid layer anymore
+    assert len(leaves) == 2         # 4 rows / block size 2
 
-    # Leaf texts match the original rows.
-    leaf_texts = {c.text for c in leaves}
-    assert "2024-01-15,4.50,Coffee" in leaf_texts
-    assert "2024-01-16,250.00,Rent" in leaf_texts
+    # Each block leaf keeps its rows intact (joined), never split mid-row.
+    block_texts = {c.text for c in leaves}
+    assert "Date,Amount,Description\n2024-01-15,4.50,Coffee" in block_texts
+    assert "2024-01-16,250.00,Rent\n2024-01-17,45.00,Gas" in block_texts
 
-    # Every leaf has a mid parent; every mid has the root as parent.
+    # Every block leaf is parented directly to the root.
     for leaf in leaves:
-        parent_mid = next(
-            (m for m in mids if m.parser_node_id == leaf.parent_parser_node_id),
-            None,
-        )
-        assert parent_mid is not None
-    for mid in mids:
-        assert mid.parent_parser_node_id == roots[0].parser_node_id
+        assert leaf.parent_parser_node_id == roots[0].parser_node_id
+
+
+def test_row_per_leaf_never_splits_a_row():
+    """A block boundary falls between rows, never inside one."""
+    pages = _make_pages("\n".join(f"row-{i},value-{i}" for i in range(10)))
+    chunks = chunk_pages_row_per_leaf(pages, rows_per_mid=3)
+    leaves = [c for c in chunks if c.node_level == 0]
+    assert len(leaves) == 4  # ceil(10/3)
+    # Every original row appears intact as a whole line in exactly one leaf.
+    all_lines = [ln for c in leaves for ln in c.text.split("\n")]
+    for i in range(10):
+        assert f"row-{i},value-{i}" in all_lines
 
 
 def test_row_per_leaf_raises_on_empty():

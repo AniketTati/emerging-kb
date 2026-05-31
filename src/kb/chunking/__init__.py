@@ -268,17 +268,21 @@ def chunk_pages_row_per_leaf(
     *,
     rows_per_mid: int = 20,
 ) -> list[Chunk]:
-    """For xlsx-style docs where one ROW = one logical retrievable
-    unit. Builds a 3-level tree:
+    """For xlsx-style docs where rows are the retrievable units. Builds a
+    2-level tree:
 
-      level 0 (leaves)  — each non-empty line is one chunk
-      level 1 (mids)    — groups of `rows_per_mid` sibling leaves
-                          rendered as concatenated text
+      level 0 (leaves)  — one chunk per BLOCK of `rows_per_mid` consecutive
+                          rows, kept intact (rows joined with newlines)
       level 2 (root)    — entire file as a single root chunk
 
-    Source page numbers come from the Page each row was on. Lines that
-    look like obvious header/separator rows (all caps, all dashes) get
-    pinned to the FIRST mid as a header.
+    FIX 6 — leaves are row-BLOCKS, not one-per-row. A 100-row statement
+    becomes 1 root + ceil(100/rows_per_mid) block leaves, not 100+ chunks.
+    Per-row precision now lives in the structured layer (extracted_entities
+    rows from KV+Tables), so the vector layer carries blocks, not rows. Each
+    row stays intact — a block boundary never splits a row. `rows_per_mid`
+    is the block size, tunable per doc-type via chunker_configs.
+
+    Source page numbers come from the Page each row was on.
     """
     if not pages:
         raise ChunkingError("empty raw_pages")
@@ -309,45 +313,25 @@ def chunk_pages_row_per_leaf(
     if not rows_with_page:
         raise ChunkingError("row_per_leaf found no non-empty rows")
 
-    # Build mids by grouping consecutive rows.
+    # Leaves: one per BLOCK of consecutive rows, parented to the root.
+    block_size = max(1, rows_per_mid)
     chunks: list[Chunk] = [root_chunk]
     chunk_index = 1
-    mid_buckets: list[list[tuple[str, int]]] = []
-    for i in range(0, len(rows_with_page), rows_per_mid):
-        mid_buckets.append(rows_with_page[i:i + rows_per_mid])
-
-    mid_ids: list[str] = []
-    for bucket in mid_buckets:
-        mid_text = "\n".join(r[0] for r in bucket)
-        mid_pages = sorted({r[1] for r in bucket})
-        mid_id = _stable_node_id()
-        mid_ids.append(mid_id)
+    for i in range(0, len(rows_with_page), block_size):
+        bucket = rows_with_page[i:i + block_size]
+        block_text = "\n".join(r[0] for r in bucket)
+        block_pages = sorted({r[1] for r in bucket})
         chunks.append(Chunk(
             chunk_index=chunk_index,
-            text=mid_text,
-            source_page_numbers=mid_pages,
-            token_count=_count_tokens(mid_text),
-            content_sha=_sha(mid_text),
-            node_level=1,
-            parser_node_id=mid_id,
+            text=block_text,
+            source_page_numbers=block_pages,
+            token_count=_count_tokens(block_text),
+            content_sha=_sha(block_text),
+            node_level=0,
+            parser_node_id=_stable_node_id(),
             parent_parser_node_id=root_id,
         ))
         chunk_index += 1
-
-    # Leaves: one per row, linked to its bucket's mid.
-    for bucket, mid_id in zip(mid_buckets, mid_ids, strict=True):
-        for row_text, page in bucket:
-            chunks.append(Chunk(
-                chunk_index=chunk_index,
-                text=row_text,
-                source_page_numbers=[page],
-                token_count=_count_tokens(row_text),
-                content_sha=_sha(row_text),
-                node_level=0,
-                parser_node_id=_stable_node_id(),
-                parent_parser_node_id=mid_id,
-            ))
-            chunk_index += 1
 
     return chunks
 
