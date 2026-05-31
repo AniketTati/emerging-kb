@@ -318,6 +318,31 @@ session diff (150fe8f..HEAD). Must-fix set, each tested + committed:
   #12 alias-judge cost, #13 doc_root 3-way merge precedence, + cleanup themes.
   143 tests green.
 
+**▶ LIVE INGEST VALIDATION (one-doc-at-a-time, real API+worker, Gemini) — PASSED,
++3 bugs found & fixed.** Built a purpose-built corpus (`demo-corpus/ingest-validation/`):
+a 3-doc loan chain (original + 2 amendments, explicit chain frontmatter, interest
+rate under 3 phrasings) + a cross-type invoice + the real `bank-statement.xlsx`.
+Ingested each through the full pipeline; reviewed with `scripts/review_ingest.py`.
+**Confirmed working on live data:** doc-chain linking (3-member versioned chain,
+live/superseded); cross-doc + cross-TYPE entity resolution (Acme across 3 loans +
+invoice; NorthWind across invoice + statement; **HDFC/'HDFC' short-form merge**);
+per-doc-type schema evolution + promotion gate; FIX 1 per-doc store; FIX 3
+coverage (xlsx no-frontmatter honest test); **FIX 6 block chunking on a real xlsx
+(14 txns → root + 2 block leaves)** + 14 typed `transaction` children (closes the
+real-binary xlsx E2E gap).
+**3 bugs the live run surfaced (all fixed + tested):**
+- **#1 (`27f3e35`)** percent/rate values weren't numeric (`'8.5%'` → text); `normalize_value`
+  now strips `%`/`per annum`/`p.a.` → face-value number.
+- **#2 (`631e6aa`)** the schema-driven LLM reinterprets numbers inconsistently
+  (`8.5%`→`0.085`, `₹2.2 crore`→`2.2`); doc_root merge now makes the deterministic
+  base numeric authoritative (LLM only fills keys base lacks).
+- **#3 (`c035851`)** multi-segment doc-IDs typed PRODUCT/LAW (`LN-2026-001-v1/v2`)
+  became entities; noise gate now drops ≥3-segment codes regardless of type.
+- **🎯 PROOF:** after re-extract, `interest_rate` is numeric (8.5/9.0/9.4) and an
+  `interest_rate >= 9` filter returns amendment-1 + amendment-2, excludes the
+  original — the FIX 1 headline acceptance works on live data. No doc-ID entities;
+  HDFC/Acme short forms merged. 127 tests green.
+
 **▶ ALL INGESTION-PIPELINE FIXES (1–10) DONE + verified.** Remaining is NOT
 ingestion code:
 - **Query-coupled FIX 4** (query-time field-name→canonical mapping in the
