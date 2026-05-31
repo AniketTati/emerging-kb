@@ -71,8 +71,21 @@ record so structured queries ("loans with rate>9%") work. Today they don't.
   into its doc_root record (or a per-doc fields store the query layer reads),
   instead of only persisting promoted-schema values.
 
+**Numeric typing (don't miss this).** For range filters ("rate>9%",
+"amount>1cr") to work, values must be stored **typed/numeric**, not as strings.
+`value_normalize.py` already parses messy forms (incl. lakh/crore) → a canonical
+number (used today for Q-mode aggregation via `value_numeric`). Ensure the
+per-doc store applies it so `extracted_entities.fields` carries real numbers
+(the extractor already returns `new_all_in_rate=9.4` as a number — preserve it).
+
+**The query path already exists — FIX 1+4 light it up.** `_route_f_mode`
+(`query/mode_router.py:992`) already reads `extracted_entities.fields` jsonb and
+applies `eq/ne/lt/le/gt/ge/like/in` predicates. So once fields land per-doc
+(FIX 1) under canonical names (FIX 4), structured filtering works with **no new
+query code** — the planner emits `field_filters`, F-mode evaluates them.
+
 **Acceptance.** After re-extract, every loan's doc_root record contains its rate
-(under canonical `interest_rate`); a structured filter "loans with
+(under canonical `interest_rate`, as a number); the F-mode filter "loans with
 interest_rate>9" returns the right loans.
 
 ---
@@ -363,9 +376,25 @@ re-extract from cached chunks → the field populates, no re-parse.
 **6** (chunking) → **7 → 8** (identity/lineage; 8 mostly falls out of 1) →
 **9** (re-extract corpus) → **10** (re-extract triggers) → validation.
 
+# Related findings — tracked in FIX_CHECKLIST, NOT this plan (so they're not lost)
+These came up in the same sessions but are **query-side / separate**, not part of
+the structured-extraction rebuild:
+- **Q5 citation-attribution** — the generator cites a *sibling* source that also
+  states a value instead of the canonical source (q012: right answer "9.40%",
+  wrong cited file). Needs claim/span-verification. (Checklist row #6.)
+- **Faithfulness gate is the IdentityGate (a no-op)** — `faith=skipped` on most
+  generation losses, so wrong-but-confident answers aren't caught. Candidate
+  lever: set `KB_FAITHFULNESS_GATE` off Identity (measure for over-refusal).
+  (Checklist row #11 note + the pre-existing `test_b3_unit` factory failures.)
+- **DQ2/DQ3/DQ4** map into FIX 7 (identity merge+noise) and FIX 4 (unit_type
+  canonicalization); DQ1 is FIX 1+3+4+5.
+
 # Out of scope here (separate gaps, tracked in FIX_CHECKLIST)
 - §2.5 **prompts** configurable without code (only thresholds done via P1).
 - Write-up consolidation to ≤4 pages.
+- Phase-2/4/5/6 items (Q1, Q2, Q7, I5, OCR escalation, Q4, S2/S4/S5/S6, A1, E1).
+- **Not reviewed this pass:** PII handling (the `is_pii` flag on mentions/fields
+  exists but we did not audit redaction end-to-end) — worth a separate check.
 
 # Editing discipline
 `tasks.py` is ~4k lines and rollback-prone (`memory/editing-cadence-tooling`).
