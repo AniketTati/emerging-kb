@@ -298,6 +298,26 @@ active fields (no auto_promoted filter) → declared field drives
 extract_schema_entities by its name, FIX 1 merges onto doc_root. Regression
 test locks it.
 
+**▶ MAX-EFFORT CODE REVIEW (9-angle) — correctness fixes landed.** Reviewed the
+session diff (150fe8f..HEAD). Must-fix set, each tested + committed:
+- **#1 (`8fb9ea8`)** force re-extract replaces children PER unit_type, not a
+  blanket delete (partial re-run no longer wipes unit_types it missed — data loss).
+- **#2/#3 (`b78bd68`)** mention noise gate type-scoped + dominance-based — stops
+  dropping real entities (PERSON 'Sonia', ORG 'Prime Rate Capital', PRODUCT
+  'Boeing 747-400'/'AK-47', EVENT 'COVID-19') while still dropping doc-IDs/benchmarks.
+- **#4 (`0585833`)** doc_root identified by schema_entity_id, not just
+  `unit_type IS NULL LIMIT 1` (was ambiguous with user-declared parent entities).
+- **#14 (`57c0bff`)** drop non-finite value_numeric (NaN/Inf) — LATENT ::jsonb
+  write crash for any NaN numeric.
+- **#5 + #11 (`f9c8730`)** reextract_file guarded on `ready` (no race with live
+  ingest); promote_count floored at 1 (no always-promote misconfig).
+- **Deferred (tracked):** #10 per-doc-field citations (feature, needs chunk-id
+  translation); **#6/#7/#8 FIX 10 trigger redesign** (whole-workspace blast +
+  defer-in-txn + queueing_lock lost-update → spawned task: schema→doc_type
+  association + after-commit debounced enqueue); #9 chunk auto-merge granularity,
+  #12 alias-judge cost, #13 doc_root 3-way merge precedence, + cleanup themes.
+  143 tests green.
+
 **▶ ALL INGESTION-PIPELINE FIXES (1–10) DONE + verified.** Remaining is NOT
 ingestion code:
 - **Query-coupled FIX 4** (query-time field-name→canonical mapping in the
