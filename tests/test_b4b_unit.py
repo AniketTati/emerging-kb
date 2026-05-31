@@ -681,15 +681,19 @@ def test_jsonb_agg_validates_against_catalog():
     assert ("extracted_entities", "fields") in vp.column_types
 
 
-def test_jsonb_agg_compiles_to_jsonb_extract_sql():
+def test_jsonb_numeric_agg_compiles_to_safe_guarded_cast():
     plan = parse_plan(_BASE_JSONB_PLAN)
     vp = validate(plan)
     sql, _params = compile_plan(vp, workspace_id="ws-1", row_cap=100)
-    # `(t."fields"->>'debit')::numeric` should appear in the SELECT.
-    assert (
-        '("extracted_entities"."fields"->>\'debit\')::numeric'
-        in sql
-    )
+    # Numeric jsonb casts are GUARDED: a dirty value ('USD 2.2M') must yield
+    # NULL and skip the aggregation, not abort it. So we expect a
+    # validate-then-cast CASE around the jsonb extraction — NOT a bare
+    # `(...)::numeric` that PostgreSQL would raise on.
+    assert '"extracted_entities"."fields"->>\'debit\'' in sql
+    assert "CASE WHEN replace(" in sql
+    assert "[[:space:]]" in sql            # the numeric-shape regex guard
+    assert "::numeric" in sql              # still casts, inside the guard
+    assert '\'debit\')::numeric' not in sql  # no bare, unguarded cast
     # The alias is emitted as a quoted identifier.
     assert '"total_debits"' in sql
 

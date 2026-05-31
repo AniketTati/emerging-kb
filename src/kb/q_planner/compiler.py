@@ -90,6 +90,15 @@ _SAFE_JSONB_CASTS: frozenset[str] = frozenset({
     "text", "date", "timestamptz",
 })
 
+# Numeric-family casts get a guarded emission (see `_jsonb_extract_sql`):
+# a raw `(...)::numeric` ABORTS the whole query when one row holds a dirty
+# value, so we validate-then-cast and yield NULL otherwise. All four widen
+# to numeric — SUM/AVG/MIN/MAX are identical on numeric and it sidesteps
+# `'1000.5'::integer` errors.
+_NUMERIC_JSONB_CASTS: frozenset[str] = frozenset({
+    "numeric", "integer", "bigint", "real",
+})
+
 
 def _jsonb_extract_sql(table: str, col: str, key: str, cast: str) -> str:
     """Emit one of:
@@ -105,13 +114,29 @@ def _jsonb_extract_sql(table: str, col: str, key: str, cast: str) -> str:
     if cast not in _SAFE_JSONB_CASTS:
         raise ValueError(f"jsonb cast {cast!r} not whitelisted")
     if not key:
-        # Plain column cast: `(t."value_text")::numeric`.
-        return f"({_quote_ident(table)}.{_quote_ident(col)})::{cast}"
-    safe_key = key.replace("'", "''")
-    return (
-        f"({_quote_ident(table)}.{_quote_ident(col)}->>"
-        f"'{safe_key}')::{cast}"
-    )
+        # Plain column cast: `(t."value_text")`.
+        extract = f"({_quote_ident(table)}.{_quote_ident(col)})"
+    else:
+        safe_key = key.replace("'", "''")
+        extract = (
+            f"({_quote_ident(table)}.{_quote_ident(col)}->>'{safe_key}')"
+        )
+    if cast in _NUMERIC_JSONB_CASTS:
+        # SAFE numeric cast. A raw `(...)::numeric` raises and ABORTS the
+        # whole aggregation the moment any row carries a non-numeric string
+        # ('USD 2.2M', 'n/a', '-', '') — common once a concept spans
+        # heterogeneous unit_types. Strip thousands separators, validate the
+        # shape, and yield NULL for anything else so dirty rows skip the
+        # SUM/AVG/MIN/MAX instead of killing it. POSIX classes ([[:space:]],
+        # [0-9], [.]) keep the regex backslash-free across string-literal
+        # settings.
+        cleaned = f"replace({extract}, ',', '')"
+        return (
+            f"(CASE WHEN {cleaned} ~ "
+            f"'^[[:space:]]*-?[0-9]+([.][0-9]+)?[[:space:]]*$' "
+            f"THEN {cleaned}::numeric END)"
+        )
+    return f"{extract}::{cast}"
 
 
 def _agg_projection(table: str, a: Aggregation) -> str:
