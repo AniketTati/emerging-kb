@@ -2676,23 +2676,29 @@ async def extract_schema_entities_file_impl(
                         doc_root_entity_id is not None
                         and schema_entity_id == doc_root_entity_id
                     ):
-                        # M3 — overlay only NON-EMPTY LLM values so a null/blank
-                        # promoted-field extraction can't clobber a good per-doc
-                        # value already in base_doc_root_fields.
-                        # ingest-review #2 — but KEEP the typed numeric from
-                        # base when the LLM returned a raw string for the same
-                        # key (e.g. base interest_rate=8.5 vs LLM
-                        # '8.5% per annum'), so promoted numeric fields stay
-                        # filterable instead of flipping to text.
-                        fields_to_store = dict(base_doc_root_fields)
-                        for k, v in instance.fields.items():
-                            if v in (None, ""):
-                                continue
-                            if isinstance(
-                                fields_to_store.get(k), (int, float)
-                            ) and not isinstance(v, (int, float)):
-                                continue  # base numeric wins over LLM string
-                            fields_to_store[k] = v
+                        # Doc_root field merge (FIX 1 / M3 / ingest-review #2).
+                        # base_doc_root_fields are the doc's OWN scalars run
+                        # through the deterministic value_normalize, so they're
+                        # the reliable source of typed values. The schema-driven
+                        # LLM reinterprets numbers inconsistently (it returned a
+                        # loan's "8.5%" as 0.085 and "₹2.2 crore" as 2.2), so:
+                        #   - a base NUMERIC is authoritative (it wins),
+                        #   - otherwise the LLM value fills in (incl. a number
+                        #     when base failed to normalize, or a cleaner text),
+                        #   - else fall back to the base value.
+                        llm_fields = {
+                            k: v for k, v in instance.fields.items()
+                            if v not in (None, "")
+                        }
+                        fields_to_store = {}
+                        for k in set(base_doc_root_fields) | set(llm_fields):
+                            bv = base_doc_root_fields.get(k)
+                            if isinstance(bv, (int, float)) and not isinstance(bv, bool):
+                                fields_to_store[k] = bv
+                            elif k in llm_fields:
+                                fields_to_store[k] = llm_fields[k]
+                            else:
+                                fields_to_store[k] = bv
                         doc_root_instance_inserted = True
                     eid = await insert_extracted_entity(
                         conn,
