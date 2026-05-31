@@ -95,6 +95,23 @@ class TestBuildDocRootFields:
         import json
         json.dumps(fields)  # must not raise
 
+    def test_nan_numeric_falls_back_to_text(self):
+        # A non-finite value_numeric (Decimal 'NaN') must not produce a bare
+        # NaN token that Postgres rejects on ::jsonb — fall back to value_text.
+        from decimal import Decimal
+        fields = build_doc_root_fields(
+            [_row("ratio", value_text="n/a", value_numeric=Decimal("NaN"))]
+        )
+        import json
+        json.dumps(fields)  # must not raise
+        assert fields == {"ratio": "n/a"}
+
+    def test_infinity_numeric_falls_back_to_text(self):
+        fields = build_doc_root_fields(
+            [_row("x", value_text="big", value_numeric=float("inf"))]
+        )
+        assert fields == {"x": "big"}
+
     def test_mixed_document(self):
         fields = build_doc_root_fields(
             [

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 from kb.db.pool import Connection
 
 
@@ -156,12 +158,17 @@ def build_doc_root_fields(rows: list[dict]) -> dict:
             # value_numeric is a Postgres `numeric` → psycopg returns it as a
             # Decimal, which json.dumps can't serialize when this dict is
             # written to the doc_root `fields` jsonb. Coerce to float (jsonb
-            # stores numbers as float anyway).
+            # stores numbers as float anyway). A non-finite value (Decimal
+            # 'NaN'/Infinity) would serialize to a bare NaN/Infinity token
+            # that Postgres rejects on the ::jsonb cast, so fall back to the
+            # text value for those.
             try:
-                out[name] = float(numeric)
+                f = float(numeric)
             except (TypeError, ValueError):
-                out[name] = numeric
-            continue
+                f = None
+            if f is not None and math.isfinite(f):
+                out[name] = f
+                continue
         text = row.get("value_text")
         if text is None or str(text).strip() == "":
             continue
