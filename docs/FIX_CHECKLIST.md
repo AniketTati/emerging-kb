@@ -343,6 +343,21 @@ real-binary xlsx E2E gap).
   original — the FIX 1 headline acceptance works on live data. No doc-ID entities;
   HDFC/Acme short forms merged. 127 tests green.
 
+**▶ CROSS-DOMAIN VALIDATION on FRONTMATTER-FREE PDFs (healthcare) — PASSED.**
+Built 3 real PDFs (no YAML frontmatter) for one patient across 3 doc-types (lab
+report / discharge summary / insurance EOB), sharing patient/hospital/physician
+(`demo-corpus/ingest-validation/build_healthcare.py`). Confirmed every layer on
+the honest no-metadata path: Docling parse; **classification with no frontmatter
+hint** (3 distinct doc-types); **coverage frontmatter_fields=0**, none degraded;
+FIX 6 row-blocking on a real PDF → **7 `test_result` children**; **numeric typing**
+(EOB `Rs. 1,84,500` → 184500, Indian-comma + Rs. parsed); 3 independent emergent
+schemas; **cross-TYPE entity resolution** (Rohan Mehta / Apollo Hospitals / Priya
+Sharma each → ONE entity across all 3 docs, 'Dr.' normalized); **noise gate #3**
+drops the real doc-IDs (patient_id/member_id/claim_number) from entities while
+KEEPING them as queryable fields — the layered design exactly. Linking across
+these docs is via shared entities (no explicit chain fields → no doc-chain, which
+is correct).
+
 **▶ ALL INGESTION-PIPELINE FIXES (1–10) DONE + verified.** Remaining is NOT
 ingestion code:
 - **Query-coupled FIX 4** (query-time field-name→canonical mapping in the
