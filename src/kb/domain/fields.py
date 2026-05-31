@@ -96,6 +96,27 @@ async def read_proposed_fields_for_doctype(
     return by_file
 
 
+async def read_doctypes_for_workspace(
+    conn: Connection,
+    *,
+    workspace_id: str,
+) -> list[str]:
+    """Distinct, real inferred_doc_types present in the workspace (excludes
+    NULL / 'unknown' / terminal-deleted/failed files). Used by the
+    corpus-finalization field-convergence pass to iterate per doc_type."""
+    cur = await conn.execute(
+        "SELECT DISTINCT inferred_doc_type FROM files "
+        "WHERE workspace_id = %s "
+        "  AND inferred_doc_type IS NOT NULL "
+        "  AND inferred_doc_type <> 'unknown' "
+        "  AND lifecycle_state NOT IN ('deleted','failed') "
+        "ORDER BY inferred_doc_type",
+        (workspace_id,),
+    )
+    rows = await cur.fetchall()
+    return [r[0] for r in rows]
+
+
 async def count_docs_of_doctype(
     conn: Connection,
     *,

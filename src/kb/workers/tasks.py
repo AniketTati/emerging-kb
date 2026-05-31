@@ -4111,6 +4111,178 @@ async def raptor_build_corpus(workspace_id: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# #19 — corpus-finalization passes (run by finalize_corpus_impl, in order)
+# ---------------------------------------------------------------------------
+
+
+async def converge_workspace_fields_impl(
+    *,
+    workspace_id: str,
+    embed_fn=None,
+    judge_fn=None,
+) -> dict:
+    """#19 / I2 — corpus field-convergence pass.
+
+    After per-doc ingest settles, re-cluster `proposed_fields` across ALL docs
+    of each doc_type and run EDC convergence (embedding-similarity blocking +
+    LLM field-merge judge) so variant field names (e.g. `total_cost` vs
+    `total_amount`) collapse to one canonical `inferred_schema_fields` row,
+    then auto-promote the converged clusters. Per-doc `extract_kv_tables`
+    produces a partial/unstable schema as docs arrive (clusters shift); this
+    is the stable corpus-wide pass the plan (item B) calls for.
+
+    `embed_fn(list[str]) -> list[list[float]]` and `judge_fn(a, b) -> bool`
+    are injectable for tests; they default to the real Gemini embedder + the
+    field-merge judge. Returns a summary dict for observability. Each doc_type
+    is its own transaction so a failure on one doesn't roll back the others.
+    """
+    from kb.config import get_settings
+    from kb.domain.fields import (
+        count_docs_of_doctype,
+        mark_inferred_field_promoted,
+        read_doctypes_for_workspace,
+        read_proposed_fields_for_doctype,
+        upsert_inferred_schema_field,
+    )
+    from kb.extraction.field_judge import make_field_merge_judge
+    from kb.extraction.promotion import (
+        PromotionThresholds,
+        cluster_fields_for_doctype,
+        converge_clusters_semantic,
+        ensure_auto_schema_entity,
+        promote_field,
+        should_promote,
+    )
+
+    settings = get_settings()
+    db_url = settings.database_url
+
+    # Default to the real embedder + field-merge judge; tests inject fakes.
+    _embed = embed_fn
+    if _embed is None:
+        embedder = make_embedder()
+
+        async def _embed(texts):
+            results = await embedder.embed_batch(texts)
+            return [list(r.vector) for r in results]
+
+    _judge = judge_fn
+    if _judge is None:
+        judge = make_field_merge_judge()
+
+        async def _judge(a, b):
+            return await judge.same_field(
+                name_a=a.canonical_name, desc_a=a.description, type_a=a.value_type,
+                name_b=b.canonical_name, desc_b=b.description, type_b=b.value_type,
+            )
+
+    summary = {
+        "doc_types": 0, "clusters_in": 0, "clusters_out": 0, "promoted": 0,
+    }
+
+    async with open_connection(db_url) as conn:
+        await conn.execute(
+            "SELECT set_config('app.workspace_id', %s, true)", (workspace_id,),
+        )
+        doctypes = await read_doctypes_for_workspace(conn, workspace_id=workspace_id)
+
+    for doc_type in doctypes:
+        async with open_connection(db_url) as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    "SELECT set_config('app.workspace_id', %s, true)",
+                    (workspace_id,),
+                )
+                proposed_per_doc = await read_proposed_fields_for_doctype(
+                    conn, workspace_id=workspace_id, inferred_doc_type=doc_type,
+                )
+                n_docs = await count_docs_of_doctype(
+                    conn, workspace_id=workspace_id, inferred_doc_type=doc_type,
+                )
+                clusters = cluster_fields_for_doctype(
+                    proposed_per_doc=proposed_per_doc, total_docs_of_type=n_docs,
+                )
+                if not clusters:
+                    continue
+                summary["clusters_in"] += len(clusters)
+
+                # The NEW corpus-level step: merge same-meaning field clusters.
+                # Reuses the field-name similarity gate (== vocabulary key).
+                sim_threshold = await _resolve_threshold(
+                    conn,
+                    key="extraction.l2b.vocabulary.similarity_threshold",
+                    workspace_id=workspace_id,
+                    default=0.86,
+                    doc_type=doc_type,
+                )
+                try:
+                    converged = await converge_clusters_semantic(
+                        clusters, embed_fn=_embed, judge_fn=_judge,
+                        sim_threshold=sim_threshold,
+                    )
+                except Exception:  # noqa: BLE001 — convergence is best-effort
+                    traceback.print_exc()
+                    converged = clusters
+                summary["clusters_out"] += len(converged)
+
+                # Persist converged clusters + auto-promote (mirrors the
+                # per-doc L2b block, with config-resolved thresholds).
+                thresholds = PromotionThresholds.from_env()
+                thresholds.prevalence = await _resolve_threshold(
+                    conn, key="extraction.l2b.auto_promotion.prevalence_threshold",
+                    workspace_id=workspace_id, default=thresholds.prevalence,
+                    doc_type=doc_type,
+                )
+                thresholds.stability = await _resolve_threshold(
+                    conn, key="extraction.l2b.auto_promotion.stability_threshold",
+                    workspace_id=workspace_id, default=thresholds.stability,
+                    doc_type=doc_type,
+                )
+                thresholds.value_type_confidence = await _resolve_threshold(
+                    conn, key="extraction.l2b.auto_promotion.value_type_confidence",
+                    workspace_id=workspace_id,
+                    default=thresholds.value_type_confidence, doc_type=doc_type,
+                )
+
+                schema_entity_id: str | None = None
+                for cluster in converged:
+                    inferred_id = await upsert_inferred_schema_field(
+                        conn,
+                        workspace_id=workspace_id,
+                        inferred_doc_type=doc_type,
+                        canonical_name=cluster.canonical_name,
+                        description=cluster.description,
+                        value_type=cluster.value_type,
+                        n_docs_observed=cluster.n_docs_observed,
+                        prevalence=cluster.prevalence,
+                        stability=cluster.stability,
+                        value_type_confidence=cluster.value_type_confidence,
+                    )
+                    if should_promote(cluster, thresholds):
+                        if schema_entity_id is None:
+                            _, schema_entity_id = await ensure_auto_schema_entity(
+                                conn, workspace_id=workspace_id, doc_type=doc_type,
+                            )
+                        schema_field_id = await promote_field(
+                            conn,
+                            workspace_id=workspace_id,
+                            schema_entity_id=schema_entity_id,
+                            canonical_name=cluster.canonical_name,
+                            description=cluster.description,
+                            value_type=cluster.value_type,
+                        )
+                        await mark_inferred_field_promoted(
+                            conn,
+                            inferred_field_id=inferred_id,
+                            promoted_schema_field_id=schema_field_id,
+                        )
+                        summary["promoted"] += 1
+        summary["doc_types"] += 1
+
+    return summary
+
+
+# ---------------------------------------------------------------------------
 # I3 — corpus-finalization phase (auto-trigger after per-doc ingest settles)
 # ---------------------------------------------------------------------------
 
@@ -4152,6 +4324,20 @@ async def finalize_corpus_impl(workspace_id: str) -> None:
         # same — see test_raptor_build_corpus_atomic_rebuild_replaces_old_rows.)
         return
 
+    # #19 — corpus-finalization sequence (in order). Each step is best-effort
+    # so one failing stage never blocks the rest of finalization.
+    # (1) Field convergence — collapse variant field names to one canonical
+    #     schema across all docs of each doc_type.
+    try:
+        await converge_workspace_fields_impl(workspace_id=workspace_id)
+    except Exception:  # noqa: BLE001
+        traceback.print_exc()
+
+    # (2) cold-start schema-entity re-extraction and (3) identity reconcile
+    #     are wired in subsequent #19 slices.
+
+    # (4) Corpus RAPTOR — heterogeneous summary tree over the (now stable)
+    #     per-doc roots.
     await raptor_build_corpus_impl(workspace_id=workspace_id)
 
 
