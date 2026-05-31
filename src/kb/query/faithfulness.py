@@ -33,10 +33,13 @@ Verdict bands (Design 7 §"two-judge" sketch + architecture §9 Moment 3):
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Protocol
+
+from kb.query.llm_client import JsonLLMClient, LLMCallError
 
 
 # ---------------------------------------------------------------------------
@@ -360,6 +363,141 @@ class HHEMFaithfulnessGate:
             score=overall,
             per_claim_scores=per,
             model_id=self.MODEL_ID,
+        )
+
+
+# ---------------------------------------------------------------------------
+# LLMFaithfulnessGate — claim-decomposition + per-claim entailment (D6)
+# ---------------------------------------------------------------------------
+
+
+_LLM_FAITHFULNESS_SYSTEM_PROMPT = (
+    "You are a strict faithfulness judge for a knowledge-base answer. You "
+    "are given CONTEXT snippets — the ONLY evidence the answer is allowed "
+    "to use — and a numbered list of CLAIMS taken from the answer. For "
+    "each claim decide whether it is SUPPORTED: a reader could verify the "
+    "claim from the context snippets alone. A claim that asserts a fact "
+    "absent from the context is NOT supported, even if it is plausibly "
+    "true. A claim whose number/date/name CONTRADICTS the context is NOT "
+    "supported. Pure framing sentences with no factual content (e.g. "
+    "'Here is what I found.') count as supported.\n\n"
+    "Return STRICTLY a JSON object: "
+    "{\"verdicts\": [{\"claim\": <int 1-based>, \"supported\": <bool>}]} "
+    "— exactly one entry per claim, in order. No prose."
+)
+
+
+def _build_faithfulness_user_prompt(
+    claims: list[str], snippets: list[str],
+) -> str:
+    ctx = "\n".join(f"[S{i + 1}] {s}" for i, s in enumerate(snippets))
+    cl = "\n".join(f"{i + 1}. {c}" for i, c in enumerate(claims))
+    return f"CONTEXT:\n{ctx}\n\nCLAIMS:\n{cl}\n\nReturn JSON only."
+
+
+def _parse_faithfulness_verdicts(raw: str, n_claims: int) -> list[float] | None:
+    """Parse the judge JSON into a per-claim [1.0|0.0] list aligned to the
+    `n_claims` claims. Returns None when the response is unusable so the
+    caller can fail-safe pass — never raises.
+
+    A claim the judge omitted defaults to SUPPORTED (1.0): we don't punish
+    a grounded answer for a judge omission, matching the gate ladder's
+    fail-safe posture (Identity/HHEM also pass on degradation)."""
+    text = (raw or "").strip()
+    if text.startswith("```"):
+        lines = text.splitlines()[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        text = "\n".join(lines)
+    try:
+        data = json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    verdicts = data.get("verdicts") if isinstance(data, dict) else data
+    if not isinstance(verdicts, list) or not verdicts:
+        return None
+    by_idx: dict[int, bool] = {}
+    for j, item in enumerate(verdicts):
+        if not isinstance(item, dict):
+            continue
+        idx = item.get("claim")
+        if not isinstance(idx, int) or isinstance(idx, bool):
+            idx = j + 1  # positional fallback when the judge drops the index
+        by_idx[idx] = bool(item.get("supported"))
+    if not by_idx:
+        return None
+    return [1.0 if by_idx.get(i + 1, True) else 0.0 for i in range(n_claims)]
+
+
+class LLMFaithfulnessGate:
+    """Claim-decomposition + per-claim entailment via a (lite) LLM — the
+    D6 deliverable that replaces the Jaccard heuristic's weak token-overlap
+    signal, which under-scores legitimately-grounded paraphrased/numeric
+    answers (e.g. a correct '9.4%' answer scored 0.15, on the refuse cliff).
+
+    Decomposes the answer into atomic claims (sentences) and asks the LLM —
+    in ONE batched call — whether each claim is supported by the cited
+    snippets. Per-claim supported→1.0 / not→0.0, averaged → overall score →
+    `verdict_from_score` on the HHEM-calibrated bands (entailment scores
+    like NLI, not Jaccard, so the 0.80/0.50 thresholds apply).
+
+    Provider-neutral: takes any `JsonLLMClient`. Runs once per answered
+    query post-generation, so a lite model is the intended fit. On any LLM
+    transport/shape failure it fail-safe PASSES (never refuse a good answer
+    because the judge hiccupped) — same rationale as the HHEM gate."""
+
+    def __init__(self, llm: JsonLLMClient) -> None:
+        self._llm = llm
+        self.model_id = f"llm-faithfulness:{getattr(llm, 'model_id', '') or '?'}"
+
+    async def assess(
+        self,
+        answer: str,
+        citation_snippets: Iterable[str],
+        *,
+        model_id_hint: str = "",
+    ) -> FaithfulnessResult:
+        claims = split_sentences(answer)
+        if not claims:
+            return FaithfulnessResult(
+                verdict="skipped", score=0.0,
+                notes="empty answer", model_id=self.model_id,
+            )
+        snippets = [s for s in (citation_snippets or []) if (s or "").strip()]
+        if not snippets:
+            # No evidence to ground against — refuse (architecture §6 step 9).
+            return FaithfulnessResult(
+                verdict="refused", score=0.0,
+                per_claim_scores=tuple(0.0 for _ in claims),
+                notes="no citation snippets to ground against",
+                model_id=self.model_id,
+            )
+        try:
+            raw = await self._llm.generate_json(
+                user=_build_faithfulness_user_prompt(claims, snippets),
+                system=_LLM_FAITHFULNESS_SYSTEM_PROMPT,
+                max_tokens=512,
+            )
+        except LLMCallError as exc:
+            return FaithfulnessResult(
+                verdict="pass", score=1.0,
+                notes=f"llm gate unavailable: {exc}",
+                model_id=self.model_id,
+            )
+        per = _parse_faithfulness_verdicts(raw, len(claims))
+        if per is None:
+            # Unusable judge output — fail-safe pass with a note.
+            return FaithfulnessResult(
+                verdict="pass", score=1.0,
+                notes="llm gate unparseable verdicts",
+                model_id=self.model_id,
+            )
+        overall = sum(per) / max(1, len(per))
+        return FaithfulnessResult(
+            verdict=verdict_from_score(overall),
+            score=overall,
+            per_claim_scores=tuple(per),
+            model_id=self.model_id,
         )
 
 
