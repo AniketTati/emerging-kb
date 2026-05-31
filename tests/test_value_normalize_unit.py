@@ -182,3 +182,24 @@ class TestRejects:
 
     def test_free_text(self):
         assert normalize_value("subject to court approval") is None
+
+
+class TestPercentRates:
+    def test_bare_percent(self):
+        assert normalize_value("8.5%").numeric == pytest.approx(8.5)
+
+    def test_percent_per_annum(self):
+        assert normalize_value("9.4% per annum").numeric == pytest.approx(9.4)
+
+    def test_percent_pa(self):
+        assert normalize_value("7.25% p.a.").numeric == pytest.approx(7.25)
+
+    def test_integer_percent(self):
+        assert normalize_value("18%").numeric == 18
+
+    def test_percent_not_divided(self):
+        # A rate is kept as its face value (9.4), not 0.094, so "rate > 9" works.
+        assert normalize_value("9.4%").numeric > 9
+
+    def test_percent_with_free_text_rejected(self):
+        assert normalize_value("50% off the seasonal catalogue") is None

@@ -157,6 +157,16 @@ def _parse_numeric_body(s: str) -> float | None:
     return -v if is_neg and v >= 0 else v
 
 
+def _strip_percent(s: str) -> str:
+    """Strip a trailing percent sign + optional rate qualifier so a rate
+    string parses to its numeric value. '8.5%' → '8.5', '9.4% per annum' →
+    '9.4', '7.25% p.a.' → '7.25'. Leaves non-percent input unchanged."""
+    m = re.match(
+        r"^\s*(.+?)\s*%\s*(?:p\.?\s*a\.?|per\s+annum)?\s*$", s, re.I,
+    )
+    return m.group(1).strip() if m else s
+
+
 def normalize_value(value_text: str | None) -> NormalizedValue | None:
     """Parse a string into (numeric, currency, raw). Returns None when
     the input clearly isn't a number (e.g. names, dates, free text)."""
@@ -171,6 +181,12 @@ def normalize_value(value_text: str | None) -> NormalizedValue | None:
     # Quick gate: must contain at least one digit.
     if not any(c.isdigit() for c in s):
         return None
+
+    # Strip a trailing percent / rate suffix so interest rates land as real
+    # numbers ("8.5%", "9.4% per annum", "7.25% p.a." → 8.5 / 9.4 / 7.25).
+    # The value is kept as-is (a 9.4% rate is the number 9.4 for a "rate > 9"
+    # filter), NOT divided by 100.
+    s = _strip_percent(s)
 
     # Strip currency from either end.
     s2, currency_pre = _strip_currency_prefix(s)
