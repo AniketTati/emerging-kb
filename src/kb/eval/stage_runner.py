@@ -49,13 +49,14 @@ ALL_DOMAINS: tuple[str, ...] = (
 # Known domain → workspace_id mappings. Only construction is committed
 # (docs/demo-corpus-eval-construction.md); the rest are filled in as each
 # domain is ingested. The CLI's --workspace always overrides this.
-# All domains co-located in ONE workspace (single-tenant, no login) so the app's
-# default view holds the whole mixed corpus. construction is already ingested
-# here; finance is ingested into the SAME workspace (no separate finance ws, no
-# construction re-ingest/copy). The app is pointed here via ui/.env.local.
+# Per-domain workspaces (cheap, clean eval, no cross-domain re-processing).
+# Co-locating finance with construction would make #19's whole-workspace
+# finalize re-extract all construction docs on every settle (cost) — so each
+# domain gets its own workspace. View one at a time in the app by pointing
+# ui/.env.local's NEXT_PUBLIC_KB_WORKSPACE_ID at the desired workspace.
 KNOWN_WORKSPACES: dict[str, str] = {
     "construction": "c0000000-0000-0000-0000-000000000001",
-    "finance":      "c0000000-0000-0000-0000-000000000001",
+    "finance":      "f0000000-0000-0000-0000-000000000001",
 }
 
 
