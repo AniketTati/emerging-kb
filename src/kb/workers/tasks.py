@@ -1776,21 +1776,37 @@ async def extract_kv_tables_file_impl(file_id: str) -> None:
 
     chunk_indexed_text = build_chunk_indexed_text(chunks) if chunks else ""
 
-    # Phase 2: KV+Tables LLM call (single round-trip).
+    # Phase 2: KV+Tables LLM call (single round-trip, WITH RETRY).
+    # FIX 2 — a transient 429/timeout/5xx (wrapped into the error message)
+    # OR an empty "no candidates" completion previously produced a
+    # permanently empty extraction for the doc (the 3 Acme loans showed
+    # gem_pf=0). Retry with backoff; on exhaustion, fall through to the
+    # empty-payload path (FIX 3 coverage marks it needs_review rather than
+    # silently succeeding).
+    from kb.llm_batching import is_transient, with_retry
     extractor = make_kv_tables_extractor()
+
+    def _kv_retry_on(exc: Exception) -> bool:
+        return is_transient(exc) or "no candidates" in str(exc).lower()
+
     try:
-        payload = await extractor.extract(
-            chunk_indexed_text=chunk_indexed_text,
-            doc_type_hint=None,
-            existing_sub_entity_hints=existing_hints or None,
-            existing_scalar_hints=existing_scalar_hints or None,
-            existing_sub_entity_column_hints=(
-                existing_sub_entity_column_hints or None
+        payload = await with_retry(
+            lambda: extractor.extract(
+                chunk_indexed_text=chunk_indexed_text,
+                doc_type_hint=None,
+                existing_sub_entity_hints=existing_hints or None,
+                existing_scalar_hints=existing_scalar_hints or None,
+                existing_sub_entity_column_hints=(
+                    existing_sub_entity_column_hints or None
+                ),
             ),
+            label="kv_tables.extract",
+            retry_on=_kv_retry_on,
         )
     except KVTablesExtractionError:
-        # Don't block the chain on extractor failure — log + advance
-        # with empty payload. Admin re-extract endpoint can rerun later.
+        # Retries exhausted (or a permanent error) — log + advance with
+        # empty payload. The coverage check (FIX 3) flags the degraded doc;
+        # the admin re-extract endpoint can rerun later.
         traceback.print_exc()
         from kb.extraction.kv_tables import KVTablesPayload
         payload = KVTablesPayload(model_id="identity")

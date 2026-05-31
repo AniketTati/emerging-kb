@@ -48,17 +48,24 @@ async def with_retry(
     attempts: int = 3,
     base_delay_s: float = 2.0,
     label: str = "llm call",
+    retry_on: Callable[[Exception], bool] | None = None,
 ) -> R:
     """Run `fn`, retrying TRANSIENT failures with exponential backoff. The
     final attempt's exception (or the first permanent one) propagates so the
-    caller's existing error handling decides what to do (e.g. mark failed)."""
+    caller's existing error handling decides what to do (e.g. mark failed).
+
+    `retry_on` overrides the default `is_transient` classifier when a caller
+    knows extra error shapes are worth retrying (e.g. the KV+Tables extractor
+    treats an empty "no candidates" completion as a transient flake). It
+    defaults to `is_transient` so existing callers are unaffected."""
+    should_retry = retry_on or is_transient
     last: Exception | None = None
     for attempt in range(attempts):
         try:
             return await fn()
         except Exception as exc:  # noqa: BLE001
             last = exc
-            if not is_transient(exc) or attempt == attempts - 1:
+            if not should_retry(exc) or attempt == attempts - 1:
                 raise
             delay = base_delay_s * (2 ** attempt)
             _LOG.warning(

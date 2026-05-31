@@ -55,6 +55,52 @@ async def test_with_retry_does_not_retry_permanent():
 
 
 @pytest.mark.asyncio
+async def test_with_retry_custom_retry_on_recovers():
+    # FIX 2 — the KV+Tables extractor treats an empty "no candidates"
+    # completion as a transient flake, even though is_transient() does NOT
+    # classify it as such. A custom retry_on predicate must be honored.
+    calls = {"n": 0}
+
+    def kv_retry_on(exc):
+        return is_transient(exc) or "no candidates" in str(exc).lower()
+
+    async def flaky():
+        calls["n"] += 1
+        if calls["n"] < 2:
+            raise RuntimeError("Gemini returned no candidates")
+        return "ok"
+
+    # Sanity: default classifier would NOT retry this.
+    assert not is_transient(RuntimeError("Gemini returned no candidates"))
+
+    out = await with_retry(
+        flaky, attempts=3, base_delay_s=0.0, retry_on=kv_retry_on,
+    )
+    assert out == "ok"
+    assert calls["n"] == 2
+
+
+@pytest.mark.asyncio
+async def test_with_retry_custom_retry_on_still_skips_permanent():
+    # The custom predicate narrows what's retryable; a true permanent error
+    # it doesn't recognize must still propagate immediately.
+    calls = {"n": 0}
+
+    def kv_retry_on(exc):
+        return is_transient(exc) or "no candidates" in str(exc).lower()
+
+    async def permanent():
+        calls["n"] += 1
+        raise RuntimeError("400 malformed request")
+
+    with pytest.raises(RuntimeError, match="400"):
+        await with_retry(
+            permanent, attempts=3, base_delay_s=0.0, retry_on=kv_retry_on,
+        )
+    assert calls["n"] == 1
+
+
+@pytest.mark.asyncio
 async def test_run_batched_retries_transient_batch_then_succeeds():
     state = {"batch_calls": 0}
 
