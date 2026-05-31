@@ -1084,6 +1084,21 @@ export async function listSchemaVersions(
   return body.items ?? [];
 }
 
+// FIX 10 — explicit "apply changes": after editing a schema, re-derive the
+// affected doc-type's ready files from cached chunks (no re-parse). Returns the
+// re-extract scope (the doc_type, or "workspace" for a user-declared schema).
+export async function reextractSchema(schemaId: string): Promise<{
+  status: string;
+  scope: string;
+  schema_id: string;
+}> {
+  const resp = await fetch(
+    `${KB_API_URL}/schemas/${schemaId}/re-extract`,
+    { method: "POST", headers: workspaceHeaders() },
+  );
+  return _handle<{ status: string; scope: string; schema_id: string }>(resp);
+}
+
 export async function promoteInferredField(fieldId: string): Promise<{
   inferred_field_id: string;
   schema_field_id: string;
