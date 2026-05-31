@@ -208,7 +208,46 @@ still skips a true permanent error).
   (2 stale exact-key assertions) + `test_kv_tables_worker` (stale FakeExtractor
   + atomic_units asserts).
 
-**▶ FIX 4 NEXT — sameness resolution (canonical names) as a first-class layer.**
+**▶ FIX 5 DONE (`a9765c7`) — count-based promotion (not 80% prevalence).**
+`should_promote` now promotes a type-stable field seen in ≥ `promote_count`
+docs (default 2) OR clearing prevalence (keeps first-doc seeding);
+stability/value_type_confidence still gate noise, `min_docs` is the floor.
+`PromotionThresholds.promote_count` (env `KB_PROMOTION_COUNT`), wired into both
+promotion sites via `extraction.l2b.auto_promotion.promote_count` + documented
+in `defaults.yaml`. Tests updated to the new semantics (3/6 repeat promotes;
+one-off + type-unstable rejected) + tunable-count test. 20 green. **This already
+lights up same-NAME repeats** (cluster_fields groups identical names across
+docs); cross-NAME synonym merge is FIX 4.
+- **Remaining half of FIX 5 (defer with FIX 4):** "user-declared fields are in
+  the schema by declaration" (extracted by declared name, no count needed).
+
+**▶ FIX 4 NEXT (the big remaining item) — sameness/canonical names as a
+first-class layer.** Largest fix; re-extract-coupled (FIX 9). Code-grounded plan:
+- `converge_clusters_semantic` (`promotion.py:115`, embed→cosine-block→LLM-judge
+  union) ALREADY exists and ALREADY feeds promotion at corpus finalize
+  (`converge_workspace_fields_impl`, the ~4450 block now also resolves
+  promote_count). The gaps the plan calls out:
+  1. **Per-doc promotion still counts raw names** (`extract_kv_tables_file_impl`
+     ~2078) — convergence only runs at finalize. Decide incremental vs
+     finalize-only (finalize-only may be acceptable now that FIX 5 makes
+     same-name repeats promote; the cross-name merge then lands at finalize).
+  2. **Query layer doesn't map to canonical** — the planner emits raw field
+     names; F-mode (`mode_router._route_f_mode`) matches `name in fields` exactly.
+     Needs a query-time field-name → canonical map (anchored on user-declared
+     schema names) so "rate" resolves to stored `interest_rate`.
+  3. **Table-name + column-name drift have NO semantic merge** — only scalar
+     names converge. `singularize_unit_type` handles plurals but not
+     `transactionlisting` vs `transaction_listing`.
+  4. **User-declared schema names are the anchors** (everything maps to them);
+     keep `original_name` for provenance.
+- Acceptance: `all_in_rate`/`interest_rate_all_in`/`post_amendment_rate` → one
+  canonical `interest_rate`; `transactionlisting`/`transaction_listing` → one
+  `Transaction`.
+
+**▶ Then FIX 6 (table-level chunking) → 7 (identity merge+noise) → 9
+(re-extract corpus, lights up FIX 1 acceptance on the Acme loans) → 10
+(re-extract triggers) → validation (M1 re-run).** FIX 8 already done (fell out
+of FIX 1).
 
 **▶ DATA-QUALITY AUDIT (actual DB rows, not coverage) — finance ws.** Reviewed
 every layer with samples. **Good:** chunking (0 garbage; bank statements
