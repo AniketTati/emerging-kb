@@ -149,22 +149,37 @@ implementation plan for the structured-layer rebuild (10 fixes in dependency
 order + validation). Expands DQ1–DQ4 + chunking + retry/coverage + re-extract.
 Start there.
 
-**▶ FIX 1 IN PROGRESS (decouple per-doc storage from promotion).** Decision:
-write the per-doc doc_root in `extract_schema_entities_file_impl` PASS 1 (not
+**▶ FIX 1 DONE (decouple per-doc storage from promotion) + FIX 8 (orphans).**
+Per-doc fields now reach the queryable `extracted_entities` doc_root regardless
+of promotion. Written in `extract_schema_entities_file_impl` PASS 1 (not
 kv_tables) — that pass already owns doc_root parents, the `_has_new_parents`
 non-destructive guard, and lineage, so it dodges a kv_tables→schema-entities
-clobber race and fixes FIX 8 orphans in the same spot. Split into 3 edits.
-- **Step 1/3 DONE (`ecc4597`).** Additive domain helpers, no pipeline change:
+clobber race and fixes FIX 8 orphans in the same spot. 3 commits:
+- **Step 1/3 (`ecc4597`).** Additive domain helpers, no pipeline change:
   `read_proposed_fields_for_file` (per-doc reader keeping `value_numeric`) +
   pure `build_doc_root_fields` (prefers numeric → real numbers for F-mode range
   predicates, text fallback, drops valueless/nameless, last-write-wins). 8 unit
   tests, no DB (`tests/test_doc_root_fields_unit.py`).
-- **Step 2/3 NEXT.** Wire `build_doc_root_fields` into PASS 1: merge base fields
-  into the LLM-inserted doc_root instances (so promoted docs also carry all
-  their proposed fields).
-- **Step 3/3.** Always create a doc_root when the LLM produced none (the
-  frontmatter-only / no-promotion docs — the Acme loans) + make a base-fields
-  doc_root count as a "new parent" so re-extract refreshes it (FIX 8).
+- **Step 2/3 (`6a3925e`).** Wire `build_doc_root_fields` into PASS 1: merge base
+  fields into the LLM-inserted doc_root (LLM promoted values win on collision →
+  promoted-field behavior unchanged; non-promoted facts like a loan's rate now
+  land on the queryable record).
+- **Step 3/3 (`6acd7bf`).** Always create a doc_root from base fields when the
+  LLM produced none (frontmatter-only / no-promotion docs — the Acme loans),
+  but ONLY when no parent already exists → preserves a richer prior parent on a
+  transient-empty re-extract (keeps the #19 guarantee; delete guard untouched).
+  Resolves FIX 8 (0% orphans) — every doc now has a doc_root for children to FK.
+- **Numeric typing:** already handled — `proposed_fields.value_numeric` is
+  computed at insert via `normalize_value`; the bridge prefers it.
+- **Acceptance is re-extract-gated:** the rate lands for docs whose
+  proposed_fields hold it (loan-002/003/004). The 3 Acme loans have `gem_pf=0`
+  (transient empty extraction) → need FIX 2 (retry) + FIX 9 (re-extract re-runs
+  KV+Tables) before their rate appears. Full M1 verification deferred to FIX 9.
+- **Flagged (out of scope):** `test_kv_tables_worker.py::test_extract_kv_tables_writes_scalars_and_tables`
+  is pre-existing-broken (stale FakeExtractor missing `existing_scalar_hints`;
+  asserts removed `atomic_units`) → spawned a separate task.
+
+**▶ FIX 2 IN PROGRESS — retry the KV+Tables extraction.** Next.
 
 **▶ DATA-QUALITY AUDIT (actual DB rows, not coverage) — finance ws.** Reviewed
 every layer with samples. **Good:** chunking (0 garbage; bank statements
