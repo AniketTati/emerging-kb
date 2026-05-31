@@ -343,6 +343,17 @@ real-binary xlsx E2E gap).
   original — the FIX 1 headline acceptance works on live data. No doc-ID entities;
   HDFC/Acme short forms merged. 127 tests green.
 
+**▶ FIX 10 RE-DESIGNED → EXPLICIT "APPLY" (`3334307`, `47b5668`).** Architect call:
+re-extraction is now user-triggered, not auto-fired per schema edit. Removed the
+auto-enqueue from `bump_schema_version` (which caused the edit storm +
+defer-in-request-txn + lost-update-while-running all at once). Added
+`POST /schemas/{id}/re-extract` ("apply changes" → one scoped force re-extract
+from cached chunks) + FE `reextractSchema()` client fn. No queueing_lock, so a
+later apply always runs against the live schema. The three FIX 10 dangers are
+GONE. **Remaining (much smaller, tracked):** schema→doc_type association so a
+*declared* schema's apply scopes to its doc_type instead of the whole workspace;
++ the FE "Apply" button placement/visual-verify in Schema Studio.
+
 **▶ CROSS-DOMAIN VALIDATION on FRONTMATTER-FREE PDFs (healthcare) — PASSED.**
 Built 3 real PDFs (no YAML frontmatter) for one patient across 3 doc-types (lab
 report / discharge summary / insurance EOB), sharing patient/hospital/physician
