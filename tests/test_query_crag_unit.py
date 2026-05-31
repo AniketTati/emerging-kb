@@ -232,17 +232,28 @@ async def test_gemini_crag_api_error_returns_1():
 
 
 @pytest.mark.asyncio
-async def test_gemini_crag_uses_only_top_3_snippets():
-    """Decision #3: only top-3 fed to LLM."""
-    raw = json.dumps({"avg_relevance": 0.7})
+async def test_gemini_crag_uses_only_top_5_snippets():
+    """Decision #3 (post finance-M1): top-5 fed to LLM (was 3 — over-refused
+    answers whose evidence reranked to position 4-5)."""
+    raw = json.dumps({"max_relevance": 0.7})
     client = _FakeClient(raw)
     gate = GeminiCragGate(client=client)
-    # 10 hits — only 3 should appear in prompt
+    # 10 hits — only the first 5 should appear in the prompt
     hits = [_hit(f"snippet-{i}") for i in range(10)]
     await gate.assess("q", hits)
     contents = client.last_kwargs.get("contents", "")
-    # Snippets 0, 1, 2 should appear; 5+ should NOT
+    # Snippets 0..4 should appear; 5+ should NOT
     assert "snippet-0" in contents
-    assert "snippet-2" in contents
+    assert "snippet-4" in contents
     assert "snippet-5" not in contents
     assert "snippet-9" not in contents
+
+
+def test_parse_score_prefers_max_relevance():
+    """The judge now returns max_relevance; avg_relevance still parses as a
+    backward-compatible fallback."""
+    assert _parse_score('{"max_relevance": 0.9}') == pytest.approx(0.9)
+    # max_relevance wins when both are present
+    assert _parse_score('{"max_relevance": 0.9, "avg_relevance": 0.2}') == pytest.approx(0.9)
+    # legacy avg_relevance still works
+    assert _parse_score('{"avg_relevance": 0.42}') == pytest.approx(0.42)

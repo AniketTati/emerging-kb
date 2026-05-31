@@ -26,18 +26,30 @@ from kb.query.rrf import Hit
 # "insufficient evidence" message.
 CRAG_THRESHOLD = 0.5
 
-# Decision #3: only top-N snippets fed to LLM (cost cap).
-_TOP_N_SNIPPETS = 3
+# Decision #3: only top-N snippets fed to LLM (cost cap). Bumped 3→5: the
+# refuse gate's question is "is there ANY grounding evidence?", and a correct
+# answer often lives in a single snippet that reranks to position 4-5 in a long
+# doc — judging only the top 3 made CRAG miss it and force-refuse a known answer
+# (finance M1: 5/8 generation losses were over-refusals on retrieved gold).
+_TOP_N_SNIPPETS = 5
 
 # Decision #9: max output tokens (one float in tiny JSON).
 _MAX_OUTPUT_TOKENS = 100
 
+# CRAG scores the BEST snippet (max), not the average. The gate asks "do we have
+# evidence to answer?" — one strong snippet is sufficient grounding. Averaging
+# punished a single correct snippet sitting among off-topic neighbours, diluting
+# the score below threshold and refusing answers that the corpus DID contain.
+# An all-irrelevant set (adversarial / unanswerable) still scores low under max,
+# so refusal of genuinely unsupported queries is preserved.
 _SYSTEM_PROMPT = (
-    "You are a relevance judge. Given a user query and up to 3 candidate "
+    "You are a relevance judge. Given a user query and up to 5 candidate "
     "snippets retrieved by a search system, return a single JSON object: "
-    "{\"avg_relevance\": 0.0-1.0}. 1.0 = all snippets directly answer the "
-    "query. 0.0 = none are relevant. Be honest — judging too generously "
-    "hurts downstream answer quality."
+    "{\"max_relevance\": 0.0-1.0}. max_relevance = the relevance of the SINGLE "
+    "most relevant snippet — 1.0 = at least one snippet directly answers the "
+    "query; 0.0 = none of them are relevant. One strong snippet is enough "
+    "grounding; do NOT average across the off-topic ones. Be honest — passing "
+    "when no snippet is relevant hurts downstream answer quality."
 )
 
 
@@ -85,7 +97,11 @@ def _parse_score(raw: str) -> float:
         return 1.0
     if not isinstance(data, dict):
         return 1.0
-    raw_val = data.get("avg_relevance")
+    # Prefer the new max-relevance key; fall back to the legacy avg_relevance
+    # so older judge outputs (and existing tests) still parse.
+    raw_val = data.get("max_relevance")
+    if raw_val is None:
+        raw_val = data.get("avg_relevance")
     if raw_val is None:
         return 1.0
     try:
@@ -96,7 +112,7 @@ def _parse_score(raw: str) -> float:
 
 
 def _build_user_prompt(query: str, hits: list[Hit]) -> str:
-    """Build the user message — top-3 snippets per decision #3."""
+    """Build the user message — top-N snippets per decision #3 (N=5)."""
     snippets = "\n\n".join(
         f"[Snippet {i+1}] {(h.snippet or '')[:500]}"
         for i, h in enumerate(hits[:_TOP_N_SNIPPETS])
