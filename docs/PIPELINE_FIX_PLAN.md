@@ -393,8 +393,9 @@ the structured-extraction rebuild:
 - §2.5 **prompts** configurable without code (only thresholds done via P1).
 - Write-up consolidation to ≤4 pages.
 - Phase-2/4/5/6 items (Q1, Q2, Q7, I5, OCR escalation, Q4, S2/S4/S5/S6, A1, E1).
-- **Not reviewed this pass:** PII handling (the `is_pii` flag on mentions/fields
-  exists but we did not audit redaction end-to-end) — worth a separate check.
+- **PII handling — DEFERRED (user decision):** the `is_pii` flag on
+  mentions/fields exists; redaction was not audited and is **out of scope for
+  now**. Do not pick this up in the rebuild thread.
 
 # Editing discipline
 `tasks.py` is ~4k lines and rollback-prone (`memory/editing-cadence-tooling`).
