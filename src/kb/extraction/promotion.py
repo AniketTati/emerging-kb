@@ -50,6 +50,33 @@ def _normalize_field_name(raw: str) -> str:
     return s[:200] or "unknown"
 
 
+def normalize_unit_key(name: str) -> str:
+    """FIX 4 — canonical MATCH key for sub_entity / table (unit_type) names.
+
+    Collapses separator / spacing / case / simple-plural variants so
+    `transaction_listing`, `transactionlisting`, `Transaction Listing`, and
+    `Transactions`... wait — `transactionlisting` and `transaction_listing`
+    are the SAME concept spelled differently and must share a key; `Transactions`
+    (the plural of a different word) maps to `transaction`, distinct from
+    `transactionlisting`. We don't try to reduce `transaction listing` → its
+    head noun (that's semantic — left to the convergence judge).
+
+    Strategy: strip everything non-alphanumeric + lowercase (so spacing /
+    underscore / hyphen / case variants unify), then drop a simple trailing
+    plural. High precision — only unifies spelling variants, not meanings.
+    """
+    s = re.sub(r"[^a-z0-9]+", "", (name or "").lower())
+    if len(s) > 4 and s.endswith("ies"):
+        return s[:-3] + "y"
+    if s.endswith(("ss", "is", "us", "as")):
+        return s
+    if len(s) > 4 and s.endswith(("sses", "xes", "zzes", "shes", "ches")):
+        return s[:-2]
+    if len(s) > 3 and s.endswith("s"):
+        return s[:-1]
+    return s
+
+
 @dataclass
 class FieldCluster:
     canonical_name: str
@@ -574,6 +601,23 @@ async def ensure_sub_entity_type(
     row = await cur.fetchone()
     if row:
         return row[0]
+
+    # FIX 4 — canonical table-name reuse. The exact-name lookup misses
+    # spelling variants the LLM emits for the same table (transaction_listing
+    # vs transactionlisting vs Transactions). Before creating a NEW sub_entity
+    # type, scan existing active sub_entities under this parent and reuse one
+    # whose normalized key matches — first spelling wins, variants collapse
+    # onto it (non-destructive; no merge of already-written rows needed).
+    want_key = normalize_unit_key(sub_name)
+    cur = await conn.execute(
+        "SELECT id::text, name FROM schema_entities "
+        "WHERE schema_id = %s AND parent_type_id = %s "
+        "  AND lifecycle_state = 'active' AND kind = 'sub_entity'",
+        (schema_id, parent_type_id),
+    )
+    for existing_id, existing_name in await cur.fetchall():
+        if normalize_unit_key(existing_name) == want_key:
+            return existing_id
 
     cur = await conn.execute(
         "INSERT INTO schema_entities "

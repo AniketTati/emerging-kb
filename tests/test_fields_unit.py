@@ -22,9 +22,27 @@ from kb.extraction.promotion import (
     PromotionThresholds,
     cluster_fields_for_doctype,
     map_value_type_to_schema_type,
+    normalize_unit_key,
     should_promote,
     _normalize_field_name,
 )
+
+
+def test_normalize_unit_key_collapses_spelling_variants():
+    # FIX 4 — separator / spacing / case / plural variants of the SAME table
+    # name share a key.
+    k = normalize_unit_key("transaction_listing")
+    assert normalize_unit_key("transactionlisting") == k
+    assert normalize_unit_key("Transaction Listing") == k
+    assert normalize_unit_key("transaction-listing") == k
+    # plurals of a word collapse to singular
+    assert normalize_unit_key("Transactions") == normalize_unit_key("transaction")
+    assert normalize_unit_key("line_items") == normalize_unit_key("LineItem")
+    # ...but DIFFERENT concepts keep DIFFERENT keys (no semantic reduction)
+    assert normalize_unit_key("transactionlisting") != normalize_unit_key("transaction")
+    # Latin/Greek already-singular endings are left alone
+    assert normalize_unit_key("status") == "status"
+    assert normalize_unit_key("basis") == "basis"
 
 
 @contextmanager
