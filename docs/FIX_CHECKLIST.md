@@ -78,7 +78,7 @@ eval after each task** so you can attribute every change.
 **▶ CURRENT FOCUS — pre-ingest WRITE-PATH BATCH (then ingest `finance` once).**
 Plan: `~/.claude/plans/lets-create-a-plan-peppy-mitten.md`. Batch ALL write-path
 changes first, then run the finance ingest ONCE (finance = most tabular domain;
-868 md table-rows). HEAD `e41e5cd`, tree clean, 135 batch tests pass.
+868 md table-rows). HEAD `87807fd`, tree clean, 138 batch tests pass.
 
 Ingestion-batch progress (do tasks ONE-AT-A-TIME — see
 `memory/editing-cadence-tooling`; never batch Edit+Bash, never `git stash pop`):
@@ -111,8 +111,22 @@ Ingestion-batch progress (do tasks ONE-AT-A-TIME — see
   also now used by the dedup script) → **(4) corpus RAPTOR**. 4 slices,
   `a4bec8d`/`79fee41`/`e4afbac`/`e41e5cd`. 13 new tests (fake embed/judge/
   extractor); 135 batch tests green. *Live validation at the finance ingest (#20).*
-- ⏳ **#20** pre-ingest gate → ingest finance once → M1 finance baseline
-- ⏸ **I6** chain detection (deferred to scale; no-op at 46 docs)
+- ◑ **I6** chain detection — **correctness DONE** (`87807fd`): distinct
+  `version_index` via `next_version_index` (loan original+2 addenda → 0/1/2,
+  not 0/1/1); explicit path accepts `chain` as alias of `chain_id` (finance
+  loan declares `chain:`, complaint declares `chain_id:`). 3 tests. *O(N²)/
+  200-doc-window perf still deferred to scale (no-op at ~50 docs).*
+- ⏳ **#20** pre-ingest gate → ingest finance once → M1 finance baseline.
+  **Key-free pre-ingest verification DONE** (architect pass): (a) I5 large-doc
+  risk — none (finance docs ≤~2k tokens vs Gemini ~1M window; I5 stays a
+  deferred *cost* optimization); (b) classifier→router alignment — `bank_statement`
+  → row chunker fires; other doc_types classify `unknown` pre-chunk (→
+  hierarchical, fine for markdown) and correct to manifest doc_types at
+  `extract_kv_tables` via frontmatter; (c) **row chunker handles markdown
+  pipe-tables** (line-based → one chunk per transaction row, no garbage).
+  **Remaining = DYNAMIC (needs keys/worker):** 1-doc smoke (classify+row-chunk+
+  extract end-to-end) → staged ingest (statements → loan/complaint chains →
+  widen) → M1 finance baseline.
 
 > Pre-existing (NOT my regression): `tests/test_b4b_api.py` 2 failures
 > (StubPlanner `.plan()` missing `conn` kwarg) — fail identically at `ff0ceea`.
@@ -176,7 +190,7 @@ master table below.
 | 23 | **S1** batch per-chunk/entity LLM calls | 5 | ✅ | `kb/llm_batching.run_batched` + batched contextualize/mentions/triples; I2/I4 judges use the same primitive. Tests in `test_s1_batching.py`. (#1 100k blocker — cleared.) |
 | 24 | **S3** `mentions_exact` trigram index | 5 | ✅ | migration 0049: `CREATE EXTENSION pg_trgm` + GIN `gin_trgm_ops` on `lower(mention_text)`. Applied + verified on running DB. |
 | 25 | **S2** identity-resolution throughput | 5 | ⏳ | |
-| 26 | **I6** chain detection O(N²)→bounded | 5 | ⏳ | |
+| 26 | **I6** chain detection O(N²)→bounded | 5 | ◑ | **Correctness DONE** `87807fd`: distinct `version_index` + `chain` alias for `chain_id`. 3 tests. O(N²)/200-window perf deferred to scale. |
 | 27 | **I3** corpus RAPTOR incremental + auto-trigger | 5 | ◑ | `09fe2e9`. Auto-trigger DONE (`finalize_corpus` self-gates on `count_inflight_files`; deferred from chain tail). Incremental rebuild deferred to scale. 4 tests |
 | 28 | **S4** vector memory/recall at ~3M vectors | 5 | ⏳ | |
 | 29 | **S5** retrieval result cache | 5 | ⏳ | |
