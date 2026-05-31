@@ -2239,9 +2239,16 @@ async def extract_kv_tables_file_impl(
                         child_entity_id=sub_id,
                     )
 
-            await delete_extracted_entities_children_for_file(
-                conn, file_id=file_id,
-            )
+            # M2 — non-destructive force re-extract for CHILDREN. A force
+            # re-run that returns scalars but NO tables (partial miss on cached
+            # chunks) must not wipe the doc's existing child rows. Only
+            # delete+rewrite children when this run actually produced rows;
+            # the fully-empty case already returned early above.
+            _has_new_children = any(t.rows for t in payload.tables)
+            if (not force) or _has_new_children:
+                await delete_extracted_entities_children_for_file(
+                    conn, file_id=file_id,
+                )
 
             inserted_ids: list[str] = []
             inserted_params: list[dict] = []
