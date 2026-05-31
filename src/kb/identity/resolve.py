@@ -59,10 +59,27 @@ class ResolutionResult:
     created_new: bool
 
 
+def _is_name_alias(a: str | None, b: str | None) -> bool:
+    """FIX 7 — high-precision short-form/full-name variant test: the token
+    sequence of the shorter name is a PREFIX of the longer's (and they
+    differ). `HDFC` ⊂ `HDFC BANK`, `Apollo Hospitals` ⊂ `Apollo Hospitals
+    Pune`. Prefix (not arbitrary subset) keeps it precise — it won't relate
+    `Bank of America` to `Bank of India`."""
+    if not a or not b:
+        return False
+    ta = a.strip().lower().split()
+    tb = b.strip().lower().split()
+    if not ta or not tb or ta == tb:
+        return False
+    short, long_ = (ta, tb) if len(ta) <= len(tb) else (tb, ta)
+    return long_[: len(short)] == short
+
+
 async def select_entity_match(
     candidates,
     *,
     judge_same,
+    mention_name: str | None = None,
     high_threshold: float = EMBEDDING_HIGH_THRESHOLD,
     low_threshold: float = EMBEDDING_LOW_THRESHOLD,
 ):
@@ -73,21 +90,32 @@ async def select_entity_match(
       candidates: list of (entity_id, name, sim), best-first.
       judge_same: async callable `(candidate_name) -> bool` — asks the LLM
         judge whether a borderline candidate is the same entity.
+      mention_name: the resolving mention's text. When provided (FIX 7),
+        candidates whose name is an obvious short-form/full-name variant of
+        the mention (`HDFC` ⊂ `HDFC BANK`) are routed to the judge EVEN below
+        low_threshold — the embedding alone under-scores these org variants.
+        The judge still gates (nothing is auto-merged on name alone), so this
+        only widens recall. `None` → legacy stop-at-low behavior.
 
-    Returns (entity_id, method, confidence) or None. Top-1-only matching
-    silently missed a true match that was the 2nd/3rd neighbour; this walks
-    the list:
+    Returns (entity_id, method, confidence) or None:
       - first candidate >= high_threshold → auto-match ('embedding')
-      - else each borderline [low, high) candidate is judged (best-sim
-        first); the first the judge confirms wins ('llm_judge')
-      - a candidate below low_threshold stops the walk (sorted desc → nothing
-        further can qualify)
+      - borderline [low, high) candidates are judged (best-sim first)
+      - alias-related candidates below low_threshold are ALSO judged
+      - first judge-confirmed candidate wins ('llm_judge')
     """
+    alias_mode = bool(mention_name)
     for cand_id, cand_name, sim in candidates:
         if sim >= high_threshold:
             return cand_id, "embedding", sim
         if sim < low_threshold:
-            return None
+            if not alias_mode:
+                # Legacy: candidates are sorted desc, so nothing further can
+                # clear the band — stop the walk.
+                return None
+            if not _is_name_alias(mention_name, cand_name):
+                # Alias mode scans the whole top-k; skip non-variant low-sim
+                # candidates rather than stopping (a later one may be a variant).
+                continue
         try:
             same = await judge_same(cand_name)
         except Exception:  # noqa: BLE001 — judge failure → treat as no-match

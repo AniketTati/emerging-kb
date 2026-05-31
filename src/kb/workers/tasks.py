@@ -2955,6 +2955,7 @@ async def resolve_identities_file_impl(file_id: str) -> None:
                                 text_a=mention_text, type_a=mention_type,
                                 text_b=cand_name, type_b=mention_type,
                             ),
+                            mention_name=mention_text,  # FIX 7 — alias routing
                             high_threshold=identity_high,
                             low_threshold=identity_low,
                         )

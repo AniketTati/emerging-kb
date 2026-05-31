@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import pytest
 
-from kb.identity.resolve import select_entity_match
+from kb.identity.resolve import _is_name_alias, select_entity_match
 
 
 async def _judge_yes(name):
@@ -63,3 +63,52 @@ async def test_judge_exception_treated_as_no_match():
     cands = [("e1", "x", 0.88)]
     out = await select_entity_match(cands, judge_same=judge_boom)
     assert out is None
+
+
+# ---------------------------------------------------------------------------
+# FIX 7 — alias routing (HDFC ⊂ HDFC BANK) below the low threshold
+# ---------------------------------------------------------------------------
+
+
+def test_name_alias_prefix_only():
+    assert _is_name_alias("HDFC", "HDFC BANK") is True
+    assert _is_name_alias("HDFC BANK", "HDFC") is True
+    assert _is_name_alias("Apollo Hospitals", "Apollo Hospitals Pune") is True
+    # precise: shared first token but diverging → NOT an alias
+    assert _is_name_alias("Bank of America", "Bank of India") is False
+    assert _is_name_alias("Apollo Tyres", "Apollo Hospitals") is False
+    assert _is_name_alias("HDFC", "HDFC") is False  # identical, not a variant
+
+
+@pytest.mark.asyncio
+async def test_alias_below_low_is_judged_when_mention_name_given():
+    # "HDFC" vs "HDFC BANK" embeds at 0.80 (below low 0.85) but is an obvious
+    # variant → with mention_name set, the judge sees it and can confirm.
+    cands = [("e1", "HDFC BANK", 0.80)]
+    out = await select_entity_match(
+        cands, judge_same=_judge_yes, mention_name="HDFC",
+    )
+    assert out == ("e1", "llm_judge", 0.80)
+
+
+@pytest.mark.asyncio
+async def test_alias_below_low_ignored_without_mention_name():
+    # Legacy behavior preserved: no mention_name → stop at the sub-low candidate.
+    cands = [("e1", "HDFC BANK", 0.80)]
+    out = await select_entity_match(cands, judge_same=_judge_yes)
+    assert out is None
+
+
+@pytest.mark.asyncio
+async def test_non_alias_below_low_not_judged_even_in_alias_mode():
+    # A sub-low candidate that is NOT a name variant is never judged.
+    calls = {"n": 0}
+
+    async def judge(name):
+        calls["n"] += 1
+        return True
+
+    cands = [("e1", "Tata Steel", 0.70)]
+    out = await select_entity_match(cands, judge_same=judge, mention_name="HDFC")
+    assert out is None
+    assert calls["n"] == 0
