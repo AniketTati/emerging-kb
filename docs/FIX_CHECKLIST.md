@@ -144,6 +144,28 @@ master-detail modal — `listSchemas` → drill into `listSchemaVersions` (versi
 kind post/put/rollback, parent, timestamp). Verified live (auto:* → v1/post),
 no console errors. 30 FE tests green, `tsc` clean.
 
+**▶ PDF-CONSISTENCY AUDIT + FULL STACK LIVE (for hands-on testing).**
+Re-read the assignment PDF (§1–§5) and audited every requirement against the
+repo. **Verdict: the checklist is faithful — the functional reqs §2.1–§2.4 are
+BUILT; the long pending list is RAG-quality + scale polish, not missing
+capability.** Confirmed in code: schema define/version/evolve (P1b wizard + P6
+versions), scanned+digital PDF + xlsx parsers (Docling/GeminiOCR/xlsx routed by
+text-layer sniff), scoped "X within Y" (S-mode) + filtered by date/metadata/id
+(D/F/C-modes), citations file→page-range→excerpt + confidence, 1-cmd bootstrap,
+seed data (8 PDF/3 xlsx/eml), loadable demo schema (P3), eval set (52 Q +
+scorer). **Stack brought up + verified live:** API :8000 · native worker · UI
+:3000 · DB :5432 · MinIO :9000. Live chat on ws `f0000000`: "current HDFC rate?"
+→ "9.40% per annum" + 7 citations + confidence=medium; UI chat history + schema
+studio (9 emergent `auto:*` schemas + New-schema wizard + Versions) all render.
+**TRUE remaining gaps vs the PDF (distinct from quality polish):** (1) §2.2
+schema-change→re-extract-without-reparse (P4+F1 #15, FUNCTIONAL); (2) §2.5
+**prompts** configurable without code (thresholds done via P1, but generator/CRAG
+prompts are still hardcoded constants); (3) §3 domain-agnostic confirming sweep
+(Q3 fixed the generator prompt; verify no OTHER hardcoded domain values); (4)
+E2E *proof* on the real mixed-format binaries (unit-tested, not demonstrated
+end-to-end); (5) write-up consolidation to ≤4 pages. Everything else pending =
+quality (Q5/Q1/Q2) + scale (S-series) + agentic/eval (A1/E1).
+
 **▶ Q-BATCH MEASURED WIN (finance, snapshot `docs/eval_baselines/finance_after_qbatch.*`).**
 Cumulative effect of this session's query fixes — CRAG best-snippet relevance
 (`7bd2073`), IRCoT env-var fix so it actually reformulates (`7510cd2`),
