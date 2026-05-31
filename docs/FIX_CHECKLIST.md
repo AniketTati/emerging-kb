@@ -144,6 +144,23 @@ master-detail modal — `listSchemas` → drill into `listSchemaVersions` (versi
 kind post/put/rollback, parent, timestamp). Verified live (auto:* → v1/post),
 no console errors. 30 FE tests green, `tsc` clean.
 
+**▶ CRAG OVER-REFUSAL FIX + Q5 CITATION DIAGNOSIS (`7bd2073`).** Diagnosed the 8
+finance generation losses live: **5 were over-refusals** (gold retrieved, CRAG
+force-refused) — root cause CRAG **averaged** relevance over top-3, so one
+correct-but-singular snippet in a long doc was diluted <0.5. Fixed → CRAG now
+scores **best-snippet (max) relevance over top-5**. Measured (n=50, single run):
+over-refusals **12→8**, adversarial refusal held 4/4; scored flat 37→37 because
+the now-answered questions hit the **next** bug. Snapshot
+`docs/eval_baselines/finance_after_crag.*`. **Q5 roadmap (the remaining loss):**
+citation **attribution** — e.g. q012 answers "9.40%" correctly with gold chunks
+IN context, but the generator cites a *sibling* hit that also states 9.40%
+(non-gold file) instead of the canonical source (the addendum that SETS the
+rate). The LLM cites `[hit_id]` markers → enriched to file_ids; when multiple
+hits support a claim it doesn't prefer the authoritative source. This is genuine
+**Q5 span/claim-verification** (prefer authoritative source for each claim),
+partly eval-gold strictness — NOT a cheap bug. (q009-class refusals are
+stochastic CRAG borderline on sparse mentions; lower priority.)
+
 **▶ FINANCE M1 BASELINE (first ever) — snapshot `docs/eval_baselines/finance_phase0.*`.**
 50 verified Qs, in-process orchestrator, Cohere rerank. **Headline: retrieval is
 NOT the bottleneck on finance either — the loss is generation+citation, same as
