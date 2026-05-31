@@ -83,3 +83,68 @@ async def test_single_cluster_noop():
         [_c("total_cost")], embed_fn=_embed, judge_fn=_judge_merge_totals,
     )
     assert len(out) == 1
+
+
+# ---------------------------------------------------------------------------
+# FIX 4 — user-declared schema names anchor the convergence
+# ---------------------------------------------------------------------------
+
+
+_ANCHOR_VECS = {
+    # emergent variants + a declared anchor, all near each other
+    "all_in_rate: the all_in_rate": [1.0, 0.0, 0.0],
+    "post_amendment_rate: the post_amendment_rate": [0.99, 0.01, 0.0],
+    # seeded anchor has empty description → text strips to just the name
+    "interest_rate": [0.985, 0.015, 0.0],
+    # emergent interest_rate (with description) → full "name: desc" text
+    "interest_rate: the interest_rate": [0.985, 0.015, 0.0],
+    "vendor_name: the vendor_name": [0.0, 0.0, 1.0],
+}
+
+
+async def _embed_anchor(texts):
+    return [_ANCHOR_VECS[t] for t in texts]
+
+
+async def _judge_all_rates(a, b):
+    rate_names = {"all_in_rate", "post_amendment_rate", "interest_rate"}
+    return a.canonical_name in rate_names and b.canonical_name in rate_names
+
+
+@pytest.mark.asyncio
+async def test_emergent_variants_adopt_declared_anchor_name():
+    # interest_rate is user-declared (not emergent). all_in_rate (3 docs) +
+    # post_amendment_rate (2 docs) should merge and adopt the DECLARED name.
+    clusters = [_c("all_in_rate", 0.5, n=3), _c("post_amendment_rate", 0.33, n=2)]
+    out = await converge_clusters_semantic(
+        clusters, embed_fn=_embed_anchor, judge_fn=_judge_all_rates,
+        sim_threshold=0.86, anchor_names={"interest_rate"},
+    )
+    names = {c.canonical_name for c in out}
+    assert names == {"interest_rate"}              # declared name won
+    merged = out[0]
+    assert merged.n_docs_observed == 5             # 3 + 2 emergent (anchor adds 0)
+
+
+@pytest.mark.asyncio
+async def test_lone_declared_anchor_is_dropped():
+    # A declared field with no emergent variant must NOT become a 0-doc cluster
+    # (it's already a schema field by declaration).
+    clusters = [_c("vendor_name", 1.0, n=4)]
+    out = await converge_clusters_semantic(
+        clusters, embed_fn=_embed_anchor, judge_fn=_judge_all_rates,
+        sim_threshold=0.86, anchor_names={"interest_rate"},
+    )
+    assert {c.canonical_name for c in out} == {"vendor_name"}
+
+
+@pytest.mark.asyncio
+async def test_anchor_wins_even_when_less_prevalent():
+    # The most-prevalent emergent spelling would normally win the canonical
+    # name; an anchor overrides that even at lower prevalence.
+    clusters = [_c("all_in_rate", 0.9, n=9), _c("interest_rate", 0.1, n=1)]
+    out = await converge_clusters_semantic(
+        clusters, embed_fn=_embed_anchor, judge_fn=_judge_all_rates,
+        sim_threshold=0.86, anchor_names={"interest_rate"},
+    )
+    assert {c.canonical_name for c in out} == {"interest_rate"}

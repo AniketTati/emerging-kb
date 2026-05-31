@@ -145,6 +145,7 @@ async def converge_clusters_semantic(
     embed_fn: Any,
     judge_fn: Any,
     sim_threshold: float = 0.86,
+    anchor_names: frozenset[str] | set[str] = frozenset(),
 ) -> list[FieldCluster]:
     """I2 (EDC) — merge exact-match clusters that mean the SAME field under
     different names (e.g. `total_cost` vs `total_amount`).
@@ -161,9 +162,44 @@ async def converge_clusters_semantic(
     pass fakes). Merged clusters keep the most-prevalent name as canonical and
     sum doc observations. Pure aside from the two injected calls — order of
     the returned list is by descending prevalence for determinism.
+
+    FIX 4 — `anchor_names` are USER-DECLARED schema field names. They're the
+    canonical anchors: an emergent variant that merges with an anchor adopts
+    the ANCHOR's name (not the most-prevalent emergent spelling), so the
+    declared schema name wins. Anchors not already present are seeded as
+    0-doc pseudo-clusters so emergent variants can merge into a declared field
+    even when that exact spelling was never emitted; a lone seeded anchor (no
+    emergent variant) is dropped from the output (it's already a schema field
+    by declaration — it doesn't need promotion).
     """
+    anchor_names = set(anchor_names or ())
+    # Seed declared anchors not already emergent so variants can merge into them.
+    present = {c.canonical_name for c in clusters}
+    seeded_anchor_names: set[str] = set()
+    if anchor_names:
+        seeded = list(clusters)
+        for a in anchor_names:
+            if a and a not in present:
+                seeded.append(FieldCluster(
+                    canonical_name=a, description="", value_type="text",
+                    n_docs_observed=0, prevalence=0.0,
+                    stability=1.0, value_type_confidence=1.0,
+                ))
+                seeded_anchor_names.add(a)
+        clusters = seeded
+
+    def _drop_lone_anchors(out: list[FieldCluster]) -> list[FieldCluster]:
+        # Drop a seeded anchor only when it stayed LONE (no emergent variant
+        # merged in → still 0 docs). A merged cluster that adopted the anchor
+        # name carries the emergent docs (n_docs_observed > 0) and is kept.
+        return [
+            c for c in out
+            if not (c.canonical_name in seeded_anchor_names
+                    and c.n_docs_observed == 0)
+        ]
+
     if len(clusters) < 2:
-        return list(clusters)
+        return _drop_lone_anchors(list(clusters))
 
     texts = [f"{c.canonical_name}: {c.description}".strip(": ") for c in clusters]
     vectors = await embed_fn(texts)
@@ -213,8 +249,12 @@ async def converge_clusters_semantic(
             merged.append(clusters[members[0]])
             continue
         group = [clusters[m] for m in members]
-        # Canonical = the most-prevalent member's name (the dominant spelling).
-        lead = max(group, key=lambda c: (c.prevalence, c.n_docs_observed))
+        # FIX 4 — a user-declared anchor in the group wins the canonical name;
+        # otherwise the most-prevalent emergent spelling does.
+        lead = next(
+            (c for c in group if c.canonical_name in anchor_names),
+            None,
+        ) or max(group, key=lambda c: (c.prevalence, c.n_docs_observed))
         total_docs = sum(c.n_docs_observed for c in group)
         # Prevalence/stability: doc-weighted averages, clamped to 1.0.
         prevalence = min(1.0, sum(c.prevalence * c.n_docs_observed for c in group)
@@ -231,6 +271,7 @@ async def converge_clusters_semantic(
             value_type_confidence=stability,
         ))
 
+    merged = _drop_lone_anchors(merged)
     merged.sort(key=lambda c: (-c.prevalence, c.canonical_name))
     return merged
 

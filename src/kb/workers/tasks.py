@@ -4533,10 +4533,26 @@ async def converge_workspace_fields_impl(
                     default=0.86,
                     doc_type=doc_type,
                 )
+                # FIX 4 — user-declared field names anchor the convergence:
+                # emergent variants merge INTO the declared name (auto_promoted
+                # = false ⇒ user-declared, not machine-promoted).
+                cur = await conn.execute(
+                    "SELECT sf.name FROM schema_fields sf "
+                    "JOIN schema_entities se ON sf.entity_id = se.id "
+                    "JOIN schemas s ON se.schema_id = s.id "
+                    "WHERE s.workspace_id = %s AND s.name = %s "
+                    "  AND s.lifecycle_state = 'active' "
+                    "  AND se.lifecycle_state = 'active' "
+                    "  AND sf.lifecycle_state = 'active' "
+                    "  AND sf.auto_promoted = false",
+                    (workspace_id, f"auto:{doc_type}"),
+                )
+                anchor_names = {r[0] for r in await cur.fetchall()}
                 try:
                     converged = await converge_clusters_semantic(
                         clusters, embed_fn=_embed, judge_fn=_judge,
                         sim_threshold=sim_threshold,
+                        anchor_names=anchor_names,
                     )
                 except Exception:  # noqa: BLE001 — convergence is best-effort
                     traceback.print_exc()
