@@ -2892,6 +2892,7 @@ async def detect_doc_chain_file_impl(file_id: str) -> None:
     from kb.domain.doc_chains import (
         add_member,
         find_chain_for_doc,
+        next_version_index,
         set_current_version,
         upsert_chain,
     )
@@ -2945,14 +2946,18 @@ async def detect_doc_chain_file_impl(file_id: str) -> None:
             cur = await conn.execute(
                 "SELECT lower(field_name), value_text FROM proposed_fields "
                 "WHERE file_id = %s AND lower(field_name) IN "
-                "('chain_id','parent_doc','doc_id','chain_role','chain_version')",
+                "('chain_id','chain','parent_doc','doc_id','chain_role','chain_version')",
                 (file_id,),
             )
             own_pf_rows = await cur.fetchall()
             own_pf: dict[str, str] = {
                 k: (v or "").strip() for k, v in own_pf_rows
             }
-            own_chain_id = own_pf.get("chain_id") or ""
+            # I6: `chain` is an accepted alias for `chain_id` — finance loan
+            # docs declare `chain:` while complaint docs declare `chain_id:`.
+            # Honor either so the deterministic explicit path fires for both
+            # instead of falling back to fragile title-similarity matching.
+            own_chain_id = own_pf.get("chain_id") or own_pf.get("chain") or ""
             own_parent_doc_ref = own_pf.get("parent_doc") or ""
             own_doc_id_ref = own_pf.get("doc_id") or ""
             own_chain_role = own_pf.get("chain_role") or ""
@@ -2968,7 +2973,7 @@ async def detect_doc_chain_file_impl(file_id: str) -> None:
                     "JOIN files f ON f.id = pf.file_id "
                     "WHERE f.workspace_id = %s AND pf.file_id <> %s "
                     "AND lower(pf.field_name) IN "
-                    "('chain_id','doc_id','parent_doc','chain_role','chain_version') "
+                    "('chain_id','chain','doc_id','parent_doc','chain_role','chain_version') "
                     "AND pf.value_text IS NOT NULL",
                     (workspace_id, file_id),
                 )
@@ -2978,7 +2983,7 @@ async def detect_doc_chain_file_impl(file_id: str) -> None:
 
                 co_member_ids = [
                     sib_id for sib_id, pf in sib_pf.items()
-                    if pf.get("chain_id") == own_chain_id
+                    if (pf.get("chain_id") or pf.get("chain")) == own_chain_id
                 ]
                 # Resolve own parent_doc reference → sibling file_id by
                 # matching against siblings' doc_id field.
@@ -3030,10 +3035,14 @@ async def detect_doc_chain_file_impl(file_id: str) -> None:
                     explicit_role = (
                         "amendment" if own_parent_doc_ref else "original"
                     )
+                # I6: honor a declared chain_version; otherwise assign a
+                # DISTINCT index below (after the chain exists) instead of the
+                # old hardcoded 0/1 — finance declares no chain_version, so two
+                # addenda both fell to 1.
                 try:
-                    explicit_version = int(own_chain_version_raw)
+                    declared_version: int | None = int(own_chain_version_raw)
                 except (ValueError, TypeError):
-                    explicit_version = 0 if explicit_role == "original" else 1
+                    declared_version = None
 
                 # Find-or-create the chain via explicit chain_key. The
                 # chain_key namespace prefix `explicit:` keeps these
@@ -3049,6 +3058,14 @@ async def detect_doc_chain_file_impl(file_id: str) -> None:
                         file_id if explicit_role != "original" else None
                     ),
                 )
+                if declared_version is not None:
+                    explicit_version = declared_version
+                elif explicit_role == "original":
+                    explicit_version = 0
+                else:
+                    explicit_version = await next_version_index(
+                        conn, chain_id=chain_id_db,
+                    )
                 inserted = await add_member(
                     conn,
                     chain_id=chain_id_db,
@@ -3076,7 +3093,12 @@ async def detect_doc_chain_file_impl(file_id: str) -> None:
                     try:
                         sib_version = int(sib_ver_raw)
                     except (ValueError, TypeError):
-                        sib_version = 0 if sib_role == "original" else 1
+                        sib_version = (
+                            0 if sib_role == "original"
+                            else await next_version_index(
+                                conn, chain_id=chain_id_db,
+                            )
+                        )
                     # Resolve sibling's parent_doc ref → file_id (could be
                     # in sib_pf or this file's own doc_id_ref).
                     sib_parent_file_id: str | None = None
@@ -3280,18 +3302,12 @@ async def detect_doc_chain_file_impl(file_id: str) -> None:
                 detection_confidence=candidate.confidence,
                 current_version_id=file_id,
             )
-            inserted = await add_member(
-                conn,
-                chain_id=chain_id,
-                doc_id=file_id,
-                workspace_id=workspace_id_str,
-                version_index=candidate.version_index,
-                role=candidate.role,
-                parent_doc_id=candidate.parent_doc_id,
-            )
-            # Ensure each sibling member referenced by the detector is
-            # in the chain (e.g., the first email needs an "original"
-            # row even though it wasn't added when first parsed).
+            # I6 correctness: assign DISTINCT, monotonic version_index values
+            # from the chain's current membership rather than trusting the
+            # detector (which hardcodes 1 for contract/corrigendum chains, so
+            # a loan original + 2 addenda all collided at index 1). Predecessor
+            # siblings are backfilled FIRST (older → lower index), then the
+            # incoming doc takes the next (highest) index as the newest event.
             for sib_id in candidate.sibling_member_ids:
                 cur = await conn.execute(
                     "SELECT 1 FROM doc_chain_members "
@@ -3305,9 +3321,20 @@ async def detect_doc_chain_file_impl(file_id: str) -> None:
                         chain_id=chain_id,
                         doc_id=sib_id,
                         workspace_id=workspace_id_str,
-                        version_index=0,
+                        version_index=await next_version_index(
+                            conn, chain_id=chain_id,
+                        ),
                         role="original",
                     )
+            inserted = await add_member(
+                conn,
+                chain_id=chain_id,
+                doc_id=file_id,
+                workspace_id=workspace_id_str,
+                version_index=await next_version_index(conn, chain_id=chain_id),
+                role=candidate.role,
+                parent_doc_id=candidate.parent_doc_id,
+            )
             # Promote the new file as current_version for amendments /
             # revisions (newer supersedes).
             if candidate.role in (

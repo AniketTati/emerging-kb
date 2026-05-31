@@ -290,6 +290,25 @@ async def add_member(
     return inserted
 
 
+async def next_version_index(conn: Connection, *, chain_id: str) -> int:
+    """Next free version_index for a chain = max(existing) + 1 (0 for an
+    empty chain).
+
+    I6 correctness: the per-type detectors hardcode `version_index=1` for
+    contract / corrigendum chains, so a loan original + 2 addenda all landed
+    at index 1 (and the sibling-backfill stacked them at 0). The worker now
+    assigns each joining member a distinct, monotonic index via this helper
+    instead of trusting the detector's value, so chain order is well-defined.
+    """
+    cur = await conn.execute(
+        "SELECT COALESCE(MAX(version_index), -1) + 1 "
+        "FROM doc_chain_members WHERE chain_id = %s",
+        (chain_id,),
+    )
+    row = await cur.fetchone()
+    return int(row[0]) if row else 0
+
+
 async def _refresh_member_count(conn: Connection, *, chain_id: str) -> None:
     await conn.execute(
         "UPDATE doc_chains SET member_count = "
