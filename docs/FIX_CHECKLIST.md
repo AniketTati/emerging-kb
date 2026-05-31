@@ -89,6 +89,17 @@ reconcile + field convergence UNDER-merge (HDFC vs HDFC BANK separate;
 account_number vs account_no) — conservative judges, tune with eval; (b)
 `resolve_identities` lacks deadlock-retry (S2/scale); (c) query path needs
 `KB_RERANKER=bge`→`cohere`/`auto` (stale docker API env) + the Q-tasks.
+**ARTIFACT AUDIT (per-doc × per-artifact coverage + integrity) — PASSED after
+one fix.** Caught: #19 cold-start re-extraction was DESTRUCTIVE — force-mode
+delete-parents-then-insert wiped doc_root entities when the re-run yielded 0
+(identity extractor on a transient KB_ENTITY_EXTRACTOR=auto/Gemini miss):
+complaint-005 → 0 entities, wire-005 → lost parent. Fixed `1d65e76` (guard
+delete on `_has_new_parents`; +regression test) and restored both docs via
+Gemini re-extract. **Re-verified: 46/46 docs have full artifact set** (raw_pages,
+chunks, contextual_chunks, embeddings [0 missing], per-doc RAPTOR root, mentions,
+doc_root parent), corpus RAPTOR (3 nodes), 2 chains (5 members). Ingestion data
+COMPLETE + INTEGRITY-VERIFIED. (Remaining = consolidation under-merge quality,
+eval-coupled — NOT a completeness gap.)
 **NEXT: UI discovery + user-schema ability (P1b/P3/P6).**
 
 ---
