@@ -75,6 +75,38 @@ eval after each task** so you can attribute every change.
 
 ### ▸ Live status (update after every task)
 
+**▶▶ QUERY PHASE STARTED — STRUCTURED QUERIES LIT UP E2E (the query half of
+FIX 4) — `a42e326`, `1798ee6`, `4ebfbe7`.** With ingestion rebuild done, the
+data was ready (typed `interest_rate` 8.5/9.0/9.4 on loan doc_roots, ws
+`f2b2…`) but the QUERY path never reached F-mode's filter. Three one-at-a-time
+edits closed it:
+- **1/3 (`a42e326`)** `_parse_plan_json` PARSES `field_filters` — it read every
+  other plan field but silently DROPPED field_filters, so even a correct LLM
+  emission was lost → F-mode always got `()` → unfiltered H pass-through. Adds
+  `_parse_field_filters` (validates `{field,op,value}`, drops malformed/unknown-op,
+  coerces stringy numerics `'9%'/'1,000'`→float for lt/le/gt/ge). 7 tests.
+- **2/3 (`1798ee6`)** routing prompt now ADVERTISES field_filters (schema key +
+  op set eq/ne/lt/le/gt/ge/like/in + snake_case names + a worked loan/rate
+  example) and steers F-vs-C (F for DOCUMENT types, C for row types).
+- **3/3 (`4ebfbe7`)** F-mode canonical name mapping (`_resolve_field_name`):
+  exact → normalized (case/space/hyphen folded) → unambiguous token-subset
+  (`'rate'`→`interest_rate` iff sole rate-key; ambiguous→None, never guesses).
+  Stored keys are the canonical anchors. 5 tests incl. apply_mode E2E + ge/gt
+  9.0 boundary. **141 planner+mode_router tests green.**
+- **🎯 LIVE E2E (native API :8000, Gemini planner, ws `f2b2…`):** NL query
+  "which loans have an interest rate over 9%" → **mode F**, planner emits
+  `field_filters=[{interest_rate, gt, 9}]` (canonical name direct), F-mode keeps
+  ONLY amendment-2 (9.4), cites it, `refused=False crag=1.0`. Boundary-inclusive
+  phrasings ("9% or higher" / "at least 9%") → `ge 9` → BOTH amendment-1 (9.0) +
+  amendment-2 (9.4), exclude the 8.5 original. The acceptance set {9.0,9.4} is
+  produced by the inclusive phrasing; "over"=strict gt is the literal reading
+  (NOT hacked to ge). Structured numeric filtering from the structured layer
+  works end-to-end with correct citations. **NOTE: F-mode is a POST-retrieval
+  filter** — it narrows hits retrieval already surfaced; works here because the
+  3-doc loan chain is fully retrieved. **NEXT:** Q5 citation-attribution +
+  faithfulness-gate lever; then the two cheap UI wins (degraded_extractions in
+  Needs-Review; Schema Studio "Apply changes" button).
+
 **▶ FINANCE INGEST COMPLETE (46/46 ready, ws `f0000000`).** Staged ingest
 (statements → chains → full corpus) surfaced + fixed 5 real bugs: I1 never
 wired into chunk_file_impl (`1d4b803`); schema-bootstrap races under concurrent
@@ -371,9 +403,10 @@ is correct).
 
 **▶ ALL INGESTION-PIPELINE FIXES (1–10) DONE + verified.** Remaining is NOT
 ingestion code:
-- **Query-coupled FIX 4** (query-time field-name→canonical mapping in the
-  planner/F-mode; semantic cross-doc column-synonym merge + its destructive
-  fields-key rewrite). Query layer, separate.
+- **Query-coupled FIX 4** — query-time field-name→canonical mapping in the
+  planner/F-mode is **DONE** (`a42e326`/`1798ee6`/`4ebfbe7`, lit up E2E — see the
+  QUERY-PHASE entry at the top). *Still pending:* semantic cross-doc
+  column-synonym merge + its destructive fields-key rewrite (ingestion-side).
 - **Validation runs** — (a) corpus re-extract over finance (FIX 9) + M1 re-run
   ("loans with rate>9%" from the structured layer; no regression on 32/50 +
   adversarial 4/4); (b) real-binary E2E (vertex-msa.pdf / scanned / xlsx) —
