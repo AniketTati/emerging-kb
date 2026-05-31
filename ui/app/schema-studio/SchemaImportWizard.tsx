@@ -13,13 +13,14 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   X, Plus, Trash2, Loader2, ArrowLeft, ArrowRight, Check,
-  UploadCloud, Sparkles, FileText,
+  UploadCloud, Sparkles, FileText, History,
 } from "lucide-react";
 
 import {
-  importSchemaDoc, importSchemaYaml,
+  importSchemaDoc, importSchemaYaml, listSchemas, listSchemaVersions,
   type SchemaImportDoc, type SchemaImportEntity, type SchemaImportField,
   type SchemaImportRelationship, type SchemaImportResponse,
+  type SchemaSummary, type SchemaVersionRow,
 } from "@/lib/api";
 
 const FIELD_TYPES = ["string", "number", "boolean", "date", "datetime"] as const;
@@ -126,9 +127,19 @@ const inputCls =
 export function SchemaCreateActions({ onChanged }: { onChanged?: () => void }) {
   const [wizardOpen, setWizardOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+  const [versionsOpen, setVersionsOpen] = useState(false);
 
   return (
     <>
+      <button
+        type="button"
+        onClick={() => setVersionsOpen(true)}
+        className="flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md text-zinc-600 hover:text-zinc-900 hover:bg-zinc-100 cursor-pointer"
+        title="View schema version history"
+        data-testid="schema-versions-btn"
+      >
+        <History className="w-3.5 h-3.5" strokeWidth={1.75} /> Versions
+      </button>
       <button
         type="button"
         onClick={() => setImportOpen(true)}
@@ -158,7 +169,129 @@ export function SchemaCreateActions({ onChanged }: { onChanged?: () => void }) {
         onClose={() => setImportOpen(false)}
         onChanged={onChanged}
       />
+      <SchemaVersionsModal
+        open={versionsOpen}
+        onClose={() => setVersionsOpen(false)}
+      />
     </>
+  );
+}
+
+
+// ===========================================================================
+// Schema version history (P6b) — list typed schemas, drill into versions
+// ===========================================================================
+
+function SchemaVersionsModal({
+  open, onClose,
+}: {
+  open: boolean;
+  onClose: () => void;
+}) {
+  const [schemas, setSchemas] = useState<SchemaSummary[] | null>(null);
+  const [selected, setSelected] = useState<SchemaSummary | null>(null);
+  const [versions, setVersions] = useState<SchemaVersionRow[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [loadingVersions, setLoadingVersions] = useState(false);
+
+  // Load the schema list whenever the modal opens.
+  useEffect(() => {
+    if (!open) return;
+    setErr(null); setSelected(null); setVersions(null); setSchemas(null);
+    listSchemas()
+      .then(setSchemas)
+      .catch((e) => setErr(e instanceof Error ? e.message : String(e)));
+  }, [open]);
+
+  const pick = useCallback(async (s: SchemaSummary) => {
+    setSelected(s); setVersions(null); setErr(null); setLoadingVersions(true);
+    try {
+      setVersions(await listSchemaVersions(s.id));
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoadingVersions(false);
+    }
+  }, []);
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      wide
+      title="Schema version history"
+      subtitle="Every schema edit, import or rollback records an immutable version"
+    >
+      {err && <ErrBox msg={err} />}
+      {!err && schemas === null && (
+        <div className="flex items-center gap-2 text-[12px] text-zinc-400">
+          <Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading schemas…
+        </div>
+      )}
+      {schemas !== null && schemas.length === 0 && (
+        <div className="text-[12px] text-zinc-400">No schemas yet. Create one with “New schema”.</div>
+      )}
+      {schemas !== null && schemas.length > 0 && (
+        <div className="grid grid-cols-[200px_1fr] gap-4">
+          {/* Schema list */}
+          <div className="space-y-1 border-r border-zinc-100 pr-3">
+            {schemas.map((s) => (
+              <button
+                key={s.id}
+                type="button"
+                onClick={() => pick(s)}
+                className={`w-full text-left px-2 py-1.5 rounded-md text-xs cursor-pointer ${
+                  selected?.id === s.id ? "bg-zinc-900 text-white" : "hover:bg-zinc-100 text-zinc-700"
+                }`}
+                data-testid="schema-versions-schema"
+              >
+                <div className="truncate font-medium">{s.name}</div>
+                {s.current_version !== undefined && (
+                  <div className={`mono text-[10px] ${selected?.id === s.id ? "text-zinc-300" : "text-zinc-400"}`}>
+                    v{s.current_version}
+                  </div>
+                )}
+              </button>
+            ))}
+          </div>
+
+          {/* Version timeline for the selected schema */}
+          <div className="min-w-0">
+            {!selected && (
+              <div className="text-[12px] text-zinc-400 pt-2">
+                Select a schema to see its version history.
+              </div>
+            )}
+            {selected && loadingVersions && (
+              <div className="flex items-center gap-2 text-[12px] text-zinc-400">
+                <Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading versions…
+              </div>
+            )}
+            {selected && versions !== null && (
+              <ol className="space-y-1.5" data-testid="schema-versions-list">
+                {versions.length === 0 && (
+                  <li className="text-[12px] text-zinc-400">No versions recorded.</li>
+                )}
+                {versions.map((v) => (
+                  <li key={v.version} className="flex items-baseline gap-2 text-[12px]">
+                    <span className="mono font-medium text-zinc-900 w-10 flex-shrink-0">v{v.version}</span>
+                    <span className="px-1.5 py-0.5 rounded text-[10px] mono bg-zinc-100 text-zinc-600">
+                      {v.kind ?? "edit"}
+                    </span>
+                    {v.parent_version != null && (
+                      <span className="mono text-[10px] text-zinc-400">← v{v.parent_version}</span>
+                    )}
+                    <span className="ml-auto text-[11px] text-zinc-400 mono truncate">
+                      {v.created_at ? new Date(v.created_at).toLocaleString() : ""}
+                    </span>
+                  </li>
+                ))}
+              </ol>
+            )}
+          </div>
+        </div>
+      )}
+    </Modal>
   );
 }
 

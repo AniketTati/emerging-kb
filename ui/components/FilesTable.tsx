@@ -3,6 +3,7 @@
 import { useCallback, useState } from "react";
 import Link from "next/link";
 import {
+  AlertCircle,
   ChevronRight,
   FileText,
   Image as ImageIcon,
@@ -418,6 +419,69 @@ function ExpandedDetail({
 }
 
 
+/** P6(a) — pure extractor for WHY a file failed. The worker records the
+ *  failure as a lifecycle event with `to_state:"failed"` and a payload
+ *  carrying `error_class` / `message` / (optional) `traceback_head` (see
+ *  workers/tasks.py `_mark_failed`). Returns the most-recent failed
+ *  transition's reason, or null if the file never failed. Exported for unit
+ *  tests (the finance demo corpus has no failed files to exercise it live). */
+export function failureReasonFrom(
+  lifecycle: FileDetails["lifecycle"],
+): { event: string | null; errorClass: string | null; message: string | null; traceback: string | null } | null {
+  // Most-recent failed transition (re-runs can append more than one).
+  const failed = [...lifecycle].reverse().find((e) => e.to_state === "failed");
+  if (!failed) return null;
+  const str = (v: unknown): string | null => (typeof v === "string" ? v : null);
+  return {
+    event: failed.event ?? null,
+    errorClass: str(failed.payload?.error_class),
+    message: str(failed.payload?.message),
+    traceback: str(failed.payload?.traceback_head),
+  };
+}
+
+/** Renders the failure reason banner (only for failed files). */
+function FailureReason({ lifecycle }: { lifecycle: FileDetails["lifecycle"] }) {
+  const reason = failureReasonFrom(lifecycle);
+  if (!reason) return null;
+  const { event: failedEvent, errorClass, message, traceback } = reason;
+
+  return (
+    <div
+      className="rounded-md border border-red-200 bg-red-50 px-3 py-2.5 text-xs"
+      data-testid="file-failure-reason"
+    >
+      <div className="flex items-center gap-1.5 font-medium text-red-800">
+        <AlertCircle className="w-3.5 h-3.5" strokeWidth={2} />
+        Failed
+        {failedEvent && (
+          <span className="mono text-[10px] text-red-500">· {failedEvent}</span>
+        )}
+      </div>
+      {errorClass && (
+        <div className="mt-1 mono text-[11px] text-red-700">{errorClass}</div>
+      )}
+      {message && (
+        <div className="mt-0.5 text-red-700 whitespace-pre-wrap">{message}</div>
+      )}
+      {!errorClass && !message && (
+        <div className="mt-1 text-red-600">No reason recorded for this failure.</div>
+      )}
+      {traceback && (
+        <details className="mt-1.5">
+          <summary className="cursor-pointer text-[11px] text-red-600 hover:text-red-800">
+            traceback
+          </summary>
+          <pre className="mt-1 max-h-48 overflow-auto rounded bg-red-100/60 p-2 text-[10px] text-red-800 whitespace-pre-wrap">
+            {traceback}
+          </pre>
+        </details>
+      )}
+    </div>
+  );
+}
+
+
 function DetailBody({ detail }: { detail: FileDetails }) {
   const f = detail.file;
   const stages = computeStageTimeline(detail.lifecycle);
@@ -425,6 +489,9 @@ function DetailBody({ detail }: { detail: FileDetails }) {
 
   return (
     <div className="space-y-4">
+      {/* P6(a) — failure reason banner (only renders for failed files) */}
+      <FailureReason lifecycle={detail.lifecycle} />
+
       {/* 5-stage timeline */}
       <div className="grid grid-cols-5 gap-2">
         {stages.map((s) => (

@@ -51,7 +51,7 @@ describe("importSchemaYaml", () => {
 
     expect(res).toEqual(OK_RESPONSE);
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toMatch(/\/schemas\/import\.yaml$/);
     expect(init.method).toBe("POST");
     expect(init.body).toBe(yaml);
@@ -83,7 +83,7 @@ describe("importSchemaDoc", () => {
     const res = await importSchemaDoc(doc);
 
     expect(res).toEqual(OK_RESPONSE);
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toMatch(/\/schemas\/import\.yaml$/);
     expect(init.method).toBe("POST");
     const headers = init.headers as Record<string, string>;
