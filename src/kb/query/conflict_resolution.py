@@ -369,6 +369,8 @@ def build_fact_candidates(
 async def resolve_conflicts_for_hits(
     conn: Any,
     hits: list[Hit],
+    *,
+    authority_dominance_gap: float | None = None,
 ) -> list[ResolvedConflict]:
     """End-to-end orchestrator helper.
 
@@ -447,7 +449,14 @@ async def resolve_conflicts_for_hits(
     if not candidates:
         return []
 
-    resolutions = resolve_all(candidates)
+    # P1 — when the orchestrator resolved an authority-dominance gap override
+    # from config, thread it through; otherwise resolve_all uses its default.
+    if authority_dominance_gap is None:
+        resolutions = resolve_all(candidates)
+    else:
+        resolutions = resolve_all(
+            candidates, authority_dominance_gap=authority_dominance_gap,
+        )
     return [r for r in resolutions if r.resolution != "consensus"]
 
 

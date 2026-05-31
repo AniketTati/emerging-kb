@@ -234,6 +234,7 @@ from kb.query.citations import (
     fetch_file_metas,
     build_citation,
 )
+from kb.query.conflict_detector import DEFAULT_AUTHORITY_DOMINANCE_GAP
 from kb.query.conflict_resolution import (
     build_conflict_prompt_block,
     persist_fact_conflicts,
@@ -612,6 +613,14 @@ class Orchestrator:
             key="retrieval.crag.threshold",
             workspace_id=workspace_id,
             default=self._crag_threshold,
+        )
+        # P1 — same for the conflict authority-dominance gap (Design 2): a
+        # domain can tune how decisively higher authority wins a fact conflict.
+        authority_dominance_gap = await resolve_query_threshold(
+            conn,
+            key="conflicts.authority_dominance_gap",
+            workspace_id=workspace_id,
+            default=DEFAULT_AUTHORITY_DOMINANCE_GAP,
         )
 
         # Auto-create a session if the caller didn't pass one. Without
@@ -1145,6 +1154,7 @@ class Orchestrator:
                 try:
                     conflict_resolutions = await resolve_conflicts_for_hits(
                         conn, hits,
+                        authority_dominance_gap=authority_dominance_gap,
                     )
                     if conflict_resolutions:
                         await emit("conflicts_resolved", {
