@@ -247,6 +247,10 @@ Ingestion-batch progress (do tasks ONE-AT-A-TIME — see
 
 > Pre-existing (NOT my regression): `tests/test_b4b_api.py` 2 failures
 > (StubPlanner `.plan()` missing `conn` kwarg) — fail identically at `ff0ceea`.
+> Also `tests/test_b3_unit.py` 4 failures (faithfulness factory default/auto
+> → Identity; 2 PDF span-ref) — `faithfulness.py`/`citations.py`/the test are
+> byte-identical to session-start `f24431a` and import none of the P1
+> query-side files, so they predate this session's query work.
 
 **Operating mode:** construction only (`c0000000-…001`, 46 docs ingested);
 other 5 domains not ingested yet — deferred until construction build is done.
