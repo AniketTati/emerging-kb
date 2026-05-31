@@ -260,7 +260,7 @@ from kb.query.context_resolver import (
     make_context_resolver,
 )
 from kb.query.intent import IntentClassifier, IntentResult, make_intent_classifier
-from kb.query.auto_merging import auto_merge_hits
+from kb.query.auto_merging import DEFAULT_MERGE_THRESHOLD, auto_merge_hits
 from kb.query.mode_router import QModeNotImplementedError, apply_mode
 from kb.query.planner import Plan, Planner, make_planner
 from kb.query.rerank import Reranker, make_reranker
@@ -622,6 +622,14 @@ class Orchestrator:
             workspace_id=workspace_id,
             default=DEFAULT_AUTHORITY_DOMINANCE_GAP,
         )
+        # P1 — AutoMerging threshold (fraction of a parent's leaves that must be
+        # hit before swapping in the parent). Domain-tunable for context width.
+        merge_threshold = await resolve_query_threshold(
+            conn,
+            key="retrieval.auto_merge.threshold",
+            workspace_id=workspace_id,
+            default=DEFAULT_MERGE_THRESHOLD,
+        )
 
         # Auto-create a session if the caller didn't pass one. Without
         # this, `_persist_turn` silently skips persistence (session_id
@@ -933,6 +941,7 @@ class Orchestrator:
         # See kb/query/auto_merging.py.
         hits, auto_merge_stats_chat = await auto_merge_hits(
             hits, conn=conn, workspace_id=workspace_id,
+            merge_threshold=merge_threshold,
         )
         if auto_merge_stats_chat.leaves_replaced:
             await emit("auto_merged", {

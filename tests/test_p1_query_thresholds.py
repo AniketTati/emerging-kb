@@ -68,6 +68,22 @@ async def test_defaults_yaml_crag_value_wins_over_passed_default(db_url_superuse
     assert val == 0.5, "defaults.yaml value should win over the passed default"
 
 
+async def test_new_query_keys_resolve_from_defaults_yaml():
+    """The two keys added/relied on this session resolve to their YAML values,
+    proving the key path exists (no DB needed)."""
+    from kb.query.config_thresholds import resolve_query_threshold
+
+    ws = str(uuid.uuid4())
+    am = await resolve_query_threshold(
+        None, key="retrieval.auto_merge.threshold", workspace_id=ws, default=0.999,
+    )
+    assert am == 0.5, "retrieval.auto_merge.threshold should read 0.5 from defaults.yaml"
+    gap = await resolve_query_threshold(
+        None, key="conflicts.authority_dominance_gap", workspace_id=ws, default=0.999,
+    )
+    assert gap == 0.30, "conflicts.authority_dominance_gap should read 0.30 from defaults.yaml"
+
+
 async def test_missing_key_falls_back_to_default(db_url_superuser):
     from kb.query.config_thresholds import resolve_query_threshold
 

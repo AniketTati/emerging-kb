@@ -83,10 +83,16 @@ retrieval:
     timeout_ms: 1500
     fallback: mxbai-rerank-large-v2
 
-  # CRAG gate (Phase 8d).
+  # AutoMerging (Step 3): swap a parent's hit leaves for the parent when at
+  # least this fraction of its leaf children were hit. P1: read at query time.
+  auto_merge:
+    threshold: 0.5
+
+  # CRAG gate (Phase 8d). top_n_snippets_to_judge raised 3→5 (see crag.py:
+  # over-refusal fix — best-snippet relevance over a wider window).
   crag:
     threshold: 0.5
-    top_n_snippets_to_judge: 3
+    top_n_snippets_to_judge: 5
 
   # IRCoT escalation budget when CRAG fires low (Wave A WA-10).
   ircot:
