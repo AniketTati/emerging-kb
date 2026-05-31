@@ -244,10 +244,52 @@ first-class layer.** Largest fix; re-extract-coupled (FIX 9). Code-grounded plan
   canonical `interest_rate`; `transactionlisting`/`transaction_listing` → one
   `Transaction`.
 
-**▶ Then FIX 6 (table-level chunking) → 7 (identity merge+noise) → 9
-(re-extract corpus, lights up FIX 1 acceptance on the Acme loans) → 10
-(re-extract triggers) → validation (M1 re-run).** FIX 8 already done (fell out
-of FIX 1).
+**▶ FIX 4 (table names) DONE (`6a23a49`).** ensure_sub_entity_type reuses an
+existing type by normalize_unit_key (alnum-only + lowercase + singularize), so
+transaction_listing / transactionlisting / Transaction Listing / Transactions
+collapse onto one type (first spelling wins, non-destructive). Scalar-name
+convergence already feeds promotion at finalize (converge_clusters_semantic) +
+FIX 5 promotes the merged clusters. **Remaining (query-coupled, NOT ingestion):**
+query-time field-name→canonical mapping in the planner/F-mode; denormalized
+unit_type string canonicalization; semantic head-noun reduction.
+
+**▶ FIX 6 DONE (`362f5e5`) — block-level table chunking.** row_per_leaf emits
+one L0 leaf per block of rows_per_mid rows (parented to root), not one-per-row;
+no redundant mid layer. 100-row statement → 1 root + ceil(100/N) leaves.
+Auto-merge still works; rows never split; prose chunker untouched.
+
+**▶ FIX 7 DONE (`abed921`, `7a022fb`) — identity noise gate + better merge.**
+(A) is_noise_mention_text drops doc-IDs / ref numbers / URLs / email-domains /
+rate-benchmarks ('HDFC MCLR') at mention creation; type-aware (numeric/temporal
+types exempt — a real DATE isn't a doc-ID). (B) select_entity_match routes
+short-form/full-name variants (HDFC ⊂ HDFC BANK, prefix rule) to the LLM judge
+even below the low cosine threshold; judge still gates (no auto-merge on name);
+mention_name=None preserves legacy behavior.
+
+**▶ FIX 9 DONE (`62d185e`) — corpus re-extract re-runs KV+Tables.**
+extract_kv_tables_file_impl(force=True) runs on a ready file from cached chunks
+(re-discovers body fields under FIX 1/2/3/4/5), stays ready (no transition, no
+re-defer), non-destructive on transient-empty. reextract orchestrator now runs
+KV+Tables(force) THEN schema-entities(force) per file. 2 DB-backed tests
+(re-discovers interest_rate + stays ready; empty re-run preserves existing).
+
+**▶ FIX 10 DONE (`41baed9`) — schema-change / correction → re-extract triggers.**
+New tasks reextract_file (per-file force) + reextract_workspace_files
+(workspace/doc-type force); reextract impl gains a doc_type filter.
+bump_schema_version defers a coalesced (queueing_lock), doc-type-scoped re-extract
+on every schema CRUD/import. corrections scope='extraction' now defers the REAL
+reextract_file (was the dead extract_fields_file). NOTE: procrastinate defers
+don't land in procrastinate_jobs in the local test env (pre-existing raptor
+defer test fails identically) → enqueue-landing not asserted; doc_type-scope
+derivation + clean-bump tested; 50 schema + 21 correction tests green.
+
+**▶ ALL INGESTION-PIPELINE FIXES (1–10) DONE.** Remaining: query-coupled FIX 4
+mapping (above), the user-declared-fields-by-declaration half of FIX 5, and
+**validation** — run the corpus re-extract over finance (FIX 9) + M1 re-run
+("loans with rate>9%" from the structured layer; no regression on 32/50 +
+adversarial 4/4). Flagged pre-existing test-rot (spawned tasks): test_files_crud
+exact-keys, test_kv_tables_worker FakeExtractor/atomic_units; plus the
+procrastinate-defer test-harness gap (defers don't land in local test DB).
 
 **▶ DATA-QUALITY AUDIT (actual DB rows, not coverage) — finance ws.** Reviewed
 every layer with samples. **Good:** chunking (0 garbage; bank statements
