@@ -138,6 +138,53 @@ def _yaml_str(value: str) -> str:
     return f'"{s}"'
 
 
+# ---------------------------------------------------------------------------
+# POST /schemas/import.yaml — inverse of export.yaml (P3)
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/import.yaml",
+    summary="Import schemas (+ entities/fields/relationships) from a YAML document",
+    responses={
+        200: {"description": "Imported; body lists per-schema created/updated outcomes"},
+        400: {"description": "Malformed YAML or import document"},
+    },
+)
+async def import_schemas_yaml(
+    request: Request,
+    workspace_id: Annotated[str, Depends(current_workspace_id)],
+    conn: Annotated[Connection, Depends(kb_app_connection)],
+) -> JSONResponse:
+    """Accepts the raw YAML body produced by `GET /schemas/export.yaml`
+    (or a hand-authored equivalent) and upserts each schema's full subtree.
+
+    The request body is the YAML document itself (Content-Type
+    `application/x-yaml` or `text/yaml`; we read the raw bytes rather than
+    relying on FastAPI's JSON parsing). Each schema is created if its name
+    is new in the workspace, or updated in place otherwise; a new version is
+    recorded for every touched schema. The whole import is one transaction.
+    """
+    import yaml
+
+    from kb.domain.schemas import ImportValidationError, import_schemas
+
+    raw = await request.body()
+    if not raw or not raw.strip():
+        raise BadRequestError("empty request body — expected a YAML document")
+    try:
+        doc = yaml.safe_load(raw)
+    except yaml.YAMLError as exc:
+        raise BadRequestError(f"could not parse YAML: {exc}") from exc
+
+    try:
+        result = await import_schemas(conn, workspace_id, doc)
+    except ImportValidationError as exc:
+        raise BadRequestError(str(exc)) from exc
+
+    return JSONResponse(content=result.model_dump(), status_code=200)
+
+
 # ===========================================================================
 # B7 / WA-14 — Inferred fields (Schema Studio "Inferred" tab)
 # ===========================================================================

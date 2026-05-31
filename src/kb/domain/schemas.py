@@ -386,6 +386,245 @@ async def soft_delete_schema(conn: Connection, schema_id: str) -> None:
         raise NotFoundError(schema_id)
 
 
+# ---------------------------------------------------------------------------
+# Import — inverse of GET /schemas/export.yaml (P3)
+# ---------------------------------------------------------------------------
+#
+# The export hand-rolls a YAML document with a top-level `schemas:` list,
+# each entry carrying `name` / `description` / `entities` (each with
+# `fields`). Import is the round-trip inverse: parse that document and
+# upsert each schema's full subtree via `restore_subtree` (the same engine
+# rollback uses), then bump a version. A schema that already exists (active,
+# same name) is updated in place; a new name is created. Relationships are
+# optional (export omits them today) but accepted so a hand-authored schema
+# can declare typed edges in one file.
+
+# Field/relationship enums mirror the DB CHECK constraints (0005/0007). We
+# validate in Python first so a malformed import returns a clean 400 instead
+# of poisoning the request transaction with a Postgres-level error.
+_IMPORT_FIELD_TYPES = ("string", "number", "boolean", "date", "datetime")
+_IMPORT_REL_KINDS = ("contains", "part_of", "references", "associates", "attribute_link")
+_IMPORT_CARDINALITIES = ("one_to_one", "one_to_many", "many_to_many")
+
+
+class ImportValidationError(Exception):
+    """The import document is malformed (→ 400 BadRequest in the API layer)."""
+
+
+class SchemaImportItem(BaseModel):
+    """Per-schema outcome of an import."""
+
+    name: str
+    schema_id: str
+    action: str  # "created" | "updated"
+    current_version: int
+    entities: int
+    fields: int
+    relationships: int
+
+
+class SchemaImportResponse(BaseModel):
+    imported: list[SchemaImportItem]
+
+
+def _normalize_import_field(field: object, ctx: str) -> dict:
+    """One field → the snapshot shape restore_subtree expects.
+
+    Accepts both the export spelling (`description` / `required`) and the
+    snapshot spelling (`nl_description` / `is_required`).
+    """
+    if not isinstance(field, dict):
+        raise ImportValidationError(f"{ctx}: each field must be a mapping")
+    name = field.get("name")
+    if not isinstance(name, str) or not name.strip():
+        raise ImportValidationError(f"{ctx}: field missing 'name'")
+    ftype = field.get("type") or "string"
+    if ftype not in _IMPORT_FIELD_TYPES:
+        raise ImportValidationError(
+            f"{ctx}.{name}: type '{ftype}' not in {_IMPORT_FIELD_TYPES}"
+        )
+    nl_description = field.get("nl_description")
+    if nl_description is None:
+        nl_description = field.get("description") or ""
+    is_required = field.get("is_required")
+    if is_required is None:
+        is_required = field.get("required", False)
+    return {
+        "name": name.strip(),
+        "type": ftype,
+        "nl_description": str(nl_description or ""),
+        "is_required": bool(is_required),
+    }
+
+
+def _normalize_import_entity(entity: object, ctx: str) -> dict:
+    if not isinstance(entity, dict):
+        raise ImportValidationError(f"{ctx}: each entity must be a mapping")
+    name = entity.get("name")
+    if not isinstance(name, str) or not name.strip():
+        raise ImportValidationError(f"{ctx}: entity missing 'name'")
+    name = name.strip()
+    raw_fields = entity.get("fields") or []
+    if not isinstance(raw_fields, list):
+        raise ImportValidationError(f"{ctx}.{name}: 'fields' must be a list")
+    fields = [_normalize_import_field(f, f"{ctx}.{name}") for f in raw_fields]
+    return {
+        "name": name,
+        "description": str(entity.get("description") or ""),
+        "fields": fields,
+    }
+
+
+def _normalize_import_relationship(
+    rel: object, entity_names: set[str], ctx: str
+) -> dict:
+    if not isinstance(rel, dict):
+        raise ImportValidationError(f"{ctx}: each relationship must be a mapping")
+    name = rel.get("name")
+    if not isinstance(name, str) or not name.strip():
+        raise ImportValidationError(f"{ctx}: relationship missing 'name'")
+    name = name.strip()
+    frm = rel.get("from")
+    to = rel.get("to")
+    if frm not in entity_names or to not in entity_names:
+        raise ImportValidationError(
+            f"{ctx}.{name}: from/to must name entities declared in this schema"
+        )
+    kind = rel.get("kind")
+    if kind not in _IMPORT_REL_KINDS:
+        raise ImportValidationError(
+            f"{ctx}.{name}: kind '{kind}' not in {_IMPORT_REL_KINDS}"
+        )
+    cardinality = rel.get("cardinality") or "one_to_many"
+    if cardinality not in _IMPORT_CARDINALITIES:
+        raise ImportValidationError(
+            f"{ctx}.{name}: cardinality '{cardinality}' not in {_IMPORT_CARDINALITIES}"
+        )
+    return {
+        "name": name,
+        "from": frm,
+        "to": to,
+        "kind": kind,
+        "cardinality": cardinality,
+        "cascade_delete": bool(rel.get("cascade_delete", False)),
+        "single_parent": bool(rel.get("single_parent", True)),
+    }
+
+
+def normalize_import_doc(doc: object) -> list[dict]:
+    """Validate a parsed YAML import document and return a list of subtree
+    snapshots ({name, description, entities[], relationships[]}) ready for
+    `restore_subtree`. Raises `ImportValidationError` on malformed input.
+    """
+    if not isinstance(doc, dict):
+        raise ImportValidationError(
+            "top-level YAML must be a mapping with a 'schemas:' key"
+        )
+    schemas = doc.get("schemas")
+    if schemas is None:
+        raise ImportValidationError("missing top-level 'schemas:' key")
+    if not isinstance(schemas, list):
+        raise ImportValidationError("'schemas' must be a list")
+    if not schemas:
+        raise ImportValidationError("'schemas' list is empty — nothing to import")
+
+    out: list[dict] = []
+    seen: set[str] = set()
+    for i, s in enumerate(schemas):
+        if not isinstance(s, dict):
+            raise ImportValidationError(f"schemas[{i}] must be a mapping")
+        name = s.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise ImportValidationError(f"schemas[{i}] missing 'name'")
+        name = name.strip()
+        if name in seen:
+            raise ImportValidationError(f"duplicate schema name '{name}' in import")
+        seen.add(name)
+
+        raw_entities = s.get("entities") or []
+        if not isinstance(raw_entities, list):
+            raise ImportValidationError(f"schemas[{i}].entities must be a list")
+        entities = [
+            _normalize_import_entity(e, f"schemas[{i}]") for e in raw_entities
+        ]
+        ent_names = {e["name"] for e in entities}
+        if len(ent_names) != len(entities):
+            raise ImportValidationError(
+                f"schema '{name}': duplicate entity name within schema"
+            )
+
+        raw_rels = s.get("relationships") or []
+        if not isinstance(raw_rels, list):
+            raise ImportValidationError(f"schemas[{i}].relationships must be a list")
+        relationships = [
+            _normalize_import_relationship(r, ent_names, f"schemas[{i}]")
+            for r in raw_rels
+        ]
+
+        out.append({
+            "name": name,
+            "description": str(s.get("description") or ""),
+            "entities": entities,
+            "relationships": relationships,
+        })
+    return out
+
+
+async def import_schemas(
+    conn: Connection, workspace_id: str, doc: object
+) -> SchemaImportResponse:
+    """Upsert every schema in a parsed import document (P3 — inverse of
+    `GET /schemas/export.yaml`). Each schema is created (new name) or updated
+    in place (existing active name), its subtree reconciled to the document
+    via `restore_subtree`, and a new version recorded (kind='put').
+
+    Runs entirely inside the request transaction, so a failure on any schema
+    rolls back the whole import.
+    """
+    snapshots = normalize_import_doc(doc)
+    results: list[SchemaImportItem] = []
+    for snap in snapshots:
+        cur = await conn.execute(
+            "SELECT id FROM schemas WHERE name = %s AND lifecycle_state = 'active'",
+            (snap["name"],),
+        )
+        row = await cur.fetchone()
+        if row is None:
+            created = await create_schema(
+                conn,
+                workspace_id,
+                SchemaCreate(name=snap["name"], description=snap["description"]),
+            )
+            schema_id = created.id
+            action = "created"
+        else:
+            schema_id = str(row[0])
+            action = "updated"
+
+        # Serialize per-schema (decision #12) and update the head row's
+        # description — restore_subtree only touches the children.
+        await lock_and_assert_active_schema(conn, schema_id)
+        await conn.execute(
+            "UPDATE schemas SET description = %s, updated_at = now() WHERE id = %s",
+            (snap["description"], schema_id),
+        )
+        await restore_subtree(conn, workspace_id, schema_id, snap)
+        new_version = await bump_schema_version(
+            conn, workspace_id, schema_id, kind="put"
+        )
+
+        results.append(SchemaImportItem(
+            name=snap["name"],
+            schema_id=schema_id,
+            action=action,
+            current_version=new_version,
+            entities=len(snap["entities"]),
+            fields=sum(len(e["fields"]) for e in snap["entities"]),
+            relationships=len(snap["relationships"]),
+        ))
+    return SchemaImportResponse(imported=results)
+
+
 async def rollback_to_version(
     conn: Connection,
     workspace_id: str,
