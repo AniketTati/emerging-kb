@@ -173,7 +173,7 @@ master table below.
 | 20 | **Q6** IRCoT: fix env-var or delete | 4 | ⏳ | |
 | 21 | **Q7** per-turn cost cap | 4 | ⏳ | |
 | 22 | **Cheap bugs** (`/tmp` dump, etc.) | 4 | ⏳ | |
-| 23 | **S1** batch per-chunk/entity LLM calls | 5 | ⏳ | #1 100k blocker |
+| 23 | **S1** batch per-chunk/entity LLM calls | 5 | ✅ | `kb/llm_batching.run_batched` + batched contextualize/mentions/triples; I2/I4 judges use the same primitive. Tests in `test_s1_batching.py`. (#1 100k blocker — cleared.) |
 | 24 | **S3** `mentions_exact` trigram index | 5 | ✅ | migration 0049: `CREATE EXTENSION pg_trgm` + GIN `gin_trgm_ops` on `lower(mention_text)`. Applied + verified on running DB. |
 | 25 | **S2** identity-resolution throughput | 5 | ⏳ | |
 | 26 | **I6** chain detection O(N²)→bounded | 5 | ⏳ | |
