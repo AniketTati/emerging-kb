@@ -149,6 +149,23 @@ implementation plan for the structured-layer rebuild (10 fixes in dependency
 order + validation). Expands DQ1–DQ4 + chunking + retry/coverage + re-extract.
 Start there.
 
+**▶ FIX 1 IN PROGRESS (decouple per-doc storage from promotion).** Decision:
+write the per-doc doc_root in `extract_schema_entities_file_impl` PASS 1 (not
+kv_tables) — that pass already owns doc_root parents, the `_has_new_parents`
+non-destructive guard, and lineage, so it dodges a kv_tables→schema-entities
+clobber race and fixes FIX 8 orphans in the same spot. Split into 3 edits.
+- **Step 1/3 DONE (`ecc4597`).** Additive domain helpers, no pipeline change:
+  `read_proposed_fields_for_file` (per-doc reader keeping `value_numeric`) +
+  pure `build_doc_root_fields` (prefers numeric → real numbers for F-mode range
+  predicates, text fallback, drops valueless/nameless, last-write-wins). 8 unit
+  tests, no DB (`tests/test_doc_root_fields_unit.py`).
+- **Step 2/3 NEXT.** Wire `build_doc_root_fields` into PASS 1: merge base fields
+  into the LLM-inserted doc_root instances (so promoted docs also carry all
+  their proposed fields).
+- **Step 3/3.** Always create a doc_root when the LLM produced none (the
+  frontmatter-only / no-promotion docs — the Acme loans) + make a base-fields
+  doc_root count as a "new parent" so re-extract refreshes it (FIX 8).
+
 **▶ DATA-QUALITY AUDIT (actual DB rows, not coverage) — finance ws.** Reviewed
 every layer with samples. **Good:** chunking (0 garbage; bank statements
 row-chunked ~59/doc; hierarchical elsewhere), **tabular field extraction**
