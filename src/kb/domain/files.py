@@ -227,6 +227,28 @@ async def record_lifecycle_event(
     )
 
 
+async def set_extraction_coverage(
+    conn: Connection,
+    *,
+    file_id: str,
+    coverage: dict[str, Any],
+    degraded: bool,
+) -> None:
+    """Persist FIX 3 per-doc extraction coverage + the degraded flag.
+
+    `coverage` is the jsonb detail ({body_fields, frontmatter_fields,
+    table_rows, text_rich, model_id, degraded}); `degraded` is the cheap
+    boolean the needs-review surface filters on. Called from the KV+Tables
+    write path so a text-rich doc that produced no body content is recorded
+    as degraded rather than silently reaching `ready`."""
+    await conn.execute(
+        "UPDATE files "
+        "SET extraction_coverage = %s::jsonb, extraction_degraded = %s "
+        "WHERE id = %s",
+        (json.dumps(coverage), degraded, file_id),
+    )
+
+
 async def list_files(
     conn: Connection, limit: int, offset: int
 ) -> FileListResponse:

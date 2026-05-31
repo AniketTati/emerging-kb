@@ -46,6 +46,7 @@ from kb.domain.contextual_chunks import (
 from kb.domain.files import (
     FileNotFoundError,
     record_lifecycle_event,
+    set_extraction_coverage,
     transition_lifecycle,
 )
 from kb.domain.raw_pages import insert_raw_page
@@ -1813,6 +1814,12 @@ async def extract_kv_tables_file_impl(file_id: str) -> None:
 
     doc_type = payload.doc_type or "unknown"
 
+    # FIX 3 — capture the BODY-field count now, before the frontmatter
+    # guard (below) appends a synthetic status scalar. These are the
+    # extractor's real content scalars; frontmatter:auto fields are
+    # metadata and must not count toward the "extracted-OK" signal.
+    n_body_scalars = len(payload.scalars)
+
     # When the LLM's TOP-LEVEL `doc_type` came back as "unknown" but it
     # ALSO extracted a scalar named `doc_type` with a real value (this
     # happens when the LLM gets confused on classification but DOES
@@ -1860,6 +1867,7 @@ async def extract_kv_tables_file_impl(file_id: str) -> None:
             await delete_proposed_fields_for_file(conn, file_id=file_id)
 
             n_proposed = 0
+            n_frontmatter = 0  # FIX 3 — frontmatter:auto fields (metadata)
             for sc in payload.scalars:
                 src_chunk_id = None
                 if (
@@ -1955,6 +1963,7 @@ async def extract_kv_tables_file_impl(file_id: str) -> None:
                         source_char_end=None,
                     )
                     n_proposed += 1
+                    n_frontmatter += 1
                     # Make this visible to the doc_status projection
                     # loop below (it reads from payload.scalars). Inject
                     # a lightweight stand-in so the canonical-status
@@ -2240,6 +2249,27 @@ async def extract_kv_tables_file_impl(file_id: str) -> None:
                         await update_entity_rarity(
                             conn, entity_id=eid, rarity_score=float(sc),
                         )
+
+            # FIX 3 — coverage check (no silent success). A text-rich doc
+            # (has chunks) that produced NO body fields and NO table rows
+            # is a degraded extraction — frontmatter:auto fields are
+            # metadata and don't count. Record coverage + flag it so it
+            # surfaces in needs-review instead of looking healthy.
+            text_rich = bool(chunks)
+            degraded = text_rich and n_body_scalars == 0 and total_rows == 0
+            await set_extraction_coverage(
+                conn,
+                file_id=file_id,
+                coverage={
+                    "body_fields": n_body_scalars,
+                    "frontmatter_fields": n_frontmatter,
+                    "table_rows": total_rows,
+                    "text_rich": text_rich,
+                    "model_id": payload.model_id,
+                    "degraded": degraded,
+                },
+                degraded=degraded,
+            )
 
             # Lifecycle: jump straight to entities_extracting, skipping
             # the legacy units_extracting slot (the L3 plugin call no
