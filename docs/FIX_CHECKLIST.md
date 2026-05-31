@@ -144,6 +144,37 @@ master-detail modal — `listSchemas` → drill into `listSchemaVersions` (versi
 kind post/put/rollback, parent, timestamp). Verified live (auto:* → v1/post),
 no console errors. 30 FE tests green, `tsc` clean.
 
+**▶ DATA-QUALITY AUDIT (actual DB rows, not coverage) — finance ws.** Reviewed
+every layer with samples. **Good:** chunking (0 garbage; bank statements
+row-chunked ~59/doc; hierarchical elsewhere), **tabular field extraction**
+(transaction rows = `{date,debit,credit,balance,description}`), RAPTOR (194
+nodes), chains (2/5 members, order correct), lineage paths (100%). **WEAK — real
+gaps (newly surfaced; prior audit only checked artifact *coverage*, not
+*quality*):**
+- **Narrative field extraction THIN — 0/13** loan/10-K/treasury docs captured a
+  key numeric term (interest_rate/principal/revenue/EBITDA) as a STRUCTURED
+  field; loan doc_root holds only frontmatter (doc_id/parties/chain_role). The
+  9.40% rate lives only in text → the §2.2 "structured data conforming to
+  schema" promise is half-delivered (strong for tables, weak for prose). A
+  structured filter like "loans with rate>9%" can't be served today.
+- **Emergent schema reflects it:** `auto:loan_agreement` = frontmatter fields +
+  an empty `Financialaction` sub-entity.
+- **unit_type fragmentation:** `transactionlisting`(52) vs `transaction_listing`
+  (18) + overlapping `*_by_category` buckets → query-splitting risk.
+- **Identity weak:** under-merge (`HDFC BANK`135 ≠ `HDFC`80; `Apollo Hospitals` ≠
+  `Apollo Hospitals Pune`); **noise entities** (doc-IDs, ref-numbers, email
+  domains `hdfcbank.com`, rate benchmark `HDFC MCLR` all as ORG/PRODUCT);
+  **only 47%** of 5877 mentions resolve to a canonical entity.
+- **Triples mixed:** some real (`X has CIF Y`), some noise (`columns for balance`,
+  field-name subjects).
+- **Lineage:** 18% of sub-entities (90/491) lack a parent FK (path set, FK null).
+**Implication:** retrieval/answers work (text layer clean); the STRUCTURED
+knowledge layer needs a quality pass — narrative-doc field extraction (read the
+body, not the frontmatter), identity merge + noise filter, mention resolution,
+unit_type canonicalization. These were partially flagged (identity/field
+under-merge as "eval-coupled") but the **narrative-extraction gap is the
+headline** and was understated. New work items to add to the master table.
+
 **▶ PDF-CONSISTENCY AUDIT + FULL STACK LIVE (for hands-on testing).**
 Re-read the assignment PDF (§1–§5) and audited every requirement against the
 repo. **Verdict: the checklist is faithful — the functional reqs §2.1–§2.4 are
