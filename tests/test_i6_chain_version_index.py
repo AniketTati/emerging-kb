@@ -190,3 +190,67 @@ async def test_complaint_chain_chain_id_distinct_indices(db_url_superuser):
     assert len(members) == 2, f"both complaint docs should be one chain; got {members}"
     indices = sorted(m[1] for m in members)
     assert indices == [0, 1], f"version_index must be distinct 0/1; got {indices}"
+
+
+async def test_renumber_chains_deterministic_by_effective_date(db_url_superuser):
+    """Renumber pass fixes a race-scrambled chain: members added with
+    duplicate version_index get reassigned 0..N by effective_date, and
+    current_version points at the latest-dated member. Concurrency-immune."""
+    from kb.domain.doc_chains import add_member, upsert_chain
+    from kb.domain.fields import insert_proposed_field
+    from kb.workers.tasks import renumber_workspace_chains_impl
+
+    workspace = str(uuid.uuid4())
+    # original (oldest), add-2 (newest), add-1 (middle) — added with COLLIDING
+    # version_index (0,0,1), mimicking the concurrent-ingest race.
+    specs = [
+        ("loan-original", "2023-11-08", "original", 0),
+        ("loan-addendum-2", "2025-03-22", "amendment", 0),
+        ("loan-addendum-1", "2024-06-12", "amendment", 1),
+    ]
+    async with await psycopg.AsyncConnection.connect(db_url_superuser) as conn:
+        await conn.execute("SELECT set_config('app.workspace_id', %s, true)", (workspace,))
+        chain_id = await upsert_chain(
+            conn, workspace_id=workspace, chain_type="contract_chain",
+            title="loan", chain_key="explicit:loan", detection_confidence=1.0,
+            current_version_id=None,
+        )
+        ids = {}
+        for name, eff, role, vidx in specs:
+            sha = hashlib.sha256(f"{workspace}-{name}".encode()).hexdigest()
+            fid = str(uuid.uuid4()); ids[name] = fid
+            await conn.execute(
+                "INSERT INTO files (id, workspace_id, name, content_sha, object_key, "
+                "mime_type, size_bytes, lifecycle_state, inferred_doc_type) "
+                "VALUES (%s,%s,%s,%s,%s,'text/markdown',100,'ready','loan_agreement')",
+                (fid, workspace, name, sha, f"raw_files/{sha}"),
+            )
+            await insert_proposed_field(
+                conn, file_id=fid, workspace_id=workspace,
+                inferred_doc_type="loan_agreement", field_name="effective_date",
+                field_description="", value_text=eff, value_type="date",
+                is_pii=False, model_id="test-mock",
+            )
+            await add_member(
+                conn, chain_id=chain_id, doc_id=fid, workspace_id=workspace,
+                version_index=vidx, role=role,
+            )
+        await conn.commit()
+
+    with _use_db(db_url_superuser):
+        out = await renumber_workspace_chains_impl(workspace_id=workspace)
+    assert out["chains_renumbered"] == 1
+
+    async with await psycopg.AsyncConnection.connect(db_url_superuser) as conn:
+        await conn.execute("SELECT set_config('app.workspace_id', %s, true)", (workspace,))
+        cur = await conn.execute(
+            "SELECT f.name, m.version_index, (m.doc_id = c.current_version_id) "
+            "FROM doc_chain_members m JOIN files f ON f.id=m.doc_id "
+            "JOIN doc_chains c ON c.id=m.chain_id WHERE m.chain_id=%s ORDER BY m.version_index",
+            (chain_id,),
+        )
+        rows = await cur.fetchall()
+    order = [(n, vi) for n, vi, _ in rows]
+    assert order == [("loan-original", 0), ("loan-addendum-1", 1), ("loan-addendum-2", 2)], order
+    current = [n for n, _, isc in rows if isc]
+    assert current == ["loan-addendum-2"], f"latest-dated member must be current; got {current}"

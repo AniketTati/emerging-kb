@@ -4459,6 +4459,66 @@ async def reconcile_workspace_entities_impl(
     return summary
 
 
+async def renumber_workspace_chains_impl(*, workspace_id: str) -> dict:
+    """#19 / I6 — deterministic per-chain version_index + current_version.
+
+    Concurrent ingest of chain members races on `next_version_index`
+    (SELECT MAX+1 across uncommitted txs), producing DUPLICATE indices and a
+    nondeterministic current_version (observed: a loan original + 2 addenda
+    landed v0/v0/v1 with the wrong addendum current). This post-settle pass is
+    concurrency-immune: it reads each chain's committed members, sorts them by
+    `effective_date` (then name as a stable tiebreak), reassigns version_index
+    0..N, and points current_version at the latest member. Idempotent.
+    """
+    from kb.config import get_settings
+
+    settings = get_settings()
+    db_url = settings.database_url
+
+    async with open_connection(db_url) as conn:
+        await conn.execute(
+            "SELECT set_config('app.workspace_id', %s, true)", (workspace_id,),
+        )
+        cur = await conn.execute(
+            "SELECT id::text FROM doc_chains WHERE workspace_id = %s", (workspace_id,),
+        )
+        chain_ids = [r[0] for r in await cur.fetchall()]
+
+    renumbered = 0
+    for cid in chain_ids:
+        async with open_connection(db_url) as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    "SELECT set_config('app.workspace_id', %s, true)", (workspace_id,),
+                )
+                cur = await conn.execute(
+                    "SELECT m.doc_id::text, f.name, "
+                    "  (SELECT pf.value_text FROM proposed_fields pf "
+                    "     WHERE pf.file_id = m.doc_id "
+                    "       AND lower(pf.field_name) = 'effective_date' LIMIT 1) AS eff "
+                    "FROM doc_chain_members m JOIN files f ON f.id = m.doc_id "
+                    "WHERE m.chain_id = %s", (cid,),
+                )
+                rows = await cur.fetchall()
+                if len(rows) < 2:
+                    continue
+                # Sort by (effective_date, name); empty date sorts first so an
+                # undated 'original' leads. Stable, deterministic.
+                rows_sorted = sorted(rows, key=lambda r: (r[2] or "", r[1]))
+                for idx, (doc_id, _name, _eff) in enumerate(rows_sorted):
+                    await conn.execute(
+                        "UPDATE doc_chain_members SET version_index = %s "
+                        "WHERE chain_id = %s AND doc_id = %s",
+                        (idx, cid, doc_id),
+                    )
+                await conn.execute(
+                    "UPDATE doc_chains SET current_version_id = %s WHERE id = %s",
+                    (rows_sorted[-1][0], cid),
+                )
+                renumbered += 1
+    return {"chains_renumbered": renumbered}
+
+
 async def reextract_workspace_schema_entities_impl(
     *,
     workspace_id: str,
@@ -4568,6 +4628,13 @@ async def finalize_corpus_impl(workspace_id: str) -> None:
     #     per-doc top-k resolver couldn't catch.
     try:
         await reconcile_workspace_entities_impl(workspace_id=workspace_id)
+    except Exception:  # noqa: BLE001
+        traceback.print_exc()
+
+    # (3b) Chain renumber — deterministic version_index + current_version per
+    #      chain (fixes the concurrent-ingest race on next_version_index).
+    try:
+        await renumber_workspace_chains_impl(workspace_id=workspace_id)
     except Exception:  # noqa: BLE001
         traceback.print_exc()
 
