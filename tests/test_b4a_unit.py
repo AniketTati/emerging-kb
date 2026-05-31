@@ -29,6 +29,8 @@ from kb.query.intent import (
 from kb.query.mode_router import (
     QModeNotImplementedError,
     _candidate_mentions_from_query,
+    _field_predicate_holds,
+    _resolve_field_name,
     apply_mode,
 )
 from kb.query.planner import (
@@ -799,6 +801,69 @@ async def test_route_f_mode_applies_field_predicate():
     assert len(out) == 1
     assert out[0].id == "h1"
     assert out[0].metadata["mode_applied"] == "F"
+
+
+# ----- F-mode canonical name mapping (query half of FIX 4) -----
+
+
+def test_resolve_field_name_exact_and_normalized():
+    fields = {"interest_rate": 9.0, "principal_amount": 22000000.0}
+    assert _resolve_field_name("interest_rate", fields) == "interest_rate"
+    assert _resolve_field_name("interest rate", fields) == "interest_rate"
+    assert _resolve_field_name("Interest-Rate", fields) == "interest_rate"
+
+
+def test_resolve_field_name_unambiguous_token_subset():
+    fields = {"interest_rate": 9.0, "doc_status": "active"}
+    # 'rate' is a token-subset of exactly one stored key → resolves.
+    assert _resolve_field_name("rate", fields) == "interest_rate"
+
+
+def test_resolve_field_name_ambiguous_or_absent_returns_none():
+    fields = {"principal_amount": 1.0, "emi_amount": 2.0}
+    # 'amount' is a subset of TWO keys → refuse to guess.
+    assert _resolve_field_name("amount", fields) is None
+    assert _resolve_field_name("missing", fields) is None
+    assert _resolve_field_name(None, fields) is None
+
+
+def test_field_predicate_boundary_ge_vs_gt():
+    # The 'over 9%' boundary: gt 9 excludes exactly 9.0; ge 9 includes it.
+    fields = {"interest_rate": 9.0}
+    assert _field_predicate_holds(
+        fields, {"field": "interest rate", "op": "gt", "value": 9}
+    ) is False
+    assert _field_predicate_holds(
+        fields, {"field": "interest rate", "op": "ge", "value": 9}
+    ) is True
+
+
+async def test_route_f_mode_maps_surface_field_name_to_stored_key():
+    """End-to-end: the planner emits the surface form 'interest rate';
+    F-mode resolves it to the stored 'interest_rate' key and keeps only
+    the loans at/above the threshold (excludes the 8.5 original)."""
+    plan = Plan(
+        mode="F", intent="field_filter",
+        field_filters=({"field": "interest rate", "op": "ge", "value": 9},),
+    )
+    hits = [
+        _hit(id="a1", file_id="amend1"),
+        _hit(id="a2", file_id="amend2"),
+        _hit(id="orig", file_id="original"),
+    ]
+    conn = _FakeConn({
+        "FROM extracted_entities": [
+            ("amend1", {"interest_rate": 9.0}),
+            ("amend2", {"interest_rate": 9.4}),
+            ("original", {"interest_rate": 8.5}),
+        ],
+    })
+    out = await apply_mode(
+        plan, hits, workspace_id="ws", query="loans over 9%", conn=conn,
+    )
+    kept = {h.metadata["file_id"] for h in out}
+    assert kept == {"amend1", "amend2"}
+    assert all(h.metadata["mode_applied"] == "F" for h in out)
 
 
 # ----- S-mode -----

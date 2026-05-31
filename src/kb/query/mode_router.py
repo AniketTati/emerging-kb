@@ -1054,16 +1054,60 @@ async def _route_f_mode(
     return out
 
 
+def _normalize_field_key(s: str) -> str:
+    """Fold a field name to a comparison key: lowercase, every run of
+    non-alphanumeric chars → one underscore, strip edge underscores.
+    'Interest Rate' / 'interest-rate' / 'interest_rate' → 'interest_rate'."""
+    return re.sub(r"[^a-z0-9]+", "_", (s or "").lower()).strip("_")
+
+
+def _resolve_field_name(name: Any, fields: dict) -> str | None:
+    """Map a planner-emitted field name to the actual stored key in this
+    entity's `fields` dict — the query half of FIX 4.
+
+    F-mode matches exactly against canonical stored keys (anchored to the
+    user-declared schema names at ingest), but the LLM emits surface
+    variants ('interest rate', 'rate'). Resolution order:
+      1. exact key hit
+      2. normalized equality (case / space / hyphen / underscore folded)
+      3. UNAMBIGUOUS token-subset — the query's tokens are a subset of
+         exactly ONE stored key's tokens ('rate' → 'interest_rate' iff it
+         is the only *_rate key). >1 candidate (e.g. 'amount' vs both
+         principal_amount + emi_amount) → None, so we never silently guess.
+    Returns the stored key, or None (the predicate then fails closed)."""
+    if not isinstance(name, str) or not name or not isinstance(fields, dict):
+        return None
+    if name in fields:
+        return name
+    norm_to_key: dict[str, str] = {}
+    for k in fields:
+        norm_to_key.setdefault(_normalize_field_key(k), k)
+    qn = _normalize_field_key(name)
+    if qn in norm_to_key:
+        return norm_to_key[qn]
+    q_tokens = {t for t in qn.split("_") if t}
+    if not q_tokens:
+        return None
+    candidates = [
+        k for k in fields
+        if q_tokens.issubset({t for t in _normalize_field_key(k).split("_") if t})
+    ]
+    return candidates[0] if len(candidates) == 1 else None
+
+
 def _field_predicate_holds(fields: dict, f: dict) -> bool:
     """Evaluate one field predicate against an extracted_entity.fields
     dict. Recognised ops: eq, ne, lt, le, gt, ge, like, in. Unknown ops
-    fail-open (return True) so we don't accidentally drop hits."""
-    name = f.get("field")
+    fail-open (return True) so we don't accidentally drop hits.
+
+    The filter's `field` is resolved to the stored key via
+    `_resolve_field_name` (canonical-name mapping) before lookup."""
     op = (f.get("op") or "eq").lower()
     val = f.get("value")
-    if name is None or name not in fields:
+    resolved = _resolve_field_name(f.get("field"), fields)
+    if resolved is None:
         return False
-    actual = fields[name]
+    actual = fields[resolved]
     try:
         if op == "eq":
             return actual == val
