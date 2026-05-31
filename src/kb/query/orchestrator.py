@@ -240,6 +240,7 @@ from kb.query.conflict_resolution import (
     resolve_conflicts_for_hits,
 )
 from kb.query.crag import CRAG_THRESHOLD, CragGate, make_crag_gate
+from kb.query.config_thresholds import resolve_query_threshold
 from kb.query.faithfulness import (
     FaithfulnessGate,
     FaithfulnessResult,
@@ -601,6 +602,17 @@ class Orchestrator:
                 pass
         t0 = time.monotonic()
         query_id = str(uuid.uuid4())
+
+        # P1 — resolve the CRAG refusal threshold for THIS request through the
+        # layered config, so a domain/workspace override set in the Settings UI
+        # changes the refuse gate instead of the hardcoded constant. Falls back
+        # to the construction default on any miss/error (never breaks a query).
+        crag_threshold = await resolve_query_threshold(
+            conn,
+            key="retrieval.crag.threshold",
+            workspace_id=workspace_id,
+            default=self._crag_threshold,
+        )
 
         # Auto-create a session if the caller didn't pass one. Without
         # this, `_persist_turn` silently skips persistence (session_id
@@ -975,7 +987,7 @@ class Orchestrator:
         crag_score = await self._crag.assess(effective_query, hits)
         await emit("crag_assessed", {
             "score": round(crag_score, 3),
-            "threshold": self._crag_threshold,
+            "threshold": crag_threshold,
             "bypassed": plan.mode != "H",
         })
 
@@ -989,7 +1001,7 @@ class Orchestrator:
         ircot_hops_payload: list[dict[str, Any]] = []
         if (
             plan.mode == "H"
-            and crag_score < self._crag_threshold
+            and crag_score < crag_threshold
             and conn is not None
             and hits
         ):
@@ -1017,14 +1029,14 @@ class Orchestrator:
 
                 await emit("ircot_escalating", {
                     "crag_before": round(crag_score, 3),
-                    "threshold": self._crag_threshold,
+                    "threshold": crag_threshold,
                     "max_hops": DEFAULT_MAX_HOPS_CRAG,
                 })
                 ircot_result = await escalate_with_ircot(
                     original_query=effective_query,
                     hits=hits,
                     crag_score=crag_score,
-                    threshold=self._crag_threshold,
+                    threshold=crag_threshold,
                     crag_assess=_ircot_crag,
                     retrieve=_ircot_retrieve,
                     reformulator=self._reformulator,
@@ -1097,7 +1109,7 @@ class Orchestrator:
         # want to add per-mode thresholds later, that's a separate
         # change with per-mode calibration on eval data.
         force_refuse = (
-            crag_score < self._crag_threshold and plan.mode == "H"
+            crag_score < crag_threshold and plan.mode == "H"
         )
 
         # ---- R1 — Design 2 conflict resolution ----
@@ -1257,7 +1269,7 @@ class Orchestrator:
         # retrieval (paraphrase of a real passage) still ships — that case
         # is the deliberate low_confidence band.
         if grounding_gate_refuses(
-            faithfulness.verdict, crag_score, self._crag_threshold,
+            faithfulness.verdict, crag_score, crag_threshold,
         ) and not generation.refused:
             # Out of retries. Two behaviors depending on whether the
             # retrieval was confident:
