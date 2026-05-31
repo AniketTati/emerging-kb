@@ -144,6 +144,11 @@ master-detail modal — `listSchemas` → drill into `listSchemaVersions` (versi
 kind post/put/rollback, parent, timestamp). Verified live (auto:* → v1/post),
 no console errors. 30 FE tests green, `tsc` clean.
 
+**▶ NEXT-THREAD PLAN → `docs/PIPELINE_FIX_PLAN.md`** — consolidated, code-grounded
+implementation plan for the structured-layer rebuild (10 fixes in dependency
+order + validation). Expands DQ1–DQ4 + chunking + retry/coverage + re-extract.
+Start there.
+
 **▶ DATA-QUALITY AUDIT (actual DB rows, not coverage) — finance ws.** Reviewed
 every layer with samples. **Good:** chunking (0 garbage; bank statements
 row-chunked ~59/doc; hierarchical elsewhere), **tabular field extraction**
