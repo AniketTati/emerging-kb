@@ -179,7 +179,36 @@ clobber race and fixes FIX 8 orphans in the same spot. 3 commits:
   is pre-existing-broken (stale FakeExtractor missing `existing_scalar_hints`;
   asserts removed `atomic_units`) → spawned a separate task.
 
-**▶ FIX 2 IN PROGRESS — retry the KV+Tables extraction.** Next.
+**▶ FIX 2 DONE (`55bd197`) — retry the KV+Tables extraction.**
+`llm_batching.with_retry` got an additive optional `retry_on` predicate
+(defaults to `is_transient` → no other caller changes). `extract_kv_tables_file_impl`
+now wraps `extractor.extract` in `with_retry` with a predicate that retries
+transient errors (429/timeout/5xx are embedded in the wrapped
+`KVTablesExtractionError` message) AND the empty `"no candidates"` completion
+— the actual cause of the 3 Acme loans landing `gem_pf=0`. On exhaustion,
+falls through to the empty-payload path → FIX 3 coverage flags it. 2 new
+`with_retry` tests (custom retry_on recovers after a non-transient flake;
+still skips a true permanent error).
+
+**▶ FIX 3 DONE (`fcac0f8`, `5eeb00e`) — frontmatter=metadata + coverage check.**
+- `0050` migration: `files.extraction_coverage` jsonb + `files.extraction_degraded`
+  bool (+ partial index); table-level GRANT already covers them. Applied to dev DB.
+- `extract_kv_tables_file_impl` counts BODY scalars (captured before the
+  frontmatter guard appends its synthetic status scalar) vs `frontmatter:auto`
+  fields; a text-rich doc (has chunks) with 0 body fields AND 0 table rows is
+  recorded `degraded`. Frontmatter is metadata → excluded from the extracted-OK
+  signal. (Excluding frontmatter from *promotion* deferred to FIX 5 to avoid
+  double-churn on the promotion path.)
+- `GET /knowledge-map/needs-review` surfaces degraded docs (`KMDegradedDoc` +
+  `degraded_extractions[_total]`, additive). 2 API tests. Doc still reaches
+  `ready` (so corpus finalize settles) but is flagged for review — the
+  forward-only lifecycle DAG can't host a `needs_review` state without breaking
+  in-flight settling.
+- **Stale tests flagged (out of scope, spawned tasks):** `test_files_crud`
+  (2 stale exact-key assertions) + `test_kv_tables_worker` (stale FakeExtractor
+  + atomic_units asserts).
+
+**▶ FIX 4 NEXT — sameness resolution (canonical names) as a first-class layer.**
 
 **▶ DATA-QUALITY AUDIT (actual DB rows, not coverage) — finance ws.** Reviewed
 every layer with samples. **Good:** chunking (0 garbage; bank statements
