@@ -155,3 +155,51 @@ async def test_reextract_workspace_orchestration(client, db_url_superuser, monke
             (workspace,),
         )
         assert (await cur.fetchone())[0] == 2, "all files stay ready after the sweep"
+
+
+async def test_force_reextract_empty_result_preserves_existing_parents(
+    client, db_url_superuser, monkeypatch,
+):
+    """#19 safety: a degraded/empty force re-extraction (e.g. identity extractor
+    on a transient Gemini miss) must NOT delete the doc's existing doc_root
+    parent entities — otherwise the doc drops to 0 entities (observed live on
+    complaint-005 / wire-005)."""
+    from kb.config import get_settings
+    from kb.workers.tasks import extract_schema_entities_file_impl
+
+    workspace = str(uuid.uuid4())
+    file_id, _ = await _seed_file_at_entities_extracting(
+        db_url_superuser, workspace, inferred_doc_type="vendor_record",
+    )
+    await _seed_active_schema(
+        db_url_superuser, workspace, doc_type="vendor_record",
+        fields=[("vendor_name", "string", "Vendor name")],
+    )
+
+    import kb.extraction.entities as entities_mod
+    # 1) Normal extraction creates one doc_root parent.
+    monkeypatch.setattr(entities_mod, "make_schema_driven_extractor",
+        _fake_entity_extractor_factory([{"fields": {"vendor_name": "ACME"}, "citations": {}}]))
+    with _env(KB_DATABASE_URL=db_url_superuser):
+        get_settings.cache_clear()
+        await extract_schema_entities_file_impl(file_id)
+
+    async with await psycopg.AsyncConnection.connect(db_url_superuser) as conn:
+        await conn.execute("SELECT set_config('app.workspace_id', %s, true)", (workspace,))
+        cur = await conn.execute("SELECT count(*) FROM extracted_entities WHERE file_id = %s", (file_id,))
+        before = (await cur.fetchone())[0]
+    assert before >= 1
+    await _set_ready(db_url_superuser, workspace, file_id)
+
+    # 2) Force re-extraction that yields NOTHING (empty extractor) must preserve.
+    monkeypatch.setattr(entities_mod, "make_schema_driven_extractor",
+        _fake_entity_extractor_factory([]))
+    with _env(KB_DATABASE_URL=db_url_superuser):
+        get_settings.cache_clear()
+        await extract_schema_entities_file_impl(file_id, force=True)
+
+    async with await psycopg.AsyncConnection.connect(db_url_superuser) as conn:
+        await conn.execute("SELECT set_config('app.workspace_id', %s, true)", (workspace,))
+        cur = await conn.execute("SELECT count(*) FROM extracted_entities WHERE file_id = %s", (file_id,))
+        after = (await cur.fetchone())[0]
+    assert after == before, f"empty re-extract must NOT wipe parents (before={before} after={after})"

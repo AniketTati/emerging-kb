@@ -2479,9 +2479,20 @@ async def extract_schema_entities_file_impl(
             # because the legacy PASS 1.5 immediately re-inserted from
             # atomic_units. Post-collapse, the children are the source
             # of truth and must survive this re-run.
-            await delete_extracted_entities_parents_for_file(
-                conn, file_id=file_id,
+            #
+            # NON-DESTRUCTIVE re-extraction (#19 cold-start safety): only
+            # replace the doc_root parents when the new extraction actually
+            # produced instances. A degraded/empty re-run — e.g. the identity
+            # extractor on a transient Gemini miss during finalize — must NOT
+            # delete good parents and leave the doc with zero entities
+            # (observed: complaint-005 / wire-005 dropped to 0 doc_roots).
+            _has_new_parents = any(
+                r is not None and r.instances for _, r in results
             )
+            if _has_new_parents:
+                await delete_extracted_entities_parents_for_file(
+                    conn, file_id=file_id,
+                )
 
             # PASS 1: insert LLM-extracted parent (doc_root) entities.
             # The LLM only runs against schema_entities that have
