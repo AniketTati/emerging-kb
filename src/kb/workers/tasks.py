@@ -2312,6 +2312,10 @@ async def extract_schema_entities_file_impl(
         read_schema_entities_with_fields,
         update_lineage,
     )
+    from kb.domain.fields import (
+        build_doc_root_fields,
+        read_proposed_fields_for_file,
+    )
     from kb.extraction.entities import (
         SchemaEntityRequest,
         SchemaExtractionError,
@@ -2473,6 +2477,17 @@ async def extract_schema_entities_file_impl(
                 "SELECT set_config('app.workspace_id', %s, true)",
                 (workspace_id_str,),
             )
+
+            # FIX 1 — per-doc field store, decoupled from promotion.
+            # Build the doc's own fields (every extracted scalar, typed
+            # numeric where possible) from its proposed_fields, so they
+            # can be merged onto the doc_root extracted_entities.fields
+            # jsonb the F-mode query path filters on — regardless of
+            # whether the field was promoted to the doc-type schema.
+            base_doc_root_fields = build_doc_root_fields(
+                await read_proposed_fields_for_file(conn, file_id=file_id)
+            )
+
             # Only delete PARENT (doc_root) rows here — children were
             # written upstream by extract_kv_tables_file_impl in the
             # same pipeline run; the legacy delete-all wiped them
@@ -2514,12 +2529,25 @@ async def extract_schema_entities_file_impl(
                     for field_name, chunk_index in (instance.citations or {}).items():
                         if 0 <= chunk_index < len(chunks):
                             citation_map[field_name] = chunks[chunk_index][0]
+                    # FIX 1 — for the doc_root parent, merge in the doc's
+                    # own per-doc fields so non-promoted facts (e.g. the
+                    # loan's interest_rate) reach the queryable record.
+                    # LLM-extracted promoted values win on key collision,
+                    # so promoted-field behavior is unchanged.
+                    fields_to_store = instance.fields
+                    if (
+                        doc_root_entity_id is not None
+                        and schema_entity_id == doc_root_entity_id
+                    ):
+                        fields_to_store = {
+                            **base_doc_root_fields, **instance.fields,
+                        }
                     eid = await insert_extracted_entity(
                         conn,
                         schema_entity_id=schema_entity_id,
                         file_id=file_id,
                         workspace_id=workspace_id_str,
-                        fields=instance.fields,
+                        fields=fields_to_store,
                         citations=citation_map,
                         model_id=result.model_id,
                     )
