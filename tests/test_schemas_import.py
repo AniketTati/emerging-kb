@@ -228,6 +228,37 @@ async def test_import_invalid_yaml_400(client):
 # ---------------------------------------------------------------------------
 
 
+async def test_import_accepts_json_body(client):
+    """The endpoint reads the raw body and yaml.safe_load()s it, and JSON is
+    valid YAML — so the FE wizard can POST a JSON document (no YAML lib in the
+    browser) to the same endpoint. Locks that contract."""
+    import json
+
+    doc = {
+        "schemas": [
+            {
+                "name": "JsonSchema",
+                "description": "built from a JS object",
+                "entities": [
+                    {"name": "Thing", "fields": [
+                        {"name": "label", "type": "string", "is_required": True},
+                    ]},
+                ],
+            }
+        ]
+    }
+    resp = await client.post(
+        "/schemas/import.yaml",
+        content=json.dumps(doc),
+        headers=headers(_ws(), content_type="application/json"),
+    )
+    assert resp.status_code == 200, resp.text
+    item = resp.json()["imported"][0]
+    assert item["name"] == "JsonSchema"
+    assert item["entities"] == 1
+    assert item["fields"] == 1
+
+
 async def test_finance_demo_schema_imports(client):
     body = _FINANCE_SCHEMA.read_text(encoding="utf-8")
     ws = _ws()
