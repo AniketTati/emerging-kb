@@ -368,6 +368,62 @@ _ROUTING_SYSTEM_PROMPT = (
 _GEMINI_SYSTEM_PROMPT = _ROUTING_SYSTEM_PROMPT
 
 
+# Field-filter operator vocabulary. MUST stay in sync with F-mode's
+# `_field_predicate_holds` (mode_router.py) — we can't import it here
+# (mode_router imports Plan from this module → circular). The numeric
+# ops are the ones F-mode evaluates with float() on both sides.
+_VALID_FIELD_OPS: frozenset[str] = frozenset(
+    {"eq", "ne", "lt", "le", "gt", "ge", "like", "in"}
+)
+_NUMERIC_FIELD_OPS: frozenset[str] = frozenset({"lt", "le", "gt", "ge"})
+
+
+def _coerce_filter_value(op: str, value: Any) -> Any:
+    """For a numeric comparison op, coerce a stringy value ('9', '9%',
+    '1,000') to a float so F-mode's `float(actual) <op> float(value)`
+    holds rather than raising and failing the predicate closed. Non-
+    numeric ops and uncoercible values pass through unchanged."""
+    if op not in _NUMERIC_FIELD_OPS or isinstance(value, (int, float)):
+        return value
+    if isinstance(value, str):
+        cleaned = value.strip().rstrip("%").replace(",", "").strip()
+        try:
+            return float(cleaned)
+        except ValueError:
+            return value
+    return value
+
+
+def _parse_field_filters(data: dict) -> tuple[dict, ...]:
+    """Parse `plan.field_filters` from the planner JSON. Each filter is a
+    `{field, op, value}` dict that F-mode (`_route_f_mode`) applies as a
+    post-retrieval predicate against `extracted_entities.fields`.
+
+    Malformed entries are dropped (missing/blank field, non-dict, unknown
+    operator) so a sloppy LLM emission can neither crash routing nor
+    smuggle an unrecognised operator past F-mode's fail-open default.
+    `op` defaults to 'eq' (matching F-mode)."""
+    raw = data.get("field_filters")
+    if not isinstance(raw, list):
+        return ()
+    out: list[dict] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("field")
+        if not isinstance(name, str) or not name.strip():
+            continue
+        op = str(item.get("op") or "eq").strip().lower()
+        if op not in _VALID_FIELD_OPS:
+            continue
+        out.append({
+            "field": name.strip(),
+            "op": op,
+            "value": _coerce_filter_value(op, item.get("value")),
+        })
+    return tuple(out)
+
+
 def _parse_plan_json(raw: str, intent: IntentResult, query: str = "") -> Plan:
     """Tolerant parser. Falls back to identity mapping on parse failure."""
     text = (raw or "").strip()
@@ -426,6 +482,7 @@ def _parse_plan_json(raw: str, intent: IntentResult, query: str = "") -> Plan:
         unit_types=_str_list("unit_types"),
         doc_types=_str_list("doc_types"),
         chain_view=chain_view,
+        field_filters=_parse_field_filters(data),
         notes=str(data.get("notes")) if data.get("notes") else None,
     )
 
