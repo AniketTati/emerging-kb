@@ -96,6 +96,72 @@ async def read_proposed_fields_for_doctype(
     return by_file
 
 
+async def read_proposed_fields_for_file(
+    conn: Connection,
+    *,
+    file_id: str,
+) -> list[dict]:
+    """Return every proposed_field row for one file, carrying the typed
+    value (value_numeric) alongside the raw value_text.
+
+    Unlike `read_proposed_fields_for_doctype` (which is doctype-scoped and
+    drops values — it only feeds cross-doc name clustering), this reader is
+    the per-doc source the FIX 1 doc_root bridge consumes: it must keep
+    `value_numeric` so range filters ("interest_rate>9") work on the
+    resulting `extracted_entities.fields` jsonb.
+
+    Ordered by created_at, field_name for determinism.
+    """
+    cur = await conn.execute(
+        "SELECT field_name, value_text, value_numeric, value_type, model_id "
+        "FROM proposed_fields "
+        "WHERE file_id = %s "
+        "ORDER BY created_at ASC, field_name ASC",
+        (file_id,),
+    )
+    rows = await cur.fetchall()
+    return [
+        {
+            "field_name": name,
+            "value_text": value_text,
+            "value_numeric": value_numeric,
+            "value_type": value_type,
+            "model_id": model_id,
+        }
+        for name, value_text, value_numeric, value_type, model_id in rows
+    ]
+
+
+def build_doc_root_fields(rows: list[dict]) -> dict:
+    """Build the doc_root `extracted_entities.fields` jsonb from a file's
+    proposed_field rows — the FIX 1 bridge that makes a document's own
+    facts queryable regardless of promotion.
+
+    For each field, prefer the typed `value_numeric` when present (so the
+    F-mode range predicates in mode_router operate on real numbers), else
+    fall back to `value_text`. Rows with neither a number nor a non-blank
+    text value are skipped. Keyed by `field_name` (canonicalization is
+    FIX 4 — until then field_name IS the original name); last write wins on
+    duplicate names, matching the row order the reader returns.
+
+    Pure (no DB, no I/O) so it can be unit-tested directly.
+    """
+    out: dict = {}
+    for row in rows:
+        name = row.get("field_name")
+        if not name:
+            continue
+        numeric = row.get("value_numeric")
+        if numeric is not None:
+            out[name] = numeric
+            continue
+        text = row.get("value_text")
+        if text is None or str(text).strip() == "":
+            continue
+        out[name] = text
+    return out
+
+
 async def read_doctypes_for_workspace(
     conn: Connection,
     *,
