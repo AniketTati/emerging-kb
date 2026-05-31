@@ -1,12 +1,10 @@
-"""FIX 10 — a schema change triggers re-extraction (no re-parse).
+"""FIX 10 — re-extraction is EXPLICIT ("apply changes"), not auto-fired.
 
-bump_schema_version (called by every schema CRUD + import) now defers a
-reextract_workspace_files job, scoped to the schema's doc_type, coalesced via
-a queueing_lock. The defer itself is best-effort (caught when procrastinate is
-not connected), and procrastinate defers don't land in procrastinate_jobs in
-this local test env (the pre-existing raptor defer test fails the same way),
-so this suite verifies the testable contract: the doc_type-scope derivation,
-and that the enqueue path runs cleanly inside a real bump without raising.
+bump_schema_version no longer enqueues a re-extract on every field edit (that
+caused an edit storm + a defer inside the request txn + a dropped-while-running
+edit). Instead the user triggers ONE re-extract via POST /schemas/{id}/re-extract.
+This suite verifies the doc_type-scope derivation, that bump stays clean, and
+that the explicit endpoint enqueues the right scoped re-extract.
 """
 
 from __future__ import annotations
@@ -21,6 +19,59 @@ from kb.extraction.promotion import ensure_auto_schema_entity
 
 
 pytestmark = pytest.mark.asyncio
+
+
+class _Deferrer:
+    def __init__(self, rec):
+        self.rec = rec
+
+    async def defer_async(self, **kw):
+        self.rec.update(kw)
+
+
+class _FakeProcApp:
+    """Captures the enqueue so the explicit-apply endpoint is testable without
+    a live procrastinate connection (defers don't land in the local test DB)."""
+    def __init__(self):
+        self.rec: dict = {}
+
+    def configure_task(self, name, **kw):
+        self.rec["task"] = name
+        self.rec.update(kw)
+        return _Deferrer(self.rec)
+
+
+async def test_explicit_reextract_endpoint_scopes_to_doctype(
+    client, db_url_superuser, monkeypatch,
+):
+    """POST /schemas/{id}/re-extract on an auto:<doc_type> schema enqueues a
+    reextract_workspace_files job scoped to that doc_type, and returns 202."""
+    workspace = str(uuid.uuid4())
+    async with open_connection(db_url_superuser) as conn:
+        async with conn.transaction():
+            await conn.execute(
+                "SELECT set_config('app.workspace_id', %s, true)", (workspace,),
+            )
+            schema_id, _ = await ensure_auto_schema_entity(
+                conn, workspace_id=workspace, doc_type="loan_agreement",
+            )
+
+    fake = _FakeProcApp()
+    import kb.workers.tasks as tasks_mod
+    monkeypatch.setattr(tasks_mod, "procrastinate_app", fake)
+
+    resp = await client.post(
+        f"/schemas/{schema_id}/re-extract",
+        headers={"X-Test-Workspace": workspace},
+    )
+    assert resp.status_code == 202, resp.text
+    body = resp.json()
+    assert body["scope"] == "loan_agreement"
+    assert body["status"] == "queued"
+    # The enqueue was scoped to the doc_type and the workspace.
+    assert fake.rec["task"] == "reextract_workspace_files"
+    assert fake.rec["doc_type"] == "loan_agreement"
+    assert fake.rec["workspace_id"] == workspace
 
 
 def test_reextract_doc_type_for_schema_derivation():

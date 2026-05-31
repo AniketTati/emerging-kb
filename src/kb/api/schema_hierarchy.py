@@ -62,6 +62,7 @@ from kb.domain.schemas import (
     bump_schema_version,
     get_schema,
     lock_and_assert_active_schema,
+    reextract_doc_type_for_schema,
 )
 
 
@@ -382,3 +383,56 @@ async def delete_relationship(
 
     await cache_response(conn, workspace_id, idem_key, body=None, status_code=204)
     return Response(status_code=204)
+
+
+# ---------------------------------------------------------------------------
+# POST /schemas/:id/re-extract — explicit "apply changes" (FIX 10).
+#
+# Re-extraction is EXPLICIT, not auto-fired on every field edit (that caused an
+# edit storm + a defer inside the request txn + a dropped-while-running edit).
+# The user batches their schema edits, then triggers ONE re-extract here. It
+# re-derives structured data for the affected doc-type's `ready` files from
+# CACHED chunks (no re-parse), in force mode (non-destructive, idempotent).
+#
+# No queueing_lock: an explicit click should run against the latest schema, so
+# a second apply after more edits enqueues its own run (it reads the live
+# schema at execution). 202 with the scope so the UI can show "Re-extraction
+# queued".
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/re-extract",
+    status_code=202,
+    summary="Apply schema changes: re-extract this schema's doc-type's ready "
+            "files from cached chunks (no re-parse).",
+)
+async def post_schema_reextract(
+    schema_id: str,
+    workspace_id: Annotated[str, Depends(current_workspace_id)],
+    conn: Annotated[Connection, Depends(kb_app_connection)],
+) -> JSONResponse:
+    # 404 / 403 surface naturally — get_schema is workspace-scoped.
+    schema = await get_schema(conn, schema_id)
+    # An `auto:<doc_type>` schema scopes to that doc_type; a user-declared
+    # schema (arbitrary name) re-extracts the whole workspace. Precise scoping
+    # for declared schemas needs a schema→doc_type association (tracked).
+    doc_type = reextract_doc_type_for_schema(schema.name)
+    try:
+        from kb.workers.tasks import procrastinate_app
+        await procrastinate_app.configure_task(
+            name="reextract_workspace_files",
+        ).defer_async(workspace_id=str(workspace_id), doc_type=doc_type)
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse(
+            status_code=503,
+            content={"detail": f"failed to enqueue re-extraction: {exc}"},
+        )
+    return JSONResponse(
+        status_code=202,
+        content={
+            "status": "queued",
+            "scope": doc_type or "workspace",
+            "schema_id": schema_id,
+        },
+    )

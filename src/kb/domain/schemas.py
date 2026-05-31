@@ -378,27 +378,13 @@ async def bump_schema_version(
         (version_id, schema_id),
     )
 
-    # FIX 10 — schema changed → re-derive structured data for the affected
-    # doc-type's `ready` files from CACHED chunks (no re-parse). Best-effort:
-    # never fail the schema mutation over the enqueue. Coalesced per
-    # workspace+doc_type via a queueing_lock so rapid multi-field edits don't
-    # pile up redundant full re-runs (a queued/running job absorbs them).
-    # An `auto:<doc_type>` schema scopes to that doc_type; a user-declared
-    # schema (arbitrary name) falls back to the whole workspace.
-    try:
-        from kb.workers.tasks import procrastinate_app
-
-        doc_type = reextract_doc_type_for_schema(name)
-        lock = f"reextract:{workspace_id}:{doc_type or 'all'}"
-        try:
-            await procrastinate_app.configure_task(
-                name="reextract_workspace_files", queueing_lock=lock,
-            ).defer_async(workspace_id=str(workspace_id), doc_type=doc_type)
-        except Exception:  # noqa: BLE001 — AlreadyEnqueued / not-open / transient
-            pass
-    except ImportError:
-        pass
-
+    # FIX 10 — re-extraction is EXPLICIT, not auto-fired on every edit.
+    # Auto-enqueueing a re-extract here (per field/entity/relationship CRUD)
+    # caused: an edit storm (N edits → N full re-extracts), a defer inside the
+    # still-open request transaction (could fire on rollback), and a lost-update
+    # (a later edit dropped while one re-extract was running). Instead, the user
+    # batches edits and triggers ONE re-extract via POST /schemas/{id}/re-extract
+    # (the "apply changes" action). bump_schema_version just versions the schema.
     return new_version
 
 
