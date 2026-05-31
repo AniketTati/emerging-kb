@@ -75,7 +75,25 @@ eval after each task** so you can attribute every change.
 
 ### ▸ Live status (update after every task)
 
-**▶ CURRENT FOCUS — pre-ingest WRITE-PATH BATCH (then ingest `finance` once).**
+**▶ FINANCE INGEST COMPLETE (46/46 ready, ws `f0000000`).** Staged ingest
+(statements → chains → full corpus) surfaced + fixed 5 real bugs: I1 never
+wired into chunk_file_impl (`1d4b803`); schema-bootstrap races under concurrent
+same-doctype ingest (`b98a3cd`); chain `version_index` race → deterministic
+renumber pass (`924bdfe`); out-of-range mention confidence parking docs
+(`06e5f02`); deadlocks from duplicate workers (operational — run ONE worker).
+Validated: all 9 doctypes classified, row-chunks on statements, loan chain
+v0/v1/v2 (addendum-2 current), complaint v0/v1, corpus RAPTOR (L2:2+L3:1),
+538 entities / 5877 mentions / 922 fields / 6901 triples.
+**Quality gaps (eval-coupled → Phase C, NOT pipeline defects):** (a) identity
+reconcile + field convergence UNDER-merge (HDFC vs HDFC BANK separate;
+account_number vs account_no) — conservative judges, tune with eval; (b)
+`resolve_identities` lacks deadlock-retry (S2/scale); (c) query path needs
+`KB_RERANKER=bge`→`cohere`/`auto` (stale docker API env) + the Q-tasks.
+**NEXT: UI discovery + user-schema ability (P1b/P3/P6).**
+
+---
+
+**▶ (prior) pre-ingest WRITE-PATH BATCH (then ingest `finance` once).**
 Plan: `~/.claude/plans/lets-create-a-plan-peppy-mitten.md`. Batch ALL write-path
 changes first, then run the finance ingest ONCE (finance = most tabular domain;
 868 md table-rows). HEAD `0712736`, tree clean, 140+ batch tests pass.
