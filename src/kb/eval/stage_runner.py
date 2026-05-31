@@ -51,6 +51,7 @@ ALL_DOMAINS: tuple[str, ...] = (
 # domain is ingested. The CLI's --workspace always overrides this.
 KNOWN_WORKSPACES: dict[str, str] = {
     "construction": "c0000000-0000-0000-0000-000000000001",
+    "finance":      "f0000000-0000-0000-0000-000000000001",
 }
 
 
