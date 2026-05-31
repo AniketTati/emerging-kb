@@ -2518,6 +2518,7 @@ async def extract_schema_entities_file_impl(
             # LLM is never invoked for them; their instances come from
             # PASS 1.5 below.
             inserted: list[tuple[str, str]] = []  # (entity_id, schema_entity_id)
+            doc_root_instance_inserted = False
             for entity_def, result in results:
                 if result is None or not result.instances:
                     continue
@@ -2542,6 +2543,7 @@ async def extract_schema_entities_file_impl(
                         fields_to_store = {
                             **base_doc_root_fields, **instance.fields,
                         }
+                        doc_root_instance_inserted = True
                     eid = await insert_extracted_entity(
                         conn,
                         schema_entity_id=schema_entity_id,
@@ -2553,6 +2555,44 @@ async def extract_schema_entities_file_impl(
                     )
                     inserted.append((eid, schema_entity_id))
                     total_inserted += 1
+
+            # FIX 1 / FIX 8 — guarantee a doc_root instance per doc.
+            # When the LLM produced no doc_root (no promoted schema_fields
+            # to extract — e.g. a frontmatter-only narrative loan), the
+            # doc would otherwise have NO queryable record and its child
+            # rows would be orphaned (lineage_path set, parent_entity_id
+            # NULL). If the doc has its own extracted fields, create the
+            # doc_root from them — but only when none already exists, so a
+            # transient-empty re-extract still preserves a richer prior
+            # parent (the #19 non-destructive guarantee above).
+            if (
+                doc_root_entity_id is not None
+                and base_doc_root_fields
+                and not doc_root_instance_inserted
+            ):
+                cur = await conn.execute(
+                    "SELECT id::text, schema_entity_id::text "
+                    "FROM extracted_entities "
+                    "WHERE file_id = %s AND unit_type IS NULL LIMIT 1",
+                    (file_id,),
+                )
+                existing_root = await cur.fetchone()
+                if existing_root is None:
+                    eid = await insert_extracted_entity(
+                        conn,
+                        schema_entity_id=doc_root_entity_id,
+                        file_id=file_id,
+                        workspace_id=workspace_id_str,
+                        fields=base_doc_root_fields,
+                        citations={},
+                        model_id=model_id_used,
+                    )
+                    inserted.append((eid, doc_root_entity_id))
+                    total_inserted += 1
+                else:
+                    # Preserve the existing parent; make sure the lineage
+                    # pass still sees it so children FK correctly.
+                    inserted.append((existing_root[0], existing_root[1]))
 
             # Pick up children KV+Tables already wrote so the lineage
             # pass (PASS 2/3) sees them and assigns parent_entity_id +
