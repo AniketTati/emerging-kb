@@ -283,13 +283,33 @@ don't land in procrastinate_jobs in the local test env (pre-existing raptor
 defer test fails identically) → enqueue-landing not asserted; doc_type-scope
 derivation + clean-bump tested; 50 schema + 21 correction tests green.
 
-**▶ ALL INGESTION-PIPELINE FIXES (1–10) DONE.** Remaining: query-coupled FIX 4
-mapping (above), the user-declared-fields-by-declaration half of FIX 5, and
-**validation** — run the corpus re-extract over finance (FIX 9) + M1 re-run
-("loans with rate>9%" from the structured layer; no regression on 32/50 +
-adversarial 4/4). Flagged pre-existing test-rot (spawned tasks): test_files_crud
-exact-keys, test_kv_tables_worker FakeExtractor/atomic_units; plus the
-procrastinate-defer test-harness gap (defers don't land in local test DB).
+**▶ FIX 4 (A) DONE (`453e734`) — declared-name anchoring.** converge_clusters_semantic
+takes anchor_names (user-declared field names, auto_promoted=false): emergent
+variants merge INTO the declared name (all_in_rate/post_amendment_rate →
+interest_rate), lone anchors dropped. Wired in converge_workspace_fields_impl.
+Column-name canonicalization: DETERMINISTIC part (case/space/separator) already
+done at the kv_tables write boundary (_snake_case on column names + row.values
+keys); semantic cross-doc column-synonym merge grouped with query-side FIX 4.
+
+**▶ FIX 5 (declared half) VERIFIED (`97b9851`) — no code change needed.**
+User-declared fields extract by declaration: read_active_schemas_for_doctype
+returns auto + user schemas, read_schema_entities_with_fields surfaces ALL
+active fields (no auto_promoted filter) → declared field drives
+extract_schema_entities by its name, FIX 1 merges onto doc_root. Regression
+test locks it.
+
+**▶ ALL INGESTION-PIPELINE FIXES (1–10) DONE + verified.** Remaining is NOT
+ingestion code:
+- **Query-coupled FIX 4** (query-time field-name→canonical mapping in the
+  planner/F-mode; semantic cross-doc column-synonym merge + its destructive
+  fields-key rewrite). Query layer, separate.
+- **Validation runs** — (a) corpus re-extract over finance (FIX 9) + M1 re-run
+  ("loans with rate>9%" from the structured layer; no regression on 32/50 +
+  adversarial 4/4); (b) real-binary E2E (vertex-msa.pdf / scanned / xlsx) —
+  never proven E2E on real binaries.
+- **Flagged pre-existing test-rot** (spawned tasks): test_files_crud exact-keys;
+  test_kv_tables_worker FakeExtractor/atomic_units; procrastinate-defer
+  test-harness gap (defers don't land in local test DB).
 
 **▶ DATA-QUALITY AUDIT (actual DB rows, not coverage) — finance ws.** Reviewed
 every layer with samples. **Good:** chunking (0 garbage; bank statements
