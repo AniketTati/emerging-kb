@@ -1,0 +1,327 @@
+# Finance domain schema — load with:
+#   uv run python scripts/load_schema.py --workspace <uuid> \
+#       demo-corpus/domains/finance/schema.yaml
+#
+# This is a SCHEMA (entity TYPES + typed fields + relationships), not the
+# entity registry (demo-corpus/entities.yaml, which is instance data). It is
+# the inverse-importable form of GET /schemas/export.yaml: one entity per the
+# nine finance doc types plus the two cross-cutting actors (Organization,
+# Person), wired with typed relationships.
+#
+# Field types are limited to: string | number | boolean | date | datetime.
+# Relationship kinds: contains | part_of | references | associates | attribute_link.
+
+schemas:
+  - name: Finance
+    description: >-
+      Finance corpus schema: bank statements, loan agreements + addenda,
+      complaint tickets, KYC records, customer profiles, financial reports
+      (10-K style), treasury memos, audit reports, and wire-transfer email
+      threads, plus the organizations and people they reference.
+    entities:
+      # ---------------------------------------------------------------
+      # Cross-cutting actors
+      # ---------------------------------------------------------------
+      - name: Organization
+        description: A company or bank party to finance documents.
+        fields:
+          - name: name
+            type: string
+            description: Canonical legal name (e.g. "HDFC Bank Ltd").
+            required: true
+          - name: organization_type
+            type: string
+            description: Role/category, e.g. bank, borrower, vendor, auditor.
+          - name: pan
+            type: string
+            description: Permanent Account Number (synthetic; PII — redact in output).
+          - name: address
+            type: string
+            description: Registered address.
+
+      - name: Person
+        description: An individual (customer, complainant, KYC subject).
+        fields:
+          - name: full_name
+            type: string
+            description: Full legal name.
+            required: true
+          - name: pan
+            type: string
+            description: Permanent Account Number (PII — redact in output).
+          - name: aadhaar_masked
+            type: string
+            description: Masked Aadhaar (PII — redact in output).
+          - name: email
+            type: string
+            description: Contact email (PII).
+          - name: mobile
+            type: string
+            description: Contact mobile number (PII).
+          - name: role
+            type: string
+            description: Relationship to the document, e.g. account holder, complainant.
+
+      # ---------------------------------------------------------------
+      # Document-type entities (one per doc_type)
+      # ---------------------------------------------------------------
+      - name: BankStatement
+        description: A periodic bank account statement.
+        fields:
+          - name: account_number
+            type: string
+            description: Account number the statement covers.
+            required: true
+          - name: bank_name
+            type: string
+            description: Issuing bank.
+          - name: account_holder
+            type: string
+            description: Name on the account.
+          - name: statement_period
+            type: string
+            description: Period covered, e.g. "January 2025" or a date range.
+          - name: opening_balance
+            type: number
+            description: Opening balance for the period.
+          - name: closing_balance
+            type: number
+            description: Closing balance for the period.
+          - name: currency
+            type: string
+            description: ISO currency code, e.g. INR.
+
+      - name: LoanAgreement
+        description: A loan agreement or one of its amendment addenda.
+        fields:
+          - name: loan_reference
+            type: string
+            description: Loan/facility reference number.
+            required: true
+          - name: principal_amount
+            type: number
+            description: Sanctioned principal.
+          - name: interest_rate
+            type: number
+            description: All-in annual interest rate percent (current effective value).
+          - name: spread_bps
+            type: number
+            description: Spread over the benchmark, in basis points.
+          - name: benchmark
+            type: string
+            description: Reference rate benchmark, e.g. "HDFC MCLR".
+          - name: tenure_months
+            type: number
+            description: Loan tenure in months.
+          - name: borrower
+            type: string
+            description: Borrower legal name.
+          - name: lender
+            type: string
+            description: Lender legal name.
+          - name: effective_date
+            type: date
+            description: Date this agreement/amendment takes effect.
+          - name: status
+            type: string
+            description: live | superseded | draft.
+
+      - name: ComplaintTicket
+        description: A customer complaint and its lifecycle.
+        fields:
+          - name: complaint_id
+            type: string
+            description: Ticket identifier.
+            required: true
+          - name: complainant
+            type: string
+            description: Name of the person who raised the complaint.
+          - name: subject
+            type: string
+            description: Short complaint subject.
+          - name: status
+            type: string
+            description: open | in_progress | resolved.
+          - name: raised_date
+            type: date
+            description: Date the complaint was raised.
+          - name: resolution_date
+            type: date
+            description: Date the complaint was resolved, if any.
+          - name: channel
+            type: string
+            description: Channel raised through, e.g. branch, email, app.
+
+      - name: KYCDocument
+        description: A Know-Your-Customer record.
+        fields:
+          - name: customer_name
+            type: string
+            description: KYC subject's name.
+            required: true
+          - name: pan
+            type: string
+            description: PAN on file (PII — redact in output).
+          - name: aadhaar_masked
+            type: string
+            description: Masked Aadhaar (PII — redact in output).
+          - name: address
+            type: string
+            description: Address on file.
+          - name: kyc_status
+            type: string
+            description: verified | pending | rejected.
+          - name: risk_category
+            type: string
+            description: low | medium | high.
+
+      - name: CustomerProfile
+        description: A relationship/CRM customer profile.
+        fields:
+          - name: customer_name
+            type: string
+            description: Customer name.
+            required: true
+          - name: segment
+            type: string
+            description: Customer segment, e.g. retail, corporate, HNI.
+          - name: relationship_manager
+            type: string
+            description: Assigned RM.
+          - name: products_held
+            type: string
+            description: Summary of products held.
+
+      - name: FinancialReport
+        description: An annual / 10-K-style financial report.
+        fields:
+          - name: entity_name
+            type: string
+            description: Reporting company.
+            required: true
+          - name: fiscal_year
+            type: string
+            description: Fiscal year covered, e.g. FY2024.
+          - name: revenue
+            type: number
+            description: Total revenue for the period.
+          - name: net_income
+            type: number
+            description: Net income for the period.
+          - name: total_assets
+            type: number
+            description: Total assets at period end.
+          - name: currency
+            type: string
+            description: Reporting currency.
+
+      - name: TreasuryMemo
+        description: An internal treasury memo (may be DRAFT or LIVE).
+        fields:
+          - name: memo_title
+            type: string
+            description: Memo title.
+            required: true
+          - name: fiscal_year
+            type: string
+            description: Fiscal year the memo concerns.
+          - name: doc_status
+            type: string
+            description: draft | live — authority gating signal.
+          - name: prepared_by
+            type: string
+            description: Author/department.
+          - name: effective_date
+            type: date
+            description: Date the memo takes effect.
+
+      - name: AuditReport
+        description: An internal/external audit report.
+        fields:
+          - name: report_title
+            type: string
+            description: Report title.
+            required: true
+          - name: period
+            type: string
+            description: Audit period covered.
+          - name: auditor
+            type: string
+            description: Auditing party.
+          - name: opinion
+            type: string
+            description: Audit opinion, e.g. unqualified.
+          - name: issue_date
+            type: date
+            description: Date issued.
+
+      - name: WireTransfer
+        description: A wire-transfer instruction (often inside an email thread).
+        fields:
+          - name: amount
+            type: number
+            description: Transfer amount.
+            required: true
+          - name: currency
+            type: string
+            description: ISO currency code.
+          - name: remitter
+            type: string
+            description: Party sending funds.
+          - name: beneficiary
+            type: string
+            description: Party receiving funds.
+          - name: value_date
+            type: date
+            description: Settlement/value date.
+          - name: purpose
+            type: string
+            description: Stated purpose of the transfer.
+          - name: status
+            type: string
+            description: requested | approved | rejected | refused.
+
+    # -----------------------------------------------------------------
+    # Typed relationships (from/to reference entity names above)
+    # -----------------------------------------------------------------
+    relationships:
+      - name: statement_holder
+        from: BankStatement
+        to: Organization
+        kind: references
+        cardinality: many_to_many
+      - name: loan_borrower
+        from: LoanAgreement
+        to: Organization
+        kind: references
+        cardinality: many_to_many
+      - name: loan_lender
+        from: LoanAgreement
+        to: Organization
+        kind: references
+        cardinality: many_to_many
+      - name: complaint_complainant
+        from: ComplaintTicket
+        to: Person
+        kind: references
+        cardinality: one_to_many
+      - name: kyc_subject
+        from: KYCDocument
+        to: Person
+        kind: references
+        cardinality: one_to_one
+      - name: profile_subject
+        from: CustomerProfile
+        to: Person
+        kind: references
+        cardinality: one_to_one
+      - name: report_issuer
+        from: FinancialReport
+        to: Organization
+        kind: references
+        cardinality: one_to_many
+      - name: wire_remitter
+        from: WireTransfer
+        to: Organization
+        kind: references
+        cardinality: many_to_many

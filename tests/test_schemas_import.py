@@ -8,12 +8,16 @@ conventions in test_schemas_crud.py.
 from __future__ import annotations
 
 import uuid
+from pathlib import Path
 
 import pytest
 import yaml
 
 
 pytestmark = pytest.mark.asyncio
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_FINANCE_SCHEMA = _REPO_ROOT / "demo-corpus" / "domains" / "finance" / "schema.yaml"
 
 
 def headers(workspace: str, *, content_type: str | None = None) -> dict[str, str]:
@@ -217,3 +221,22 @@ schemas:
 async def test_import_invalid_yaml_400(client):
     resp = await _import(client, _ws(), "schemas: [unclosed\n")
     assert resp.status_code == 400, resp.text
+
+
+# ---------------------------------------------------------------------------
+# Committed demo artifact imports cleanly (guards against drift)
+# ---------------------------------------------------------------------------
+
+
+async def test_finance_demo_schema_imports(client):
+    body = _FINANCE_SCHEMA.read_text(encoding="utf-8")
+    ws = _ws()
+    resp = await _import(client, ws, body)
+    assert resp.status_code == 200, resp.text
+    item = resp.json()["imported"][0]
+    assert item["name"] == "Finance"
+    assert item["action"] == "created"
+    # 9 doc-type entities + Organization + Person.
+    assert item["entities"] == 11
+    assert item["relationships"] == 8
+    assert item["fields"] > 0
