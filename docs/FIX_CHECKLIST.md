@@ -144,6 +144,25 @@ master-detail modal — `listSchemas` → drill into `listSchemaVersions` (versi
 kind post/put/rollback, parent, timestamp). Verified live (auto:* → v1/post),
 no console errors. 30 FE tests green, `tsc` clean.
 
+**▶ P1 QUERY-SIDE (core) DONE — `f51a87f`/`9ddf557`.** The query pipeline now
+reads its two highest-value thresholds through layered config instead of
+hardcoded constants: the **CRAG refuse gate** (`retrieval.crag.threshold`, the
+M1-identified loss area) and the **conflict authority-dominance gap**
+(`conflicts.authority_dominance_gap`, Design 2). New `kb.query.config_thresholds.
+resolve_query_threshold` (mirrors the write-path helper) resolves both once per
+`chat()` request from conn+workspace_id; CRAG value flows to all 6 in-request
+decision sites (emit/IRCoT/force_refuse/grounding gate), the gap threads through
+`resolve_conflicts_for_hits`→`resolve_all`. SAFE: hardcoded default passed +
+returned on any error; `conn=None` still reads defaults.yaml. **End-to-end loop
+closed:** `POST /settings/overrides`→`insert_override`→`config_overrides`→
+`resolve_config`→orchestrator — so an override set via the Settings API now
+genuinely changes the refuse/conflict behavior (P1 done-when, for these
+thresholds). 5 new tests; CRAG + b2 conflict + write-path P1 all green.
+**Optional remaining for P1:** auto_merge (0.5) + faithfulness (0.80/0.50) —
+need new defaults.yaml keys; lower value than the refuse gate.
+
+This also **unblocks P1b's "+config"** thread (config is now read at runtime).
+
 **▶ P1b/P3/P6 PHASE COMPLETE.** UI discovery + user-schema ability delivered:
 schema import endpoint+loader+demo artifact (P3 ✅), define-from-scratch wizard +
 one-step import (P1b ◑ — "+config" bundle coupled to P1), failure-reason +
@@ -273,7 +292,7 @@ master table below.
 | 8 | **Citation honesty** (kill fake-cite fallback) + **P5** page-range | 2 | ✅ | **C1** grounded aggregate citations (0.00→1.00; `0079118`); **fake-citation fallback killed** (`45d7da3`); **P5** page-range (citation reports `pp. X–Y`; mechanism-tested — not construction-visible, markdown corpus). D6 |
 | 9 | **Q3** strip corpus-specific facts from generator prompt | 2 | ⏳ | after I1/I2/Q1. D5/NFR |
 | 10 | **Q2** collapse 13-mode facade → ~4 honest modes | 2 | ⏳ | D5 |
-| 11 | **P1** wire pipeline to read layered config | 3 | ◑ | **Extraction-side DONE** (`91824f3`/`03dcdb1`/`40becc9`): identity, promotion, field-sim, doc-chain thresholds via `_resolve_threshold`→`resolve_config`, safe defaults. 4 tests. **Query-side (CRAG 0.5 etc.) + FE Settings still ⏳.** D7 |
+| 11 | **P1** wire pipeline to read layered config | 3 | ◑ | **Extraction-side DONE** (`91824f3`/`03dcdb1`/`40becc9`). **Query-side CRAG refuse gate + conflict authority-gap DONE** (`f51a87f`/`9ddf557`): `resolve_query_threshold` resolves `retrieval.crag.threshold` + `conflicts.authority_dominance_gap` per chat() request; end-to-end closed (`POST /settings/overrides`→`config_overrides`→`resolve_config`→orchestrator). 5 tests. **Remaining (optional):** auto_merge + faithfulness thresholds (need new defaults.yaml keys). D7 |
 | 12 | **P3** committed, loadable demo-schema artifact | 3 | ✅ | D7 |
 | 13 | **P1b** define-from-scratch schema + onboarding | 3 | ◑ | `2f24a1a`. Schema-studio "New schema" 4-step wizard (entities+fields+relationships) + "Import YAML" loader, both via atomic POST /schemas/import.yaml; verified live (both create schemas end-to-end). **Remaining:** "+config" one-click bundle — coupled to P1 config wiring (row 11). D7 |
 | 14 | **P6** FE: failure reasons + schema version view | 3 | ✅ | `2bcfb0a`. (a) FilesTable expanded detail surfaces failed-file `error_class`/`message`/traceback from the failed lifecycle event (pure `failureReasonFrom`, 4 tests; no live failed files in finance). (b) "Versions" modal in Schema Studio: list schemas → drill into immutable version history (verified live, auto:* show v1/post). |
