@@ -4158,7 +4158,21 @@ async def reextract_file(file_id: str) -> None:
     targeted re-extract trigger. Mirrors the corpus orchestrator's per-file
     body so a schema/correction change re-derives structured data without
     re-parsing.
+
+    review #5 — guard on `ready`: a correction/trigger may name a file that is
+    still mid-pipeline. Force-re-extracting it would race the live ingest chain
+    (concurrent delete/insert of the same extracted_entities) and emit a bogus
+    from_state='ready' audit event. Skip non-ready files — the normal pipeline
+    will extract them when they settle.
     """
+    from kb.config import get_settings
+    async with open_connection(get_settings().database_url) as conn:
+        cur = await conn.execute(
+            "SELECT lifecycle_state FROM files WHERE id = %s", (file_id,),
+        )
+        row = await cur.fetchone()
+    if row is None or row[0] != "ready":
+        return
     await extract_kv_tables_file_impl(file_id, force=True)
     await extract_schema_entities_file_impl(file_id, force=True)
 

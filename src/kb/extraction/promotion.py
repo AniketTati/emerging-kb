@@ -314,9 +314,12 @@ def should_promote(cluster: FieldCluster, thresholds: PromotionThresholds) -> bo
         return False
     # Promote when the field REPEATS enough times (count-based, the designed
     # rule) OR clears the prevalence bar (keeps first-doc schema seeding:
-    # 1/1 docs = prevalence 1.0).
+    # 1/1 docs = prevalence 1.0). review #11 — floor the count bar at 1 so a
+    # misconfigured promote_count <= 0 (env/config override) can't make the
+    # count branch trivially true and auto-promote every type-stable field.
+    count_bar = max(1, thresholds.promote_count)
     return (
-        cluster.n_docs_observed >= thresholds.promote_count
+        cluster.n_docs_observed >= count_bar
         or cluster.prevalence >= thresholds.prevalence
     )
 
