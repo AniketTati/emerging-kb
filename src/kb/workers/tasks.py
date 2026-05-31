@@ -2704,11 +2704,18 @@ async def extract_schema_entities_file_impl(
                 and base_doc_root_fields
                 and not doc_root_instance_inserted
             ):
+                # Identify THE doc_root by its schema_entity type, not just
+                # `unit_type IS NULL` — PASS 1 inserts every LLM-extracted
+                # parent (incl. user-declared-schema entities) with unit_type
+                # NULL, so an unscoped LIMIT 1 could pick a sibling parent and
+                # merge per-doc fields onto the wrong row (and never repair the
+                # real doc_root → orphaned children).
                 cur = await conn.execute(
                     "SELECT id::text, schema_entity_id::text, fields "
                     "FROM extracted_entities "
-                    "WHERE file_id = %s AND unit_type IS NULL LIMIT 1",
-                    (file_id,),
+                    "WHERE file_id = %s AND unit_type IS NULL "
+                    "  AND schema_entity_id = %s LIMIT 1",
+                    (file_id, doc_root_entity_id),
                 )
                 existing_root = await cur.fetchone()
                 if existing_root is None:
