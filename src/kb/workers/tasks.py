@@ -4106,6 +4106,36 @@ async def resolve_identities_file(file_id: str) -> None:
     await resolve_identities_file_impl(file_id)
 
 
+@procrastinate_app.task(name="reextract_file", queue="kb", pass_context=False)
+async def reextract_file(file_id: str) -> None:
+    """FIX 10 — per-file force re-extract from CACHED chunks (no re-parse).
+
+    Re-runs KV+Tables (open-vocab) then schema-driven extraction in force
+    mode: the file stays `ready`, body fields are re-discovered, the doc_root
+    is rebuilt. Deferred by the scope='extraction' correction path and any
+    targeted re-extract trigger. Mirrors the corpus orchestrator's per-file
+    body so a schema/correction change re-derives structured data without
+    re-parsing.
+    """
+    await extract_kv_tables_file_impl(file_id, force=True)
+    await extract_schema_entities_file_impl(file_id, force=True)
+
+
+@procrastinate_app.task(name="reextract_workspace_files", queue="kb", pass_context=False)
+async def reextract_workspace_files(
+    workspace_id: str, doc_type: str | None = None,
+) -> None:
+    """FIX 10 — workspace (optionally doc-type-scoped) force re-extract.
+
+    Deferred when a schema is edited/imported so the affected doc-type's
+    `ready` files re-derive their structured data from cached chunks (no
+    re-parse). Non-destructive + idempotent (FIX 9).
+    """
+    await reextract_workspace_schema_entities_impl(
+        workspace_id=workspace_id, doc_type=doc_type,
+    )
+
+
 @procrastinate_app.task(name="detect_doc_chain_file", queue="kb", pass_context=False)
 async def detect_doc_chain_file(file_id: str) -> None:
     """Wire-level Procrastinate task. Delegates to the testable impl.
@@ -4728,6 +4758,7 @@ async def renumber_workspace_chains_impl(*, workspace_id: str) -> dict:
 async def reextract_workspace_schema_entities_impl(
     *,
     workspace_id: str,
+    doc_type: str | None = None,
 ) -> dict:
     """#19 — cold-start schema-entity re-extraction (plan item I).
 
@@ -4740,6 +4771,9 @@ async def reextract_workspace_schema_entities_impl(
     schema, reusing existing chunks (no re-parse), in force mode (stays
     `ready`, no identity re-chain). Best-effort per file.
 
+    `doc_type` (FIX 10): when set, re-extract only that doc-type's ready files
+    — used by schema edit/import triggers, which only affect one doc-type.
+
     Returns an observability summary.
     """
     from kb.config import get_settings
@@ -4751,13 +4785,19 @@ async def reextract_workspace_schema_entities_impl(
         await conn.execute(
             "SELECT set_config('app.workspace_id', %s, true)", (workspace_id,),
         )
+        params: list = [workspace_id]
+        doc_type_clause = ""
+        if doc_type:
+            doc_type_clause = "  AND inferred_doc_type = %s\n"
+            params.append(doc_type)
         cur = await conn.execute(
             "SELECT id::text FROM files "
             "WHERE workspace_id = %s AND lifecycle_state = 'ready' "
             "  AND inferred_doc_type IS NOT NULL "
             "  AND inferred_doc_type <> 'unknown' "
+            + doc_type_clause +
             "ORDER BY id",
-            (workspace_id,),
+            tuple(params),
         )
         file_ids = [r[0] for r in await cur.fetchall()]
 

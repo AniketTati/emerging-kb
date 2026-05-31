@@ -634,11 +634,15 @@ async def route_correction(
                 from kb.workers.tasks import procrastinate_app
                 for file_id in implicated:
                     try:
+                        # FIX 10 — defer the REAL force re-extract task.
+                        # The old `extract_fields_file` no longer exists
+                        # (collapsed into KV+Tables) and a plain
+                        # `extract_kv_tables_file` is a no-op on a `ready`
+                        # file (lifecycle guard). `reextract_file` runs
+                        # KV+Tables + schema-entities in force mode from
+                        # cached chunks (no re-parse).
                         await procrastinate_app.configure_task(
-                            name="extract_fields_file"
-                        ).defer_async(file_id=file_id)
-                        await procrastinate_app.configure_task(
-                            name="extract_kv_tables_file"
+                            name="reextract_file"
                         ).defer_async(file_id=file_id)
                         deferred_for.append(file_id)
                     except Exception as exc:  # noqa: BLE001

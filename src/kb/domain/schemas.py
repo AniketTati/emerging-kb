@@ -311,6 +311,18 @@ async def lock_and_assert_active_schema(conn: Connection, schema_id: str) -> Non
         raise NotFoundError(schema_id)
 
 
+def reextract_doc_type_for_schema(schema_name: str | None) -> str | None:
+    """FIX 10 — derive the re-extract doc_type scope from a schema name.
+
+    An auto-discovered schema is named `auto:<doc_type>` → scope to that
+    doc_type. A user-declared schema has an arbitrary name → return None so
+    the trigger re-extracts the whole workspace (we can't map an arbitrary
+    declared schema to a single inferred_doc_type)."""
+    if schema_name and schema_name.startswith("auto:"):
+        return schema_name[len("auto:"):] or None
+    return None
+
+
 async def bump_schema_version(
     conn: Connection,
     workspace_id: str,
@@ -365,6 +377,28 @@ async def bump_schema_version(
         "UPDATE schemas SET current_version_id = %s, updated_at = now() WHERE id = %s",
         (version_id, schema_id),
     )
+
+    # FIX 10 — schema changed → re-derive structured data for the affected
+    # doc-type's `ready` files from CACHED chunks (no re-parse). Best-effort:
+    # never fail the schema mutation over the enqueue. Coalesced per
+    # workspace+doc_type via a queueing_lock so rapid multi-field edits don't
+    # pile up redundant full re-runs (a queued/running job absorbs them).
+    # An `auto:<doc_type>` schema scopes to that doc_type; a user-declared
+    # schema (arbitrary name) falls back to the whole workspace.
+    try:
+        from kb.workers.tasks import procrastinate_app
+
+        doc_type = reextract_doc_type_for_schema(name)
+        lock = f"reextract:{workspace_id}:{doc_type or 'all'}"
+        try:
+            await procrastinate_app.configure_task(
+                name="reextract_workspace_files", queueing_lock=lock,
+            ).defer_async(workspace_id=str(workspace_id), doc_type=doc_type)
+        except Exception:  # noqa: BLE001 — AlreadyEnqueued / not-open / transient
+            pass
+    except ImportError:
+        pass
+
     return new_version
 
 
