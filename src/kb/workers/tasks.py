@@ -2661,9 +2661,14 @@ async def extract_schema_entities_file_impl(
                         doc_root_entity_id is not None
                         and schema_entity_id == doc_root_entity_id
                     ):
-                        fields_to_store = {
-                            **base_doc_root_fields, **instance.fields,
+                        # M3 — overlay only NON-EMPTY LLM values so a null/blank
+                        # promoted-field extraction can't clobber a good per-doc
+                        # value already in base_doc_root_fields.
+                        llm_fields = {
+                            k: v for k, v in instance.fields.items()
+                            if v not in (None, "")
                         }
+                        fields_to_store = {**base_doc_root_fields, **llm_fields}
                         doc_root_instance_inserted = True
                     eid = await insert_extracted_entity(
                         conn,
