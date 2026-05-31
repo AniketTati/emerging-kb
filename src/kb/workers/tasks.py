@@ -2259,7 +2259,9 @@ async def extract_kv_tables_file_impl(file_id: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def extract_schema_entities_file_impl(file_id: str) -> None:
+async def extract_schema_entities_file_impl(
+    file_id: str, *, force: bool = False,
+) -> None:
     """Run Gemini structured-output extraction per active schema_entity for
     the file's inferred_doc_type. Write extracted_entities rows with
     per-field citations + lineage_path. Advance lifecycle to `ready`.
@@ -2267,6 +2269,12 @@ async def extract_schema_entities_file_impl(file_id: str) -> None:
     Per build_tracker §5.13 (13 locked decisions).
 
     Per-stage idempotency: returns immediately if already at `ready`.
+
+    `force=True` (cold-start re-extraction, #19): re-run against an ALREADY
+    `ready` file (skips the ready/entities_extracting guard). It still
+    delete-then-inserts (idempotent), but does NOT transition lifecycle or
+    re-chain resolve_identities_file — the file stays `ready`, so this can't
+    knock it out of the settled state and re-fire the finalize_corpus loop.
     """
     import os
 
@@ -2309,10 +2317,15 @@ async def extract_schema_entities_file_impl(file_id: str) -> None:
                 raise FileNotFoundError(file_id)
             workspace_id, lifecycle_state, inferred_doc_type = row
 
-            if lifecycle_state in ("ready", "failed", "deleted"):
-                return
-            if lifecycle_state != "entities_extracting":
-                return
+            if force:
+                # Cold-start re-extraction: only skip genuinely dead files.
+                if lifecycle_state in ("failed", "deleted"):
+                    return
+            else:
+                if lifecycle_state in ("ready", "failed", "deleted"):
+                    return
+                if lifecycle_state != "entities_extracting":
+                    return
 
             workspace_id_str = str(workspace_id)
             await conn.execute(
@@ -2568,29 +2581,52 @@ async def extract_schema_entities_file_impl(file_id: str) -> None:
                     lineage_path=lineage_path,
                 )
 
-            # Phase 7 §5.14 #1: transition to identity_resolving (was 'ready'
-            # in Phase 6; Phase 7 resolves mentions → entities before ready).
-            await transition_lifecycle(
-                conn,
-                workspace_id=workspace_id_str,
-                file_id=file_id,
-                to_state="identity_resolving",
-                event="schema_entities_extracted",
-                payload={
-                    "entity_count": total_inserted,
-                    "schema_entity_calls": len(results),
-                    "inferred_doc_type": inferred_doc_type,
-                    "model_id": model_id_used,
-                },
-            )
+            if force:
+                # Cold-start re-extraction: file is already `ready`. Record an
+                # audit event but DO NOT transition (would drop it out of
+                # `ready` → un-settle the workspace → re-fire finalize_corpus).
+                await record_lifecycle_event(
+                    conn,
+                    file_id=file_id,
+                    workspace_id=workspace_id_str,
+                    from_state="ready",
+                    to_state="ready",
+                    event="schema_entities_reextracted",
+                    payload={
+                        "entity_count": total_inserted,
+                        "schema_entity_calls": len(results),
+                        "inferred_doc_type": inferred_doc_type,
+                        "model_id": model_id_used,
+                    },
+                )
+            else:
+                # Phase 7 §5.14 #1: transition to identity_resolving (was
+                # 'ready' in Phase 6; Phase 7 resolves mentions → entities
+                # before ready).
+                await transition_lifecycle(
+                    conn,
+                    workspace_id=workspace_id_str,
+                    file_id=file_id,
+                    to_state="identity_resolving",
+                    event="schema_entities_extracted",
+                    payload={
+                        "entity_count": total_inserted,
+                        "schema_entity_calls": len(results),
+                        "inferred_doc_type": inferred_doc_type,
+                        "model_id": model_id_used,
+                    },
+                )
 
     # Phase 7 §5.14 #1: chain resolve_identities_file in a SEPARATE tx.
-    try:
-        await procrastinate_app.configure_task(
-            name="resolve_identities_file"
-        ).defer_async(file_id=file_id)
-    except Exception:  # noqa: BLE001
-        traceback.print_exc()
+    # Skip in force mode — cold-start re-extraction must not re-run the
+    # per-doc identity chain (the finalization reconcile sweep handles dedup).
+    if not force:
+        try:
+            await procrastinate_app.configure_task(
+                name="resolve_identities_file"
+            ).defer_async(file_id=file_id)
+        except Exception:  # noqa: BLE001
+            traceback.print_exc()
 
 
 # ---------------------------------------------------------------------------
@@ -4372,6 +4408,52 @@ async def reconcile_workspace_entities_impl(
     return summary
 
 
+async def reextract_workspace_schema_entities_impl(
+    *,
+    workspace_id: str,
+) -> dict:
+    """#19 — cold-start schema-entity re-extraction (plan item I).
+
+    On a NEW domain the schema is auto-discovered as docs arrive
+    (proposed_fields → convergence → schema_fields), so the FIRST docs were
+    extracted against an empty/thin schema and their structured
+    extracted_entities are incomplete. Per-doc streaming can't fix this — the
+    schema isn't ready yet. After the convergence pass stabilizes the schema,
+    re-run schema-entity extraction for ALL ready docs against the converged
+    schema, reusing existing chunks (no re-parse), in force mode (stays
+    `ready`, no identity re-chain). Best-effort per file.
+
+    Returns an observability summary.
+    """
+    from kb.config import get_settings
+
+    settings = get_settings()
+    db_url = settings.database_url
+
+    async with open_connection(db_url) as conn:
+        await conn.execute(
+            "SELECT set_config('app.workspace_id', %s, true)", (workspace_id,),
+        )
+        cur = await conn.execute(
+            "SELECT id::text FROM files "
+            "WHERE workspace_id = %s AND lifecycle_state = 'ready' "
+            "  AND inferred_doc_type IS NOT NULL "
+            "  AND inferred_doc_type <> 'unknown' "
+            "ORDER BY id",
+            (workspace_id,),
+        )
+        file_ids = [r[0] for r in await cur.fetchall()]
+
+    summary = {"files": len(file_ids), "reextracted": 0}
+    for fid in file_ids:
+        try:
+            await extract_schema_entities_file_impl(fid, force=True)
+            summary["reextracted"] += 1
+        except Exception:  # noqa: BLE001 — one bad file can't block the rest
+            traceback.print_exc()
+    return summary
+
+
 # ---------------------------------------------------------------------------
 # I3 — corpus-finalization phase (auto-trigger after per-doc ingest settles)
 # ---------------------------------------------------------------------------
@@ -4423,7 +4505,13 @@ async def finalize_corpus_impl(workspace_id: str) -> None:
     except Exception:  # noqa: BLE001
         traceback.print_exc()
 
-    # (2) cold-start schema-entity re-extraction is wired in the next #19 slice.
+    # (2) Cold-start schema-entity re-extraction — re-extract all docs against
+    #     the now-converged schema (a new domain's first docs were extracted
+    #     against an empty/thin schema).
+    try:
+        await reextract_workspace_schema_entities_impl(workspace_id=workspace_id)
+    except Exception:  # noqa: BLE001
+        traceback.print_exc()
 
     # (3) Identity reconcile — merge order-induced duplicate entities the
     #     per-doc top-k resolver couldn't catch.
