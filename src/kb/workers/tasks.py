@@ -2679,11 +2679,20 @@ async def extract_schema_entities_file_impl(
                         # M3 — overlay only NON-EMPTY LLM values so a null/blank
                         # promoted-field extraction can't clobber a good per-doc
                         # value already in base_doc_root_fields.
-                        llm_fields = {
-                            k: v for k, v in instance.fields.items()
-                            if v not in (None, "")
-                        }
-                        fields_to_store = {**base_doc_root_fields, **llm_fields}
+                        # ingest-review #2 — but KEEP the typed numeric from
+                        # base when the LLM returned a raw string for the same
+                        # key (e.g. base interest_rate=8.5 vs LLM
+                        # '8.5% per annum'), so promoted numeric fields stay
+                        # filterable instead of flipping to text.
+                        fields_to_store = dict(base_doc_root_fields)
+                        for k, v in instance.fields.items():
+                            if v in (None, ""):
+                                continue
+                            if isinstance(
+                                fields_to_store.get(k), (int, float)
+                            ) and not isinstance(v, (int, float)):
+                                continue  # base numeric wins over LLM string
+                            fields_to_store[k] = v
                         doc_root_instance_inserted = True
                     eid = await insert_extracted_entity(
                         conn,
