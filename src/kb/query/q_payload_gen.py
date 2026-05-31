@@ -114,6 +114,17 @@ def _build_system_prompt() -> str:
         "\n"
         "## Rules\n"
         "1. Only ONE table per query (no joins) — pick the table that has the columns you need.\n"
+        "1a. Doc-type NAMES (bank_statement, invoice, loan_agreement, …) are "
+        "NOT tables; the only tables are the allowed ones above. To aggregate "
+        "the structural ROWS inside a doc-type's documents (e.g. 'debits "
+        "across bank statements'), use from:extracted_entities and filter "
+        "unit_type with `in` over that doc-type's unit_types (see the "
+        "doc_type→unit_types hint — include ALL spelling variants, e.g. "
+        "['transaction_listing','transactionlisting']). For a doc-type's "
+        "top-level summary scalars, use from:proposed_fields filtered by "
+        "inferred_doc_type. Prefer a scoped `in`-list over refusing as "
+        "'ambiguous' whenever the doc-type or concept clearly maps to a set "
+        "of unit_types.\n"
         "2. Aliases must be lowercase identifiers (letters, digits, underscore; "
         "max 63 chars).\n"
         "3. For 'how many' / 'count' questions, use COUNT with field='*'.\n"
@@ -411,6 +422,67 @@ async def discover_proposed_fields_schema(
     return out
 
 
+async def discover_doc_type_unit_types(
+    conn: Connection | None,
+    *,
+    workspace_id: str | None,
+    limit_types_per_doctype: int = 40,
+) -> dict[str, list[str]]:
+    """Return `{inferred_doc_type: [unit_type, …]}` — which structural-row
+    unit_types actually appear inside each doc-type's documents.
+
+    Without this the Q-mode LLM can't connect a doc-type the user NAMES
+    ('debits across bank statements') to the rows it should aggregate, so
+    it guesses a table name (`from: 'bank_statement'`) that fails the
+    allowlist, or calls a fragmented concept 'ambiguous' and refuses. With
+    it, the LLM scopes to from:extracted_entities + unit_type IN (the doc
+    type's real unit_types, incl. all spelling variants)."""
+    if conn is None or not workspace_id:
+        return {}
+    cur = await conn.execute(
+        "SELECT f.inferred_doc_type, ee.unit_type, count(*) AS n "
+        "FROM extracted_entities ee "
+        "JOIN files f ON f.id = ee.file_id "
+        "WHERE ee.workspace_id = %s "
+        "  AND ee.unit_type IS NOT NULL "
+        "  AND f.inferred_doc_type IS NOT NULL "
+        "GROUP BY f.inferred_doc_type, ee.unit_type "
+        "ORDER BY f.inferred_doc_type, n DESC",
+        (workspace_id,),
+    )
+    rows = await cur.fetchall()
+    out: dict[str, list[str]] = {}
+    for dt, ut, _n in rows:
+        bucket = out.setdefault(str(dt), [])
+        if len(bucket) < limit_types_per_doctype:
+            bucket.append(str(ut))
+    return out
+
+
+def _format_doc_type_unit_types_hints(schema: dict[str, list[str]]) -> str:
+    """Render `{doc_type: [unit_type, …]}` so the LLM can scope a
+    doc-type-named aggregation to the rows that doc-type actually
+    contains (and union spelling variants)."""
+    if not schema:
+        return ""
+    lines = [
+        "## doc_type → unit_types (which structural rows each doc-type holds)",
+        "",
+        "A doc-type NAME (bank_statement, invoice, loan_agreement, …) is NOT "
+        "a table — the only tables are the allowed ones above. To aggregate "
+        "the ROWS inside documents of a named type (e.g. 'debits across bank "
+        "statements'), use from:extracted_entities and filter `unit_type` "
+        "`in` the FULL list below for that doc-type (the list already "
+        "includes camelCase/snake_case spelling variants of the same "
+        "concept — keep them all).",
+        "",
+        "inferred_doc_type → unit_types present:",
+    ]
+    for dt in sorted(schema.keys())[:60]:
+        lines.append(f"  {dt}: [{', '.join(schema[dt])}]")
+    return "\n".join(lines)
+
+
 def _format_proposed_fields_hints(schema: dict[str, list[str]]) -> str:
     """Render the discovered doctype→field_name map as a hint block.
 
@@ -507,6 +579,7 @@ async def generate_q_payload(
     llm: JsonLLMClient | None,
     schema_hints: dict[str, list[str]] | None = None,
     proposed_fields_hints: dict[str, list[str]] | None = None,
+    doc_type_unit_types: dict[str, list[str]] | None = None,
 ) -> tuple[dict[str, Any] | None, str | None]:
     """Run the LLM-to-QPlan path. Returns ``(payload, reason)``:
 
@@ -536,7 +609,10 @@ async def generate_q_payload(
 
     hint_block = _format_schema_hints(schema_hints or {})
     pf_block = _format_proposed_fields_hints(proposed_fields_hints or {})
-    combined_hints = "\n\n".join(b for b in (hint_block, pf_block) if b)
+    dt_block = _format_doc_type_unit_types_hints(doc_type_unit_types or {})
+    combined_hints = "\n\n".join(
+        b for b in (dt_block, hint_block, pf_block) if b
+    )
     user_msg = (
         f"{combined_hints}\n\nUser question: {query}" if combined_hints
         else f"User question: {query}"

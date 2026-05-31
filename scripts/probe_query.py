@@ -48,7 +48,9 @@ def show(query: str, d: dict) -> None:
         f"{round(d.get('faithfulness_score') or 0, 2)} ({d.get('faithfulness_model_id')})"
     )
     print(f"  confid : {d.get('confidence')} — {d.get('confidence_reason')}")
-    modes_applied = sorted({(h.get("metadata") or {}).get("mode_applied") for h in hits})
+    modes_applied = sorted({
+        m for h in hits if (m := (h.get("metadata") or {}).get("mode_applied"))
+    })
     print(f"  hits   : {len(hits)}  mode_applied={modes_applied}")
     print(f"  ANSWER : {(g.get('answer') or '').strip()[:700]}")
     cits = g.get("citations") or []
