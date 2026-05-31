@@ -1560,9 +1560,20 @@ class Orchestrator:
                 verdict="skipped", score=0.0,
                 notes="aggregate-only hits (Q-mode bypass)", model_id="",
             )
-        snippets = [
-            (c.snippet_preview or "") for c in generation.citations
-        ]
+        # Ground on the FULL text of each cited hit, not the truncated
+        # citation preview. `snippet_preview` cuts off mid-chunk, so a
+        # claim whose support sits past the cutoff looks unverifiable and
+        # the gate under-scores a CORRECT answer (observed: a right "9.40%"
+        # factoid scored ~0 against previews, and a good workspace summary
+        # got refused). Map each citation back to its hit's full snippet;
+        # fall back to the preview, then to the top reranked hits.
+        hit_by_id = {str(h.id): h for h in hits}
+        snippets: list[str] = []
+        for c in generation.citations:
+            h = hit_by_id.get(str(getattr(c, "hit_id", "") or ""))
+            full = (h.snippet if h and h.snippet else "") or (c.snippet_preview or "")
+            if full:
+                snippets.append(full)
         if not any(snippets):
             # Fallback: ground on the top-K reranked hits' snippets.
             snippets = [(h.snippet or "") for h in hits[:5]]
