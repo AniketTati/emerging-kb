@@ -315,33 +315,48 @@ async def ensure_auto_schema_entity(
     if row:
         schema_id = row[0]
     else:
+        # Race-safe: concurrent same-doc_type ingest may both try to create
+        # the auto schema. ON CONFLICT DO NOTHING + re-SELECT; only the winner
+        # creates the v1 schema_version.
         cur = await conn.execute(
             "INSERT INTO schemas (workspace_id, name, description, lifecycle_state) "
             "VALUES (%s, %s, %s, 'active') "
+            "ON CONFLICT DO NOTHING "
             "RETURNING id::text",
             (
                 workspace_id, schema_name,
                 f"Auto-created from emergent fields for doc-type '{doc_type}'",
             ),
         )
-        schema_id = (await cur.fetchone())[0]
-        # Phase 1b expects schema_versions row to back the schema.
-        # Create v1 with kind='post' (the original creation flavor per 0006).
-        await conn.execute(
-            "INSERT INTO schema_versions (schema_id, workspace_id, version_number, body, kind) "
-            "VALUES (%s, %s, 1, %s::jsonb, 'post') "
-            "ON CONFLICT DO NOTHING",
-            (
-                schema_id, workspace_id,
-                '{"name": "' + schema_name + '", "entities": [], "relationships": []}',
-            ),
-        )
-        await conn.execute(
-            "UPDATE schemas SET current_version_id = ("
-            "SELECT id FROM schema_versions WHERE schema_id = %s AND version_number = 1"
-            ") WHERE id = %s",
-            (schema_id, schema_id),
-        )
+        _new = await cur.fetchone()
+        if _new is None:
+            # Lost the race — another tx created it; re-SELECT and skip version
+            # creation (the winner handles it). Falls through to doc_root below.
+            cur = await conn.execute(
+                "SELECT id::text FROM schemas "
+                "WHERE workspace_id = %s AND name = %s AND lifecycle_state = 'active' "
+                "LIMIT 1",
+                (workspace_id, schema_name),
+            )
+            schema_id = (await cur.fetchone())[0]
+        else:
+            schema_id = _new[0]
+            # Winner: back the schema with a v1 schema_versions row.
+            await conn.execute(
+                "INSERT INTO schema_versions (schema_id, workspace_id, version_number, body, kind) "
+                "VALUES (%s, %s, 1, %s::jsonb, 'post') "
+                "ON CONFLICT DO NOTHING",
+                (
+                    schema_id, workspace_id,
+                    '{"name": "' + schema_name + '", "entities": [], "relationships": []}',
+                ),
+            )
+            await conn.execute(
+                "UPDATE schemas SET current_version_id = ("
+                "SELECT id FROM schema_versions WHERE schema_id = %s AND version_number = 1"
+                ") WHERE id = %s",
+                (schema_id, schema_id),
+            )
 
     # Find existing doc_root entity. Three cases handled in order:
     #   1. A row named with the proper PascalCase already exists (new path).
@@ -377,16 +392,29 @@ async def ensure_auto_schema_entity(
                 (entity_id,),
             )
     else:
+        # Race-safe doc_root creation (concurrent same-doc_type ingest).
         cur = await conn.execute(
             "INSERT INTO schema_entities "
             "  (schema_id, workspace_id, name, description, "
             "   lifecycle_state, kind) "
             "VALUES (%s, %s, %s, %s, 'active', 'doc_root') "
+            "ON CONFLICT DO NOTHING "
             "RETURNING id::text",
             (schema_id, workspace_id, doc_root_name,
              f"Auto-created doc-root entity for '{doc_type}'"),
         )
-        entity_id = (await cur.fetchone())[0]
+        _r = await cur.fetchone()
+        if _r:
+            entity_id = _r[0]
+        else:
+            cur = await conn.execute(
+                "SELECT id::text FROM schema_entities "
+                "WHERE schema_id = %s AND name = %s AND lifecycle_state = 'active' "
+                "  AND parent_type_id IS NULL "
+                "LIMIT 1",
+                (schema_id, doc_root_name),
+            )
+            entity_id = (await cur.fetchone())[0]
 
     return schema_id, entity_id
 
@@ -432,6 +460,11 @@ async def ensure_contains_relationship(
     child_name = child_row[0] if child_row else "child"
     rel_name = name_hint or f"has_{child_name.lower()}s"
 
+    # Race-safe insert (mirrors ensure_sub_entity_type): concurrent ingest of
+    # multiple same-doc_type files (e.g. a batch of bank_statements) all try to
+    # create the same `contains` relationship → UniqueViolation on the
+    # (schema_id, name) WHERE active index. ON CONFLICT DO NOTHING + re-SELECT
+    # makes it idempotent instead of parking the loser at fields_extracting.
     cur = await conn.execute(
         "INSERT INTO schema_relationships "
         "  (schema_id, workspace_id, name, "
@@ -439,11 +472,40 @@ async def ensure_contains_relationship(
         "   cascade_delete, single_parent, lifecycle_state) "
         "VALUES (%s, %s, %s, %s, %s, 'contains', 'one_to_many', "
         "        true, true, 'active') "
+        "ON CONFLICT DO NOTHING "
         "RETURNING id::text",
         (schema_id, workspace_id, rel_name,
          parent_entity_id, child_entity_id),
     )
-    return (await cur.fetchone())[0]
+    row = await cur.fetchone()
+    if row:
+        return row[0]
+    # Another tx won the race — re-SELECT by the same parent/child pair.
+    cur = await conn.execute(
+        "SELECT id::text FROM schema_relationships "
+        "WHERE schema_id = %s AND from_entity_id = %s AND to_entity_id = %s "
+        "  AND kind = 'contains' AND lifecycle_state = 'active' "
+        "LIMIT 1",
+        (schema_id, parent_entity_id, child_entity_id),
+    )
+    row = await cur.fetchone()
+    if row:
+        return row[0]
+    # Conflict was a (schema_id, name) collision from a different parent/child;
+    # return the active row holding that name so callers still get a valid id.
+    cur = await conn.execute(
+        "SELECT id::text FROM schema_relationships "
+        "WHERE schema_id = %s AND name = %s AND lifecycle_state = 'active' "
+        "LIMIT 1",
+        (schema_id, rel_name),
+    )
+    row = await cur.fetchone()
+    if row is None:
+        raise RuntimeError(
+            f"ensure_contains_relationship: ON CONFLICT but no row found "
+            f"for schema_id={schema_id} name={rel_name}"
+        )
+    return row[0]
 
 
 async def ensure_sub_entity_type(
