@@ -75,6 +75,43 @@ eval after each task** so you can attribute every change.
 
 ### ▸ Live status (update after every task)
 
+**▶▶▶ DEEP QUERY-PIPELINE REVIEW + 4 FIXES (live, finance ws `f0000000`) —
+`0462251`,`81dd268`,`38dcd5e`,`00db02d`.** User report: "a lot of answers
+weren't even coming." Probed one query per flow type (probe tool
+`scripts/probe_query.py`); **6 of 12 flows returned NOTHING.** Root-caused to 4
+issues, each fixed + live-verified one at a time:
+- **Fix 1 (`0462251`)** unit_type fragmentation broke C/A/M — planner matched
+  unit_types EXACTLY, so stemmed 'transaction' ≠ stored `transaction_listing`/
+  `transactionlisting`/`major_transaction`/… → C/A downgraded to H → refused.
+  Added `_resolve_unit_types` (normalize + ≥5-char-substring match). → "show
+  transactions over 100000" (C, 35 hits) + "unusual transactions" (A,
+  rarity-scored) now answer with cites.
+- **Fix 2 (`81dd268`)** Q-mode treated a doc-type as a SQL table
+  (`from:'bank_statement'` → allowlist reject). Added `discover_doc_type_unit_types`
+  + a doc_type→unit_types hint + prompt rule (doc-types aren't tables; scope via
+  unit_type IN [variants]). → "total debits across bank statements" now plans
+  from:extracted_entities.
+- **Fix 3 (`38dcd5e`)** the `fields.x::numeric` cast ABORTED the whole
+  aggregation on one dirty value ('USD 2.2M') → "sum of all transactions"
+  refused at execution. Compiler now emits a guarded validate-then-cast
+  (dirty→NULL, skipped). → "sum of all transactions" → debits 866,958,265.22 /
+  credits 995,171,457.0 with **aggregate + source-file citations**.
+- **Fix 4 (`00db02d`) + LLM-gate activation** the faithfulness gate fed on
+  TRUNCATED `snippet_preview` → under-scored CORRECT answers (workspace summary
+  REFUSED; 9.40% factoid scored ~0). Now grounds on FULL cited-hit text. Plus
+  `KB_FAITHFULNESS_GATE=llm` activated in `.env` (lite gemini-2.5-flash-lite;
+  API restarted). → workspace summary SHIPS (pass 0.89); factoid/entity/mention/
+  multi-hop/scoped all 0.29–0.47 low_conf → **pass 1.0 / high**; fabricated
+  claims still refuse.
+- **SCORECARD:** all 6 dead flows now answer; all weak-confidence flows now
+  high. **Remaining (lower-pri, noted not fixed):** (a) "disagreement across
+  docs" misroutes to Anomaly→refuse (ties into **Q1** conflict task); (b)
+  finance `interest_rate_all_in` stored inconsistently (0.0985 vs 9.65) →
+  misleading AVG — **ingestion re-extract** (DQ, percent-normalization predates
+  the corpus); (c) inventory "how many bank statements" shows the full table
+  not the specific count (minor). **⚠ Env: API restarted with
+  `KB_FAITHFULNESS_GATE=llm`; native API still on :8000.**
+
 **▶▶ QUERY PHASE STARTED — STRUCTURED QUERIES LIT UP E2E (the query half of
 FIX 4) — `a42e326`, `1798ee6`, `4ebfbe7`.** With ingestion rebuild done, the
 data was ready (typed `interest_rate` 8.5/9.0/9.4 on loan doc_roots, ws
