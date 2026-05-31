@@ -1571,6 +1571,7 @@ async def extract_kv_tables_file_impl(
     )
     from kb.domain.extracted_entities import (
         delete_extracted_entities_children_for_file,
+        delete_extracted_entities_children_for_unit_types,
         insert_extracted_entity,
         read_existing_entity_fields_for_unit_type,
         update_entity_rarity,
@@ -2239,15 +2240,21 @@ async def extract_kv_tables_file_impl(
                         child_entity_id=sub_id,
                     )
 
-            # M2 — non-destructive force re-extract for CHILDREN. A force
-            # re-run that returns scalars but NO tables (partial miss on cached
-            # chunks) must not wipe the doc's existing child rows. Only
-            # delete+rewrite children when this run actually produced rows;
-            # the fully-empty case already returned early above.
-            _has_new_children = any(t.rows for t in payload.tables)
-            if (not force) or _has_new_children:
+            # Non-destructive force re-extract for CHILDREN (review #1, M2).
+            # First ingest: full replace (no prior children to lose). Force
+            # re-run: replace ONLY the unit_types this run produced, so a
+            # partial re-extract (returns table B but misses previously-
+            # extracted table A) preserves A's children instead of the
+            # unscoped delete wiping everything. tbl.name is already
+            # singularized above, matching the stored unit_type.
+            new_unit_types = sorted({t.name for t in payload.tables if t.rows})
+            if not force:
                 await delete_extracted_entities_children_for_file(
                     conn, file_id=file_id,
+                )
+            elif new_unit_types:
+                await delete_extracted_entities_children_for_unit_types(
+                    conn, file_id=file_id, unit_types=new_unit_types,
                 )
 
             inserted_ids: list[str] = []

@@ -190,6 +190,69 @@ async def test_force_reextract_with_no_tables_preserves_children(
     assert await _child_count(db_url_superuser, workspace, file_id) == 2
 
 
+async def _child_count_for_type(db_url, ws, file_id, unit_type) -> int:
+    async with await psycopg.AsyncConnection.connect(db_url) as conn:
+        await conn.execute("SELECT set_config('app.workspace_id', %s, true)", (ws,))
+        cur = await conn.execute(
+            "SELECT count(*) FROM extracted_entities "
+            "WHERE file_id = %s AND unit_type = %s",
+            (file_id, unit_type),
+        )
+        return (await cur.fetchone())[0]
+
+
+async def test_force_reextract_partial_tables_preserves_other_unit_types(
+    db_url_superuser, monkeypatch,
+):
+    """review #1 — a force re-run that returns table B but MISSES previously-
+    extracted table A must replace only B, not wipe A's children."""
+    workspace = str(uuid.uuid4())
+    file_id, _chunks, _cc = await _seed_file_at_fields_extracting(
+        db_url_superuser, workspace, label="multi",
+    )
+    import kb.extraction.kv_tables as kv_mod
+    from kb.workers.tasks import extract_kv_tables_file_impl
+    monkeypatch.setenv("KB_DATABASE_URL", db_url_superuser)
+
+    # First ingest: two table types — transaction (2 rows) + fee (1 row).
+    both = KVTablesPayload(
+        doc_type="bank_statement",
+        scalars=[KVScalar(name="account_holder", value="J", value_type="text",
+                          source_chunk=0)],
+        tables=[
+            KVTable(name="transaction", rows=[
+                KVRow(values={"amount": "10.0"}, source_chunk=0),
+                KVRow(values={"amount": "20.0"}, source_chunk=0),
+            ]),
+            KVTable(name="fee", rows=[KVRow(values={"amount": "5.0"}, source_chunk=0)]),
+        ],
+        model_id="fake",
+    )
+    monkeypatch.setattr(kv_mod, "make_kv_tables_extractor", _fake_kv(both))
+    await extract_kv_tables_file_impl(file_id)
+    await _set_ready(db_url_superuser, workspace, file_id)
+    assert await _child_count_for_type(db_url_superuser, workspace, file_id, "transaction") == 2
+    assert await _child_count_for_type(db_url_superuser, workspace, file_id, "fee") == 1
+
+    # Force re-run surfaces ONLY 'transaction' (3 rows now), misses 'fee'.
+    partial = KVTablesPayload(
+        doc_type="bank_statement",
+        scalars=[KVScalar(name="account_holder", value="J", value_type="text",
+                          source_chunk=0)],
+        tables=[KVTable(name="transaction", rows=[
+            KVRow(values={"amount": "10.0"}, source_chunk=0),
+            KVRow(values={"amount": "20.0"}, source_chunk=0),
+            KVRow(values={"amount": "30.0"}, source_chunk=0),
+        ])],
+        model_id="fake",
+    )
+    monkeypatch.setattr(kv_mod, "make_kv_tables_extractor", _fake_kv(partial))
+    await extract_kv_tables_file_impl(file_id, force=True)
+    # transaction replaced (2 → 3); fee preserved (1), NOT wiped.
+    assert await _child_count_for_type(db_url_superuser, workspace, file_id, "transaction") == 3
+    assert await _child_count_for_type(db_url_superuser, workspace, file_id, "fee") == 1
+
+
 async def test_force_reextract_refreshes_doc_root_with_new_fields(
     db_url_superuser, monkeypatch,
 ):

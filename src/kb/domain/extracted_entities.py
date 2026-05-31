@@ -157,6 +157,24 @@ async def delete_extracted_entities_children_for_file(
     return cur.rowcount or 0
 
 
+async def delete_extracted_entities_children_for_unit_types(
+    conn: Connection, *, file_id: str, unit_types: list[str],
+) -> int:
+    """Delete child rows for a file scoped to specific unit_types. Used by the
+    force re-extract path to replace ONLY the unit_types the new run produced,
+    so a partial re-extract (returns table B but not previously-extracted
+    table A) doesn't wipe A's children — the unscoped
+    delete_extracted_entities_children_for_file would."""
+    if not unit_types:
+        return 0
+    cur = await conn.execute(
+        "DELETE FROM extracted_entities "
+        "WHERE file_id = %s AND unit_type = ANY(%s)",
+        (file_id, list(unit_types)),
+    )
+    return cur.rowcount or 0
+
+
 async def read_active_schemas_for_doctype(
     conn: Connection,
     *,
