@@ -4282,6 +4282,96 @@ async def converge_workspace_fields_impl(
     return summary
 
 
+async def reconcile_workspace_entities_impl(
+    *,
+    workspace_id: str,
+    judge=None,
+) -> dict:
+    """#19 — post-ingest identity-reconciliation sweep.
+
+    Entity dedup at ingest time is ORDER-sensitive: doc N only resolves its
+    mentions against entities from docs 1..N-1, so a true duplicate created
+    before its match arrived is never merged. This sweep runs once after
+    ingest settles: per (workspace, entity_type) it pulls ACTIVE entities
+    (merged_into IS NULL), token-overlap-clusters them (cheap blocking), asks
+    the identity judge to confirm each cluster member against the cluster's
+    highest-mention survivor, and soft-merges confirmed duplicates via the
+    shared `merge_entity_group` (repoint mentions/relationships/graph +
+    recompute count + stamp merged_into).
+
+    `judge` is injectable for tests; defaults to the real identity judge.
+    Returns an observability summary.
+    """
+    from kb.config import get_settings
+    from kb.identity.judge import make_identity_judge
+    from kb.identity.merge import cluster_candidates, merge_entity_group
+
+    settings = get_settings()
+    db_url = settings.database_url
+    if judge is None:
+        judge = make_identity_judge()
+
+    summary = {"entity_types": 0, "candidate_clusters": 0, "merged": 0}
+
+    async with open_connection(db_url) as conn:
+        await conn.execute(
+            "SELECT set_config('app.workspace_id', %s, true)", (workspace_id,),
+        )
+        cur = await conn.execute(
+            "SELECT id::text, entity_type, canonical_name, mention_count "
+            "FROM canonical_entities "
+            "WHERE workspace_id = %s AND merged_into IS NULL",
+            (workspace_id,),
+        )
+        rows = await cur.fetchall()
+
+    by_type: dict[str, list[dict]] = {}
+    for eid, etype, name, mc in rows:
+        by_type.setdefault(etype, []).append(
+            {"id": eid, "canonical_name": name, "mention_count": mc or 0},
+        )
+
+    for etype, ents in by_type.items():
+        clusters = cluster_candidates(ents)
+        if not clusters:
+            continue
+        summary["entity_types"] += 1
+        async with open_connection(db_url) as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    "SELECT set_config('app.workspace_id', %s, true)",
+                    (workspace_id,),
+                )
+                for cluster in clusters:
+                    summary["candidate_clusters"] += 1
+                    survivor = max(
+                        cluster,
+                        key=lambda r: (r["mention_count"], r["canonical_name"]),
+                    )
+                    confirmed: list[str] = []
+                    for r in cluster:
+                        if r["id"] == survivor["id"]:
+                            continue
+                        try:
+                            same = await judge.same_entity(
+                                text_a=survivor["canonical_name"], type_a=etype,
+                                text_b=r["canonical_name"], type_b=etype,
+                            )
+                        except Exception:  # noqa: BLE001 — judge fail → don't merge
+                            same = False
+                        if same:
+                            confirmed.append(r["id"])
+                    if confirmed:
+                        summary["merged"] += await merge_entity_group(
+                            conn,
+                            workspace_id=workspace_id,
+                            survivor_id=survivor["id"],
+                            loser_ids=confirmed,
+                        )
+
+    return summary
+
+
 # ---------------------------------------------------------------------------
 # I3 — corpus-finalization phase (auto-trigger after per-doc ingest settles)
 # ---------------------------------------------------------------------------
@@ -4333,8 +4423,14 @@ async def finalize_corpus_impl(workspace_id: str) -> None:
     except Exception:  # noqa: BLE001
         traceback.print_exc()
 
-    # (2) cold-start schema-entity re-extraction and (3) identity reconcile
-    #     are wired in subsequent #19 slices.
+    # (2) cold-start schema-entity re-extraction is wired in the next #19 slice.
+
+    # (3) Identity reconcile — merge order-induced duplicate entities the
+    #     per-doc top-k resolver couldn't catch.
+    try:
+        await reconcile_workspace_entities_impl(workspace_id=workspace_id)
+    except Exception:  # noqa: BLE001
+        traceback.print_exc()
 
     # (4) Corpus RAPTOR — heterogeneous summary tree over the (now stable)
     #     per-doc roots.
