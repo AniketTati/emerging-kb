@@ -133,6 +133,63 @@ class IdentityMentionExtractor:
 # ---------------------------------------------------------------------------
 
 
+# FIX 7 — noise gate. The NER LLM types doc-IDs, reference numbers, URLs /
+# email domains, and rate benchmarks as ORG/PRODUCT, which then become
+# canonical entities (noise). Reject them at mention creation, before they
+# can seed an entity. Patterns are deliberately HIGH-PRECISION (no spaces /
+# explicit separators / known benchmark tokens) so real multiword names
+# ("HDFC BANK", "iPhone 15") are never dropped.
+import re as _re
+
+# token-sep-token with at least one digit and no whitespace:
+# INV-2024-001, DOC_2024_001, REF/123, ABC-123, 2024-001.
+_REF_CODE_RE = _re.compile(
+    r"^(?=.*\d)[A-Za-z0-9]+(?:[\-_/#:.][A-Za-z0-9]+)+$"
+)
+# bare long digit run (account/reference number): 12345, 000123456.
+_DIGIT_RUN_RE = _re.compile(r"^\d{4,}$")
+# url / email-domain markers.
+_URL_RE = _re.compile(r"(?://)|@|\b[\w-]+\.(?:com|org|net|io|co|ai|gov|edu|in)\b", _re.I)
+# rate benchmarks stored as ORG/PRODUCT (e.g. "HDFC MCLR", "1Y MCLR", "LIBOR").
+_BENCHMARK_RE = _re.compile(
+    r"\b(?:mclr|libor|sofr|euribor|sonia|eonia|repo rate|reverse repo|"
+    r"base rate|prime rate|t-bill|treasury yield)\b",
+    _re.I,
+)
+
+
+# Numeric / temporal types where digit-bearing content is EXPECTED (a real
+# date "2024-01-15", money "$4.50"). The content gate would false-positive on
+# these, and they're skipped as noise TYPES at identity resolution anyway, so
+# the gate only applies to named-entity types.
+_GATE_EXEMPT_TYPES = frozenset({
+    "DATE", "TIME", "PERCENT", "MONEY", "QUANTITY", "ORDINAL", "CARDINAL",
+})
+
+
+def is_noise_mention_text(text: str | None, mention_type: str | None = None) -> bool:
+    """True when `text` is a doc-ID / reference number / URL / email-domain /
+    rate-benchmark string that should NOT become a named entity. Conservative
+    by design — only fires on unambiguous noise shapes, and only for
+    named-entity types (numeric/temporal types are exempt; a DATE like
+    '2024-01-15' is real content, not a doc-ID)."""
+    if not text or not text.strip():
+        return True
+    if mention_type and mention_type.strip().upper() in _GATE_EXEMPT_TYPES:
+        return False
+    t = text.strip()
+    compact = t.replace(" ", "")
+    if _REF_CODE_RE.match(compact):
+        return True
+    if _DIGIT_RUN_RE.match(compact):
+        return True
+    if _URL_RE.search(t):
+        return True
+    if _BENCHMARK_RE.search(t):
+        return True
+    return False
+
+
 def _parse_mentions_json(raw_text: str) -> list[Mention]:
     """Parse the LLM's JSON output → list of valid Mention objects.
 
@@ -173,6 +230,10 @@ def _parse_mentions_json(raw_text: str) -> list[Mention]:
             continue
         m_text = m_text.strip()[:1000]
         if not isinstance(m_type, str) or m_type not in valid_types:
+            continue
+        # FIX 7 — drop noise spans (doc-IDs, ref numbers, URLs, benchmarks)
+        # before they can become canonical entities.
+        if is_noise_mention_text(m_text, m_type):
             continue
         try:
             mentions.append(Mention(

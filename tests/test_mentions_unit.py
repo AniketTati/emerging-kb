@@ -19,8 +19,53 @@ from kb.extraction.mentions import (
     MentionExtractionError,
     ONTONOTES_18_TYPES,
     _parse_mentions_json,
+    is_noise_mention_text,
     make_mention_extractor,
 )
+
+
+# ===========================================================================
+# FIX 7 — noise gate (doc-IDs / ref numbers / URLs / benchmarks)
+# ===========================================================================
+
+
+class TestNoiseGate:
+    @pytest.mark.parametrize("noise", [
+        "INV-2024-001", "DOC_2024_001", "REF/123", "ABC-123", "2024-001",
+        "12345", "000123456",
+        "https://hdfcbank.com", "support@acme.com", "hdfcbank.com",
+        "HDFC MCLR", "1Y MCLR", "LIBOR", "6M SOFR", "repo rate",
+        "", "   ",
+    ])
+    def test_rejects_noise(self, noise):
+        assert is_noise_mention_text(noise) is True
+
+    @pytest.mark.parametrize("real", [
+        "HDFC BANK", "HDFC", "Acme Corporation", "iPhone 15", "Jane Doe",
+        "Apollo Hospitals Pune", "Reserve Bank of India", "Section 12A",
+        "Q3 2024",  # has a digit + space but is a real-ish phrase, not a code
+    ])
+    def test_keeps_real_entities(self, real):
+        assert is_noise_mention_text(real, "ORG") is False
+
+    def test_numeric_temporal_types_exempt(self):
+        # A DATE/MONEY value is real content, not a doc-ID — never gated.
+        assert is_noise_mention_text("2024-01-15", "DATE") is False
+        assert is_noise_mention_text("12345", "CARDINAL") is False
+        assert is_noise_mention_text("$4.50", "MONEY") is False
+        # ...but the SAME string misclassified as ORG is gated.
+        assert is_noise_mention_text("2024-01-15", "ORG") is True
+
+    def test_noise_dropped_in_parse(self):
+        raw = json.dumps({"mentions": [
+            {"text": "HDFC BANK", "type": "ORG"},
+            {"text": "INV-2024-001", "type": "ORG"},
+            {"text": "hdfcbank.com", "type": "ORG"},
+            {"text": "HDFC MCLR", "type": "PRODUCT"},
+        ]})
+        mentions = _parse_mentions_json(raw)
+        texts = {m.mention_text for m in mentions}
+        assert texts == {"HDFC BANK"}
 
 
 @contextmanager
