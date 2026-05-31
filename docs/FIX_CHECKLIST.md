@@ -78,13 +78,19 @@ eval after each task** so you can attribute every change.
 **▶ CURRENT FOCUS — pre-ingest WRITE-PATH BATCH (then ingest `finance` once).**
 Plan: `~/.claude/plans/lets-create-a-plan-peppy-mitten.md`. Batch ALL write-path
 changes first, then run the finance ingest ONCE (finance = most tabular domain;
-868 md table-rows). HEAD `87807fd`, tree clean, 138 batch tests pass.
+868 md table-rows). HEAD `0712736`, tree clean, 140+ batch tests pass.
 
 Ingestion-batch progress (do tasks ONE-AT-A-TIME — see
 `memory/editing-cadence-tooling`; never batch Edit+Bash, never `git stash pop`):
 - ✅ **S1** batching (contextualize/mentions/triples via `kb/llm_batching.run_batched`)
 - ✅ **I7** transient retry (`is_transient`/`with_retry`; run_batched + parse retry)
-- ✅ **I1** classify-before-chunk (`kb.classification`; bank_statement→row chunker)
+- ✅ **I1** classify-before-chunk — **NOW ACTUALLY WIRED** (`1d4b803`). The
+  classifier existed + was unit-tested but `chunk_file_impl` never called it
+  (read NULL `inferred_doc_type` → MIME/hierarchical fallback → markdown
+  bank_statements chunked across transaction rows). A live finance smoke caught
+  it. Fixed: classify before `select_chunker` + persist doc_type. Verified live
+  (statement-003: 42 row-leaves vs 9 hierarchical windows). +2 regression tests
+  (`0712736`).
 - ✅ **I2** field-convergence converger (`converge_clusters_semantic`) — *wiring → #19*
 - ✅ **I4** identity top-k (`select_entity_match`) + embedder-fail parks file
 - ✅ **S3** mentions trigram index (migration 0049, applied+verified)
@@ -124,9 +130,21 @@ Ingestion-batch progress (do tasks ONE-AT-A-TIME — see
   hierarchical, fine for markdown) and correct to manifest doc_types at
   `extract_kv_tables` via frontmatter; (c) **row chunker handles markdown
   pipe-tables** (line-based → one chunk per transaction row, no garbage).
-  **Remaining = DYNAMIC (needs keys/worker):** 1-doc smoke (classify+row-chunk+
-  extract end-to-end) → staged ingest (statements → loan/complaint chains →
-  widen) → M1 finance baseline.
+  **Live smoke DONE (3 finance bank_statements into ws `f0000000`):** full
+  pipeline reaches `ready` (~85s/doc); classify→`bank_statement`; kv_tables +
+  schema_entities + triples + chains + graph all fire; finalize_corpus fires.
+  **Smoke caught the I1 not-wired bug (now fixed `1d4b803`).** Decisions this
+  session: finance gets its **own** workspace `f0000000` (co-locating with
+  construction would make #19's whole-workspace finalize re-extract all 46
+  construction docs every settle — cost); view via `ui/.env.local` FE pointer.
+  **Env state:** stale docker worker `knowledgebaseservice-worker-1` STOPPED;
+  native worker (this branch) is the active consumer of the `localhost:5432`
+  queue. **NEXT:** statement-001/002 were ingested BEFORE the I1 fix (bad
+  hierarchical chunks) — wipe ws `f0000000` (`DELETE FROM files WHERE
+  workspace_id='f0000000-…001'` cascades) and re-run the **staged** ingest
+  (statements → loan/complaint chains → widen) on the fixed worker → M1 finance
+  baseline. Restart docker worker (`docker start knowledgebaseservice-worker-1`)
+  only if reverting to the docker stack.
 
 > Pre-existing (NOT my regression): `tests/test_b4b_api.py` 2 failures
 > (StubPlanner `.plan()` missing `conn` kwarg) — fail identically at `ff0ceea`.
@@ -166,7 +184,7 @@ master table below.
 | # | Task | Phase | Status | Note / measured effect |
 |---|---|---|---|---|
 | 1 | **M1** per-stage harness (+Cohere reranker) | 0 | ✅ | `0fef654`. Phase-0 baseline; query ~25s→13s. `docs/M1_STAGE_EVAL.md`, D9 |
-| 2 | **I1** classify-before-chunk + clause/row chunker | 1 | ✅ | `kb.classification` pre-chunk classifier (vocab-constrained) wired into chunk_file_impl → bank_statement chunks row-aware. 6 tests. Clause chunking still hier-backed (markdown-limited; PDF follow-up). D2 |
+| 2 | **I1** classify-before-chunk + clause/row chunker | 1 | ✅ | **Wiring fixed `1d4b803`** — classifier was built+tested but `chunk_file_impl` never called it (smoke caught it); now classifies→persists doc_type before `select_chunker`. Verified live (42 row-leaves). 6 + 2 regression tests. Clause chunking still hier-backed (markdown-limited). D2 |
 | 3 | **I2** field convergence (EDC) | 1 | ✅ | converger `converge_clusters_semantic` + `field_judge` wired as corpus pass `converge_workspace_fields_impl` (#19, `79fee41`). 5+3 tests. D3 |
 | 4 | **I4** identity resolution (top-k) | 1 | ✅ | top-k `select_entity_match` (per-doc) + post-ingest `reconcile_workspace_entities_impl` sweep on shared `merge_entity_group` (#19, `e4afbac`). 6+3 tests. D4 |
 | 5 | **Q1** conflict across independent docs | 2 | ⏳ | depends I2+I4. D8 |
