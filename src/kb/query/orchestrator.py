@@ -805,7 +805,7 @@ class Orchestrator:
             from kb.query.inventory import build_inventory_answer
             await emit("inventory_lookup", {})
             generation = await build_inventory_answer(
-                conn, workspace_id=workspace_id,
+                conn, workspace_id=workspace_id, query=effective_query,
             )
             await emit("generated", {
                 "refused": False, "refusal_reason": None,

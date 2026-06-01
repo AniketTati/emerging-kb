@@ -12,6 +12,7 @@ from ~13s to ~50ms because we just run a single SQL `GROUP BY`.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -64,8 +65,44 @@ async def _read_workspace_inventory(
     ]
 
 
-def _render_markdown(rows: list[_TypeRow]) -> str:
-    """Compose the user-facing markdown answer from the SQL result."""
+def _match_query_doc_type(
+    query: str | None, rows: list[_TypeRow],
+) -> _TypeRow | None:
+    """When the user asks about a SPECIFIC doc-type ("how many bank
+    statements"), find the matching inventory row so we can headline its
+    count instead of dumping the whole-workspace table. A row matches when
+    every word of its doc_type (e.g. {bank, statement}) appears in the
+    query, tolerating plurals. The most specific (most words) match wins."""
+    if not query:
+        return None
+    qwords = {w for w in re.split(r"[^a-z0-9]+", query.lower()) if w}
+    if not qwords:
+        return None
+
+    def _word_present(w: str) -> bool:
+        # exact, or the query has the plural, or a query word singularises to it
+        return w in qwords or (w + "s") in qwords or any(
+            qw.rstrip("s") == w for qw in qwords
+        )
+
+    best: _TypeRow | None = None
+    best_n = 0
+    for r in rows:
+        if not r.doc_type:
+            continue
+        dt_words = [w for w in r.doc_type.lower().split("_") if w]
+        if dt_words and all(_word_present(w) for w in dt_words):
+            if len(dt_words) > best_n:
+                best, best_n = r, len(dt_words)
+    return best
+
+
+def _render_markdown(
+    rows: list[_TypeRow], focus: _TypeRow | None = None,
+) -> str:
+    """Compose the user-facing markdown answer from the SQL result. When
+    `focus` is set (the query named a specific doc-type) lead with that
+    type's count, then show the full breakdown for context."""
     if not rows:
         return (
             "Your workspace is empty — no documents have been uploaded "
@@ -77,17 +114,26 @@ def _render_markdown(rows: list[_TypeRow]) -> str:
     unclassified = sum(r.count for r in rows if r.doc_type is None)
 
     lines: list[str] = []
-    header = (
-        f"You have **{total_files} documents** across **{total_types} "
-        f"document type{'s' if total_types != 1 else ''}**"
-    )
-    if unclassified:
-        header += (
-            f" (plus {unclassified} file"
-            f"{'s' if unclassified != 1 else ''} still being classified)"
+    if focus is not None and focus.doc_type:
+        label = focus.doc_type.replace("_", " ")
+        plural = "s" if focus.count != 1 else ""
+        lines.append(
+            f"You have **{focus.count} {label}{plural}** in this workspace."
         )
-    header += " in this workspace."
-    lines.append(header)
+        lines.append("")
+        lines.append("Full breakdown:")
+    else:
+        header = (
+            f"You have **{total_files} documents** across **{total_types} "
+            f"document type{'s' if total_types != 1 else ''}**"
+        )
+        if unclassified:
+            header += (
+                f" (plus {unclassified} file"
+                f"{'s' if unclassified != 1 else ''} still being classified)"
+            )
+        header += " in this workspace."
+        lines.append(header)
     lines.append("")
     lines.append("| Type | Count | Files |")
     lines.append("|---|---:|---|")
@@ -132,10 +178,13 @@ def _build_citations(rows: list[_TypeRow]) -> list[Citation]:
 
 
 async def build_inventory_answer(
-    conn: Any, *, workspace_id: str,
+    conn: Any, *, workspace_id: str, query: str | None = None,
 ) -> GenerationResult:
     """End-to-end entry point — the orchestrator calls this and returns
     the result without running retrieval / CRAG / generator.
+
+    When `query` names a specific doc-type ("how many bank statements"),
+    the answer headlines that type's count before the full breakdown.
 
     Failure mode: if the SQL query raises (RLS denied, schema drift),
     the caller's exception handler kicks in and the user sees the
@@ -143,8 +192,9 @@ async def build_inventory_answer(
     a metadata query failing is rare enough to not warrant complexity.
     """
     rows = await _read_workspace_inventory(conn, workspace_id=workspace_id)
+    focus = _match_query_doc_type(query, rows)
     return GenerationResult(
-        answer=_render_markdown(rows),
+        answer=_render_markdown(rows, focus=focus),
         citations=_build_citations(rows),
         refused=False,
         refusal_reason=None,
