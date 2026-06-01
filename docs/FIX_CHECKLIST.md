@@ -75,6 +75,32 @@ eval after each task** so you can attribute every change.
 
 ### ▸ Live status (update after every task)
 
+**▶▶ CHAT BUGS A + B FIXED (user picked "fix both first") —
+`136383b`,`4a2e27f`.** Both verified live (reopened sessions on finance
+`f0000000`); tsc clean · 30/30 FE vitest · `test_b6a_api` 30/30 (the lone b3
+orchestrator-retry failure is PRE-EXISTING — fails on a clean stash too).
+- **Bug A — trust signals now survive chat reopen.** Root cause: the replay
+  path (`set_turns_from_session`) synthesizes a response from the persisted
+  `SessionTurn`, which dropped the answer-level signals.
+  - *Confidence badge* (`136383b`): NOT stored on query_log → **re-derived**
+    server-side in `/sessions/{id}/turns` via the canonical
+    `derive_answer_confidence` (from the already-persisted faithfulness
+    verdict/score + CRAG + refused). Threaded through `SessionTurn` + the
+    synthResponse. A reopened chat now shows the badge per answer.
+  - *Conflict-resolution banner* (`4a2e27f`): `conflict_resolutions` wasn't
+    persisted → **migration 0051** adds `query_log.conflict_resolutions jsonb`;
+    the `/chat` audit write persists it; the turns replay reads it back. Reopen
+    now re-renders "Resolved N conflicts…" (picked-vs-superseded + rule).
+  - *Superseded chips*: already survived — the persisted citations carry the
+    `superseded`/`conflict_resolution` flags (no fix needed; verified).
+- **Bug B — `/sessions` refresh dedupe (`136383b`).** ⚠️ **Honest correction:**
+  on closer inspection this was NOT a runaway loop — idle produces ZERO calls;
+  the "flood" I first reported was the intentional aggressive refresh (mount +
+  activeId + new-turn + window focus + visibilitychange, documented in the
+  component) AMPLIFIED by browser-automation focus events + React StrictMode.
+  Still applied a no-downside hardening: an in-flight ref guard so concurrent
+  triggers can't stack overlapping `GET /sessions`.
+
 **▶▶ QUERY-SURFACE BROWSER VERIFY — ALL SURFACES RENDER LIVE; 2 pre-existing
 chat-UI bugs found.** Drove the chat on finance `f0000000` (live UI :3000 + API
 :8000, streaming `/chat/stream`). Confirmed every signal the brief listed renders
