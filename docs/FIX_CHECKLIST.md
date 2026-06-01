@@ -75,6 +75,34 @@ eval after each task** so you can attribute every change.
 
 ### ▸ Live status (update after every task)
 
+**▶▶ FINAL-REVIEW FIXES (ultra multi-agent review → Sr-architect triage) —
+`ab20550`,`289eee5`,`abd26e7`,`b417e9f`.** 4 adversarial lenses
+(correctness/security/perf/tests). **Security CLEAN** (cast triple-defended;
+no injection/RLS/ReDoS/secret). Fixed the necessary set, deferred scale:
+- **Fix 1 (`ab20550`) numeric-cast confident-garbage** — blind comma-strip
+  turned `'3,14'`→314 in a SUM. **Verified the data FIRST:** corpus uses
+  comma=THOUSANDS (Indian `'4,82,40,000'`→48240000), so the reviewer's
+  "strip 3-digit-groups-only" fix would have REGRESSED Indian. Added a narrow
+  decimal-comma reject guard (comma + 1-2 trailing digits → NULL-skip) + the
+  missing **EXECUTION test** (temp-table, real formats).
+- **Fix 2 (`289eee5`) gate-default parity** — `KB_FAITHFULNESS_GATE=llm` lived
+  only in gitignored `.env` → fresh checkout/CI/deploy ran the weaker
+  heuristic. Flipped `auto→llm` (degrades to heuristic w/o key) + `.env.example`
+  + docstrings. Bonus: fixed 2 pre-existing b3 failures.
+- **Fix 3 (`abd26e7`) gate leniency** — an omitted claim defaulted SUPPORTED
+  (an under-reporting judge inflated a hallucinated long answer to 'pass') →
+  now UNSUPPORTED + out-of-range index→positional; `max_tokens` scales with
+  claim count (was truncating → silent fail-safe pass on long answers).
+- **Fix 4 (`b417e9f`) mode-miss** — extracted the firing condition to a
+  testable helper (locks the strictly-additive invariant in CI) + dropped the
+  stale `conflict_context` on the hybrid retry.
+- **DEFERRED (architect call — scale or mitigated):** gate-in-loop call count,
+  per-workspace discovery-scan caching + covering index, op-vocab dedup (all
+  non-issues at 46 docs → Phase 5); T-mode full-text grounding no-op (mitigated
+  by the synthesis-mode softening — T-mode ships regardless). **308 query-path
+  tests pass; 4 pre-existing fails remain** (2 b4b_api StubPlanner conn-kwarg,
+  2 b3 PDF span-ref).
+
 **▶▶ OUTPUT-VERIFIED COVERAGE + SYNTHESIS-MODE FIX + SUBSET RE-EXTRACT —
 `eee6627`.** Ground-truth-verified ALL 13 modes (`scripts/verify_outputs.py`
 checks answers against DB-computed values, not just "did it answer"): **8/8
