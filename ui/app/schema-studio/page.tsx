@@ -26,7 +26,7 @@ import {
   Download, Library, AlertTriangle, Clock, ChevronRight, ChevronDown,
   Loader2, FileText, MessageSquare, X, Search, Flame, AlertOctagon,
   Sprout, BookOpen, Network, ArrowRight, ArrowLeft,
-  Users, Building2, MapPin, Sparkles, Pencil, Trash2, Plus, Check,
+  Users, Building2, MapPin, Sparkles, Pencil, Trash2, Plus, Check, RefreshCw,
 } from "lucide-react";
 
 import { Sidebar } from "@/components/Sidebar";
@@ -37,9 +37,9 @@ import {
   getKnowledgeMapEntities, getKnowledgeMapEntityDetail,
   listSchemaFields, patchSchemaField, createSchemaField, deleteSchemaField,
   listSubEntityColumns, patchSubEntityColumn, createSubEntityColumn, deleteSubEntityColumn,
-  downloadSchemaExportYaml,
+  downloadSchemaExportYaml, reextractSchema,
   type KMStats, type KMSchemaCard, type KMNeedsReview, type KMHistoryResp,
-  type KMHistoryEvent, type KMAnomaly, type KMConflict,
+  type KMHistoryEvent, type KMAnomaly, type KMConflict, type KMDegradedDoc,
   type KMSchemaSample, type KMSubEntitySample, type KMCohortResponse,
   type KMEntity, type KMEntityDetailResponse, type KMEntityNeighbor,
   type KMEntityFile, type SchemaFieldOut, type SubEntityColumnOut,
@@ -548,6 +548,27 @@ function CatalogDetail({ card }: { card: KMSchemaCard }) {
     return () => { cancelled = true; };
   }, [card.id]);
 
+  // FIX 10 — explicit "apply changes": after editing this schema's fields,
+  // re-extract its doc-type's ready files from cached chunks (no re-parse).
+  // User-triggered, so a batch of edits maps to ONE re-extract; the inline
+  // result echoes the scope the server resolved (a doc-type, or "workspace").
+  const [applying, setApplying] = useState(false);
+  const [applyResult, setApplyResult] = useState<string | null>(null);
+  const [applyErr, setApplyErr] = useState<string | null>(null);
+  const handleApply = useCallback(async () => {
+    setApplying(true);
+    setApplyResult(null);
+    setApplyErr(null);
+    try {
+      const r = await reextractSchema(card.id);
+      setApplyResult(`Re-extraction queued · scope: ${r.scope}`);
+    } catch (e) {
+      setApplyErr(String(e));
+    } finally {
+      setApplying(false);
+    }
+  }, [card.id]);
+
   return (
     <div className="p-5 space-y-5">
       {/* Action bar */}
@@ -582,7 +603,26 @@ function CatalogDetail({ card }: { card: KMSchemaCard }) {
         >
           <Download className="w-3.5 h-3.5" /> Export YAML
         </button>
+        <button
+          type="button"
+          onClick={handleApply}
+          disabled={applying}
+          className="text-[12px] flex items-center gap-1.5 px-2.5 py-1 rounded-md border border-zinc-900 bg-zinc-900 text-white hover:bg-zinc-800 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer ml-auto"
+          title="Re-extract this schema's documents from cached text (no re-parse) after editing fields"
+        >
+          {applying
+            ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            : <RefreshCw className="w-3.5 h-3.5" />}
+          {applying ? "Applying…" : "Apply changes"}
+        </button>
       </div>
+
+      {applyResult && (
+        <div className="flex items-center gap-1.5 text-[12px] text-emerald-700 bg-emerald-50 border border-emerald-100 rounded-md px-2.5 py-1.5">
+          <Check className="w-3.5 h-3.5 flex-shrink-0" /> {applyResult}
+        </div>
+      )}
+      {applyErr && <ErrorBanner msg={applyErr} />}
 
       {sampleErr && <ErrorBanner msg={sampleErr} />}
 
@@ -933,7 +973,7 @@ function formatCellValue(v: unknown): string {
 // ---------------------------------------------------------------------------
 
 
-type ReviewSubTab = "anomalies" | "conflicts" | "emerging" | "synonyms";
+type ReviewSubTab = "anomalies" | "conflicts" | "degraded" | "emerging" | "synonyms";
 const REVIEW_PAGE_SIZE = 30;
 
 
@@ -957,10 +997,11 @@ function NeedsReviewTab() {
   // Default to the sub-tab with the most pending items.
   useEffect(() => {
     if (!data) return;
-    const max = Math.max(data.anomalies_total, data.conflicts_total, data.emerging_fields_total, data.synonym_proposals_total);
+    const max = Math.max(data.anomalies_total, data.conflicts_total, data.degraded_extractions_total, data.emerging_fields_total, data.synonym_proposals_total);
     if (max === 0) return;
     if (data.anomalies_total === max) setSub("anomalies");
     else if (data.conflicts_total === max) setSub("conflicts");
+    else if (data.degraded_extractions_total === max) setSub("degraded");
     else if (data.emerging_fields_total === max) setSub("emerging");
     else setSub("synonyms");
   }, [data]);
@@ -968,6 +1009,7 @@ function NeedsReviewTab() {
   const stats = useMemo(() => data ? [
     { label: "anomalies",  value: data.anomalies_total },
     { label: "conflicts",  value: data.conflicts_total },
+    { label: "degraded",   value: data.degraded_extractions_total },
     { label: "emerging",   value: data.emerging_fields_total },
     { label: "synonyms",   value: data.synonym_proposals_total },
   ] : null, [data]);
@@ -980,6 +1022,7 @@ function NeedsReviewTab() {
       <div className="px-5 py-2 border-b border-zinc-200 bg-white sticky top-[33px] z-10 flex items-center gap-1 text-[12px]">
         <SubTab label="🔥 Anomalies"  count={data?.anomalies_total ?? 0}        active={sub === "anomalies"} onClick={() => setSub("anomalies")} />
         <SubTab label="⚠ Conflicts"   count={data?.conflicts_total ?? 0}        active={sub === "conflicts"} onClick={() => setSub("conflicts")} />
+        <SubTab label="🩺 Degraded"   count={data?.degraded_extractions_total ?? 0} active={sub === "degraded"}  onClick={() => setSub("degraded")} />
         <SubTab label="🌿 Emerging"   count={data?.emerging_fields_total ?? 0}  active={sub === "emerging"}  onClick={() => setSub("emerging")} />
         <SubTab label="📖 Synonyms"   count={data?.synonym_proposals_total ?? 0} active={sub === "synonyms"} onClick={() => setSub("synonyms")} />
       </div>
@@ -1005,6 +1048,9 @@ function NeedsReviewTab() {
                 onLoadMore={() => setShownConflicts((n) => n + REVIEW_PAGE_SIZE)}
                 hasMore={shownConflicts < data.conflicts.length}
               />
+            )}
+            {sub === "degraded" && (
+              <DegradedList rows={data.degraded_extractions} total={data.degraded_extractions_total} />
             )}
             {sub === "emerging" && (
               <ReviewEmptyState
@@ -1144,6 +1190,74 @@ function ConflictList({ rows, total, onOpen, onLoadMore, hasMore }: {
       </div>
       <LoadMore shown={rows.length} total={total} onLoadMore={onLoadMore} hasMore={hasMore} />
     </>
+  );
+}
+
+
+// FIX 3 — degraded extractions. A text-rich doc that yielded no body fields
+// or table rows reaches `ready` but shouldn't be trusted as complete. We
+// surface file + doc-type + the coverage counts so a silent extraction
+// failure can't hide behind a healthy-looking status. Rows deep-link to the
+// file so the user can inspect / re-extract it.
+function coverageNum(coverage: Record<string, unknown>, key: string): number | null {
+  const v = coverage[key];
+  return typeof v === "number" ? v : null;
+}
+
+function degradedReason(coverage: Record<string, unknown>): string {
+  const body = coverageNum(coverage, "body_fields");
+  const rows = coverageNum(coverage, "table_rows");
+  if (coverage["text_rich"] === true && body === 0 && rows === 0) {
+    return "Has text content, but extraction produced no fields or table rows — re-extract or check the schema.";
+  }
+  return "Extraction was flagged as degraded — the captured values may be incomplete.";
+}
+
+function DegradedList({ rows, total }: { rows: KMDegradedDoc[]; total: number }) {
+  if (total === 0) {
+    return (
+      <ReviewEmptyState
+        emoji="🩺"
+        title="No degraded extractions"
+        body="Every ingested document yielded at least one field or table row. Docs that have text but extract nothing would appear here."
+      />
+    );
+  }
+  return (
+    <div className="bg-white border border-zinc-200 rounded-md divide-y divide-zinc-100">
+      {rows.map((d) => {
+        const body = coverageNum(d.coverage, "body_fields");
+        const tableRows = coverageNum(d.coverage, "table_rows");
+        const frontmatter = coverageNum(d.coverage, "frontmatter_fields");
+        return (
+          <a
+            key={d.file_id}
+            href={`/files/${d.file_id}`}
+            className="block px-3 py-2 text-left hover:bg-zinc-50 cursor-pointer"
+            data-testid="km-degraded-row"
+          >
+            <div className="flex items-center gap-2 text-[11px]">
+              <span className="px-1.5 py-0.5 rounded bg-orange-50 text-orange-700 mono">degraded</span>
+              {d.doc_type && <span className="mono text-zinc-500">{d.doc_type}</span>}
+              <span className="text-zinc-700 truncate flex-1">{d.file_name ?? "(unknown file)"}</span>
+              <FileText className="w-3 h-3 text-zinc-400 flex-shrink-0" />
+            </div>
+            <div className="mt-1 text-[12px] text-zinc-700">{degradedReason(d.coverage)}</div>
+            <div className="mt-1 flex items-center gap-1.5 text-[10px] text-zinc-500 mono">
+              <span>{body ?? "—"} body fields</span>
+              <span className="text-zinc-300">·</span>
+              <span>{tableRows ?? "—"} table rows</span>
+              {frontmatter ? (
+                <>
+                  <span className="text-zinc-300">·</span>
+                  <span>{frontmatter} frontmatter (metadata)</span>
+                </>
+              ) : null}
+            </div>
+          </a>
+        );
+      })}
+    </div>
   );
 }
 

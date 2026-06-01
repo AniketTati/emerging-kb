@@ -75,6 +75,36 @@ eval after each task** so you can attribute every change.
 
 ### ▸ Live status (update after every task)
 
+**▶▶ UI PHASE — 2 CHEAP WINS (FE-only; API + client already existed) —
+browser-verified live (UI :3000 + native API :8000, finance ws `f0000000`).**
+- **Win 1 — `degraded_extractions` in Needs Review.** The FE `KMNeedsReview` type
+  was missing `degraded_extractions[_total]` (the API returned them; the FE
+  silently dropped them). Added `KMDegradedDoc` + the two fields (`ui/lib/api.ts`)
+  and a 5th **"🩺 Degraded"** sub-tab in `NeedsReviewTab` (StatStrip item +
+  default-tab max + a `DegradedList`): each doc renders as file (deep-links
+  `/files/:id`) + doc_type + a reason derived from `coverage` (text-rich, 0 body
+  fields, 0 table rows) + count badges. Verified BOTH states: finance had 0
+  degraded → empty state; **seeded one 10-K via SQL → populated row renders
+  file/reason/badges**, then restored EXACTLY (degraded=false, coverage=NULL,
+  `updated_at` untouched — no trigger; 0 degraded residue across all workspaces).
+- **Win 2 — Schema Studio "Apply changes".** `reextractSchema(card.id)` existed
+  with no caller. Placed it in the **per-schema-card action bar** (`CatalogDetail`)
+  — the only place a single schema is in scope; checklist row ~534 left placement
+  open, and the API is per-schema-scoped, so a global header button was wrong.
+  Click → `POST /schemas/{id}/re-extract` → **202**, `{status:queued,
+  scope:loan_agreement}`, green inline success line. The re-extract actually RAN
+  and **succeeded** (procrastinate job 3984 deferred→succeeded), so nothing left
+  queued to clean up.
+- **tsc clean · 30/30 FE vitest green.** Only console errors observed were
+  PRE-EXISTING `/upload` duplicate-key warnings (different page, not my code).
+- **⚠ Env finding (matters for DQ1):** the API embeds NO worker (`main.py` only
+  `procrastinate_app.open_async()` to ENQUEUE — "worker container manages its own
+  lifecycle separately"). Yet job 3984 was processed → **a separate worker is
+  ALREADY running** (a stray python multiprocessing group from ~09:35, not started
+  this session). The brief assumed no worker was up. **Re-confirm and STOP it
+  before DQ1's in-process re-extract** (one-worker rule — a 2nd extractor
+  deadlocks).
+
 **▶▶ FINAL-REVIEW FIXES (ultra multi-agent review → Sr-architect triage) —
 `ab20550`,`289eee5`,`abd26e7`,`b417e9f`.** 4 adversarial lenses
 (correctness/security/perf/tests). **Security CLEAN** (cast triple-defended;

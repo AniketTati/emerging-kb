@@ -1987,11 +1987,24 @@ export type KMConflict = {
   notes: string | null;
 };
 
+/** FIX 3 — a doc whose extraction was degraded (text-rich but produced no
+ *  body fields / table rows). Surfaced so a failed extraction can't hide
+ *  behind a healthy-looking `ready` status. `coverage` carries the counts
+ *  ({body_fields, frontmatter_fields, table_rows, text_rich, ...}). */
+export type KMDegradedDoc = {
+  file_id: string;
+  file_name: string | null;
+  doc_type: string | null;
+  coverage: Record<string, unknown>;
+};
+
 export type KMNeedsReview = {
   anomalies: KMAnomaly[];
   anomalies_total: number;
   conflicts: KMConflict[];
   conflicts_total: number;
+  degraded_extractions: KMDegradedDoc[];
+  degraded_extractions_total: number;
   emerging_fields_total: number;
   synonym_proposals_total: number;
 };
