@@ -100,8 +100,13 @@ turnover 184.2cr; T/M Northwind); C/D/S/G spot-checked correct.
   session so `_persist_turn`'s fresh conn finds it; 3/3 convs resolve — "its
   rate"→HDFC loan→9.40%, "its findings"→full Nimbus-audit identity carried from
   the prior answer, "them"→"the 8 bank statements"; LLM resolver, no code fix);
-  (b) **real-conflict** (docs that actually disagree) untested; (c) the OTHER
-  finance narrative docs
+  (b) **real-conflict ✅ VERIFIED** (`scripts/verify_conflicts.py`, eval conflict
+  stratum q021-q026) — conflicts RESOLVE 6/7 (8.85-vs-9.40→9.40; 11.5-vs-16.5→loan
+  prevails; draft-vs-audited→audited; fraud-dup→correct). Two paths: GENERATOR
+  resolves prose conflicts (q021-q024 via authority-prompt); STRUCTURED 5-rule
+  layer fires only on structured facts (q025, `conflict_resolutions=6`). Structured
+  detection on PROSE is DQ1-gated; q026 entity-identity miss is DQ2. No query-logic
+  fix — both gaps data-coupled. (c) the OTHER finance narrative docs
   (10-K/treasury/audit) likely need the same re-extract; (d) **test-coverage
   debt** (safe-cast exec test, mode-miss, full-text grounding — live-verified,
   not CI-locked). **⚠ Stopped + restarted the worker for the re-extract.**
