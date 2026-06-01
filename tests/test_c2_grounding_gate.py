@@ -9,9 +9,48 @@ must be refused — while a low_confidence answer backed by strong retrieval
 
 from __future__ import annotations
 
-from kb.query.orchestrator import grounding_gate_refuses
+from kb.query.orchestrator import (
+    grounding_gate_refuses,
+    keep_low_confidence_answer_visible,
+)
 
 THRESH = 0.5
+
+
+def _keep(mode, verdict, crag, has_content=True):
+    return keep_low_confidence_answer_visible(
+        mode=mode, faithfulness_verdict=verdict,
+        crag_score=crag, answer_has_content=has_content,
+    )
+
+
+def test_synthesis_mode_low_confidence_stays_visible():
+    # G-mode (workspace summary) carries a structurally-low CRAG; a
+    # low_confidence verdict must NOT be escalated to a hidden refusal.
+    assert _keep("G", "low_confidence", 0.0) is True
+    assert _keep("S", "low_confidence", 0.0) is True
+    assert _keep("T", "low_confidence", 0.2) is True
+
+
+def test_h_mode_low_confidence_weak_crag_still_refuses():
+    # H-mode out-of-corpus: low_confidence + weak CRAG stays a refusal.
+    assert _keep("H", "low_confidence", 0.0) is False
+
+
+def test_strong_crag_keeps_visible_any_mode():
+    assert _keep("H", "refused", 0.8) is True
+    assert _keep("G", "low_confidence", 0.9) is True
+
+
+def test_genuine_refused_verdict_not_softened_by_synthesis_branch():
+    # A non-H mode whose gate said 'refused' (real hallucination) + weak
+    # CRAG is NOT kept visible — only the high-CRAG branch can override that.
+    assert _keep("T", "refused", 0.0) is False
+    assert _keep("G", "refused", 0.49) is False
+
+
+def test_no_content_never_visible():
+    assert _keep("G", "low_confidence", 0.9, has_content=False) is False
 
 
 def test_refused_verdict_always_refuses():

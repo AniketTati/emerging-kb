@@ -306,6 +306,34 @@ def grounding_gate_refuses(
     )
 
 
+def keep_low_confidence_answer_visible(
+    *,
+    mode: str,
+    faithfulness_verdict: str | None,
+    crag_score: float,
+    answer_has_content: bool,
+) -> bool:
+    """When the grounding gate would refuse, decide whether to SOFTEN to a
+    visible low-confidence answer instead of hiding it. True when there is
+    content AND either:
+      - retrieval was confident (CRAG >= 0.7) — the faithfulness gate is
+        likely a false-positive on paraphrased prose, OR
+      - it's a non-H synthesis/structured mode (G/S/T/aggregate/…) carrying
+        a `low_confidence` verdict — CRAG scores literal snippet→answer
+        overlap, which those modes structurally lack, so a low CRAG there is
+        not a real weak-retrieval signal (the same reason force_refuse is
+        H-only). A correct workspace summary (G) was otherwise being
+        stochastically refused.
+    A genuine hallucination surfaces as verdict=='refused' and is NOT
+    softened by the synthesis-mode branch — only by the high-CRAG branch
+    (deliberate: strong retrieval overrides one harsh gate verdict)."""
+    if not answer_has_content:
+        return False
+    if crag_score >= 0.7:
+        return True
+    return mode != "H" and faithfulness_verdict == "low_confidence"
+
+
 def derive_answer_confidence(
     *,
     refused: bool,
@@ -1331,20 +1359,23 @@ class Orchestrator:
             #   - CRAG was LOW or answer is empty: genuine abstain
             #     (architecture §6 step 9 final branch).
             answer_has_content = bool((generation.answer or "").strip())
-            if crag_score >= 0.7 and answer_has_content:
-                # Downgrade verdict — don't propagate refused=True.
-                # The UI sees faithfulness_verdict="low_confidence"
-                # and can render a "low confidence" warning beside
-                # the otherwise-correct answer.
+            if keep_low_confidence_answer_visible(
+                mode=plan.mode,
+                faithfulness_verdict=faithfulness.verdict,
+                crag_score=crag_score,
+                answer_has_content=answer_has_content,
+            ):
+                # Keep the answer visible, mark verdict="low_confidence" so
+                # the UI badges it (don't propagate refused=True).
                 faithfulness = FaithfulnessResult(
                     verdict="low_confidence",
                     score=faithfulness.score,
                     per_claim_scores=faithfulness.per_claim_scores,
                     notes=(
                         (faithfulness.notes or "")
-                        + " [softened: CRAG was confident, "
-                        "answer kept visible with low-confidence "
-                        "badge instead of hidden refusal]"
+                        + " [softened: kept visible with a low-confidence "
+                        "badge instead of a hidden refusal — confident "
+                        "retrieval or non-H synthesis mode]"
                     ),
                     model_id=faithfulness.model_id,
                 )
