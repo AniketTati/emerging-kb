@@ -69,3 +69,8 @@ demo-corpus/**/*.bak[0-9]
 
 # M1 stage-eval transient run outputs (baselines are snapshotted under docs/eval_baselines/)
 eval_out/
+
+# Submission write-up (≤4-page doc + diagram). Kept out of git on purpose —
+# the deliverable code/seed-data/schema/eval are committed; the write-up lives
+# here, untracked.
+submission/
