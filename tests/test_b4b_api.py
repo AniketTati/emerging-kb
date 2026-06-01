@@ -17,9 +17,11 @@ Covers layers 7 + 8 + 10 (need a real DB) and end-to-end Q-mode:
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import uuid
 from contextlib import contextmanager
+from decimal import Decimal
 
 import psycopg
 import pytest
@@ -237,6 +239,39 @@ async def test_executor_runs_compiled_count_plan(db_url_superuser, test_workspac
     assert result.column_names == ("n",)
     # 5 live + 0 superseded matching the filter
     assert result.rows[0][0] == 5
+
+
+async def test_safe_numeric_cast_skips_dirty_and_sums_clean(db_url_superuser):
+    """EXECUTION proof for the guarded jsonb numeric cast
+    (compiler._jsonb_extract_sql) — the unit test only checks SQL shape. The
+    cast must SUM clean / Indian-grouped / US values and NULL-SKIP dirty +
+    decimal-comma ones, WITHOUT aborting the SUM on a bad row. We run the
+    exact emitted expression against a temp table of the real value formats."""
+    from kb.q_planner.compiler import _jsonb_extract_sql
+
+    cast_expr = _jsonb_extract_sql("_cast_t", "fields", "amount", "numeric")
+    clean = {
+        "4,82,40,000": Decimal("48240000"),   # Indian grouping
+        "1,000.50": Decimal("1000.50"),         # US thousands + decimal
+        "174228000": Decimal("174228000"),      # bare
+        "100": Decimal("100"),
+    }
+    dirty = ["3,14", "1.000,50", "USD 2.2M", "n/a", "-", ""]  # all must skip
+
+    async with await psycopg.AsyncConnection.connect(db_url_superuser) as conn:
+        await conn.execute(
+            'CREATE TEMP TABLE "_cast_t" (fields jsonb)'
+        )
+        for v in list(clean) + dirty:
+            await conn.execute(
+                'INSERT INTO "_cast_t" (fields) VALUES (%s::jsonb)',
+                (json.dumps({"amount": v}),),
+            )
+        cur = await conn.execute(f'SELECT sum({cast_expr}) FROM "_cast_t"')
+        total = (await cur.fetchone())[0]
+
+    # dirty + decimal-comma → NULL (skipped, no crash); only clean rows summed.
+    assert total == sum(clean.values())  # 222,469,100.50
 
 
 async def test_executor_group_by_returns_one_row_per_status(

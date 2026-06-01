@@ -690,10 +690,12 @@ def test_jsonb_numeric_agg_compiles_to_safe_guarded_cast():
     # validate-then-cast CASE around the jsonb extraction — NOT a bare
     # `(...)::numeric` that PostgreSQL would raise on.
     assert '"extracted_entities"."fields"->>\'debit\'' in sql
-    assert "CASE WHEN replace(" in sql
-    assert "[[:space:]]" in sql            # the numeric-shape regex guard
-    assert "::numeric" in sql              # still casts, inside the guard
-    assert '\'debit\')::numeric' not in sql  # no bare, unguarded cast
+    assert "CASE WHEN " in sql
+    assert "!~ ',[0-9]{1,2}[[:space:]]*$'" in sql  # rejects decimal-comma (3,14)
+    assert "replace(" in sql                       # strips thousands separators
+    assert "[[:space:]]" in sql                    # the numeric-shape regex guard
+    assert "::numeric" in sql                      # still casts, inside the guard
+    assert '\'debit\')::numeric' not in sql        # no bare, unguarded cast
     # The alias is emitted as a quoted identifier.
     assert '"total_debits"' in sql
 

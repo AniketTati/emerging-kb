@@ -125,14 +125,24 @@ def _jsonb_extract_sql(table: str, col: str, key: str, cast: str) -> str:
         # SAFE numeric cast. A raw `(...)::numeric` raises and ABORTS the
         # whole aggregation the moment any row carries a non-numeric string
         # ('USD 2.2M', 'n/a', '-', '') — common once a concept spans
-        # heterogeneous unit_types. Strip thousands separators, validate the
-        # shape, and yield NULL for anything else so dirty rows skip the
-        # SUM/AVG/MIN/MAX instead of killing it. POSIX classes ([[:space:]],
-        # [0-9], [.]) keep the regex backslash-free across string-literal
-        # settings.
+        # heterogeneous unit_types. So NULL-skip anything that isn't a clean
+        # number instead of killing the query.
+        #
+        # Comma = THOUSANDS separator — correct for the formats this corpus
+        # actually uses: Indian '4,82,40,000'→48240000 and US
+        # '1,000.50'→1000.50. A decimal-comma locale ('3,14') is AMBIGUOUS vs
+        # a truncated thousands group, and blind-stripping it would FABRICATE
+        # 314 (confident-garbage — the worst failure mode for a grounded
+        # answer). So we REJECT the decimal-comma signature — a comma
+        # followed by only 1-2 trailing digits — and NULL-skip it rather than
+        # guess; Indian/US numbers always end in a 3-digit group or a decimal,
+        # so they pass. True locale normalization belongs at ingestion
+        # (value_numeric / normalize_value), not in the query cast. POSIX
+        # classes keep the regex backslash-free across string-literal settings.
         cleaned = f"replace({extract}, ',', '')"
         return (
-            f"(CASE WHEN {cleaned} ~ "
+            f"(CASE WHEN {extract} !~ ',[0-9]{{1,2}}[[:space:]]*$' "
+            f"AND {cleaned} ~ "
             f"'^[[:space:]]*-?[0-9]+([.][0-9]+)?[[:space:]]*$' "
             f"THEN {cleaned}::numeric END)"
         )
