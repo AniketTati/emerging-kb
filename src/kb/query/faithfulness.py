@@ -398,12 +398,16 @@ def _build_faithfulness_user_prompt(
 
 def _parse_faithfulness_verdicts(raw: str, n_claims: int) -> list[float] | None:
     """Parse the judge JSON into a per-claim [1.0|0.0] list aligned to the
-    `n_claims` claims. Returns None when the response is unusable so the
-    caller can fail-safe pass — never raises.
+    `n_claims` claims — preferring the 1-based claim index, falling back to
+    position for a missing / out-of-range index (off-by-N drift). Returns
+    None when the response is unusable so the caller can fail-safe pass —
+    never raises.
 
-    A claim the judge omitted defaults to SUPPORTED (1.0): we don't punish
-    a grounded answer for a judge omission, matching the gate ladder's
-    fail-safe posture (Identity/HHEM also pass on degradation)."""
+    A claim the judge NEVER covered defaults to UNSUPPORTED (0.0), not
+    supported: an incomplete / under-reporting judge must not be able to
+    inflate a partially-hallucinated answer to 'pass' (the gate is the
+    grounding guarantee — err strict, then the grounding-gate softening
+    keeps a genuinely-grounded synthesis answer visible with a badge)."""
     text = (raw or "").strip()
     if text.startswith("```"):
         lines = text.splitlines()[1:]
@@ -418,16 +422,22 @@ def _parse_faithfulness_verdicts(raw: str, n_claims: int) -> list[float] | None:
     if not isinstance(verdicts, list) or not verdicts:
         return None
     by_idx: dict[int, bool] = {}
-    for j, item in enumerate(verdicts):
+    for pos, item in enumerate(verdicts):
         if not isinstance(item, dict):
             continue
         idx = item.get("claim")
-        if not isinstance(idx, int) or isinstance(idx, bool):
-            idx = j + 1  # positional fallback when the judge drops the index
-        by_idx[idx] = bool(item.get("supported"))
+        # Use a valid 1-based claim index; fall back to position when the
+        # judge drops it OR emits an out-of-range index (off-by-N drift) —
+        # rather than silently discarding that (possibly negative) verdict.
+        if (not isinstance(idx, int) or isinstance(idx, bool)
+                or not (1 <= idx <= n_claims)):
+            idx = pos + 1
+        if 1 <= idx <= n_claims:
+            by_idx[idx] = bool(item.get("supported"))
     if not by_idx:
         return None
-    return [1.0 if by_idx.get(i + 1, True) else 0.0 for i in range(n_claims)]
+    # Uncovered claim → UNSUPPORTED (0.0), not supported (see docstring).
+    return [1.0 if by_idx.get(i + 1, False) else 0.0 for i in range(n_claims)]
 
 
 class LLMFaithfulnessGate:
@@ -477,7 +487,11 @@ class LLMFaithfulnessGate:
             raw = await self._llm.generate_json(
                 user=_build_faithfulness_user_prompt(claims, snippets),
                 system=_LLM_FAITHFULNESS_SYSTEM_PROMPT,
-                max_tokens=512,
+                # Scale with claim count: a long answer's per-claim verdict
+                # JSON must not truncate (truncated → unparseable → silent
+                # fail-safe pass, which would disable the gate on exactly the
+                # long answers that most need checking). ~48 tok/verdict.
+                max_tokens=min(4096, max(512, 48 * len(claims))),
             )
         except LLMCallError as exc:
             return FaithfulnessResult(

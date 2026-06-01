@@ -51,9 +51,16 @@ def test_parse_positional_fallback_when_index_missing():
     assert _parse_faithfulness_verdicts(raw, 2) == [1.0, 0.0]
 
 
-def test_parse_omitted_claim_defaults_supported():
-    # Judge only returned claim 1 → claim 2 defaults to supported (fail-safe).
+def test_parse_omitted_claim_defaults_unsupported():
+    # Judge only covered claim 1 → claim 2 defaults to UNSUPPORTED (strict):
+    # an under-reporting judge must not inflate a hallucinated answer to pass.
     raw = '{"verdicts":[{"claim":1,"supported":false}]}'
+    assert _parse_faithfulness_verdicts(raw, 2) == [0.0, 0.0]
+
+
+def test_parse_out_of_range_index_falls_back_to_position():
+    # Off-by-N drift (claims 11/12 for a 2-claim answer) → positional, not dropped.
+    raw = '{"verdicts":[{"claim":11,"supported":false},{"claim":12,"supported":true}]}'
     assert _parse_faithfulness_verdicts(raw, 2) == [0.0, 1.0]
 
 
