@@ -32,6 +32,7 @@ from kb.query.faithfulness import (
     HeuristicFaithfulnessGate,
     HHEMFaithfulnessGate,
     IdentityFaithfulnessGate,
+    LLMFaithfulnessGate,
     make_faithfulness_gate,
     should_regenerate,
     split_sentences,
@@ -536,16 +537,20 @@ async def test_hhem_gate_fail_safe_when_predict_throws():
 # ===========================================================================
 
 
-def test_factory_default_is_identity():
-    with _env(KB_FAITHFULNESS_GATE=None):
+def test_factory_default_with_key_is_llm():
+    # Validated default: auto/unset → llm when an LLM key is configured.
+    with _env(KB_FAITHFULNESS_GATE=None, KB_GEMINI_API_KEY="x", KB_PLANNER="auto"):
         g = make_faithfulness_gate()
-        assert isinstance(g, IdentityFaithfulnessGate)
+        assert isinstance(g, LLMFaithfulnessGate)
 
 
-def test_factory_auto_is_identity():
-    with _env(KB_FAITHFULNESS_GATE="auto"):
+def test_factory_auto_degrades_to_heuristic_without_key():
+    # No LLM key → degrade to heuristic (NOT identity), so no-key CI is
+    # deterministic without silently disabling the gate.
+    with _env(KB_FAITHFULNESS_GATE="auto", KB_GEMINI_API_KEY=None,
+              KB_ANTHROPIC_API_KEY=None, KB_PLANNER="auto"):
         g = make_faithfulness_gate()
-        assert isinstance(g, IdentityFaithfulnessGate)
+        assert isinstance(g, HeuristicFaithfulnessGate)
 
 
 def test_factory_heuristic():

@@ -20,9 +20,10 @@ Three impls (mirrors the CRAG factory pattern at kb/query/crag.py):
     package is installed. Per-sentence inference.
 
 Selection:
-  KB_FAITHFULNESS_GATE ∈ {identity, heuristic, hhem, auto}
-    auto → 'identity' (fail-safe default for the demo). Switch to 'hhem'
-    explicitly when the model is available.
+  KB_FAITHFULNESS_GATE ∈ {identity, heuristic, hhem, llm, auto}
+    auto → 'llm' when an LLM key is configured (the validated default that
+    fixed the heuristic gate's over-refusal), else degrades to 'heuristic'
+    so CI / no-key runs stay deterministic.
 
 Verdict bands (Design 7 §"two-judge" sketch + architecture §9 Moment 3):
   score >= PASS_THRESHOLD          → 'pass'
@@ -553,16 +554,19 @@ def make_faithfulness_gate() -> FaithfulnessGate:
                   entailment via a lite LLM, default gemini-2.5-flash-lite;
                   set KB_FAITHFULNESS_MODEL to override). Degrades to
                   heuristic when no LLM key is configured.
-      auto      → heuristic. We used to default to identity but that
-                  let the chat surface invent details about made-up
-                  entities ("Zorblax-9000 contract" got a full answer
-                  citing real MSA docs). Heuristic catches that without
-                  needing a model checkpoint; explicit 'hhem' upgrades
-                  to real entailment when the model is available.
+      auto      → llm when an LLM key is configured (the VALIDATED default —
+                  fixes the heuristic's over-refusal of correct paraphrased/
+                  numeric answers), else heuristic. NOT identity: identity is
+                  a no-op that let the chat invent details about made-up
+                  entities. Degrades gracefully so no-key CI is deterministic.
     """
     selector = (os.environ.get("KB_FAITHFULNESS_GATE") or "auto").lower()
     if selector == "auto":
-        selector = "heuristic"
+        # Validated default: the LLM gate when a key is available, degrading
+        # to heuristic (NOT identity) when none — so CI / fresh checkouts stay
+        # deterministic but real deployments get the gate that fixed the
+        # heuristic's over-refusal (a correct 9.4% answer scored 0.15 → cliff).
+        selector = "llm"
     if selector == "identity":
         return IdentityFaithfulnessGate()
     if selector == "heuristic":
