@@ -166,7 +166,7 @@ function CitationCardRow({ c, index }: { c: Citation; index: number }) {
           </a>
         </div>
         <span className="mono text-[11px] text-zinc-500 flex-shrink-0">
-          {(c.score * 100).toFixed(0)}%
+          {Math.min(100, c.score * 100).toFixed(0)}%
         </span>
       </div>
       {/* Sub-row: chips for kind / page / exact / superseded / doc_status. */}
@@ -220,7 +220,7 @@ function HitRow({ h }: { h: Hit }) {
   return (
     <div className="text-[11px] text-zinc-600">
       <span className="mono text-zinc-500">{h.kind}</span> ·{" "}
-      <span className="mono">{(h.score * 100).toFixed(0)}%</span>{" "}
+      <span className="mono">{Math.min(100, h.score * 100).toFixed(0)}%</span>{" "}
       <span className="text-zinc-500">— {h.snippet.slice(0, 70)}…</span>
     </div>
   );

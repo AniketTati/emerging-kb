@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useMemo, type ReactNode } from "react";
+import { Fragment, useMemo, useState, type ReactNode } from "react";
 import { ChevronRight } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -254,6 +254,7 @@ function AutoMergeRow({ response }: { response: ChatResponse }) {
  *  having to dig through the inspector. */
 function ConflictResolutionBanner({ response }: { response: ChatResponse }) {
   const conflicts = response.conflict_resolutions ?? [];
+  const [expanded, setExpanded] = useState(false);
   if (conflicts.length === 0) return null;
 
   return (
@@ -261,11 +262,23 @@ function ConflictResolutionBanner({ response }: { response: ChatResponse }) {
       className="mb-4 rounded-lg border border-amber-200 bg-amber-50/40 px-4 py-3"
       data-testid="conflict-resolutions"
     >
-      <div className="text-xs font-medium text-amber-900 mb-2 flex items-center gap-2">
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        aria-expanded={expanded}
+        className="w-full flex items-center gap-2 text-xs font-medium text-amber-900"
+      >
         <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
-        Resolved {conflicts.length === 1 ? "1 conflict" : `${conflicts.length} conflicts`} across doc-chain versions
-      </div>
-      <div className="space-y-1.5">
+        <span>
+          Resolved {conflicts.length === 1 ? "1 conflict" : `${conflicts.length} conflicts`} across doc-chain versions
+        </span>
+        <ChevronRight
+          className={`ml-auto w-3.5 h-3.5 text-amber-700 transition-transform ${expanded ? "rotate-90" : ""}`}
+          strokeWidth={2}
+        />
+      </button>
+      {expanded && (
+      <div className="space-y-1.5 mt-2.5">
         {conflicts.map((c, i) => (
           <div
             key={`${c.entity_id}-${c.predicate}-${i}`}
@@ -303,6 +316,7 @@ function ConflictResolutionBanner({ response }: { response: ChatResponse }) {
           </div>
         ))}
       </div>
+      )}
     </div>
   );
 }
@@ -364,7 +378,7 @@ function RefusalBody({ response }: { response: ChatResponse }) {
               {hits.slice(0, 3).map((h, i) => (
                 <div key={i} className="text-[11px]">
                   <span className="mono text-zinc-400">
-                    [{i + 1}] {h.kind} · {(h.score * 100).toFixed(0)}%
+                    [{i + 1}] {h.kind} · {Math.min(100, h.score * 100).toFixed(0)}%
                   </span>
                   <span className="ml-2 text-zinc-600">
                     {h.snippet.slice(0, 80)}…
