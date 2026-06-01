@@ -15,45 +15,42 @@ The architecture / 9 tier-1 gap designs / wiring inventory below describe the **
 ## Quick start
 
 ```bash
-# 1. Copy env template + add your Gemini API key
+# 1. Env: copy the template, then add your two API keys to .env
 cp .env.example .env
-echo "KB_GEMINI_API_KEY=your-key-here" >> .env
-# Optional (otherwise Identity fallback runs for contextualization/summarization):
-# echo "KB_ANTHROPIC_API_KEY=your-anthropic-key" >> .env
+#   KB_GEMINI_API_KEY=...      # embeddings + scanned-PDF OCR + (default) generation
+#   KB_ANTHROPIC_API_KEY=...   # optional — Claude for answer generation
 
-# 2. Bring up the full stack (Postgres + MinIO + worker + API)
-docker compose up --build -d
+# 2. ONE command: brings up Docker (db · minio · migrate · api · worker) AND
+#    restores the committed demo seed into Postgres + MinIO.
+./scripts/bootstrap.sh
+#   First run builds the image (~5 min — downloads the Docling OCR models),
+#   then restores the seed. Idempotent: re-running skips the restore.
 
-# 3. Start the UI (Next.js 15, port 3000)
-cd ui && pnpm install && pnpm dev
-# Open http://localhost:3000 — drop a file into /upload, then ask
-# questions on /chat. Every answer cites its sources or refuses.
+# 3. Start the UI (Next.js 15, port 3000 — not in compose)
+cd ui && cp -n .env.local.example .env.local && npm install && npm run dev
 
-# --- or drive it from the command line ---
+# Open http://localhost:3000 — the FINANCE workspace (55 fully-extracted docs:
+# markdown, email, digital + scanned/OCR PDFs, spreadsheets) is already
+# populated. Ask on /chat; every answer cites its sources or refuses.
 
-# 4. Upload a file — the worker chains parse → chunk → contextualize →
-#    embed → RAPTOR → mentions → fields → atomic units → entities → ready
-curl -X POST http://localhost:8000/files \
-  -H "X-Test-Workspace: 11111111-1111-1111-1111-111111111111" \
-  -H "Idempotency-Key: $(uuidgen)" \
-  -F "file=@tests/fixtures/tiny.pdf;type=application/pdf"
+# --- or drive it from the command line (workspace = finance) ---
+WS=f0000000-0000-0000-0000-000000000001
 
-# 5. Ask a cited question (the 6-channel retrieval + CRAG + Astute
-#    generation + faithfulness gate runs end-to-end)
+# Ask a cited question (6-channel retrieval + RRF + rerank + CRAG + Astute
+# generation + faithfulness gate runs end-to-end)
 curl -X POST http://localhost:8000/chat \
-  -H "X-Test-Workspace: 11111111-1111-1111-1111-111111111111" \
-  -H "Content-Type: application/json" \
-  -d '{"query": "What documents do I have indexed?"}'
+  -H "X-Test-Workspace: $WS" -H "Content-Type: application/json" \
+  -d '{"query": "What was the INR 6,30,00,000 wire from Acme to Vertex in March 2025 for?"}'
 
-# 6. Re-extract on demand (e.g. after promoting a new inferred field)
-curl -X POST http://localhost:8000/files/<id>/re-extract \
-  -H "X-Test-Workspace: 11111111-1111-1111-1111-111111111111" \
-  -H "Idempotency-Key: $(uuidgen)"
-# Use ?stage=parsing to re-run the whole pipeline (VLM / OCR fallback).
+# Run the 16-pair submission eval through the live pipeline + score it
+python3 scripts/run_submission_eval.py        # -> eval_out/submission_eval_results.json
 
-# 7. Run the test suite
-uv sync && PATH="$PWD/.venv/bin:$PATH" uv run pytest tests/  # full unit + integration
-./scripts/verify_sweep.sh                                    # 12 docker-stack verify scripts
+# (Re)load a schema from committed YAML — the "schema as config" deliverable
+docker compose exec -T api python scripts/load_schema.py --workspace $WS - \
+  < demo-corpus/domains/finance/schema.yaml
+
+# Full test suite
+uv sync && PATH="$PWD/.venv/bin:$PATH" uv run pytest tests/
 ```
 
 ---
