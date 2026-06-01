@@ -75,9 +75,9 @@ eval after each task** so you can attribute every change.
 
 ### ▸ Live status (update after every task)
 
-**▶▶▶ DEEP QUERY-PIPELINE REVIEW + 4 FIXES (live, finance ws `f0000000`) —
-`0462251`,`81dd268`,`38dcd5e`,`00db02d`.** User report: "a lot of answers
-weren't even coming." Probed one query per flow type (probe tool
+**▶▶▶ DEEP QUERY-PIPELINE REVIEW + 6 FIXES (live, finance ws `f0000000`) —
+`0462251`,`81dd268`,`38dcd5e`,`00db02d`,`0804770`,`c2d08c3`.** User report: "a
+lot of answers weren't even coming." Probed one query per flow type (probe tool
 `scripts/probe_query.py`); **6 of 12 flows returned NOTHING.** Root-caused to 4
 issues, each fixed + live-verified one at a time:
 - **Fix 1 (`0462251`)** unit_type fragmentation broke C/A/M — planner matched
@@ -103,14 +103,23 @@ issues, each fixed + live-verified one at a time:
   API restarted). → workspace summary SHIPS (pass 0.89); factoid/entity/mention/
   multi-hop/scoped all 0.29–0.47 low_conf → **pass 1.0 / high**; fabricated
   claims still refuse.
-- **SCORECARD:** all 6 dead flows now answer; all weak-confidence flows now
-  high. **Remaining (lower-pri, noted not fixed):** (a) "disagreement across
-  docs" misroutes to Anomaly→refuse (ties into **Q1** conflict task); (b)
-  finance `interest_rate_all_in` stored inconsistently (0.0985 vs 9.65) →
-  misleading AVG — **ingestion re-extract** (DQ, percent-normalization predates
-  the corpus); (c) inventory "how many bank statements" shows the full table
-  not the specific count (minor). **⚠ Env: API restarted with
-  `KB_FAITHFULNESS_GATE=llm`; native API still on :8000.**
+- **Fix 5 (`0804770`)** mode-miss fallback — "is there any disagreement about X
+  across docs" mis-routed to A-mode → generator self-refused on off-target
+  anomaly rows. Now, when a non-H/Q/I mode REFUSES, retry generation once on the
+  pre-mode hybrid hits (strictly additive — can't overwrite a working answer).
+  → "disagreement about Acme turnover" now answers "No disagreement — all report
+  INR 184.2 crore" (pass 1.0). Anomaly still answers (fallback doesn't fire).
+- **Fix 6 (`c2d08c3`)** inventory specific-count — "how many bank statements"
+  dumped the 46-doc table; now headlines "You have **8 bank statements**" then
+  the breakdown (`_match_query_doc_type`, plural-tolerant). Generic asks
+  unchanged.
+- **SCORECARD:** all 6 dead flows answer; all weak-confidence flows now high;
+  conflict misroute + inventory-count fixed. **Remaining = ONE, and it's NOT a
+  query bug:** finance `interest_rate_all_in` stored inconsistently (0.0985 vs
+  9.65) → misleading AVG — needs an **ingestion re-extract** (percent-
+  normalization predates this corpus; no query fix can reconcile mixed stored
+  values). **⚠ Env: API restarted with `KB_FAITHFULNESS_GATE=llm`; native API
+  on :8000.**
 
 **▶▶ QUERY PHASE STARTED — STRUCTURED QUERIES LIT UP E2E (the query half of
 FIX 4) — `a42e326`, `1798ee6`, `4ebfbe7`.** With ingestion rebuild done, the
