@@ -1255,6 +1255,35 @@ class Orchestrator:
             "refusal_reason": generation.refusal_reason,
             "n_citations": len(generation.citations),
         })
+        # Mode-miss fallback (generation level). A specialized mode can route
+        # to NON-ZERO but OFF-TARGET hits — e.g. "is there any disagreement
+        # about X across the docs" mis-routes to A-mode, which surfaces
+        # anomaly rows that don't address X, so the generator self-refuses on
+        # irrelevant evidence even though plain hybrid retrieval found the
+        # answer. This extends the zero-hits fallback above to the
+        # refused-on-irrelevant case. STRICTLY ADDITIVE: it fires only when
+        # the moded answer ALREADY refused (the user gets nothing either way),
+        # so it can never overwrite a working mode answer — the exact regression
+        # the H-only force_refuse comment warns about. Retry generation once on
+        # the pre-mode hybrid hits; adopt it only if it yields a real answer.
+        if (
+            generation.refused
+            and plan.mode not in ("H", "Q", "I")
+            and pre_mode_hits
+            and hits is not pre_mode_hits
+        ):
+            await emit("mode_miss_retry", {"mode": plan.mode})
+            hybrid_gen = await self._generator.generate(
+                effective_query, pre_mode_hits, force_refuse=False,
+                conflict_context=conflict_context,
+            )
+            if not hybrid_gen.refused and (hybrid_gen.answer or "").strip():
+                generation = hybrid_gen
+                hits = pre_mode_hits
+                crag_score = await self._crag.assess(effective_query, hits)
+                await emit("mode_miss_fallback", {
+                    "mode": plan.mode, "restored": len(hits),
+                })
         faithfulness = await self._assess_faithfulness(generation, hits, conn)
         await emit("faithfulness_checked", {
             "verdict": faithfulness.verdict, "score": faithfulness.score,
