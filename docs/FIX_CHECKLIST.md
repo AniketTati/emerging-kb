@@ -95,9 +95,13 @@ turnover 184.2cr; T/M Northwind); C/D/S/G spot-checked correct.
   (Correction: my first GT check used wrong keys `interest_rate`/`principal_amount`;
   finance stores `interest_rate_all_in`/`loan_amount_usd` — the data existed,
   the real defect was the 0.0985 row, now fixed.)
-- **Honest gaps still open:** (a) multi-turn **follow-ups UNVERIFIED** (in-process
-  harness can't persist sessions — RLS); (b) **real-conflict** (docs that
-  actually disagree) untested; (c) the OTHER finance narrative docs
+- **Honest gaps still open:** (a) multi-turn **follow-ups ✅ VERIFIED WORKING**
+  (`scripts/verify_followups.py` — was a harness bug: pre-create a COMMITTED
+  session so `_persist_turn`'s fresh conn finds it; 3/3 convs resolve — "its
+  rate"→HDFC loan→9.40%, "its findings"→full Nimbus-audit identity carried from
+  the prior answer, "them"→"the 8 bank statements"; LLM resolver, no code fix);
+  (b) **real-conflict** (docs that actually disagree) untested; (c) the OTHER
+  finance narrative docs
   (10-K/treasury/audit) likely need the same re-extract; (d) **test-coverage
   debt** (safe-cast exec test, mode-miss, full-text grounding — live-verified,
   not CI-locked). **⚠ Stopped + restarted the worker for the re-extract.**
