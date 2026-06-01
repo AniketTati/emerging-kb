@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 
 from kb.api.deps import current_workspace_id, kb_app_connection
 from kb.db.pool import Connection
+from kb.query.orchestrator import derive_answer_confidence
 from kb.domain.chat_memory import (
     build_chat_context,
     create_session,
@@ -79,6 +80,14 @@ class TurnOut(BaseModel):
     crag_score: float | None = None
     faithfulness_verdict: str | None = None
     faithfulness_score: float | None = None
+    # Answer-level confidence (high/medium/low) + one-line reason. NOT
+    # persisted on query_log — re-derived here from the grounding signals
+    # (faithfulness verdict/score + CRAG + refused) via the SAME canonical
+    # `derive_answer_confidence` the live path uses, so a reopened chat shows
+    # the confidence badge instead of dropping it. Null only when the turn
+    # has no query_log row (older turns) to derive from.
+    confidence: str | None = None
+    confidence_reason: str | None = None
     refused: bool | None = None
     refusal_reason: str | None = None
     # Real numbers from query_log so the "How I answered" inspector
@@ -225,6 +234,19 @@ async def get_session_turns(
     rows = await cur.fetchall()
     items: list[TurnOut] = []
     for r in rows:
+        # Re-derive the answer-level confidence from the persisted grounding
+        # signals (same canonical fn the live path uses) so a reopened chat
+        # keeps the badge. Only when a query_log row exists (r[8]) — older
+        # turns have no signals, so leave null rather than fabricate one.
+        confidence = None
+        confidence_reason = None
+        if r[8] is not None:
+            confidence, confidence_reason = derive_answer_confidence(
+                refused=bool(r[15]),
+                faithfulness_verdict=r[13],
+                faithfulness_score=(float(r[14]) if r[14] is not None else None),
+                crag_score=(float(r[12]) if r[12] is not None else 0.0),
+            )
         items.append(TurnOut(
             id=r[0],
             session_id=r[1],
@@ -240,6 +262,8 @@ async def get_session_turns(
             crag_score=(float(r[12]) if r[12] is not None else None),
             faithfulness_verdict=r[13],
             faithfulness_score=(float(r[14]) if r[14] is not None else None),
+            confidence=confidence,
+            confidence_reason=confidence_reason,
             refused=r[15],
             refusal_reason=r[16],
             latency_ms=(int(r[17]) if r[17] is not None else None),

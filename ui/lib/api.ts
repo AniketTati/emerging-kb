@@ -690,6 +690,11 @@ export type SessionTurn = {
   crag_score?: number | null;
   faithfulness_verdict?: string | null;
   faithfulness_score?: number | null;
+  // Answer-level confidence + reason, re-derived server-side from the
+  // grounding signals so the confidence badge survives a session reopen
+  // (these are NOT persisted on query_log; the turns endpoint derives them).
+  confidence?: "high" | "medium" | "low" | null;
+  confidence_reason?: string | null;
   refused?: boolean | null;
   refusal_reason?: string | null;
   // Pulled from query_log so the "How I answered" inspector shows

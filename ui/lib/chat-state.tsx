@@ -160,6 +160,9 @@ export function reducer(state: State, action: Action): State {
           intent_confidence: t.intent_confidence ?? undefined,
           faithfulness_verdict: t.faithfulness_verdict ?? undefined,
           faithfulness_score: t.faithfulness_score ?? undefined,
+          // Re-derived server-side so the confidence badge survives reopen.
+          confidence: t.confidence ?? undefined,
+          confidence_reason: t.confidence_reason ?? undefined,
         };
         replayed.push({
           id: `replay-a-${action.sessionId}-${t.turn_index}`,

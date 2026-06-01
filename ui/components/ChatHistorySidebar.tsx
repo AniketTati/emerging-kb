@@ -21,7 +21,7 @@
  * mode. Deleting the active session routes back to /chat (landing).
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { Plus, MessageSquare, Loader2, Trash2, Check, X } from "lucide-react";
@@ -64,7 +64,14 @@ export function ChatHistorySidebar() {
   const [creating, setCreating] = useState(false);
   const lastTurnCount = state.turns.length;
 
+  // The triggers below (mount + activeId + new-turn + window focus +
+  // visibilitychange) can all fire within the same tick, which would
+  // stack several concurrent GET /sessions in flight. Dedupe: if one is
+  // already running, skip — the in-flight result is fresh enough.
+  const inFlightRef = useRef(false);
   const refresh = useCallback(async () => {
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
     try {
       setLoading(true);
       const out = await listSessions(50);
@@ -73,6 +80,7 @@ export function ChatHistorySidebar() {
       console.error("listSessions failed", err);
     } finally {
       setLoading(false);
+      inFlightRef.current = false;
     }
   }, []);
 
