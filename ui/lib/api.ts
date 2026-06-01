@@ -695,6 +695,9 @@ export type SessionTurn = {
   // (these are NOT persisted on query_log; the turns endpoint derives them).
   confidence?: "high" | "medium" | "low" | null;
   confidence_reason?: string | null;
+  // R1 — structured conflict resolutions, persisted on query_log (0051) so the
+  // conflict-resolution banner re-renders on session reopen.
+  conflict_resolutions?: ConflictResolution[] | null;
   refused?: boolean | null;
   refusal_reason?: string | null;
   // Pulled from query_log so the "How I answered" inspector shows

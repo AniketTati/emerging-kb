@@ -94,6 +94,10 @@ class TurnOut(BaseModel):
     # doesn't show 0ms / 0 hits when the user reopens a chat session.
     latency_ms: int | None = None
     hits_count: int | None = None
+    # R1 — structured conflict resolutions, persisted on query_log (0051) so
+    # the conflict-resolution banner re-renders on session reopen instead of
+    # vanishing. Empty/None when the turn had no structured conflict.
+    conflict_resolutions: list | None = None
 
 
 class TurnsListResponse(BaseModel):
@@ -223,7 +227,8 @@ async def get_session_turns(
                ql.crag_score, ql.faithfulness_verdict,
                ql.faithfulness_score, ql.refused, ql.refusal_reason,
                ql.latency_ms,
-               jsonb_array_length(coalesce(ql.hit_ids, '[]'::jsonb))
+               jsonb_array_length(coalesce(ql.hit_ids, '[]'::jsonb)),
+               ql.conflict_resolutions
           FROM chat_turns t
           LEFT JOIN query_log ql ON ql.id = t.query_log_id
          WHERE t.session_id = %s
@@ -268,6 +273,7 @@ async def get_session_turns(
             refusal_reason=r[16],
             latency_ms=(int(r[17]) if r[17] is not None else None),
             hits_count=(int(r[18]) if r[18] is not None else None),
+            conflict_resolutions=(r[19] if isinstance(r[19], list) else None),
         ))
     return TurnsListResponse(items=items)
 

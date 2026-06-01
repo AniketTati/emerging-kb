@@ -134,6 +134,9 @@ async def _write_query_log(
     intent_label: str | None = None
     intent_conf: float | None = None
     plan_payload: Any = None
+    # R1 — structured conflict resolutions, persisted so the chat conflict
+    # banner can re-render on session reopen (migration 0051).
+    conflict_resolutions_payload: Any = None
     # The mode actually executed (may differ from the request's mode
     # when the planner overrode 'H' with something more precise).
     mode_used: str = body.mode
@@ -152,6 +155,7 @@ async def _write_query_log(
         intent_label = chat_result.intent
         intent_conf = chat_result.intent_confidence
         plan_payload = chat_result.plan
+        conflict_resolutions_payload = chat_result.conflict_resolutions or None
         if chat_result.mode:
             mode_used = chat_result.mode
     elif search_result is not None:
@@ -177,7 +181,7 @@ async def _write_query_log(
                 latency_ms, idempotency_key,
                 faithfulness_score, faithfulness_verdict,
                 faithfulness_regenerations, citation_modalities,
-                intent, intent_confidence, plan
+                intent, intent_confidence, plan, conflict_resolutions
             ) VALUES (
                 %s, %s, %s, %s, %s,
                 %s::jsonb, %s::jsonb, %s,
@@ -185,7 +189,7 @@ async def _write_query_log(
                 %s, %s,
                 %s, %s,
                 %s, %s,
-                %s, %s, %s::jsonb
+                %s, %s, %s::jsonb, %s::jsonb
             )
             """,
             (
@@ -211,6 +215,8 @@ async def _write_query_log(
                 intent_label,
                 intent_conf,
                 json.dumps(plan_payload) if plan_payload is not None else None,
+                json.dumps(conflict_resolutions_payload)
+                if conflict_resolutions_payload is not None else None,
             ),
         )
     except Exception as exc:  # noqa: BLE001 — audit is best-effort

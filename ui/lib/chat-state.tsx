@@ -163,6 +163,8 @@ export function reducer(state: State, action: Action): State {
           // Re-derived server-side so the confidence badge survives reopen.
           confidence: t.confidence ?? undefined,
           confidence_reason: t.confidence_reason ?? undefined,
+          // Persisted (0051) so the conflict-resolution banner survives reopen.
+          conflict_resolutions: t.conflict_resolutions ?? undefined,
         };
         replayed.push({
           id: `replay-a-${action.sessionId}-${t.turn_index}`,
