@@ -75,6 +75,33 @@ eval after each task** so you can attribute every change.
 
 ### ▸ Live status (update after every task)
 
+**▶▶ OUTPUT-VERIFIED COVERAGE + SYNTHESIS-MODE FIX + SUBSET RE-EXTRACT —
+`eee6627`.** Ground-truth-verified ALL 13 modes (`scripts/verify_outputs.py`
+checks answers against DB-computed values, not just "did it answer"): **8/8
+hard numeric/count checks match the DB exactly** (Q debits=866,958,265.22;
+I=8 bank statements; A top-rarity 4.25 / 48.24M; K 8.85→9.40; H 9.40%; E
+turnover 184.2cr; T/M Northwind); C/D/S/G spot-checked correct.
+- **Fix 7 (`eee6627`)** synthesis modes (G/S/T) no longer over-refused —
+  `keep_low_confidence_answer_visible` ships a non-H `low_confidence` answer
+  with a badge (CRAG is structurally ~0 for synthesis). G summary ships;
+  adversarial/out-of-corpus still refuse. 5 tests.
+- **SUBSET re-extract (`scripts/reextract_loans.py`)** — re-ran KV+Tables +
+  schema-entities (force, CACHED chunks, no re-parse) on the **6 finance loans
+  ONLY**. Fixed the rate inconsistency (apollo **0.0985→9.85**; all now
+  8.35–9.85, **0 fraction rows**). → F-mode "rate over 9%" now filters from the
+  STRUCTURED layer (resolver maps "interest rate"→stored `interest_rate_all_in`)
+  and "average interest rate" returns the **correct 9.25%** (was bogus 6.03%).
+  **A subset re-extract is sufficient to verify the fix** — don't need all 46.
+  (Correction: my first GT check used wrong keys `interest_rate`/`principal_amount`;
+  finance stores `interest_rate_all_in`/`loan_amount_usd` — the data existed,
+  the real defect was the 0.0985 row, now fixed.)
+- **Honest gaps still open:** (a) multi-turn **follow-ups UNVERIFIED** (in-process
+  harness can't persist sessions — RLS); (b) **real-conflict** (docs that
+  actually disagree) untested; (c) the OTHER finance narrative docs
+  (10-K/treasury/audit) likely need the same re-extract; (d) **test-coverage
+  debt** (safe-cast exec test, mode-miss, full-text grounding — live-verified,
+  not CI-locked). **⚠ Stopped + restarted the worker for the re-extract.**
+
 **▶▶▶ DEEP QUERY-PIPELINE REVIEW + 6 FIXES (live, finance ws `f0000000`) —
 `0462251`,`81dd268`,`38dcd5e`,`00db02d`,`0804770`,`c2d08c3`.** User report: "a
 lot of answers weren't even coming." Probed one query per flow type (probe tool
