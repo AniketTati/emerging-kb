@@ -75,6 +75,43 @@ eval after each task** so you can attribute every change.
 
 ### ▸ Live status (update after every task)
 
+**▶▶ QUERY-SURFACE BROWSER VERIFY — ALL SURFACES RENDER LIVE; 2 pre-existing
+chat-UI bugs found.** Drove the chat on finance `f0000000` (live UI :3000 + API
+:8000, streaming `/chat/stream`). Confirmed every signal the brief listed renders
+on the LIVE path, with screenshots:
+- **Confidence badge + reason** ✅ — "HIGH CONFIDENCE · Grounded in the cited
+  sources" (sum-of-transactions: debits 866,958,265.22 / credits 995,171,457.0).
+  Verified `derive_answer_confidence` always returns a level (never null).
+- **Faithfulness verdict** ✅ — "Answer · grounded · 100%" inline + the verdict in
+  the "How I answered" inspector (low_confidence / pass per run; LLM-variant).
+- **Conflict-resolution banner + superseded chips** ✅ — q025 fraud-duplicate
+  ("Aniket Desai… which is fraudulent?") fires the STRUCTURED layer:
+  `conflict_resolutions=6`, banner "Resolved 6 conflicts across doc-chain versions"
+  lists each predicate's picked value (bold) vs superseded losers (strikethrough)
+  + "via chain" rule; 3 superseded citation chips (`data-superseded`). The brief's
+  3 named queries don't trigger this (HDFC=factoid; Acme-turnover="no disagreement";
+  sum=aggregate) — q021-q024 resolve in PROSE (generator), structured detection on
+  prose stays DQ1-gated. q025 works because the fraud-dup facts are structured.
+- **Citations + source viewer + polymorphic inline cites** ✅ — Sources panel
+  (snippets, relevance %, doc labels, RAPTOR L2/L3 vs chunk), inline [n] markers.
+- **Live pipeline transparency** ✅ — streamed stages (planned·mode → rewrites →
+  retrieving·6 channels → retrieved → mode-routed → CRAG → generating → faithfulness).
+- **🐛 BUG A (persisted-path trust-signal drop):** the confidence badge + conflict
+  banner + superseded chips VANISH when a chat is reopened / reloaded, and on the
+  FIRST landing turn (after `router.replace('/chat/:id')` re-hydrates via
+  `getSessionTurns`). Root cause: the persisted `SessionTurn` (ui/lib/api.ts:677)
+  carries How-I-answered basics (mode/intent/faithfulness) but NOT `confidence`/
+  `confidence_reason`/`conflict_resolutions`/citation `superseded`. The live answer
+  shows them; the re-hydrated one doesn't. Fix = add those to the
+  `/sessions/{id}/turns` query + `SessionTurn` type + the `set_turns_from_session`
+  hydration. Undermines the core trust UX on any reopened chat.
+- **🐛 BUG B (runaway `/sessions` poll):** `ChatHistorySidebar` fires
+  `GET /sessions?limit=50` dozens of times/sec (saw ~70+ in one capture). `refresh`
+  is stable (`useCallback([])`); the effect dep `[refresh, lastTurnCount, activeId]`
+  re-fires from an unstable `activeId`. Perf bug; pre-existing, not from this work.
+- Console: only PRE-EXISTING `/upload` duplicate-key warnings (unrelated page).
+  **Neither bug is in the brief roadmap — surfaced for a priority call.**
+
 **▶▶ UI PHASE — 2 CHEAP WINS (FE-only; API + client already existed) —
 browser-verified live (UI :3000 + native API :8000, finance ws `f0000000`).**
 - **Win 1 — `degraded_extractions` in Needs Review.** The FE `KMNeedsReview` type
