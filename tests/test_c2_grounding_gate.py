@@ -12,7 +12,36 @@ from __future__ import annotations
 from kb.query.orchestrator import (
     grounding_gate_refuses,
     keep_low_confidence_answer_visible,
+    mode_miss_should_retry,
 )
+
+
+def _retry(refused, mode, *, has_pre=True, differ=True):
+    return mode_miss_should_retry(
+        moded_refused=refused, mode=mode,
+        has_pre_mode_hits=has_pre, hits_differ=differ,
+    )
+
+
+def test_mode_miss_fires_on_refused_non_h_mode():
+    for mode in ("A", "C", "E", "M", "S", "T", "K", "D", "F"):
+        assert _retry(True, mode) is True, mode
+
+
+def test_mode_miss_never_overwrites_a_working_answer():
+    # The additive invariant: a non-refused mode answer is never retried.
+    assert _retry(False, "A") is False
+
+
+def test_mode_miss_skips_h_q_i():
+    assert _retry(True, "H") is False   # no mode filtering happened
+    assert _retry(True, "Q") is False   # its own SQL path
+    assert _retry(True, "I") is False   # inventory short-circuit
+
+
+def test_mode_miss_needs_distinct_fallback_hits():
+    assert _retry(True, "A", has_pre=False) is False  # nothing to fall back to
+    assert _retry(True, "A", differ=False) is False   # already on hybrid hits
 
 THRESH = 0.5
 

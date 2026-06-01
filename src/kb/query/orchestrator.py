@@ -334,6 +334,30 @@ def keep_low_confidence_answer_visible(
     return mode != "H" and faithfulness_verdict == "low_confidence"
 
 
+def mode_miss_should_retry(
+    *,
+    moded_refused: bool,
+    mode: str,
+    has_pre_mode_hits: bool,
+    hits_differ: bool,
+) -> bool:
+    """Mode-miss fallback firing condition. A specialized non-H/Q/I mode can
+    route to NON-ZERO but off-target hits and make the generator self-refuse
+    even though plain hybrid retrieval had the answer. Retry generation on the
+    pre-mode hybrid hits ONLY when the moded answer ALREADY refused and the
+    hybrid set differs.
+
+    STRICTLY ADDITIVE: it never fires on a working (non-refused) mode answer,
+    so it can never overwrite one; and never for H/Q/I (H = no filtering, Q =
+    its own SQL path, I = inventory short-circuit)."""
+    return (
+        moded_refused
+        and mode not in ("H", "Q", "I")
+        and has_pre_mode_hits
+        and hits_differ
+    )
+
+
 def derive_answer_confidence(
     *,
     refused: bool,
@@ -1294,16 +1318,20 @@ class Orchestrator:
         # so it can never overwrite a working mode answer — the exact regression
         # the H-only force_refuse comment warns about. Retry generation once on
         # the pre-mode hybrid hits; adopt it only if it yields a real answer.
-        if (
-            generation.refused
-            and plan.mode not in ("H", "Q", "I")
-            and pre_mode_hits
-            and hits is not pre_mode_hits
+        if mode_miss_should_retry(
+            moded_refused=generation.refused,
+            mode=plan.mode,
+            has_pre_mode_hits=bool(pre_mode_hits),
+            hits_differ=hits is not pre_mode_hits,
         ):
             await emit("mode_miss_retry", {"mode": plan.mode})
             hybrid_gen = await self._generator.generate(
                 effective_query, pre_mode_hits, force_refuse=False,
-                conflict_context=conflict_context,
+                # conflict_context was computed for the MODED hits — it would
+                # inject stale "X is superseded" framing about docs the hybrid
+                # answer never cites. The hybrid set is a different evidence
+                # pool, so drop it (we also re-assess CRAG for the same reason).
+                conflict_context=None,
             )
             if not hybrid_gen.refused and (hybrid_gen.answer or "").strip():
                 generation = hybrid_gen
