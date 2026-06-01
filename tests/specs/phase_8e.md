@@ -1,7 +1,7 @@
 # Phase 8e — Test Spec (G3)
 
 > **Status:** G3 open · drafted 2026-05-25.
-> **Inputs:** Phase 8e G1 plan ([build_tracker §5.15.5](../../docs/build_tracker.md), 15 decisions) · G2 was a no-op (no API surface change at 8e — 8f owns HTTP).
+> **Inputs:** Phase 8e G1 plan ([build_tracker §5.15.5](../../docs/archive/build_tracker.md), 15 decisions) · G2 was a no-op (no API surface change at 8e — 8f owns HTTP).
 > **Outputs at G3:** this spec + 1 new red skeleton file. Imports point at `kb.query.generate.{Generator, GeminiGenerator, IdentityGenerator, make_generator, GenerationResult, Citation, _parse_result, _build_user_prompt}` — module lands at G4.
 
 ---

@@ -2,7 +2,7 @@
 
 A domain-agnostic enterprise knowledge base. Upload heterogeneous documents (PDFs both digital and scanned, spreadsheets, images, emails). Ask natural-language questions and get cited answers. The system auto-discovers structure as data arrives; user-defined schemas are a *view* on top, never a precondition.
 
-This document is the public technical brief. The locked architecture lives in [`architecture.md`](architecture.md); the locked UI design lives in [`ui_design.md`](ui_design.md); the build discipline lives in [`build_tracker.md`](build_tracker.md).
+This document is the public technical brief. See [`architecture.md`](architecture.md) for how the system works today, and [`README.md`](README.md) for the full docs index (current + historical).
 
 ---
 
@@ -38,21 +38,13 @@ A working system that:
 9. **Tracks doc chains** — contract amendments, email threads, drawing revisions.
 10. **Captures feedback** — when an answer is wrong, the correction routes back to targeted re-extraction; the system learns.
 11. **Is auditable** — every query reproducible from immutable logs.
-12. **Demos at scale honestly** — perfect at 80–100 docs (the demo corpus); honest about cost/latency tradeoffs at 100K / 1M / 10M / 100M.
+12. **Demos at scale honestly** — fully working on the 55-doc demo corpus; honest about cost/latency tradeoffs at 100K / 1M / 10M / 100M (see [`scale_perf_audit.md`](scale_perf_audit.md)).
 
 ## Demo corpus
 
-Mixed public datasets to prove domain-agnosticism:
+The shipped demo is a **finance workspace of 55 documents** — bank statements, KYC records, a loan amended twice, SEC-style filings, wire-transfer emails, treasury memos, plus scanned slips, digital-PDF agreements, and spreadsheets. It is committed as a pre-extracted seed (`demo-corpus/seed/`), so a fresh clone shows a full, working system in minutes; the source files live in `demo-corpus/domains/finance/`. It exercises every modality (markdown · email · digital PDF · scanned/OCR PDF · xlsx), the loan-amendment conflict case, cross-format answers, and two safety refusals.
 
-| Domain | Dataset | What it tests |
-|---|---|---|
-| Legal | **CUAD** — 510 commercial contracts annotated with 41 clause types | Clause-level extraction · rare-clause anomaly · identity resolution across parties · hierarchical schema |
-| Communications | **Enron Email Corpus** — ~500K real emails from 150 employees | Vague-query needles · identity resolution across aliases · conversation threading · casual mentions of events |
-| Financial | **SEC EDGAR 10-K filings** — public, well-structured | Aggregation queries · structured-table extraction · cross-doc joins |
-| Scanned | Variants of the above, re-rendered as low-quality scans | OCR robustness · scan-vs-digital fallback chain |
-| Spreadsheet | Vendor-list xlsx derived from CUAD parties | xlsx row-level extraction · join across modalities |
-
-**Total: ~80–100 documents.** Small enough to fully demo + audit; large enough to demonstrate the architectural moves that fail at small scale (cross-doc identity resolution, topic clustering, schema emergence).
+The architecture is **domain-agnostic** — during development it was also run across legal, construction, healthcare, mining, and government corpora (those eval runs are preserved under [`archive/`](archive/) and `eval_audit/`). 55 docs is small enough to fully demo + audit, large enough to exercise the moves that only matter at scale: cross-doc identity resolution, topic clustering, and schema emergence.
 
 ## Out of scope (deliberate descopes)
 
@@ -71,17 +63,11 @@ The system is **scoped** here. Each item below is a conscious choice, not an ove
 
 ## How to read the rest of these docs
 
+See [`README.md`](README.md) for the full index. The current set:
+
 | Doc | Role |
 |---|---|
-| [`architecture.md`](architecture.md) | Locked formal spec — layers, indexing/query pipelines, storage stack, eval design |
-| [`ui_design.md`](ui_design.md) | Locked UI design + demo flow + per-screen reference |
-| [`gaps_design.md`](gaps_design.md) | 9 detailed designs (aggregation · conflicts · doc chains · feedback · citations · vocabulary · lineage · conversational context · layered config) |
-| [`build_tracker.md`](build_tracker.md) | Gate-by-gate build discipline (G1 plan → G5 verify per phase) + Git workflow |
-| [`walkthrough.md`](walkthrough.md) | Teaching doc — one doc's journey through ingest, one query's journey through retrieval |
-| [`scenarios.md`](scenarios.md) | 8 enterprise stress-tests with verdicts |
-| [`red_team.md`](red_team.md) | Adversarial review of the architecture |
-| [`citations_audit.md`](citations_audit.md) | Every cited paper/product verified real |
-| [`competitive_audit.md`](competitive_audit.md) | 2026 SOTA sweep — Hebbia, Glean, NotebookLM, OpenAI Files, Onyx, DSPy, Search-o1, Mem0 |
-| [`scale_perf_audit.md`](scale_perf_audit.md) | Honest scale/cost/latency at 10K / 100K / 1M / 10M / 100M docs |
-| [`../prototype/`](../prototype/) | Clickable HTML prototype of all 10 UI surfaces |
-| [`../CONTRIBUTING.md`](../CONTRIBUTING.md) | How to contribute · Git workflow · gate discipline |
+| [`architecture.md`](architecture.md) | How the system works today — ingest · query · UI · stack — plus an honest scale review |
+| [`scale_perf_audit.md`](scale_perf_audit.md) | Deep scale/cost/latency analysis (10K → 100M docs) + enterprise upgrade paths |
+
+The design-phase specs (`architecture_design_spec.md`, `ui_design.md`, `gaps_design.md`), the gate-by-gate build log (`build_tracker.md`), the API contract, the audits, the clickable prototype, and the per-domain eval runs are preserved under [`archive/`](archive/). Contributor workflow: [`../CONTRIBUTING.md`](../CONTRIBUTING.md).

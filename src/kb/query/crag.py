@@ -154,7 +154,7 @@ class GeminiCragGate:
             max_output_tokens=_MAX_OUTPUT_TOKENS,
             response_mime_type="application/json",
             # Relevance judging should be deterministic. See
-            # docs/RAG_AUDIT_AND_ACTION_PLAN.md Phase 1.1.
+            # docs/archive/RAG_AUDIT_AND_ACTION_PLAN.md Phase 1.1.
             temperature=0.1,
             thinking_config=types.ThinkingConfig(thinking_budget=0),
         )

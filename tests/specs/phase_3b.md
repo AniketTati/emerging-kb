@@ -1,14 +1,14 @@
 # Phase 3b — Test Spec (G3)
 
 > **Status:** G3 open · drafted 2026-05-23 · awaiting sign-off.
-> **Inputs:** Phase 3b G1 plan ([build_tracker §5.8](../../docs/build_tracker.md)) · Phase 3b G2 contract delta ([api_contracts.md §5.1 #3 + §5.2](../../docs/api_contracts.md)).
+> **Inputs:** Phase 3b G1 plan ([build_tracker §5.8](../../docs/archive/build_tracker.md)) · Phase 3b G2 contract delta ([api_contracts.md §5.1 #3 + §5.2](../../docs/archive/api_contracts.md)).
 > **Outputs at G3:** this spec + two new red skeleton files (`test_contextualization_unit.py`, `test_contextualization_worker.py`). Imports point at `kb.contextualization` + `kb.domain.contextual_chunks` + extended `kb.workers.tasks` (all land at G4).
 
 ---
 
 ## 1. Scope
 
-Every G1 decision in [build_tracker §5.8](../../docs/build_tracker.md) gets a matching test:
+Every G1 decision in [build_tracker §5.8](../../docs/archive/build_tracker.md) gets a matching test:
 - Model choice & override (#1) · prompt-cache placement (#2) · adapter pattern (#5) · IdentityContextualizer self-disable (#6) · prompt template (#7) · output budget (#8) · thinking disabled (#9) · table immutability (#10) · cache metrics persisted (#11) · lifecycle widening (#12) · task chaining (#13) · failure mode (#14).
 
 Two files cover the surface (**15 new tests**, on top of 204 from prior phases):
@@ -88,7 +88,7 @@ When all of the following pass, G3 is satisfied and G4 closes:
 
 ## 6. Sign-off
 
-When Aniket approves this spec + the skeleton files, the Phase 3b G3 cell in [build_tracker §5](../../docs/build_tracker.md) flips 🟡 → ✅ and G4 (build) opens. Sign-off recorded in `build_tracker.md` §9.
+When Aniket approves this spec + the skeleton files, the Phase 3b G3 cell in [build_tracker §5](../../docs/archive/build_tracker.md) flips 🟡 → ✅ and G4 (build) opens. Sign-off recorded in `build_tracker.md` §9.
 
 ---
 

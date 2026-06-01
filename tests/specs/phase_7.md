@@ -1,7 +1,7 @@
 # Phase 7 — Test Spec (G3)
 
 > **Status:** G3 open · drafted 2026-05-25 · awaiting sign-off.
-> **Inputs:** Phase 7 G1 plan ([build_tracker §5.14](../../docs/build_tracker.md), 14 decisions) · G2 was a no-op (no `api_contracts.md` delta — Phase 7 has no new HTTP surface).
+> **Inputs:** Phase 7 G1 plan ([build_tracker §5.14](../../docs/archive/build_tracker.md), 14 decisions) · G2 was a no-op (no `api_contracts.md` delta — Phase 7 has no new HTTP surface).
 > **Outputs at G3:** this spec + 2 new red skeleton files + 1 mutated test. Imports point at `kb.identity.judge`, `kb.identity.resolve`, `kb.domain.entities`, `kb.workers.tasks.resolve_identities_file_impl` — modules land at G4.
 
 ---

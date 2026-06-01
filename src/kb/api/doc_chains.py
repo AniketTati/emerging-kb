@@ -1,6 +1,6 @@
 """WA-3 / Design 3 — Doc chain HTTP endpoints.
 
-Per Design 3 §"UI surface" + ui_design.md §6.9 "Doc Detail panel —
+Per Design 3 §"UI surface" + docs/archive/ui_design.md §6.9 "Doc Detail panel —
 Chain section":
 
   GET  /files/{file_id}/chain   chain (+ members) the file belongs to

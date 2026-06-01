@@ -1,7 +1,7 @@
 # Phase 10a — Test Spec (G3)
 
 > **Status:** G3 + G4 done 2026-05-25. Tests live in `ui/tests/` (Vitest + Playwright), not under `tests/` (which is Python). This spec documents what landed.
-> **Inputs:** Phase 10a G1 plan ([build_tracker §5.17](../../docs/build_tracker.md), 15 decisions).
+> **Inputs:** Phase 10a G1 plan ([build_tracker §5.17](../../docs/archive/build_tracker.md), 15 decisions).
 
 ---
 

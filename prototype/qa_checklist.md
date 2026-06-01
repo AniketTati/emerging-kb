@@ -2,7 +2,7 @@
 
 > Applied per page, per viewport. The runner (`prototype/qa.mjs`) screenshots each page at 3 viewports and produces a report file. This checklist is the source of truth for what we check.
 >
-> Source: [`docs/build_tracker.md`](../docs/build_tracker.md) §0.1.
+> Source: [`docs/archive/build_tracker.md`](../docs/archive/build_tracker.md) §0.1.
 
 ## Viewports we check
 

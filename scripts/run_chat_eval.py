@@ -1,4 +1,4 @@
-"""Run the 20-query chat eval (see `docs/chat_eval_queries.md`) and dump a
+"""Run the 20-query chat eval (see `docs/archive/chat_eval_queries.md`) and dump a
 per-query verdict to `/tmp/eval_results.json`.
 
 Spaces calls 3s apart to stay under Gemini's parallel-call ceiling on the
@@ -25,7 +25,7 @@ WORKSPACE = "00000000-0000-0000-0000-000000000001"
 CHAT_URL = "http://localhost:8000/chat"
 
 
-# Keep in sync with the table in docs/chat_eval_queries.md.
+# Keep in sync with the table in docs/archive/chat_eval_queries.md.
 QUERIES = [
     {"id": "Q1-CORPUS-SUMMARY", "category": "corpus-scope", "query": "Summarize all the documents in this workspace"},
     {"id": "Q2-LIST-DOCS", "category": "corpus-scope", "query": "What types of documents do I have"},

@@ -1,7 +1,7 @@
 # Phase 8c — Test Spec (G3)
 
 > **Status:** G3 open · drafted 2026-05-25.
-> **Inputs:** Phase 8c G1 plan ([build_tracker §5.15.3](../../docs/build_tracker.md), 12 decisions) · G2 was a no-op.
+> **Inputs:** Phase 8c G1 plan ([build_tracker §5.15.3](../../docs/archive/build_tracker.md), 12 decisions) · G2 was a no-op.
 > **Outputs at G3:** this spec + 1 new red skeleton file. Imports point at `kb.query.rerank.{Reranker, IdentityReranker, CohereReranker, MxBaiReranker, make_reranker}` — module lands at G4.
 
 ---

@@ -145,7 +145,7 @@ test("accordions lazy-load when clicked (source + fields + mentions)", async ({
 });
 
 test("PDF doc surfaces the L2 mentions gap visibly", async ({ page }) => {
-  // The audit at docs/upload_flow_audit.md §7 documents that the Gemini
+  // The audit at docs/archive/upload_flow_audit.md §7 documents that the Gemini
   // mentions extractor returns 0 results on Docling-parsed PDFs. The
   // doc-detail page makes that gap explicit (warn badges).
   await page.goto("/upload");

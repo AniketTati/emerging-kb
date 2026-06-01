@@ -47,7 +47,7 @@ ALL_DOMAINS: tuple[str, ...] = (
 )
 
 # Known domain → workspace_id mappings. Only construction is committed
-# (docs/demo-corpus-eval-construction.md); the rest are filled in as each
+# (docs/archive/demo-corpus-eval-construction.md); the rest are filled in as each
 # domain is ingested. The CLI's --workspace always overrides this.
 # Per-domain workspaces (cheap, clean eval, no cross-domain re-processing).
 # Co-locating finance with construction would make #19's whole-workspace

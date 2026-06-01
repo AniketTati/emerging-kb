@@ -9,7 +9,7 @@
 # OmegaConf struct merging.
 #
 # Cross-reference: every numerical threshold here is also referenced in
-# `architecture.md` or one of `docs/gaps_design.md` Designs; the YAML is
+# `architecture.md` or one of `docs/archive/gaps_design.md` Designs; the YAML is
 # the *operational* source of truth, with the docs serving as the
 # *rationale* + *literature* anchor.
 # --------------------------------------------------------------------------

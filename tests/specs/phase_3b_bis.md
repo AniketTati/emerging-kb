@@ -1,7 +1,7 @@
 # Phase 3b-bis — Test Spec (G3)
 
 > **Status:** G3 open · drafted 2026-05-24 · awaiting sign-off.
-> **Inputs:** Phase 3b-bis G1 plan ([build_tracker §5.8.1](../../docs/build_tracker.md)). No G2 (no API contract delta, no migration).
+> **Inputs:** Phase 3b-bis G1 plan ([build_tracker §5.8.1](../../docs/archive/build_tracker.md)). No G2 (no API contract delta, no migration).
 > **Outputs at G3:** this spec + one new red skeleton file (`tests/test_contextualization_gemini_unit.py`) + small mutation to `tests/test_contextualization_unit.py` (factory selector test widens to cover all 4 `KB_CONTEXTUALIZER` values). Imports point at `kb.contextualization.GeminiContextualizer` + the widened `make_contextualizer()` (both land at G4).
 
 ---

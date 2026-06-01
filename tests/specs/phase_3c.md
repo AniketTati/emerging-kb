@@ -1,14 +1,14 @@
 # Phase 3c — Test Spec (G3)
 
 > **Status:** G3 open · drafted 2026-05-23 · awaiting sign-off.
-> **Inputs:** Phase 3c G1 plan ([build_tracker §5.9](../../docs/build_tracker.md)) · Phase 3c G2 contract delta ([api_contracts.md §5.1 #3 + §5.2](../../docs/api_contracts.md)).
+> **Inputs:** Phase 3c G1 plan ([build_tracker §5.9](../../docs/archive/build_tracker.md)) · Phase 3c G2 contract delta ([api_contracts.md §5.1 #3 + §5.2](../../docs/archive/api_contracts.md)).
 > **Outputs at G3:** this spec + two new red skeleton files (`test_embeddings_unit.py`, `test_embeddings_worker.py`).
 
 ---
 
 ## 1. Scope
 
-Every G1 decision in [build_tracker §5.9](../../docs/build_tracker.md) gets a matching test:
+Every G1 decision in [build_tracker §5.9](../../docs/archive/build_tracker.md) gets a matching test:
 - Model choice & override (#1) · halfvec storage (#2) · adapter pattern (#3) · self-disable fallback (#4) · mock embedder determinism (#5) · batching (#6) · table immutability (#8) · UNIQUE composite (#9) · lifecycle widening (#10) · task chaining (#11) · idempotency (#12) · failure mode (#13).
 
 Two files cover the surface (**13 new tests**, on top of 219 from prior phases):
@@ -84,7 +84,7 @@ When all of the following pass, G3 is satisfied and G4 closes:
 
 ## 6. Sign-off
 
-When Aniket approves this spec + skeleton files, Phase 3c G3 cell in [build_tracker §5](../../docs/build_tracker.md) flips 🟡 → ✅ and G4 (build) opens. Sign-off recorded in `build_tracker.md` §9.
+When Aniket approves this spec + skeleton files, Phase 3c G3 cell in [build_tracker §5](../../docs/archive/build_tracker.md) flips 🟡 → ✅ and G4 (build) opens. Sign-off recorded in `build_tracker.md` §9.
 
 ---
 

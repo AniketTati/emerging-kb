@@ -1,7 +1,7 @@
 # Phase 8a — Test Spec (G3)
 
 > **Status:** G3 open · drafted 2026-05-25 · awaiting sign-off.
-> **Inputs:** Phase 8a G1 plan ([build_tracker §5.15.1](../../docs/build_tracker.md), 10 decisions) · G2 was a no-op (no `api_contracts.md` delta — 8a is module-only; HTTP surface lands at 8f).
+> **Inputs:** Phase 8a G1 plan ([build_tracker §5.15.1](../../docs/archive/build_tracker.md), 10 decisions) · G2 was a no-op (no `api_contracts.md` delta — 8a is module-only; HTTP surface lands at 8f).
 > **Outputs at G3:** this spec + 1 new red skeleton file. Imports point at `kb.query.rewriter.{Rewrites, IdentityQueryRewriter, GeminiQueryRewriter, AnthropicQueryRewriter, make_query_rewriter, _parse_rewrites}` — module lands at G4.
 
 ---

@@ -13,7 +13,7 @@
  *   - overrides     ← active runtime overrides; create + soft-revoke
  *                     via inline forms.
  *
- * Layered config design lives in `docs/gaps_design.md` (Design 9).
+ * Layered config design lives in `docs/archive/gaps_design.md` (Design 9).
  * Backend: src/kb/api/settings.py — no new endpoints needed.
  */
 

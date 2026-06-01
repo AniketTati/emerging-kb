@@ -1,14 +1,14 @@
 # Phase 1c — Test Spec (G3)
 
 > **Status:** G3 open · drafted 2026-05-23 · awaiting sign-off.
-> **Inputs:** Phase 1c G1 plan ([build_tracker §5.4](../../docs/build_tracker.md)) · Phase 1c G2 contracts ([api_contracts.md §4](../../docs/api_contracts.md)).
+> **Inputs:** Phase 1c G1 plan ([build_tracker §5.4](../../docs/archive/build_tracker.md)) · Phase 1c G2 contracts ([api_contracts.md §4](../../docs/archive/api_contracts.md)).
 > **Outputs at G3:** this spec + four new red skeleton files. New imports point at `kb.api.schema_hierarchy` and `kb.domain.schema_hierarchy` that land at G4 — collection fails at G3 (expected "red" state).
 
 ---
 
 ## 1. Scope
 
-Every endpoint in api_contracts §4 gets coverage. Every G1 decision in [build_tracker §5.4](../../docs/build_tracker.md) (new tables, type enum, NL description, kind enum, recorded-not-enforced metadata, soft delete, coarse-grained versioning, hierarchy-in-rollback, nested URLs, Idempotency-Key rules, RLS day-1, snapshot body shape, nested diff paths) has at least one test asserting it.
+Every endpoint in api_contracts §4 gets coverage. Every G1 decision in [build_tracker §5.4](../../docs/archive/build_tracker.md) (new tables, type enum, NL description, kind enum, recorded-not-enforced metadata, soft delete, coarse-grained versioning, hierarchy-in-rollback, nested URLs, Idempotency-Key rules, RLS day-1, snapshot body shape, nested diff paths) has at least one test asserting it.
 
 Four files cover the surface (**36 new tests**, on top of 106 from Phase 0+1a+1b; pytest `--collect-only` is authoritative):
 
@@ -124,7 +124,7 @@ When all of the following pass, G3 is satisfied and G4 closes:
 
 ## 6. Sign-off
 
-When Aniket approves this spec + the skeleton files, the Phase 1c G3 cell in [build_tracker §5](../../docs/build_tracker.md) flips 🟡 → ✅ and G4 (build) opens. Sign-off recorded in `build_tracker.md` §9.
+When Aniket approves this spec + the skeleton files, the Phase 1c G3 cell in [build_tracker §5](../../docs/archive/build_tracker.md) flips 🟡 → ✅ and G4 (build) opens. Sign-off recorded in `build_tracker.md` §9.
 
 ---
 

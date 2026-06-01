@@ -1,14 +1,14 @@
 # Phase 2a — Test Spec (G3)
 
 > **Status:** G3 open · drafted 2026-05-23 · awaiting sign-off.
-> **Inputs:** Phase 2a G1 plan ([build_tracker §5.5](../../docs/build_tracker.md)) · Phase 2a G2 contracts ([api_contracts.md §5](../../docs/api_contracts.md)).
+> **Inputs:** Phase 2a G1 plan ([build_tracker §5.5](../../docs/archive/build_tracker.md)) · Phase 2a G2 contracts ([api_contracts.md §5](../../docs/archive/api_contracts.md)).
 > **Outputs at G3:** this spec + 5 new red skeleton files. New imports point at `kb.api.files`, `kb.domain.files`, `kb.domain.raw_pages`, `kb.parsers`, `kb.workers.tasks` that land at G4 — collection fails at G3 (expected "red" state).
 
 ---
 
 ## 1. Scope
 
-Every endpoint in api_contracts §5 gets coverage. Every G1 decision in [build_tracker §5.5](../../docs/build_tracker.md) (MinIO/PG split, content-hash dedup, state machine, append-only audit, raw_pages immutability, Procrastinate worker, workspace context in worker, two-mode upload, two-layer idempotency, Parser Protocol + dispatcher, Docling integration, RLS, upload validation, failure mode) has at least one test asserting it.
+Every endpoint in api_contracts §5 gets coverage. Every G1 decision in [build_tracker §5.5](../../docs/archive/build_tracker.md) (MinIO/PG split, content-hash dedup, state machine, append-only audit, raw_pages immutability, Procrastinate worker, workspace context in worker, two-mode upload, two-layer idempotency, Parser Protocol + dispatcher, Docling integration, RLS, upload validation, failure mode) has at least one test asserting it.
 
 Five files cover the surface (**28 new tests**, on top of 142 from Phase 0+1a+1b+1c; pytest `--collect-only` is authoritative):
 
@@ -123,7 +123,7 @@ When all of the following pass, G3 is satisfied and G4 closes:
 
 ## 6. Sign-off
 
-When Aniket approves this spec + the skeleton files, the Phase 2a G3 cell in [build_tracker §5](../../docs/build_tracker.md) flips 🟡 → ✅ and G4 (build) opens. Sign-off recorded in `build_tracker.md` §9.
+When Aniket approves this spec + the skeleton files, the Phase 2a G3 cell in [build_tracker §5](../../docs/archive/build_tracker.md) flips 🟡 → ✅ and G4 (build) opens. Sign-off recorded in `build_tracker.md` §9.
 
 ---
 

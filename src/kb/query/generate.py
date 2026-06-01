@@ -770,7 +770,7 @@ class GeminiGenerator:
             # Answer generation: low-but-nonzero temperature for natural
             # prose without going off-script. Gemini SDK default (~1.0)
             # produced too much variance in eval. 0.3 is a standard RAG
-            # value. See docs/RAG_AUDIT_AND_ACTION_PLAN.md Phase 1.1.
+            # value. See docs/archive/RAG_AUDIT_AND_ACTION_PLAN.md Phase 1.1.
             temperature=0.3,
             thinking_config=types.ThinkingConfig(thinking_budget=0),
         )

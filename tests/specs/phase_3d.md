@@ -1,7 +1,7 @@
 # Phase 3d — Test Spec (G3)
 
 > **Status:** G3 open · drafted 2026-05-24 · awaiting sign-off.
-> **Inputs:** Phase 3d G1 plan ([build_tracker §5.10](../../docs/build_tracker.md), 16 decisions) · Phase 3d G2 contract delta ([api_contracts.md §5.2 + §5.3](../../docs/api_contracts.md) — lifecycle enum widens with `raptor_building`; §5.3 example annotated with full post-2c stage transitions).
+> **Inputs:** Phase 3d G1 plan ([build_tracker §5.10](../../docs/archive/build_tracker.md), 16 decisions) · Phase 3d G2 contract delta ([api_contracts.md §5.2 + §5.3](../../docs/archive/api_contracts.md) — lifecycle enum widens with `raptor_building`; §5.3 example annotated with full post-2c stage transitions).
 > **Outputs at G3:** this spec + 3 new red skeleton files. Imports point at `kb.raptor.{cluster_embeddings, build_tree_for_file}`, `kb.summarization.{Summarizer, GeminiSummarizer, AnthropicSummarizer, IdentitySummarizer, make_summarizer, SummarizationError}`, `kb.domain.raptor.{RaptorNode, insert_raptor_node, insert_raptor_edge, read_raptor_level_embeddings}`, migration 0012, the widened `files.lifecycle_state` CHECK including `raptor_building`, and `kb.workers.tasks.raptor_build_file_impl` — all land at G4.
 
 ---

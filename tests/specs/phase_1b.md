@@ -1,14 +1,14 @@
 # Phase 1b — Test Spec (G3)
 
 > **Status:** G3 open · drafted 2026-05-23 · awaiting sign-off.
-> **Inputs:** Phase 1b G1 plan ([build_tracker §5.3](../../docs/build_tracker.md)) · Phase 1b G2 contracts ([api_contracts.md §3](../../docs/api_contracts.md)).
+> **Inputs:** Phase 1b G1 plan ([build_tracker §5.3](../../docs/archive/build_tracker.md)) · Phase 1b G2 contracts ([api_contracts.md §3](../../docs/archive/api_contracts.md)).
 > **Outputs at G3:** this spec + one new red skeleton file (`tests/test_schema_versions.py`) + two RED *additions* to existing Phase 1a files (`tests/test_schemas_crud.py`, `tests/test_idempotency.py`). New imports point at `kb.api.schema_versions` and the extended `kb.domain.schemas` that land at G4 — collection fails at G3 (expected "red" state).
 
 ---
 
 ## 1. Scope
 
-Every endpoint in api_contracts §3 gets coverage. Every G1 decision in [build_tracker §5.3](../../docs/build_tracker.md) (full snapshot, monotonic int per schema, POST creates v1 atomically, rollback = clone-forward, declarative diff format, Idempotency-Key required on rollback, per-schema FOR UPDATE serialization, 409 rollback-noop) has at least one test asserting it.
+Every endpoint in api_contracts §3 gets coverage. Every G1 decision in [build_tracker §5.3](../../docs/archive/build_tracker.md) (full snapshot, monotonic int per schema, POST creates v1 atomically, rollback = clone-forward, declarative diff format, Idempotency-Key required on rollback, per-schema FOR UPDATE serialization, 409 rollback-noop) has at least one test asserting it.
 
 Three files cover the surface (**28 new tests**, on top of the 78 from Phase 0+1a; pytest `--collect-only` is the authoritative count):
 
@@ -52,7 +52,7 @@ Same as Phase 0 + 1a (pytest + pytest-asyncio + httpx + structlog; testcontainer
 
 ### 4.1 `tests/test_schema_versions.py` — NEW file
 
-Maps to [api_contracts §3.7 + §3.8 + §3.9](../../docs/api_contracts.md) and the §3.1 invariants.
+Maps to [api_contracts §3.7 + §3.8 + §3.9](../../docs/archive/api_contracts.md) and the §3.1 invariants.
 
 #### Version list — `GET /schemas/:id/versions` (§3.7)
 
@@ -133,7 +133,7 @@ When all of the following pass, G3 is satisfied and G4 closes:
 
 ## 6. Sign-off
 
-When Aniket approves this spec + the skeleton files, the Phase 1b G3 cell in [build_tracker §5](../../docs/build_tracker.md) flips 🟡 → ✅ and G4 (build) opens. Sign-off recorded in `build_tracker.md` §9.
+When Aniket approves this spec + the skeleton files, the Phase 1b G3 cell in [build_tracker §5](../../docs/archive/build_tracker.md) flips 🟡 → ✅ and G4 (build) opens. Sign-off recorded in `build_tracker.md` §9.
 
 ---
 

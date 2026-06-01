@@ -202,7 +202,7 @@ class GeminiQueryRewriter:
             # point — step_back / HyDE / query2doc rewrites should
             # phrase the same intent in different ways. 0.5 keeps
             # rewrites varied without going gibberish-creative. See
-            # docs/RAG_AUDIT_AND_ACTION_PLAN.md Phase 1.1.
+            # docs/archive/RAG_AUDIT_AND_ACTION_PLAN.md Phase 1.1.
             temperature=0.5,
             thinking_config=types.ThinkingConfig(thinking_budget=0),
         )

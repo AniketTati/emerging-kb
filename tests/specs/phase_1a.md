@@ -1,7 +1,7 @@
 # Phase 1a — Test Spec (G3)
 
 > **Status:** G3 open · drafted 2026-05-23 · awaiting sign-off.
-> **Inputs:** Phase 1a G1 plan ([build_tracker §5.2](../../docs/build_tracker.md)) · Phase 1a G2 contracts ([api_contracts.md §2](../../docs/api_contracts.md)).
+> **Inputs:** Phase 1a G1 plan ([build_tracker §5.2](../../docs/archive/build_tracker.md)) · Phase 1a G2 contracts ([api_contracts.md §2](../../docs/archive/api_contracts.md)).
 > **Outputs at G3:** this spec + three red skeleton test files in `tests/`. They import from `kb.api.schemas` and `kb.domain.schemas` (which land at G4); collection fails at G3 — that's the expected "red" state.
 
 ---
@@ -49,7 +49,7 @@ Same as Phase 0 (pytest + pytest-asyncio + httpx + structlog; testcontainers ses
 
 ### 4.1 `test_schemas_crud.py` — happy paths + business errors
 
-Maps to [api_contracts §2.2–§2.6](../../docs/api_contracts.md).
+Maps to [api_contracts §2.2–§2.6](../../docs/archive/api_contracts.md).
 
 | Test | Intent |
 |---|---|
@@ -76,7 +76,7 @@ Maps to [api_contracts §2.2–§2.6](../../docs/api_contracts.md).
 
 ### 4.2 `test_schemas_rls.py` — workspace isolation
 
-Maps to [api_contracts §2.7 + build_tracker §5.2 decision #6](../../docs/build_tracker.md).
+Maps to [api_contracts §2.7 + build_tracker §5.2 decision #6](../../docs/archive/build_tracker.md).
 
 | Test | Intent |
 |---|---|
@@ -88,7 +88,7 @@ Maps to [api_contracts §2.7 + build_tracker §5.2 decision #6](../../docs/build
 
 ### 4.3 `test_idempotency.py` — Idempotency-Key behavior
 
-Maps to [api_contracts §0.5 + §2.2](../../docs/api_contracts.md).
+Maps to [api_contracts §0.5 + §2.2](../../docs/archive/api_contracts.md).
 
 | Test | Intent |
 |---|---|
@@ -111,7 +111,7 @@ When all of the following pass, G3 is satisfied and G4 closes:
 
 ## 6. Sign-off
 
-When Aniket approves this spec + the skeleton files, the Phase 1a G3 cell in [build_tracker §5](../../docs/build_tracker.md) flips 🟡 → ✅ and G4 (build) opens. Sign-off recorded in `build_tracker.md` §9.
+When Aniket approves this spec + the skeleton files, the Phase 1a G3 cell in [build_tracker §5](../../docs/archive/build_tracker.md) flips 🟡 → ✅ and G4 (build) opens. Sign-off recorded in `build_tracker.md` §9.
 
 ---
 

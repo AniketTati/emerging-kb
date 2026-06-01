@@ -502,7 +502,7 @@ class GeminiIntentClassifier:
             response_mime_type="application/json",
             # Same query should always return the same intent label.
             # Default temperature (~1.0) was a known source of eval
-            # variance. See docs/RAG_AUDIT_AND_ACTION_PLAN.md Phase 1.1.
+            # variance. See docs/archive/RAG_AUDIT_AND_ACTION_PLAN.md Phase 1.1.
             temperature=0.1,
             thinking_config=types.ThinkingConfig(thinking_budget=0),
         )

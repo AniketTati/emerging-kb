@@ -1,7 +1,7 @@
 # Phase 8d — Test Spec (G3)
 
 > **Status:** G3 open · drafted 2026-05-25.
-> **Inputs:** Phase 8d G1 plan ([build_tracker §5.15.4](../../docs/build_tracker.md), 10 decisions) · G2 was a no-op.
+> **Inputs:** Phase 8d G1 plan ([build_tracker §5.15.4](../../docs/archive/build_tracker.md), 10 decisions) · G2 was a no-op.
 > **Outputs at G3:** this spec + 1 new red skeleton file. Imports point at `kb.query.crag.{CragGate, GeminiCragGate, IdentityCragGate, make_crag_gate, CRAG_THRESHOLD, _parse_score}` — module lands at G4.
 
 ---

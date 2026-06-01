@@ -1,14 +1,14 @@
 # Phase 3a — Test Spec (G3)
 
 > **Status:** G3 open · drafted 2026-05-23 · awaiting sign-off.
-> **Inputs:** Phase 3a G1 plan ([build_tracker §5.7](../../docs/build_tracker.md)) · Phase 3a G2 contract delta ([api_contracts.md §5.1 #3 + §5.2](../../docs/api_contracts.md)).
+> **Inputs:** Phase 3a G1 plan ([build_tracker §5.7](../../docs/archive/build_tracker.md)) · Phase 3a G2 contract delta ([api_contracts.md §5.1 #3 + §5.2](../../docs/archive/api_contracts.md)).
 > **Outputs at G3:** this spec + two new red skeleton files (`test_chunking_unit.py`, `test_chunking_worker.py`). New imports point at `kb.chunking` + `kb.domain.chunks` + the extended `kb.workers.tasks` (all land at G4) — collection fails at G3 (expected red state).
 
 ---
 
 ## 1. Scope
 
-Every G1 decision in [build_tracker §5.7](../../docs/build_tracker.md) gets a matching test:
+Every G1 decision in [build_tracker §5.7](../../docs/archive/build_tracker.md) gets a matching test:
 - Budget enforcement (#1) · overlap (#2) · tokenizer (#3 — implicit via budget assertions) · layout-aware boundary (#4) · small-page joining (#5) · source-page tracking (#6) · chunks immutability via REVOKE (#7) · lifecycle state addition (#8) · task chaining via separate-tx defer (#9) · per-stage idempotency (#10) · empty-input failure (#11) · row-boundary preservation on huge xlsx sheets (#12).
 
 Two files cover the surface (**16 new tests**, on top of 188 from prior phases; `pytest --collect-only` is authoritative):
@@ -91,7 +91,7 @@ When all of the following pass, G3 is satisfied and G4 closes:
 
 ## 6. Sign-off
 
-When Aniket approves this spec + the skeleton files, the Phase 3a G3 cell in [build_tracker §5](../../docs/build_tracker.md) flips 🟡 → ✅ and G4 (build) opens. Sign-off recorded in `build_tracker.md` §9.
+When Aniket approves this spec + the skeleton files, the Phase 3a G3 cell in [build_tracker §5](../../docs/archive/build_tracker.md) flips 🟡 → ✅ and G4 (build) opens. Sign-off recorded in `build_tracker.md` §9.
 
 ---
 

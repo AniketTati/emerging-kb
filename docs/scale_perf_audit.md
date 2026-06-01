@@ -1,5 +1,13 @@
 # Scale / Performance / Cost Audit — Is This Architecture Actually Good?
 
+> **Status: CURRENT (forward-looking reference).** Written against the full
+> target design, so some component counts (storage layers, planner modes,
+> channels) describe more than the seeded demo ships today. The **scaling
+> breakpoints, cost math, and per-tier upgrade paths are the live reference for
+> the enterprise-scale roadmap** (see [README → Roadmap](../README.md) and the
+> scale review in [`architecture.md`](architecture.md)). For what runs today,
+> start with [`architecture.md`](architecture.md).
+
 **Date:** 2026-05-21
 **Purpose:** the honest "is it perfect?" pass. Concrete numbers per dimension across five corpus scales (10K → 100M docs); honest weaknesses identified; upgrade path stated for each scale ceiling.
 **Methodology:** compose published numbers (pgvector HNSW behavior, ParadeDB pg_search benchmarks, Cohere Rerank latency, Gemini Flash pricing) with the system's design points; identify where each dimension breaks and what we'd do about it.
@@ -170,7 +178,7 @@ The architecture has:
 This is a **lot of engineering surface area**. The simpler alternative — single chunk-and-embed pipeline with one retrieval channel — would be 10% the code.
 
 **Why we chose this:** every layer earns its keep for a *specific* query class:
-- L1a Contextual Retrieval: vocabulary-mismatch needles (`docs/red_team.md` edge case 1)
+- L1a Contextual Retrieval: vocabulary-mismatch needles (`docs/archive/red_team.md` edge case 1)
 - L1d RAPTOR: vague/abstract queries
 - L2b emergent fields: schema-emerges principle
 - L3 atomic units: rare-clause needles (edge case 2)

@@ -1,7 +1,7 @@
 # Phase 8f — Test Spec (G3)
 
 > **Status:** G3 open · drafted 2026-05-25.
-> **Inputs:** Phase 8f G1 plan ([build_tracker §5.15.6](../../docs/build_tracker.md), 17 decisions) + G2 ([api_contracts §7](../../docs/api_contracts.md)).
+> **Inputs:** Phase 8f G1 plan ([build_tracker §5.15.6](../../docs/archive/build_tracker.md), 17 decisions) + G2 ([api_contracts §7](../../docs/archive/api_contracts.md)).
 > **Outputs at G3:** this spec + 2 new red test files.
 
 ---

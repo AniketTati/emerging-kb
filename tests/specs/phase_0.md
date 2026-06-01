@@ -1,7 +1,7 @@
 # Phase 0 — Test Spec (G3)
 
 > **Status:** G3 open · drafted 2026-05-23 · awaiting sign-off.
-> **Inputs:** Phase 0 G1 plan ([build_tracker §5.1](../../docs/build_tracker.md)) · Phase 0 G2 contracts ([api_contracts.md §1](../../docs/api_contracts.md)).
+> **Inputs:** Phase 0 G1 plan ([build_tracker §5.1](../../docs/archive/build_tracker.md)) · Phase 0 G2 contracts ([api_contracts.md §1](../../docs/archive/api_contracts.md)).
 > **Outputs at G3:** this spec + five red skeleton test files in `tests/` + `tests/conftest.py`. Skeletons fail at collection time (modules don't exist yet) or at runtime (`NotImplementedError`) — that is the **expected** state at G3. G4 lands the code that turns them green.
 
 ---
@@ -59,7 +59,7 @@ Plus [`tests/conftest.py`](../conftest.py) — shared fixtures.
 
 ### 4.1 `test_health.py` — `GET /health`
 
-Maps to [api_contracts §1.1](../../docs/api_contracts.md).
+Maps to [api_contracts §1.1](../../docs/archive/api_contracts.md).
 
 | Test | Intent |
 |---|---|
@@ -75,7 +75,7 @@ Maps to [api_contracts §1.1](../../docs/api_contracts.md).
 
 ### 4.2 `test_ready.py` — `GET /ready`
 
-Maps to [api_contracts §1.2](../../docs/api_contracts.md).
+Maps to [api_contracts §1.2](../../docs/archive/api_contracts.md).
 
 | Test | Intent |
 |---|---|
@@ -95,7 +95,7 @@ Maps to [api_contracts §1.2](../../docs/api_contracts.md).
 
 ### 4.3 `test_migrations.py` — migration runner
 
-Maps to [build_tracker §5.1 "Migration runner behaviour"](../../docs/build_tracker.md).
+Maps to [build_tracker §5.1 "Migration runner behaviour"](../../docs/archive/build_tracker.md).
 
 | Test | Intent |
 |---|---|
@@ -111,7 +111,7 @@ Maps to [build_tracker §5.1 "Migration runner behaviour"](../../docs/build_trac
 
 ### 4.4 `test_rls.py` — RLS isolation
 
-Maps to [build_tracker §5.1 decision #6](../../docs/build_tracker.md).
+Maps to [build_tracker §5.1 decision #6](../../docs/archive/build_tracker.md).
 
 | Test | Intent |
 |---|---|
@@ -126,7 +126,7 @@ Maps to [build_tracker §5.1 decision #6](../../docs/build_tracker.md).
 
 ### 4.5 `test_middleware.py` — workspace context + X-Request-Id
 
-Maps to [api_contracts §0.8](../../docs/api_contracts.md) + [build_tracker §5.1 decision #6](../../docs/build_tracker.md).
+Maps to [api_contracts §0.8](../../docs/archive/api_contracts.md) + [build_tracker §5.1 decision #6](../../docs/archive/build_tracker.md).
 
 | Test | Intent |
 |---|---|
@@ -157,7 +157,7 @@ When all of the following pass, G3 is satisfied and G4 closes:
 
 ## 6. Sign-off
 
-When Aniket signs off this spec + the skeleton files in `tests/`, the Phase 0 G3 cell in [build_tracker §5](../../docs/build_tracker.md) flips 🟡 → ✅ and G4 (build) opens. Sign-off recorded in `build_tracker.md` §9.
+When Aniket signs off this spec + the skeleton files in `tests/`, the Phase 0 G3 cell in [build_tracker §5](../../docs/archive/build_tracker.md) flips 🟡 → ✅ and G4 (build) opens. Sign-off recorded in `build_tracker.md` §9.
 
 ---
 

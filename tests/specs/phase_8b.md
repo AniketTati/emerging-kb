@@ -1,7 +1,7 @@
 # Phase 8b — Test Spec (G3)
 
 > **Status:** G3 open · drafted 2026-05-25 · awaiting sign-off.
-> **Inputs:** Phase 8b G1 plan ([build_tracker §5.15.2](../../docs/build_tracker.md), 12 decisions) · G2 was a no-op (no `api_contracts.md` delta — 8b is module-only; HTTP surface lands at 8f).
+> **Inputs:** Phase 8b G1 plan ([build_tracker §5.15.2](../../docs/archive/build_tracker.md), 12 decisions) · G2 was a no-op (no `api_contracts.md` delta — 8b is module-only; HTTP surface lands at 8f).
 > **Outputs at G3:** this spec + 2 new red skeleton files. Imports point at `kb.query.rrf.{Hit, rrf_fuse, DEFAULT_K}` + `kb.query.channels.{6 channel functions, run_all_channels}` — modules land at G4.
 
 ---

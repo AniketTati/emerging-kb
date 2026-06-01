@@ -1,14 +1,14 @@
 # Phase 2b — Test Spec (G3)
 
 > **Status:** G3 open · drafted 2026-05-23 · awaiting sign-off.
-> **Inputs:** Phase 2b G1 plan ([build_tracker §5.6](../../docs/build_tracker.md)) · Phase 2b G2 contract delta ([api_contracts.md §5.5](../../docs/api_contracts.md)).
+> **Inputs:** Phase 2b G1 plan ([build_tracker §5.6](../../docs/archive/build_tracker.md)) · Phase 2b G2 contract delta ([api_contracts.md §5.5](../../docs/archive/api_contracts.md)).
 > **Outputs at G3:** this spec + three new red skeleton files (`test_parse_xlsx.py`, `test_parse_email.py`, `test_parse_mistral_ocr.py`) + additions to `test_files_crud.py` + two fixture files placeholders (`tiny.xlsx`, `tiny.eml` — bytes land at G4). New imports point at `kb.parsers.{xlsx,email,mistral_ocr}_parser` modules that land at G4 — collection fails at G3 (expected red state).
 
 ---
 
 ## 1. Scope
 
-Every G1 decision in [build_tracker §5.6](../../docs/build_tracker.md) gets a matching test:
+Every G1 decision in [build_tracker §5.6](../../docs/archive/build_tracker.md) gets a matching test:
 - One `raw_pages` per xlsx sheet (#1) · per-email page model (#2) · TSV+header rendering (#3) · email rendering (#4) · attachments-as-metadata (#5) · magic-byte sniffer (#6) · Mistral self-disables when no key (#9) · `ParserRegistry` dispatch order (#7) · empty-content fallback (#13).
 
 Four files cover the surface (**18 new tests**, on top of 170 from prior phases; pytest `--collect-only` is authoritative):
@@ -105,7 +105,7 @@ When all of the following pass, G3 is satisfied and G4 closes:
 
 ## 6. Sign-off
 
-When Aniket approves this spec + the skeleton files, the Phase 2b G3 cell in [build_tracker §5](../../docs/build_tracker.md) flips 🟡 → ✅ and G4 (build) opens. Sign-off recorded in `build_tracker.md` §9.
+When Aniket approves this spec + the skeleton files, the Phase 2b G3 cell in [build_tracker §5](../../docs/archive/build_tracker.md) flips 🟡 → ✅ and G4 (build) opens. Sign-off recorded in `build_tracker.md` §9.
 
 ---
 

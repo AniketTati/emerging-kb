@@ -1,7 +1,7 @@
 # Phase 9 — Test Spec (G3)
 
 > **Status:** G3 open · drafted 2026-05-25.
-> **Inputs:** Phase 9 G1 plan ([build_tracker §5.16](../../docs/build_tracker.md), 12 decisions).
+> **Inputs:** Phase 9 G1 plan ([build_tracker §5.16](../../docs/archive/build_tracker.md), 12 decisions).
 > **Outputs at G3:** this spec + 2 new red test files.
 
 ---

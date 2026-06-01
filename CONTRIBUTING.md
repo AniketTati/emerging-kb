@@ -1,6 +1,6 @@
 # Contributing to Emerging KB
 
-Thanks for looking at this. The project follows a strict gate-by-gate build discipline so that the design decisions, API contracts, tests, and implementation never drift out of sync. This doc is the short version. The long version lives in [`docs/build_tracker.md`](docs/build_tracker.md).
+Thanks for looking at this. The project follows a strict gate-by-gate build discipline so that the design decisions, API contracts, tests, and implementation never drift out of sync. This doc is the short version. The long version lives in [`docs/archive/build_tracker.md`](docs/archive/build_tracker.md).
 
 ---
 
@@ -23,10 +23,10 @@ G1 Plan → G1.5 Visual prototype (UI only) → G1.6 Wiring inventory (UI only)
 
 | Gate | Artifact | Definition of green |
 |------|----------|---------------------|
-| G1   | Plan in `docs/build_tracker.md` | Reviewed + signed off |
+| G1   | Plan in `docs/archive/build_tracker.md` | Reviewed + signed off |
 | G1.5 | Clickable HTML at `prototype/*.html` | User opens in browser, signs off; Playwright QA green |
 | G1.6 | `prototype/wiring_inventory.md` entry | Every interactive element → endpoint or LOCAL |
-| G2   | Entry in `docs/api_contracts.md` | Endpoint shapes locked |
+| G2   | Entry in `docs/archive/api_contracts.md` | Endpoint shapes locked |
 | G3   | Failing tests at `tests/specs/<phase>.md` + `tests/test_phase_<N>_*.py` | Tests exist, are red |
 | G4   | Code in `src/kb/...` | G3 tests now pass |
 | G5   | `scripts/verify_phase_<N>.sh` | End-to-end smoke green |
@@ -90,8 +90,8 @@ The sweep wrapper brings the stack up once, TRUNCATEs workspace-scoped tables be
 
 ## How to get started
 
-1. **Clone + read.** Start with this README, then [`docs/problem_statement.md`](docs/problem_statement.md), then [`docs/architecture.md`](docs/architecture.md), then [`docs/ui_design.md`](docs/ui_design.md).
-2. **Look at the tracker.** [`docs/build_tracker.md`](docs/build_tracker.md) tells you exactly what state each phase is in. Pick a phase that's at G1 or G2 and is unclaimed.
+1. **Clone + read.** Start with this README, then [`docs/problem_statement.md`](docs/problem_statement.md), then [`docs/architecture.md`](docs/architecture.md), then [`docs/archive/ui_design.md`](docs/archive/ui_design.md).
+2. **Look at the tracker.** [`docs/archive/build_tracker.md`](docs/archive/build_tracker.md) tells you exactly what state each phase is in. Pick a phase that's at G1 or G2 and is unclaimed.
 3. **Look at the prototype.** Open [`prototype/index.html`](prototype/index.html) in a browser. Click through. The wiring inventory [`prototype/wiring_inventory.md`](prototype/wiring_inventory.md) tells you what backend endpoint each interactive element will call.
 4. **Open an issue** before opening a PR for anything non-trivial. Discuss design at the issue, not in the PR.
 5. **Branch + commit + PR** per the workflow above.

@@ -229,7 +229,7 @@ def test_parse_resolution_happy_path():
     # Phase 1.3 contract change — the resolver no longer parses
     # `new_entities` or `new_filters`. The dataclass still has the
     # fields for back-compat with downstream callers but they always
-    # come back empty. See docs/RAG_AUDIT_AND_ACTION_PLAN.md Phase 1.3
+    # come back empty. See docs/archive/RAG_AUDIT_AND_ACTION_PLAN.md Phase 1.3
     # for the rationale (caused aurangabad UUID cast bug + stale
     # filter pollution across turns).
     out = _parse_resolution_json(

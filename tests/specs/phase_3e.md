@@ -1,7 +1,7 @@
 # Phase 3e — Test Spec (G3)
 
 > **Status:** G3 open · drafted 2026-05-24 · awaiting sign-off.
-> **Inputs:** Phase 3e G1 plan ([build_tracker §5.10.1](../../docs/build_tracker.md), 15 decisions) · Phase 3e G2 contract delta ([api_contracts.md §6](../../docs/api_contracts.md) — new section with POST /corpus/raptor/rebuild).
+> **Inputs:** Phase 3e G1 plan ([build_tracker §5.10.1](../../docs/archive/build_tracker.md), 15 decisions) · Phase 3e G2 contract delta ([api_contracts.md §6](../../docs/archive/api_contracts.md) — new section with POST /corpus/raptor/rebuild).
 > **Outputs at G3:** this spec + 3 new red skeleton files. Imports point at `kb.raptor.corpus.{cluster_embeddings_corpus, read_doc_roots_for_workspace, build_corpus_tree}`, `kb.workers.tasks.raptor_build_corpus_impl`, the new `kb.api.corpus` router + its mount in `kb.api.main` — all land at G4.
 
 ---

@@ -1,7 +1,7 @@
 # Phase 2c — Test Spec (G3)
 
 > **Status:** G3 open · drafted 2026-05-24 · awaiting sign-off.
-> **Inputs:** Phase 2c G1 plan ([build_tracker §5.6.1](../../docs/build_tracker.md)) · Phase 2c G2 contract delta ([api_contracts.md §5.5 Query parameters + §5.3 parser-enum widening](../../docs/api_contracts.md)).
+> **Inputs:** Phase 2c G1 plan ([build_tracker §5.6.1](../../docs/archive/build_tracker.md)) · Phase 2c G2 contract delta ([api_contracts.md §5.5 Query parameters + §5.3 parser-enum widening](../../docs/archive/api_contracts.md)).
 > **Outputs at G3:** this spec + 4 new red skeleton files + 1 mutated test file. Imports point at `kb.parsers.gemini_ocr_parser.GeminiOCRParser`, `kb.parsers.text_layer_sniff.sniff_pdf_text_layer`, the widened `kb.parsers.select_parser_for(...)`, and the `kb.workers.tasks.parse_file_impl` quality-escalation branch (all land at G4).
 
 ---

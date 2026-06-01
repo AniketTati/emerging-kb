@@ -1,7 +1,7 @@
 # Phase 4 — Test Spec (G3)
 
 > **Status:** G3 open · drafted 2026-05-25 · awaiting sign-off.
-> **Inputs:** Phase 4 G1 plan ([build_tracker §5.11](../../docs/build_tracker.md), 16 decisions) · G2 was a no-op per decision #16 (no `api_contracts.md` delta — Phase 4 has no HTTP surface).
+> **Inputs:** Phase 4 G1 plan ([build_tracker §5.11](../../docs/archive/build_tracker.md), 16 decisions) · G2 was a no-op per decision #16 (no `api_contracts.md` delta — Phase 4 has no HTTP surface).
 > **Outputs at G3:** this spec + 2 new red skeleton files. Imports point at `kb.retrieval.smoke.{bm25_smoke, dense_smoke}` — module lands at G4 along with `migrations/sql/0013_indexes.sql`.
 
 ---
