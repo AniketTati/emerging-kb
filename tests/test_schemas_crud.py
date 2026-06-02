@@ -383,21 +383,37 @@ async def test_promote_inferred_field_creates_typed_schema_field(
     assert resp2.json()["schema_field_id"] == body["schema_field_id"]
 
 
-async def test_rename_inferred_field_updates_canonical_name(
+async def test_rename_inferred_field_sets_display_label_not_canonical(
     client, test_workspace, db_url_superuser,
 ):
-    """PATCH /schemas/inferred-fields/{id} updates canonical_name only."""
+    """T1 — PATCH /schemas/inferred-fields/{id} sets the user-facing DISPLAY
+    label (a pointer); the system canonical_name (= the stored jsonb key) is
+    left UNCHANGED. O(1), no stored-data rewrite. Queries map the label back to
+    the canonical key at query time."""
     fid = await _seed_inferred_field(
         db_url_superuser, workspace_id=test_workspace,
-        canonical_name="old_name",
+        canonical_name="closing_balance",
     )
     resp = await client.patch(
         f"/schemas/inferred-fields/{fid}",
-        json={"canonical_name": "new_name"},
+        json={"display_name": "Ending Balance"},
         headers=headers(test_workspace),
     )
-    assert resp.status_code == 200
-    assert resp.json()["canonical_name"] == "new_name"
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["display_name"] == "Ending Balance"
+    assert body["canonical_name"] == "closing_balance"  # system key unchanged
+
+    # Legacy clients that still send {"canonical_name": ...} set the display
+    # label too (back-compat) — and STILL don't change the canonical key.
+    resp2 = await client.patch(
+        f"/schemas/inferred-fields/{fid}",
+        json={"canonical_name": "Closing Balance (USD)"},
+        headers=headers(test_workspace),
+    )
+    assert resp2.status_code == 200, resp2.text
+    assert resp2.json()["display_name"] == "Closing Balance (USD)"
+    assert resp2.json()["canonical_name"] == "closing_balance"
 
 
 async def test_discard_inferred_field_hard_deletes(

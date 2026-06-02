@@ -4526,6 +4526,10 @@ async def converge_workspace_fields_impl(
     is its own transaction so a failure on one doesn't roll back the others.
     """
     from kb.config import get_settings
+    from kb.domain.field_rename import (
+        insert_field_rename_audit,
+        rename_doc_root_field_keys,
+    )
     from kb.domain.fields import (
         count_docs_of_doctype,
         mark_inferred_field_promoted,
@@ -4567,6 +4571,7 @@ async def converge_workspace_fields_impl(
 
     summary = {
         "doc_types": 0, "clusters_in": 0, "clusters_out": 0, "promoted": 0,
+        "renamed_scalar_keys": 0,
     }
 
     async with open_connection(db_url) as conn:
@@ -4687,7 +4692,210 @@ async def converge_workspace_fields_impl(
                             promoted_schema_field_id=schema_field_id,
                         )
                         summary["promoted"] += 1
+
+                # T1 — apply convergence to the STORED data: rewrite each raw
+                # scalar key in the doc_root extracted_entities.fields to the
+                # canonical name, IN PLACE (no re-extract), and audit every
+                # rewrite. This is the work that previously required re-reading
+                # every doc; now it's a single set-based UPDATE per rename.
+                rename_map = {
+                    raw: c.canonical_name
+                    for c in converged
+                    for raw in c.raw_names
+                    if raw and raw != c.canonical_name
+                }
+                if rename_map:
+                    renamed = await rename_doc_root_field_keys(
+                        conn,
+                        workspace_id=workspace_id,
+                        inferred_doc_type=doc_type,
+                        rename_map=rename_map,
+                    )
+                    for raw, n_rows in renamed.items():
+                        await insert_field_rename_audit(
+                            conn,
+                            workspace_id=workspace_id,
+                            inferred_doc_type=doc_type,
+                            scope="scalar",
+                            raw_key=raw,
+                            canonical_key=rename_map[raw],
+                            method="convergence",
+                            n_rows=n_rows,
+                        )
+                    summary["renamed_scalar_keys"] += len(rename_map)
         summary["doc_types"] += 1
+
+    return summary
+
+
+async def converge_workspace_columns_impl(
+    *,
+    workspace_id: str,
+    embed_fn=None,
+    judge_fn=None,
+) -> dict:
+    """T1 — corpus column-convergence pass for table (sub_entity) columns.
+
+    The scalar analogue (`converge_workspace_fields_impl`) consolidates
+    doc_root field names; this does the same for the COLUMNS of structural
+    tables, which live only as jsonb keys in `extracted_entities.fields` per
+    `unit_type` (there's no proposed_fields layer for them). Per unit_type:
+    cluster the observed column names, semantic-converge synonyms (embedding
+    block + LLM judge), RENAME the keys in place (+ audit), and promote a
+    canonical column into the sub_entity schema once it repeats across N docs.
+    No document re-read, no re-extraction — a set-based UPDATE per rename.
+
+    `embed_fn` / `judge_fn` are injectable for tests; default to the real
+    Gemini embedder + field-merge judge. Each unit_type is its own transaction
+    so one failure doesn't roll back the others.
+    """
+    from kb.config import get_settings
+    from kb.domain.field_rename import (
+        insert_field_rename_audit,
+        read_sub_entity_columns_per_file,
+        rename_sub_entity_column_keys,
+    )
+    from kb.extraction.field_judge import make_field_merge_judge
+    from kb.extraction.promotion import (
+        PromotionThresholds,
+        cluster_fields_for_doctype,
+        converge_clusters_semantic,
+        promote_field,
+        should_promote,
+    )
+
+    settings = get_settings()
+    db_url = settings.database_url
+
+    _embed = embed_fn
+    if _embed is None:
+        embedder = make_embedder()
+
+        async def _embed(texts):
+            results = await embedder.embed_batch(texts)
+            return [list(r.vector) for r in results]
+
+    _judge = judge_fn
+    if _judge is None:
+        judge = make_field_merge_judge()
+
+        async def _judge(a, b):
+            return await judge.same_field(
+                name_a=a.canonical_name, desc_a=a.description, type_a=a.value_type,
+                name_b=b.canonical_name, desc_b=b.description, type_b=b.value_type,
+            )
+
+    summary = {
+        "unit_types": 0, "renamed_column_keys": 0, "promoted_columns": 0,
+    }
+
+    async with open_connection(db_url) as conn:
+        await conn.execute(
+            "SELECT set_config('app.workspace_id', %s, true)", (workspace_id,),
+        )
+        cols_per_unit = await read_sub_entity_columns_per_file(
+            conn, workspace_id=workspace_id,
+        )
+
+    thresholds = PromotionThresholds.from_env()
+
+    for unit_type, per_file in cols_per_unit.items():
+        if not per_file:
+            continue
+        async with open_connection(db_url) as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    "SELECT set_config('app.workspace_id', %s, true)",
+                    (workspace_id,),
+                )
+                # Reuse the scalar clusterer over column names: one pseudo-field
+                # per (file, column). raw_names then carries every spelling.
+                proposed_per_doc = {
+                    fid: [
+                        {"field_name": c, "value_type": "text",
+                         "field_description": ""}
+                        for c in cols
+                    ]
+                    for fid, cols in per_file.items()
+                }
+                n_docs = len(per_file)
+                clusters = cluster_fields_for_doctype(
+                    proposed_per_doc=proposed_per_doc, total_docs_of_type=n_docs,
+                )
+                if not clusters:
+                    continue
+
+                # The sub_entity type id(s) for this unit_type + their
+                # user-declared column names, used as convergence anchors so
+                # emergent variants adopt the declared spelling.
+                cur = await conn.execute(
+                    "SELECT DISTINCT schema_entity_id::text "
+                    "FROM extracted_entities "
+                    "WHERE workspace_id = %s AND unit_type = %s "
+                    "  AND schema_entity_id IS NOT NULL",
+                    (workspace_id, unit_type),
+                )
+                sub_entity_ids = [r[0] for r in await cur.fetchall()]
+                anchor_names: set[str] = set()
+                if sub_entity_ids:
+                    cur = await conn.execute(
+                        "SELECT name FROM schema_fields "
+                        "WHERE entity_id = ANY(%s) "
+                        "  AND lifecycle_state = 'active' "
+                        "  AND auto_promoted = false",
+                        (sub_entity_ids,),
+                    )
+                    anchor_names = {r[0] for r in await cur.fetchall()}
+
+                try:
+                    converged = await converge_clusters_semantic(
+                        clusters, embed_fn=_embed, judge_fn=_judge,
+                        sim_threshold=0.86, anchor_names=anchor_names,
+                    )
+                except Exception:  # noqa: BLE001 — convergence is best-effort
+                    traceback.print_exc()
+                    converged = clusters
+
+                # Rewrite stored column keys → canonical, in place + audit.
+                rename_map = {
+                    raw: c.canonical_name
+                    for c in converged
+                    for raw in c.raw_names
+                    if raw and raw != c.canonical_name
+                }
+                if rename_map:
+                    renamed = await rename_sub_entity_column_keys(
+                        conn, workspace_id=workspace_id, unit_type=unit_type,
+                        rename_map=rename_map,
+                    )
+                    for raw, n_rows in renamed.items():
+                        await insert_field_rename_audit(
+                            conn, workspace_id=workspace_id,
+                            inferred_doc_type=None, unit_type=unit_type,
+                            scope="column", raw_key=raw,
+                            canonical_key=rename_map[raw],
+                            method="convergence", n_rows=n_rows,
+                        )
+                    summary["renamed_column_keys"] += len(rename_map)
+
+                # Promote a canonical column into the sub_entity schema once it
+                # repeats across N docs (mirrors scalar promotion). value_type
+                # stays 'text'/'string' here — numeric typing for aggregation is
+                # derived from the actual values at Q-mode catalog time (T3).
+                for cluster in converged:
+                    if not should_promote(cluster, thresholds):
+                        continue
+                    for sub_id in sub_entity_ids:
+                        await promote_field(
+                            conn,
+                            workspace_id=workspace_id,
+                            schema_entity_id=sub_id,
+                            canonical_name=cluster.canonical_name,
+                            description=cluster.description,
+                            value_type=cluster.value_type,
+                        )
+                        summary["promoted_columns"] += 1
+        summary["unit_types"] += 1
 
     return summary
 
@@ -4947,20 +5155,28 @@ async def finalize_corpus_impl(workspace_id: str) -> None:
         # same — see test_raptor_build_corpus_atomic_rebuild_replaces_old_rows.)
         return
 
-    # #19 — corpus-finalization sequence (in order). Each step is best-effort
-    # so one failing stage never blocks the rest of finalization.
-    # (1) Field convergence — collapse variant field names to one canonical
-    #     schema across all docs of each doc_type.
+    # T1 (schema-as-a-view) — corpus-finalization sequence (in order). Each
+    # step is best-effort so one failing stage never blocks the rest.
+    # (1) Scalar convergence — collapse variant doc_root field names to one
+    #     canonical name and rewrite the stored doc_root keys IN PLACE.
     try:
         await converge_workspace_fields_impl(workspace_id=workspace_id)
     except Exception:  # noqa: BLE001
         traceback.print_exc()
 
-    # (2) Cold-start schema-entity re-extraction — re-extract all docs against
-    #     the now-converged schema (a new domain's first docs were extracted
-    #     against an empty/thin schema).
+    # (2) Column convergence — same consolidation for table (sub_entity)
+    #     columns, rewriting the stored child-row keys in place.
+    #
+    # NOTE: there is deliberately NO automatic re-extraction here anymore. The
+    # old blanket `reextract_workspace_schema_entities_impl` re-read EVERY ready
+    # doc (2 LLM calls each) on every settle — O(corpus) per upload, which does
+    # not scale past a few hundred docs (trickle ingest → O(N^2) LLM calls).
+    # Convergence now propagates canonical names by RENAMING stored keys (no
+    # LLM, no re-read). A genuinely never-captured field is healed only on an
+    # explicit USER re-extract (POST /files/{id}/re-extract or
+    # POST /schemas/{id}/re-extract) — see reextract_workspace_files.
     try:
-        await reextract_workspace_schema_entities_impl(workspace_id=workspace_id)
+        await converge_workspace_columns_impl(workspace_id=workspace_id)
     except Exception:  # noqa: BLE001
         traceback.print_exc()
 

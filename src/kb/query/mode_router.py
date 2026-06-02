@@ -1028,10 +1028,22 @@ async def _route_f_mode(
     except Exception:
         return _tag_mode(hits, "F")
 
+    # T1 — a manual rename is a display pointer (the stored key keeps the system
+    # canonical name). Map the user's display label back to the canonical key so
+    # a renamed field is still matched by the predicate below. Best-effort:
+    # absence of custom labels (or a read error) leaves behavior unchanged.
+    display_map: dict[str, str] = {}
+    try:
+        from kb.domain.fields import read_field_display_map
+        raw_display = await read_field_display_map(conn, workspace_id=workspace_id)
+        display_map = {_normalize_field_key(d): c for d, c in raw_display.items()}
+    except Exception:
+        display_map = {}
+
     for fid, fields in rows:
         if not isinstance(fields, dict):
             continue
-        if all(_field_predicate_holds(fields, f) for f in filters):
+        if all(_field_predicate_holds(fields, f, display_map) for f in filters):
             matching_files.add(str(fid))
 
     if not matching_files:
@@ -1061,13 +1073,20 @@ def _normalize_field_key(s: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", (s or "").lower()).strip("_")
 
 
-def _resolve_field_name(name: Any, fields: dict) -> str | None:
+def _resolve_field_name(
+    name: Any, fields: dict, display_map: dict[str, str] | None = None,
+) -> str | None:
     """Map a planner-emitted field name to the actual stored key in this
     entity's `fields` dict — the query half of FIX 4.
 
     F-mode matches exactly against canonical stored keys (anchored to the
     user-declared schema names at ingest), but the LLM emits surface
     variants ('interest rate', 'rate'). Resolution order:
+      0. T1 — if `display_map` (normalized user display label → canonical key)
+         is given and the query name matches a user-assigned display label,
+         translate it to the canonical key FIRST, then resolve that against the
+         stored keys. This is how a MANUAL rename (a display pointer, not a key
+         rewrite) becomes queryable without touching any stored data.
       1. exact key hit
       2. normalized equality (case / space / hyphen / underscore folded)
       3. UNAMBIGUOUS token-subset — the query's tokens are a subset of
@@ -1077,6 +1096,11 @@ def _resolve_field_name(name: Any, fields: dict) -> str | None:
     Returns the stored key, or None (the predicate then fails closed)."""
     if not isinstance(name, str) or not name or not isinstance(fields, dict):
         return None
+    # Display-label → canonical translation (manual-rename pointer).
+    if display_map:
+        canon = display_map.get(_normalize_field_key(name))
+        if canon is not None:
+            name = canon
     if name in fields:
         return name
     norm_to_key: dict[str, str] = {}
@@ -1095,16 +1119,19 @@ def _resolve_field_name(name: Any, fields: dict) -> str | None:
     return candidates[0] if len(candidates) == 1 else None
 
 
-def _field_predicate_holds(fields: dict, f: dict) -> bool:
+def _field_predicate_holds(
+    fields: dict, f: dict, display_map: dict[str, str] | None = None,
+) -> bool:
     """Evaluate one field predicate against an extracted_entity.fields
     dict. Recognised ops: eq, ne, lt, le, gt, ge, like, in. Unknown ops
     fail-open (return True) so we don't accidentally drop hits.
 
     The filter's `field` is resolved to the stored key via
-    `_resolve_field_name` (canonical-name mapping) before lookup."""
+    `_resolve_field_name` (canonical-name mapping + T1 display-label pointer)
+    before lookup."""
     op = (f.get("op") or "eq").lower()
     val = f.get("value")
-    resolved = _resolve_field_name(f.get("field"), fields)
+    resolved = _resolve_field_name(f.get("field"), fields, display_map)
     if resolved is None:
         return False
     actual = fields[resolved]

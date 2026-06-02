@@ -288,3 +288,33 @@ async def update_file_inferred_doc_type(
         "UPDATE files SET inferred_doc_type = %s, updated_at = now() WHERE id = %s",
         (doc_type, file_id),
     )
+
+
+async def read_field_display_map(
+    conn: Connection, *, workspace_id: str,
+) -> dict[str, str]:
+    """Return {display_name: canonical_key} for every field the user has given a
+    custom display label (T1 manual rename = display pointer).
+
+    The query resolver uses this to map a query's user-facing label back to the
+    SYSTEM canonical key (= the stored `extracted_entities.fields` jsonb key),
+    so a manual rename is queryable instantly without rewriting any stored data.
+    Read from BOTH the promoted typed schema (`schema_fields.name`) and the
+    inferred layer (`inferred_schema_fields.canonical_name`) — the inferred row
+    keeps its label even after promotion. Raw (un-normalized) keys; the caller
+    normalizes for matching.
+    """
+    cur = await conn.execute(
+        "SELECT display_name, name FROM schema_fields "
+        "WHERE workspace_id = %s AND display_name IS NOT NULL "
+        "  AND lifecycle_state = 'active' "
+        "UNION ALL "
+        "SELECT display_name, canonical_name FROM inferred_schema_fields "
+        "WHERE workspace_id = %s AND display_name IS NOT NULL",
+        (workspace_id, workspace_id),
+    )
+    out: dict[str, str] = {}
+    for display, canonical in await cur.fetchall():
+        if display and canonical:
+            out[str(display)] = str(canonical)
+    return out

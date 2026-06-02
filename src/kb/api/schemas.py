@@ -195,6 +195,10 @@ class InferredFieldOut(BaseModel):
     workspace_id: str
     inferred_doc_type: str
     canonical_name: str
+    # T1 — user-facing display label (manual rename). None = no custom label
+    # (UI falls back to canonical_name). The canonical_name is the stable
+    # system key; display_name is just a presentation pointer.
+    display_name: str | None = None
     description: str | None = None
     value_type: str | None = None
     n_docs_observed: int = 0
@@ -211,7 +215,14 @@ class InferredFieldsListResponse(BaseModel):
 
 
 class InferredFieldRenameRequest(BaseModel):
-    canonical_name: str = Field(min_length=1, max_length=128)
+    # T1: a manual rename sets the user-facing DISPLAY label (a pointer); the
+    # system canonical key is left unchanged. `canonical_name` is accepted as a
+    # legacy alias for the same label so older clients keep working.
+    display_name: str | None = Field(default=None, min_length=1, max_length=128)
+    canonical_name: str | None = Field(default=None, min_length=1, max_length=128)
+
+    def label(self) -> str:
+        return (self.display_name or self.canonical_name or "").strip()
 
 
 class InferredFieldPromotedResponse(BaseModel):
@@ -266,8 +277,8 @@ async def get_inferred_fields(
     params.append(limit)
     cur = await conn.execute(
         f"SELECT id::text, workspace_id::text, inferred_doc_type, "
-        f"       canonical_name, description, value_type, n_docs_observed, "
-        f"       prevalence, stability, value_type_confidence, "
+        f"       canonical_name, display_name, description, value_type, "
+        f"       n_docs_observed, prevalence, stability, value_type_confidence, "
         f"       is_promoted, promoted_schema_field_id::text, created_at "
         f"FROM inferred_schema_fields "
         f"WHERE {where} "
@@ -282,17 +293,18 @@ async def get_inferred_fields(
             workspace_id=str(r[1]),
             inferred_doc_type=str(r[2]),
             canonical_name=str(r[3]),
-            description=r[4],
-            value_type=r[5],
-            n_docs_observed=int(r[6] or 0),
-            prevalence=float(r[7] or 0.0),
-            stability=float(r[8] or 0.0),
-            value_type_confidence=float(r[9] or 0.0),
-            is_promoted=bool(r[10]),
-            promoted_schema_field_id=str(r[11]) if r[11] else None,
+            display_name=r[4],
+            description=r[5],
+            value_type=r[6],
+            n_docs_observed=int(r[7] or 0),
+            prevalence=float(r[8] or 0.0),
+            stability=float(r[9] or 0.0),
+            value_type_confidence=float(r[10] or 0.0),
+            is_promoted=bool(r[11]),
+            promoted_schema_field_id=str(r[12]) if r[12] else None,
             created_at=(
-                r[12].isoformat() if hasattr(r[12], "isoformat") else
-                (str(r[12]) if r[12] else None)
+                r[13].isoformat() if hasattr(r[13], "isoformat") else
+                (str(r[13]) if r[13] else None)
             ),
         )
         for r in rows
@@ -387,7 +399,7 @@ async def promote_inferred_field(
 @router.patch(
     "/inferred-fields/{field_id}",
     response_model=InferredFieldOut,
-    summary="Rename the canonical_name on an inferred field (curator override)",
+    summary="Set the user-facing display label on an inferred field (manual rename)",
 )
 async def rename_inferred_field(
     field_id: str,
@@ -395,41 +407,51 @@ async def rename_inferred_field(
     workspace_id: Annotated[str, Depends(current_workspace_id)],
     conn: Annotated[Connection, Depends(kb_app_connection)],
 ) -> InferredFieldOut:
-    """Updates the cluster's canonical_name. Useful when L2b picked
-    `non_compete` but the curator wants `non_competition_clause`.
+    """T1 (schema-as-a-view) — a manual rename sets the USER-FACING display
+    label (a pointer), NOT the system canonical key. The `canonical_name`
+    (which equals the stored `extracted_entities.fields` jsonb key) is left
+    UNCHANGED, so this is O(1): no document re-read, no rewriting every stored
+    key, and no fight with automatic convergence (which never touches
+    display_name). Queries map the display label -> canonical key at query time
+    (kb.query.mode_router._resolve_field_name). Useful when L2b picked
+    `non_compete` but the curator wants to SHOW `Non-Competition Clause`.
     Returns the updated row."""
-    new_name = body.canonical_name.strip()
+    from fastapi import HTTPException
+
+    new_label = body.label()
+    if not new_label:
+        raise HTTPException(status_code=422, detail="display_name required")
     cur = await conn.execute(
         "UPDATE inferred_schema_fields "
-        "   SET canonical_name = %s "
+        "   SET display_name = %s "
         " WHERE id = %s AND workspace_id = %s "
         "RETURNING id::text, workspace_id::text, inferred_doc_type, "
-        "          canonical_name, description, value_type, "
+        "          canonical_name, display_name, description, value_type, "
         "          n_docs_observed, prevalence, stability, "
         "          value_type_confidence, is_promoted, "
         "          promoted_schema_field_id::text, created_at",
-        (new_name, field_id, workspace_id),
+        (new_label, field_id, workspace_id),
     )
     r = await cur.fetchone()
     if r is None:
-        from fastapi import HTTPException
         raise HTTPException(status_code=404, detail="inferred field not found")
     return InferredFieldOut(
         id=str(r[0]),
         workspace_id=str(r[1]),
         inferred_doc_type=str(r[2]),
         canonical_name=str(r[3]),
-        description=r[4],
-        value_type=r[5],
-        n_docs_observed=int(r[6] or 0),
-        prevalence=float(r[7] or 0.0),
-        stability=float(r[8] or 0.0),
-        value_type_confidence=float(r[9] or 0.0),
-        is_promoted=bool(r[10]),
-        promoted_schema_field_id=str(r[11]) if r[11] else None,
+        display_name=r[4],
+        description=r[5],
+        value_type=r[6],
+        n_docs_observed=int(r[7] or 0),
+        prevalence=float(r[8] or 0.0),
+        stability=float(r[9] or 0.0),
+        value_type_confidence=float(r[10] or 0.0),
+        is_promoted=bool(r[11]),
+        promoted_schema_field_id=str(r[12]) if r[12] else None,
         created_at=(
-            r[12].isoformat() if hasattr(r[12], "isoformat") else
-            (str(r[12]) if r[12] else None)
+            r[13].isoformat() if hasattr(r[13], "isoformat") else
+            (str(r[13]) if r[13] else None)
         ),
     )
 

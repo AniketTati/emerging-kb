@@ -86,6 +86,12 @@ class FieldCluster:
     prevalence: float         # n_docs_observed / total_docs_of_type
     stability: float          # frequency of the modal value_type
     value_type_confidence: float
+    # T1 — every RAW spelling that fell into this cluster (e.g.
+    # {"end_balance", "closing_bal"} → canonical "closing_balance"). Drives the
+    # in-place key rewrite at convergence so stored keys match the canonical
+    # name without re-reading documents. Defaulted so existing constructors and
+    # the pure convergence unit-tests keep working unchanged.
+    raw_names: frozenset[str] = frozenset()
 
 
 def cluster_fields_for_doctype(
@@ -105,11 +111,21 @@ def cluster_fields_for_doctype(
 
     # canonical → list of (file_id, value_type, description)
     by_canonical: dict[str, list[tuple[str, str, str]]] = {}
+    # canonical → every RAW spelling observed for it. T1: this drives the
+    # in-place key rewrite (raw stored key → canonical) at convergence. We
+    # collect it for ALL fields — BEFORE the per-file observation dedupe — so a
+    # second spelling within one doc still registers as a rename source.
+    raw_by_canonical: dict[str, set[str]] = {}
     for file_id, fields in proposed_per_doc.items():
         seen_in_this_file: set[str] = set()
         for f in fields:
-            canon = _normalize_field_name(f.get("field_name") or "")
-            if not canon or canon in seen_in_this_file:
+            raw_name = (f.get("field_name") or "").strip()
+            canon = _normalize_field_name(raw_name)
+            if not canon:
+                continue
+            if raw_name:
+                raw_by_canonical.setdefault(canon, set()).add(raw_name)
+            if canon in seen_in_this_file:
                 continue  # dedupe within doc
             seen_in_this_file.add(canon)
             by_canonical.setdefault(canon, []).append((
@@ -135,6 +151,7 @@ def cluster_fields_for_doctype(
             prevalence=min(1.0, prevalence),
             stability=stability,
             value_type_confidence=stability,
+            raw_names=frozenset(raw_by_canonical.get(canon, set())),
         ))
     return clusters
 
@@ -269,6 +286,9 @@ async def converge_clusters_semantic(
             prevalence=prevalence,
             stability=stability,
             value_type_confidence=stability,
+            # T1 — union every raw spelling in the merged group so the
+            # in-place key rewrite remaps all of them to the lead canonical.
+            raw_names=frozenset().union(*(c.raw_names for c in group)),
         ))
 
     merged = _drop_lone_anchors(merged)
