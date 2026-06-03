@@ -90,12 +90,15 @@ async def apply_mode(
     workspace_id: str,
     query: str,
     conn: Any,
+    predicate: Any = None,
 ) -> list[Hit]:
     """Apply mode-conditional routing to the candidate hit list. Pure
     side-effect-free transformation; returns a new list.
 
     `conn` may be None when running unit-tests that don't need DB lookups
-    (K/T modes degrade gracefully)."""
+    (K/T modes degrade gracefully). `predicate` (T3) is the turn's
+    `ResolvedPredicate` — Q-mode reads its `row_filters` for the §6.11 row-level
+    WHERE; other modes ignore it."""
     mode = (plan.mode or "H").upper()
 
     if mode == "H":
@@ -104,7 +107,7 @@ async def apply_mode(
     if mode == "Q":
         return await _route_q_mode(
             plan, hits, conn,
-            workspace_id=workspace_id, query=query,
+            workspace_id=workspace_id, query=query, predicate=predicate,
         )
 
     if mode == "K":
@@ -606,6 +609,254 @@ def _q_refusal_hit(reason: str) -> Hit:
     )
 
 
+async def _superseded_file_ids(conn: Any, workspace_id: str) -> list[str]:
+    """File_ids that are OLDER versions in a doc chain (superseded by the chain's
+    current version). Excluding them from an aggregate dedups an entity that
+    appears in both an original and its amendment (§6.11 grain dedup).
+
+    SAVEPOINT-guarded + best-effort: any error (or no chains) → [] (no dedup,
+    today's behavior — never poisons the shared request txn)."""
+    if conn is None:
+        return []
+    try:
+        await conn.execute("SAVEPOINT q_dedup")
+    except Exception:  # noqa: BLE001
+        return []
+    try:
+        cur = await conn.execute(
+            "SELECT m.doc_id::text FROM doc_chain_members m "
+            "JOIN doc_chains c ON c.id = m.chain_id "
+            "WHERE m.workspace_id = %s AND c.current_version_id IS NOT NULL "
+            "  AND m.doc_id <> c.current_version_id",
+            (workspace_id,),
+        )
+        rows = await cur.fetchall()
+        try:
+            await conn.execute("RELEASE SAVEPOINT q_dedup")
+        except Exception:  # noqa: BLE001
+            pass
+        return [str(r[0]) for r in rows]
+    except Exception:  # noqa: BLE001
+        try:
+            await conn.execute("ROLLBACK TO SAVEPOINT q_dedup")
+            await conn.execute("RELEASE SAVEPOINT q_dedup")
+        except Exception:  # noqa: BLE001
+            pass
+        return []
+
+
+# Words dropped when deriving the "concept" of a summed field, so
+# `principal_portion` and a stated `total_principal_outstanding` still match on
+# the shared head noun `principal`.
+_RECON_STOPWORDS: frozenset[str] = frozenset({
+    "total", "totals", "sum", "of", "the", "amount", "amounts", "value",
+    "values", "inr", "usd", "eur", "portion", "as", "at", "on", "fy", "q1",
+    "q2", "q3", "q4", "net", "gross", "balance", "per", "and",
+})
+# A stated total field_name carries one of these markers.
+_RECON_TOTAL_MARKERS: tuple[str, ...] = (
+    "total", "aggregate", "outstanding", "grand", "overall", "cumulative",
+)
+
+
+def _concept_tokens(name: str) -> set[str]:
+    return {
+        t for t in re.split(r"[^a-z0-9]+", (name or "").lower())
+        if len(t) >= 3 and t not in _RECON_STOPWORDS
+    }
+
+
+async def _reconcile_stated_total(
+    conn: Any,
+    *,
+    workspace_id: str,
+    parsed: Any,
+    computed_value: float,
+    summed_key: str,
+) -> str | None:
+    """§6.5(1) active stated-vs-computed reconciliation — for a single SUM over
+    `extracted_entities` unit rows, look for a STATED total of the SAME concept
+    in `proposed_fields` on the SAME source docs and compare.
+
+    Returns a note to surface BOTH figures with provenance when they materially
+    disagree (or confirm consistency), or None when there's no comparable stated
+    total. Signal-gated + SAVEPOINT-isolated → never asserts which is right
+    (§6.5(4): surface, don't silently pick), never breaks the query."""
+    concept = _concept_tokens(summed_key)
+    if not concept or conn is None:
+        return None
+    # Source docs of the summed unit rows (scope the stated-total search).
+    unit_vals: list[str] = [
+        str(v)
+        for f in parsed.filters
+        if f.field == "unit_type" and f.op in ("eq", "in")
+        for v in (f.value if isinstance(f.value, list) else [f.value])
+        if v is not None
+    ]
+
+    async def _q(sp: str, sql: str, p: tuple) -> list[tuple] | None:
+        try:
+            await conn.execute(f"SAVEPOINT {sp}")
+        except Exception:  # noqa: BLE001
+            return None
+        try:
+            cur = await conn.execute(sql, p)
+            rows = await cur.fetchall()
+            try:
+                await conn.execute(f"RELEASE SAVEPOINT {sp}")
+            except Exception:  # noqa: BLE001
+                pass
+            return rows
+        except Exception:  # noqa: BLE001
+            try:
+                await conn.execute(f"ROLLBACK TO SAVEPOINT {sp}")
+                await conn.execute(f"RELEASE SAVEPOINT {sp}")
+            except Exception:  # noqa: BLE001
+                pass
+            return None
+
+    if unit_vals:
+        files = await _q(
+            "q_recon_files",
+            "SELECT DISTINCT file_id::text FROM extracted_entities "
+            "WHERE workspace_id = %s AND unit_type = ANY(%s)",
+            (workspace_id, unit_vals),
+        )
+        file_ids = [r[0] for r in (files or []) if r[0]]
+    else:
+        file_ids = []
+    if not file_ids:
+        return None
+
+    stated = await _q(
+        "q_recon_stated",
+        "SELECT field_name, value_numeric, file_id::text FROM proposed_fields "
+        "WHERE workspace_id = %s AND value_numeric IS NOT NULL "
+        "  AND file_id = ANY(%s::uuid[])",
+        (workspace_id, file_ids),
+    )
+    if not stated:
+        return None
+
+    # Best stated candidate: a "total"-marked field sharing the concept noun.
+    best: tuple[float, str, float] | None = None  # (overlap, field_name, value)
+    for field_name, value_numeric, _fid in stated:
+        fn = str(field_name)
+        if not any(m in fn.lower() for m in _RECON_TOTAL_MARKERS):
+            continue
+        overlap = len(concept & _concept_tokens(fn))
+        if overlap <= 0:
+            continue
+        try:
+            sval = float(value_numeric)
+        except (TypeError, ValueError):
+            continue
+        if best is None or overlap > best[0]:
+            best = (overlap, fn, sval)
+    if best is None:
+        return None
+
+    _overlap, stated_name, stated_val = best
+    try:
+        tol = await _recon_tolerance(conn, workspace_id)
+    except Exception:  # noqa: BLE001
+        tol = 0.01
+    return _reconcile_note(float(computed_value), stated_name, stated_val, tol)
+
+
+def _reconcile_note(
+    computed_value: float, stated_name: str, stated_val: float, tol: float,
+) -> str:
+    """Pure §6.5(1)/(4) verdict: on a gap > tol, surface BOTH figures with
+    provenance (never silently pick); else note consistency. Split out so the
+    same-quantity decision is unit-testable without a DB."""
+    denom = max(abs(stated_val), 1.0)
+    gap = abs(computed_value - stated_val) / denom
+    if gap > tol:
+        return (
+            f"Reconciliation: the COMPUTED total ({computed_value:,.2f}, summed "
+            f"from the rows) differs from a STATED total '{stated_name}' "
+            f"({stated_val:,.2f}) by {gap * 100:.1f}%. Surface BOTH — verify "
+            f"they cover the same basis (period / scope / tax) before trusting "
+            f"either; do not silently pick one."
+        )
+    return (
+        f"Reconciliation: the computed total ({computed_value:,.2f}) is "
+        f"consistent with the stated total '{stated_name}' ({stated_val:,.2f}) "
+        f"within tolerance."
+    )
+
+
+async def _recon_tolerance(conn: Any, workspace_id: str) -> float:
+    from kb.query.config_thresholds import resolve_query_threshold
+    return await resolve_query_threshold(
+        conn, key="recon_tolerance", workspace_id=workspace_id, default=0.01,
+    )
+
+
+def _aggregate_all_null(group_by: tuple | list, cols: list, rows: list) -> bool:
+    """True when EVERY aggregate cell (the columns after the group-by keys) is
+    NULL — i.e. rows may have matched but nothing cast to a value. This is the
+    §6.6 'computed nothing' case (e.g. SUM over 'INR 18,400/year' strings the
+    cast can't parse) that must NOT ship as a number."""
+    g = len(group_by or ())
+    if not rows:
+        return True
+    for r in rows:
+        for ci in range(g, len(cols)):
+            if ci < len(r) and r[ci] is not None:
+                return False
+    return True
+
+
+async def _count_contributing_rows(
+    conn: Any,
+    *,
+    parsed: Any,
+    workspace_id: str,
+    row_filters: list[dict],
+    exclude_ids: list[str],
+    live_catalog: Any,
+) -> int | None:
+    """COUNT(*) over the SAME WHERE (filters + §6.11 row-filters + dedup) as the
+    aggregate — the 'computed from N rows' figure (§6.6) and the sanity-check
+    denominator. Reuses the compiler so the WHERE matches exactly. None on any
+    failure (sanity then can't assert a contributing count, but won't crash)."""
+    try:
+        from kb.q_planner import (
+            DEFAULT_ROW_CAP,
+            DEFAULT_TIMEOUT_MS,
+            compile_plan,
+            execute,
+            validate,
+        )
+        from kb.q_planner.grammar import Aggregation, QPlan
+
+        count_plan = QPlan(
+            from_table=parsed.from_table,
+            filters=parsed.filters,
+            group_by=(),
+            aggregations=(Aggregation(op="COUNT", field="*", alias="n"),),
+            order_by=(),
+            limit=1,
+        )
+        validated = validate(count_plan, live_catalog=live_catalog)
+        csql, cparams = compile_plan(
+            validated, workspace_id=workspace_id, row_cap=DEFAULT_ROW_CAP,
+            row_filters=row_filters, live_catalog=live_catalog,
+            exclude_file_ids=exclude_ids,
+        )
+        cres = await execute(
+            conn, csql, cparams,
+            row_cap=DEFAULT_ROW_CAP, timeout_ms=DEFAULT_TIMEOUT_MS,
+        )
+        if cres.status == "ok" and cres.rows:
+            return int(cres.rows[0][0])
+    except Exception:  # noqa: BLE001
+        return None
+    return None
+
+
 async def _route_q_mode(
     plan: Plan,
     hits: list[Hit],
@@ -613,6 +864,7 @@ async def _route_q_mode(
     *,
     workspace_id: str,
     query: str,
+    predicate: Any = None,
 ) -> list[Hit]:
     """Compile + execute the planner's Q payload. Returns a single
     synthesized Hit carrying the aggregate result (or a refusal).
@@ -671,32 +923,191 @@ async def _route_q_mode(
     from kb.q_planner.artifact import persist_csv_artifact
     from kb.q_planner.grammar import QPlanParseError
 
+    # T3 §6.11 — the live, type-aware catalog: gates a numeric aggregation over a
+    # text-only field at EXEC time too (defense-in-depth for HTTP / hand-built
+    # plans) and lets the row-filter compiler skip a mis-named column. Best-effort
+    # → None leaves the static-catalog behavior.
+    live_catalog = None
+    try:
+        from kb.q_planner.dynamic_catalog import build_dynamic_catalog
+        live_catalog = await build_dynamic_catalog(conn, workspace_id=workspace_id)
+    except Exception:  # noqa: BLE001
+        live_catalog = None
+
+    # Row-level filters (date windows / value thresholds) carried by the
+    # ResolvedPredicate (§6.11). Passed as dicts so the compiler stays
+    # query-layer-free.
+    row_filter_dicts: list[dict] = []
+    if predicate is not None and getattr(predicate, "row_filters", None):
+        try:
+            row_filter_dicts = [rf.to_dict() for rf in predicate.row_filters]
+        except Exception:  # noqa: BLE001
+            row_filter_dicts = []
+
     # Layers 2 + 3 + 4 (grammar parse — operator / aggregation / set_op enums)
     try:
         parsed = parse_plan(plan.q_payload)
     except QPlanParseError as exc:
         return [_q_refusal_hit(f"plan parse error: {exc}")]
 
-    # Layer 1 (catalog whitelist + type checks)
+    # Layer 1 (catalog whitelist + type checks) + T3 value_type gate.
     try:
-        validated = validate(parsed)
+        validated = validate(parsed, live_catalog=live_catalog)
     except QPlanValidationError as exc:
         return [_q_refusal_hit(f"plan validation error: {exc}")]
 
-    # Layers 5 + 6 (compile to parameterized SQL — no escape hatch)
-    try:
-        sql, params = compile_plan(
-            validated, workspace_id=workspace_id, row_cap=DEFAULT_ROW_CAP,
-        )
-    except Exception as exc:  # noqa: BLE001
-        return [_q_refusal_hit(f"plan compile error: {exc}")]
+    # T3 §6.11 grain dedup — superseded doc versions to drop from the aggregate
+    # (an entity in both an original + amendment counted once). Signal-gated.
+    exclude_ids = await _superseded_file_ids(conn, workspace_id)
 
-    # Layers 7 + 8 + 9 (execute with read_only + timeout + row cap)
-    result = await execute(
-        conn, sql, params,
-        row_cap=DEFAULT_ROW_CAP,
-        timeout_ms=DEFAULT_TIMEOUT_MS,
-    )
+    # Everything the user must be told about the number (repair / merge / cap /
+    # reconciliation / sanity) — so a computed aggregate is never bare (§6.6).
+    agg_notes: list[str] = []
+
+    # Layers 5-9 + §6.6 self-repair: compile + execute, peeling the ADDITIVE T3
+    # layers (row-filters, then dedup) on a SQL *error* — ≤2 retries toward the
+    # pre-T3 known-good base query — before a typed refusal. Never trust-or-crash.
+    repair_plan: list[tuple[list, list]] = [
+        (row_filter_dicts, exclude_ids),   # full T3
+        ([], exclude_ids),                 # drop §6.11 row-filters
+        ([], []),                          # base (pre-T3 known-good)
+    ]
+    result = None
+    sql, params = "", []
+    used_rf, used_ex = row_filter_dicts, exclude_ids
+    for attempt, (rf, ex) in enumerate(repair_plan):
+        try:
+            sql, params = compile_plan(
+                validated, workspace_id=workspace_id, row_cap=DEFAULT_ROW_CAP,
+                row_filters=rf, live_catalog=live_catalog, exclude_file_ids=ex,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return [_q_refusal_hit(f"plan compile error: {exc}")]
+        result = await execute(
+            conn, sql, params,
+            row_cap=DEFAULT_ROW_CAP, timeout_ms=DEFAULT_TIMEOUT_MS,
+        )
+        if result.status != "error":
+            used_rf, used_ex = rf, ex
+            if attempt == 1:
+                agg_notes.append(
+                    "self-repair: re-ran without the row-level date/value "
+                    "filter after a SQL error"
+                )
+            elif attempt == 2:
+                agg_notes.append(
+                    "self-repair: re-ran the base aggregate (dropped row-filter "
+                    "+ dedup) after a SQL error"
+                )
+            break
+    if result is None:  # defensive — repair_plan is non-empty
+        return [_q_refusal_hit("Q-mode could not execute the aggregate")]
+
+    # T3 §6.11 — group-by canonicalization (fold spelling-variant entity keys:
+    # HDFC / HDFC Bank / HDFC Ltd → one) + GROUPBY_CARDINALITY_CAP. Pure
+    # post-processing over the result rows; `display_*` is what the user sees +
+    # what the CSV/snippet carry. `agg_notes` accumulates everything we must
+    # surface (merge / cap / reconciliation / sanity) so the number is never bare.
+    display_cols: list = list(result.column_names)
+    display_rows: list = list(result.rows)
+    if result.status == "ok" and parsed.group_by:
+        try:
+            from kb.q_planner.group_by import (
+                DEFAULT_GROUPBY_CARDINALITY_CAP,
+                canonicalize_and_cap,
+            )
+            cap = DEFAULT_GROUPBY_CARDINALITY_CAP
+            try:
+                from kb.query.config_thresholds import resolve_query_threshold
+                cap = int(await resolve_query_threshold(
+                    conn, key="groupby_cardinality_cap",
+                    workspace_id=workspace_id,
+                    default=float(DEFAULT_GROUPBY_CARDINALITY_CAP),
+                ))
+            except Exception:  # noqa: BLE001
+                pass
+            display_cols, display_rows, gb_notes = canonicalize_and_cap(
+                result.column_names, result.rows,
+                group_by=parsed.group_by, aggregations=parsed.aggregations,
+                cap=cap,
+            )
+            agg_notes.extend(gb_notes)
+        except Exception:  # noqa: BLE001
+            display_cols = list(result.column_names)
+            display_rows = list(result.rows)
+
+    # T3 §6.5(1) — active stated-vs-computed reconciliation for a single SUM
+    # over unit rows: fetch a stated total of the same concept on the source
+    # docs and surface BOTH on a material gap (never silently pick).
+    if (
+        result.status == "ok" and display_rows
+        and parsed.from_table == "extracted_entities"
+        and not parsed.group_by
+        and len(parsed.aggregations) == 1
+        and (parsed.aggregations[0].op or "").upper() == "SUM"
+        and parsed.aggregations[0].jsonb_path is not None
+    ):
+        try:
+            summed_key = parsed.aggregations[0].jsonb_path[1]  # (col, key, cast)
+            computed = display_rows[0][0]
+            if summed_key and computed is not None:
+                recon_note = await _reconcile_stated_total(
+                    conn, workspace_id=workspace_id, parsed=parsed,
+                    computed_value=float(computed), summed_key=summed_key,
+                )
+                if recon_note:
+                    agg_notes.append(recon_note)
+        except Exception:  # noqa: BLE001
+            pass
+
+    # T3 §6.6 — sanity check (the guard that REPLACES the bare faithfulness
+    # exemption). A computed aggregate must clear: (a) rows actually contributed,
+    # (b) a numeric aggregate isn't all-NULL (matched rows but nothing parsed —
+    # the 'INR 18,400/year' case), (c) no non-finite magnitude. On failure the
+    # number is NOT asserted (handled in the return below).
+    n_contributing: int | None = None
+    sanity_ok = True
+    sanity_reasons: list[str] = []
+    grain = "doc_root"
+    if parsed.from_table == "extracted_entities" and any(
+        f.field == "unit_type" for f in parsed.filters
+    ):
+        grain = "unit_type_row"
+    if result.status == "ok":
+        n_contributing = await _count_contributing_rows(
+            conn, parsed=parsed, workspace_id=workspace_id,
+            row_filters=used_rf, exclude_ids=used_ex, live_catalog=live_catalog,
+        )
+        has_numeric_agg = any(
+            (getattr(a, "op", "") or "").upper() in ("SUM", "AVG", "MIN", "MAX")
+            for a in parsed.aggregations
+        )
+        if not display_rows:
+            sanity_ok = False
+            sanity_reasons.append("the query returned no result rows")
+        elif has_numeric_agg and n_contributing == 0:
+            # SUM/AVG/MIN/MAX over zero rows → NULL: no number to assert. (A
+            # COUNT of 0 is a VALID answer, so this only gates numeric aggs.)
+            sanity_ok = False
+            sanity_reasons.append("no rows matched the query — nothing to aggregate")
+        elif has_numeric_agg and _aggregate_all_null(
+            parsed.group_by, display_cols, display_rows,
+        ):
+            sanity_ok = False
+            matched = n_contributing if n_contributing is not None else "some"
+            sanity_reasons.append(
+                f"matched {matched} row(s) but none held a parseable numeric "
+                f"value to aggregate"
+            )
+        for r in display_rows:
+            for ci in range(len(parsed.group_by or ()), len(display_cols)):
+                v = r[ci] if ci < len(r) else None
+                if isinstance(v, float) and (
+                    v != v or v in (float("inf"), float("-inf"))
+                ):
+                    sanity_ok = False
+                    sanity_reasons.append("aggregate produced a non-finite value")
+                    break
 
     # Layer 10 — persist audit row (+ best-effort CSV artifact).
     # audit_queries is APPEND-ONLY (kb_app has SELECT+INSERT only), so we
@@ -708,12 +1119,12 @@ async def _route_q_mode(
     audit_id = str(_uuid.uuid4())
     csv_key: str | None = None
 
-    if result.status == "ok" and result.row_count > 0:
+    if result.status == "ok" and len(display_rows) > 0:
         csv_key = await persist_csv_artifact(
             workspace_id=workspace_id,
             audit_query_id=audit_id,
-            column_names=result.column_names,
-            rows=result.rows,
+            column_names=display_cols,
+            rows=display_rows,
         )
 
     try:
@@ -727,7 +1138,10 @@ async def _route_q_mode(
             row_count=result.row_count,
             runtime_ms=result.runtime_ms,
             status=result.status,
-            refusal_reason=result.error_message,
+            refusal_reason=(
+                result.error_message
+                or (None if sanity_ok else "; ".join(sanity_reasons))
+            ),
             csv_artifact_key=csv_key,
             audit_query_id=audit_id,
         )
@@ -738,6 +1152,42 @@ async def _route_q_mode(
             "Q-mode audit_query insert failed: %s", exc,
         )
         audit_id = "audit-insert-failed"
+
+    # T3 §6.6 — the audit envelope + "computed from N rows". The number is never
+    # bare: it ships with its contributing-row count, the audited SQL id, grain,
+    # and the sanity verdict.
+    if n_contributing is not None and sanity_ok:
+        agg_notes.append(
+            f"computed from {n_contributing} contributing row(s); "
+            f"audited SQL id={audit_id} (grain={grain})"
+        )
+    audit_envelope = {
+        "n_contributing_rows": n_contributing,
+        "audit_query_id": audit_id,
+        "grain": grain,
+        "sanity_ok": sanity_ok,
+        "sanity_reasons": list(sanity_reasons),
+    }
+
+    # Source-doc hits from retrieval, kept for citation + grounding (C1). Capped
+    # so the aggregate stays the headline and the prompt stays bounded.
+    source_hits = [h for h in hits if h.kind != "aggregate"][:_Q_SOURCE_HITS_CAP]
+
+    # §6.6 — sanity FAIL on an otherwise-'ok' execution: the SQL ran but produced
+    # no trustworthy number (0 rows / all-NULL after cast / non-finite). Do NOT
+    # assert the number — emit a typed, auditable refusal (carrying the envelope)
+    # and keep the source docs. This is the guard that turns the old silent
+    # "None"/bare-0 into an honest "couldn't compute" — system-enforced.
+    if result.status == "ok" and not sanity_ok:
+        reason = "; ".join(sanity_reasons) or "no reliable value"
+        refusal = _q_refusal_hit(
+            f"the aggregate could not be computed reliably: {reason}"
+        )
+        refusal.metadata.update({
+            "audit_query_id": audit_id,
+            "audit_envelope": audit_envelope,
+        })
+        return [refusal, *source_hits]
 
     # Synthesize the aggregate Hit, then KEEP the retrieved source-doc hits
     # behind it. C1: the aggregate Hit carries the computed number but no
@@ -750,8 +1200,8 @@ async def _route_q_mode(
     # hits lets the generator cite real documents and ground the count.
     if result.status == "ok":
         snippet = _format_aggregate_snippet(
-            result.column_names, result.rows,
-            plan=plan.q_payload,
+            display_cols, display_rows,
+            plan=plan.q_payload, extra_notes=agg_notes,
         )
         aggregate_hit = Hit(
             id=audit_id,
@@ -762,19 +1212,19 @@ async def _route_q_mode(
                 "mode_applied": "Q",
                 "aggregate": True,
                 "audit_query_id": audit_id,
-                "row_count": result.row_count,
+                "row_count": len(display_rows),
                 "csv_artifact_key": csv_key,
                 "Q_plan_id": audit_id,
-                "column_names": list(result.column_names),
+                "column_names": list(display_cols),
+                "agg_notes": list(agg_notes),
+                "audit_envelope": audit_envelope,
+                "n_contributing_rows": n_contributing,
+                "sanity_ok": sanity_ok,
             },
         )
-        # Source-doc hits from retrieval, kept for citation + grounding.
-        # Capped so the aggregate stays the headline and the prompt stays
-        # bounded.
-        source_hits = [h for h in hits if h.kind != "aggregate"][:_Q_SOURCE_HITS_CAP]
         return [aggregate_hit, *source_hits]
 
-    # Non-ok status: refusal Hit.
+    # Non-ok status (timeout / row_cap / error after self-repair): refusal Hit.
     return [_q_refusal_hit(
         f"{result.status}: {result.error_message or 'no detail'}"
     )]
@@ -786,6 +1236,7 @@ def _format_aggregate_snippet(
     *,
     plan: dict[str, Any] | None = None,
     max_rows: int = 5,
+    extra_notes: list[str] | None = None,
 ) -> str:
     """Human-readable rendering of the aggregate result for the generator.
 
@@ -896,6 +1347,13 @@ def _format_aggregate_snippet(
                     break
             if currency_hint:
                 lines.append(f"Currency: {currency_hint}")
+
+    # T3 §6.6/§6.11 — surface the audit envelope (merge / cap / reconciliation /
+    # sanity). These MUST reach the user so a computed number is never bare.
+    if extra_notes:
+        lines.append("Notes (surface these to the user):")
+        for n in extra_notes:
+            lines.append(f"  - {n}")
     return "\n".join(lines)
 
 

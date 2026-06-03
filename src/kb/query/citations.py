@@ -319,11 +319,20 @@ def _raptor_summary_ref(hit: Hit, meta: FileMetaForCitation | None) -> dict[str,
 
 def _aggregate_ref(hit: Hit, meta: FileMetaForCitation | None) -> dict[str, Any]:
     md = hit.metadata or {}
+    # T3 §6.6 — the audit envelope rides on the aggregate citation so a computed
+    # number is user-auditable: how many rows contributed, the sanity verdict,
+    # and any caveats (merge / cap / reconciliation) that must be surfaced.
+    envelope = md.get("audit_envelope") or {}
     return {
         "audit_query_id": md.get("audit_query_id"),
         "Q_plan_id": md.get("Q_plan_id"),
         "row_count": md.get("row_count"),
         "csv_artifact_id": md.get("csv_artifact_id"),
+        "n_contributing_rows": md.get("n_contributing_rows")
+        or envelope.get("n_contributing_rows"),
+        "sanity_ok": md.get("sanity_ok", envelope.get("sanity_ok")),
+        "grain": envelope.get("grain"),
+        "agg_notes": md.get("agg_notes") or [],
     }
 
 

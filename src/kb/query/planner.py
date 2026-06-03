@@ -844,11 +844,26 @@ class LLMPlanner:
         doc_type_unit_types = await discover_doc_type_unit_types(
             conn, workspace_id=workspace_id,
         )
+        # T3 §6.11 — derive the canonical aggregation catalog (keys + grain +
+        # value_type) from the live emerged schema, so the planner only emits
+        # plans for fields that exist + are correctly typed, and so
+        # generation-time validation matches execution-time. Best-effort:
+        # a probe hiccup leaves live_catalog=None → the static-catalog behavior.
+        live_catalog = None
+        if conn is not None and workspace_id:
+            try:
+                from kb.q_planner.dynamic_catalog import build_dynamic_catalog
+                live_catalog = await build_dynamic_catalog(
+                    conn, workspace_id=workspace_id,
+                )
+            except Exception:  # noqa: BLE001
+                live_catalog = None
         payload, reason = await generate_q_payload(
             query, llm=self._llm,
             schema_hints=schema_hints,
             proposed_fields_hints=proposed_fields_hints,
             doc_type_unit_types=doc_type_unit_types,
+            live_catalog=live_catalog,
         )
         if payload is not None:
             return Plan(

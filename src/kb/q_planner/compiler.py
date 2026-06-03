@@ -17,6 +17,8 @@ parameter.
 
 from __future__ import annotations
 
+import re
+
 from kb.q_planner.grammar import Aggregation, Filter, QPlan
 from kb.q_planner.validator import ValidatedQPlan
 
@@ -149,6 +151,83 @@ def _jsonb_extract_sql(table: str, col: str, key: str, cast: str) -> str:
     return f"{extract}::{cast}"
 
 
+# Tables that carry a `file_id` column — the ones a supersedes-lineage dedup
+# (§6.11 grain dedup) can exclude older versions on.
+_TABLES_WITH_FILE_ID: frozenset[str] = frozenset({
+    "extracted_entities", "proposed_fields",
+})
+
+# Row-level filter operators (date windows / value thresholds carried by the
+# ResolvedPredicate, §6.11) — symbol-mapped, never interpolated as text.
+_ROWFILTER_OP_SYM: dict[str, str] = {
+    "lt": "<", "le": "<=", "gt": ">", "ge": ">=", "eq": "=", "ne": "<>",
+}
+_ROWFILTER_COL_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$")
+
+
+def _guarded_jsonb_date_extract(table: str, col: str, key: str) -> str:
+    """`(t."fields"->>'key')::date`, but ISO-guarded so a dirty date string
+    yields NULL (row excluded) instead of ABORTING the whole aggregate — the
+    same fail-safe stance as the numeric cast in `_jsonb_extract_sql`."""
+    safe_key = key.replace("'", "''")
+    extract = f"({_quote_ident(table)}.{_quote_ident(col)}->>'{safe_key}')"
+    return (
+        f"(CASE WHEN {extract} ~ '^[0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}}' "
+        f"THEN {extract}::date END)"
+    )
+
+
+def compile_row_filters(
+    table: str,
+    row_filters: list[dict] | tuple[dict, ...] | None,
+    *,
+    unit_types: list[str] | None = None,
+    live_catalog: object | None = None,
+) -> list[tuple[str, list]]:
+    """Compile `ResolvedPredicate.row_filters` (date windows / value thresholds)
+    into ROW-LEVEL WHERE fragments on `extracted_entities.fields` (§6.11), so a
+    'last quarter' window applies per transaction row, not just to doc-pick.
+    Reuses the guarded jsonb casts (a dirty value is NULL-skipped, never aborts).
+
+    Each `rf` is a `RowFilter.to_dict()`: {column, op, value, grain, kind}.
+
+    **Fail-open** — any filter that doesn't map cleanly (unsupported table,
+    column not a real key on the queried rows, bad op/value) is SKIPPED: a row
+    filter may narrow the aggregate, never silently zero it out or error it."""
+    out: list[tuple[str, list]] = []
+    if not row_filters or table != "extracted_entities":
+        return out
+    for rf in row_filters:
+        if not isinstance(rf, dict):
+            continue
+        col = rf.get("column")
+        op = rf.get("op") or "eq"
+        val = rf.get("value")
+        kind = rf.get("kind") or "value"
+        if not isinstance(col, str) or not _ROWFILTER_COL_RE.match(col):
+            continue
+        # Skip a filter whose column isn't a real key on these rows (a mis-named
+        # date field would otherwise NULL-exclude every row → empty aggregate).
+        if live_catalog is not None and hasattr(live_catalog, "has_key"):
+            try:
+                if not live_catalog.has_key(col, unit_types=unit_types):
+                    continue
+            except Exception:  # noqa: BLE001
+                pass
+        if kind == "date":
+            col_sql = _guarded_jsonb_date_extract(table, "fields", col)
+        else:
+            col_sql = _jsonb_extract_sql(table, "fields", col, "numeric")
+        if op == "between":
+            if not (isinstance(val, (list, tuple)) and len(val) == 2):
+                continue
+            out.append((f"{col_sql} BETWEEN %s AND %s", [val[0], val[1]]))
+        elif op in _ROWFILTER_OP_SYM:
+            out.append((f"{col_sql} {_ROWFILTER_OP_SYM[op]} %s", [val]))
+        # unknown op → skip (fail-open)
+    return out
+
+
 def _agg_projection(table: str, a: Aggregation) -> str:
     """SQL fragment for one aggregation in the SELECT list."""
     op_to_sql = {
@@ -211,13 +290,24 @@ def compile_plan(
     *,
     workspace_id: str,
     row_cap: int,
+    row_filters: list[dict] | tuple[dict, ...] | None = None,
+    live_catalog: object | None = None,
+    exclude_file_ids: list[str] | tuple[str, ...] | None = None,
 ) -> tuple[str, list]:
     """Compile a validated Q plan into a single parameterized SQL string +
     its bound parameter list.
 
     `workspace_id` becomes the FIRST positional parameter (filter on the
     base table's workspace_id). `row_cap` clamps the user-requested limit
-    so a malicious / runaway plan can't exhaust memory."""
+    so a malicious / runaway plan can't exhaust memory.
+
+    `row_filters` (T3 §6.11) are the `ResolvedPredicate.row_filters` (as dicts);
+    when present they compile into ROW-LEVEL WHERE fragments (date windows /
+    value thresholds applied per row, not just to doc-pick). Fail-open.
+
+    `exclude_file_ids` (T3 §6.11 grain dedup) are superseded doc versions to
+    drop, so a loan/account that appears in both an original and its amendment
+    isn't counted twice. Applied only on tables that carry `file_id`."""
     plan = validated.plan
     table = plan.from_table
     table_sql = _quote_ident(table)
@@ -259,6 +349,29 @@ def compile_plan(
         fragment, fparams = _filter_clause(table, f)
         where_parts.append(fragment)
         params.extend(fparams)
+
+    # T3 §6.11 — row-level date/value filters from the ResolvedPredicate,
+    # appended AFTER the plan filters so positional params stay in order.
+    if row_filters:
+        unit_types = [
+            str(v)
+            for f in plan.filters
+            if f.field == "unit_type" and f.op in ("eq", "in")
+            for v in (f.value if isinstance(f.value, list) else [f.value])
+            if v is not None
+        ] or None
+        for frag, fparams in compile_row_filters(
+            table, row_filters, unit_types=unit_types, live_catalog=live_catalog,
+        ):
+            where_parts.append(frag)
+            params.extend(fparams)
+
+    # T3 §6.11 grain dedup — drop superseded doc versions so an entity present in
+    # both an original and its amendment isn't double-counted. Signal-gated (only
+    # when there ARE superseded ids) → no-op for the common single-version case.
+    if exclude_file_ids and table in _TABLES_WITH_FILE_ID:
+        where_parts.append(f'{table_sql}."file_id" <> ALL(%s::uuid[])')
+        params.append(list(exclude_file_ids))
 
     where_clause = " AND ".join(where_parts)
 

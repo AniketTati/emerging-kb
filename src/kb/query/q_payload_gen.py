@@ -580,6 +580,7 @@ async def generate_q_payload(
     schema_hints: dict[str, list[str]] | None = None,
     proposed_fields_hints: dict[str, list[str]] | None = None,
     doc_type_unit_types: dict[str, list[str]] | None = None,
+    live_catalog: Any = None,
 ) -> tuple[dict[str, Any] | None, str | None]:
     """Run the LLM-to-QPlan path. Returns ``(payload, reason)``:
 
@@ -610,8 +611,16 @@ async def generate_q_payload(
     hint_block = _format_schema_hints(schema_hints or {})
     pf_block = _format_proposed_fields_hints(proposed_fields_hints or {})
     dt_block = _format_doc_type_unit_types_hints(doc_type_unit_types or {})
+    # T3 §6.11 — the canonical, type+grain-tagged aggregation surface derived
+    # from the live emerged schema. Authoritative, so it leads the hint stack.
+    catalog_block = ""
+    if live_catalog is not None:
+        try:
+            catalog_block = live_catalog.prompt_block()
+        except Exception:  # noqa: BLE001
+            catalog_block = ""
     combined_hints = "\n\n".join(
-        b for b in (dt_block, hint_block, pf_block) if b
+        b for b in (catalog_block, dt_block, hint_block, pf_block) if b
     )
     user_msg = (
         f"{combined_hints}\n\nUser question: {query}" if combined_hints
@@ -647,7 +656,7 @@ async def generate_q_payload(
     except QPlanParseError as exc:
         return None, f"parse_error: {exc}"
     try:
-        validated = validate(typed)
+        validated = validate(typed, live_catalog=live_catalog)
     except QPlanValidationError as exc:
         return None, f"validation: {exc}"
 

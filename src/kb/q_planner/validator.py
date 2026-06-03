@@ -17,6 +17,7 @@ compiler consumes this and produces (sql, params).
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from kb.q_planner.catalog import (
     ALLOWED_TABLES,
@@ -125,10 +126,21 @@ _COMPARABLE_CASTS: frozenset[str] = _NUMERIC_CASTS | frozenset({
 })
 
 
-def _validate_aggregation(table: str, a: Aggregation) -> tuple[str, str] | None:
+def _validate_aggregation(
+    table: str,
+    a: Aggregation,
+    *,
+    unit_types: list[str] | None = None,
+    live_catalog: Any = None,
+) -> tuple[str, str] | None:
     """Returns the (table, column) referenced by the agg, or None for
     COUNT(*) and for jsonb-path aggregations (which the catalog accounts
-    for differently). Raises on type mismatch."""
+    for differently). Raises on type mismatch.
+
+    `live_catalog` (T3 §6.11), when provided, is the per-workspace
+    `DynamicCatalog`; it gates a NUMERIC aggregation over a jsonb key the live
+    schema knows is text-only. Absent → behavior is unchanged (static catalog
+    only)."""
     if a.field == "*":
         if a.op != "COUNT":
             raise QPlanValidationError(
@@ -183,6 +195,27 @@ def _validate_aggregation(table: str, a: Aggregation) -> tuple[str, str] | None:
                 f"aggregation {a.op!r} on {a.field!r} requires "
                 f"a comparable cast (got ::{cast_type})"
             )
+        # T3 §6.11 value_type gate — refuse a NUMERIC aggregation over a jsonb
+        # key the live schema knows is text-only (e.g. `entity_detail.value`
+        # holding names / GST numbers). `None` verdict (key unknown in scope)
+        # falls through: never a NEW refusal vs the static catalog (back-compat).
+        if (
+            live_catalog is not None
+            and not is_column_cast
+            and (
+                a.op in ("SUM", "AVG")
+                or (a.op in ("MIN", "MAX") and cast_type in _NUMERIC_CASTS)
+            )
+        ):
+            verdict = live_catalog.numeric_aggregatable_verdict(
+                jsonb_key, unit_types=unit_types,
+            )
+            if verdict is False:
+                raise QPlanValidationError(
+                    f"aggregation {a.op!r} on {a.field!r}: field {jsonb_key!r} "
+                    f"holds non-numeric values in this workspace and cannot be "
+                    f"{a.op}-aggregated (use COUNT / COUNT_DISTINCT / group_by)"
+                )
         # The (table, col_name) tuple still goes into column_types for
         # bookkeeping; the compiler doesn't need a per-key entry.
         return (table, col_name)
@@ -205,9 +238,26 @@ def _validate_aggregation(table: str, a: Aggregation) -> tuple[str, str] | None:
     return (table, a.field)
 
 
-def validate(plan: QPlan) -> ValidatedQPlan:
+def _unit_type_filter_values(plan: QPlan) -> list[str] | None:
+    """The unit_type values the plan filters on (eq / in) — the scope the T3
+    value_type gate checks a jsonb key against. None when unscoped."""
+    vals: list[str] = []
+    for f in plan.filters:
+        if f.field == "unit_type" and f.op in ("eq", "in"):
+            if isinstance(f.value, list):
+                vals.extend(str(v) for v in f.value)
+            elif f.value is not None:
+                vals.append(str(f.value))
+    return vals or None
+
+
+def validate(plan: QPlan, *, live_catalog: Any = None) -> ValidatedQPlan:
     """Catalog + type validation. Raises QPlanValidationError on any
-    miss. Returns a ValidatedQPlan ready for the compiler."""
+    miss. Returns a ValidatedQPlan ready for the compiler.
+
+    `live_catalog` (T3 §6.11) is the optional per-workspace `DynamicCatalog`;
+    when present it adds the value_type gate (numeric agg over a text-only field
+    refuses). When absent, validation is exactly the static-catalog behavior."""
     if plan.from_table not in ALLOWED_TABLES:
         raise QPlanValidationError(
             f"table {plan.from_table!r} is not in the Q-mode allowlist; "
@@ -256,8 +306,11 @@ def validate(plan: QPlan) -> ValidatedQPlan:
         column_types[(plan.from_table, g.field)] = t
 
     # Aggregations
+    unit_types = _unit_type_filter_values(plan)
     for a in plan.aggregations:
-        key = _validate_aggregation(plan.from_table, a)
+        key = _validate_aggregation(
+            plan.from_table, a, unit_types=unit_types, live_catalog=live_catalog,
+        )
         if key is not None:
             column_types[key] = column_type(*key) or "text"
 

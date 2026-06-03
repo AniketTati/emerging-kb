@@ -1216,6 +1216,7 @@ class Orchestrator:
             hits = await apply_mode(
                 plan, hits,
                 workspace_id=workspace_id, query=effective_query, conn=conn,
+                predicate=predicate,
             )
             await emit("mode_routed", {"mode": plan.mode, "kept": len(hits)})
         except QModeNotImplementedError as exc:
