@@ -9,7 +9,7 @@ started **cold**, without the conversation that produced it.
 
 ## T1 — Schema as a view: alias-map convergence + targeted re-extraction
 
-**Status:** proposed · **Area:** ingestion / schema convergence · **Impact:** high (correctness-at-scale + cost)
+**Status:** ✅ shipped (`feat/roadmap-t1-t2-t3`; in-place key convergence + display-pointer rename, NO auto re-extraction) · **Area:** ingestion / schema convergence · **Impact:** high (correctness-at-scale + cost)
 
 ### The problem
 
@@ -132,7 +132,12 @@ this fallback can't be deleted — only made rare and targeted.)
 
 ## T2 — Structured pre-filter for retrieval (narrow doc-ids first, then search)
 
-**Status:** proposed · **Area:** query / retrieval · **Impact:** high (precision + recall on structured questions)
+**Status:** ✅ shipped as Phase 1 (`feat/roadmap-t1-t2-t3`, 2026-06-03) — the
+structured-first head went well beyond this sketch (confidence-weighted hard/soft
+scope + relevance-widen, predicate carry-forward + relax/reset, answer-direct
+LOOKUP/LIST/EXISTENCE with P2, locator gate). **The authoritative spec + exact
+implementation status is [`query_pipeline_plan.md`](query_pipeline_plan.md) §10.1.**
+· **Area:** query / retrieval · **Impact:** high (precision + recall on structured questions)
 
 > **Detailed plan:** [`query_pipeline_plan.md`](query_pipeline_plan.md) is the
 > authoritative, build-ready design for the new query pipeline (T2 + T3 +
@@ -218,7 +223,10 @@ should narrow within the previously-resolved scope.
 
 ## T3 — Q-mode: schema-derived catalog for generous aggregation
 
-**Status:** proposed · **Area:** query / Q-mode · **Impact:** medium-high (fewer aggregation refusals)
+**Status:** proposed — **NEXT UP** (Phase 2; T2 shipped, this is the immediate
+follow-on). The T2 resolver already produces `ResolvedPredicate.row_filters` +
+grain hints + an active-reconcile seam waiting for this. See
+[`query_pipeline_plan.md`](query_pipeline_plan.md) §6.11/§10.1. · **Area:** query / Q-mode · **Impact:** medium-high (fewer aggregation refusals)
 
 ### The problem
 

@@ -1,6 +1,9 @@
 # New Query Pipeline — detailed plan v2 (T2 + T3 + KG-as-route)
 
-**Status:** approved-in-principle, not yet built · **Owner:** query/retrieval
+**Status:** **Phase 1 (T2) SHIPPED** — 2026-06-03, branch `feat/roadmap-t1-t2-t3`
+(commit `feat(query): T2 structured-first query pipeline`). **Phase 2 (T3 — 5b
+Q-mode internals) and Phase 3 (KG) are pending.** See the §10 implementation
+status for exactly what's built, verified, and outstanding. · **Owner:** query/retrieval
 **v2 note:** this revision folds in two adversarial reviews — a cross-domain
 query war-game (12 trace gaps) and a senior-architect "sounds-right-but-wrong"
 pass (12 design gaps). Every finding is resolved in the body and tracked in the
@@ -565,14 +568,58 @@ is a separate, required check.
 ---
 
 ## 10. Phasing & out-of-scope
-- **Phase 1 — T2** (Stages 0.5–10 minus 5b internals).
+- **Phase 1 — T2** (Stages 0.5–10 minus 5b internals). ✅ **SHIPPED** (2026-06-03).
 - **Phase 2 — T3** (5b internals: schema-derived catalog + grain + value-type
   casts + row-filter compile + group-by canon + active reconcile + self-repair +
-  audit envelope).
+  audit envelope). ⏳ **pending.**
 - **Phase 3 — KG, agentic.** 3a query the existing graph on-demand (Stage 7,
   context-constrained). 3b agentic-extraction verify pass (propose→critic→resolve)
   to raise entity/relationship quality before the graph is trusted. 3c measure.
+  ⏳ **pending.**
 - **Noted:** faithfulness LLM gate tuning; whether per-doc RAPTOR earns its cost.
+
+### 10.1 Implementation status (2026-06-03)
+
+**Phase 1 / T2 — shipped on `feat/roadmap-t1-t2-t3`.** New modules:
+`domain/schema_epoch.py`, `domain/structured_schema.py` (§6.1),
+`query/structured_prefilter.py` (`ResolvedPredicate` + resolver §6.2/6.12 +
+scope state machine §6.7), `query/structured_answer.py` (answer_mode §6.4 +
+trust gate §6.3 + S5a/S5c + §6.13 locator gate). Changed: `channels.py`
+(`file_scope` §6.8), `orchestrator.py` (S0.5 gate, confidence-weighted scope +
+relevance-widen §6.10, structured-answer branch, scope surfacing §S10),
+`chat_memory.py` (`carry_forward_predicate`), `workers/tasks.py` + `api/schemas.py`
+(epoch bump §6.1). Migration `0054`.
+
+**Verified:** full test suite green (zero new failures; ~53 new T2 tests across
+`tests/test_t2_*`). Live finance eval unchanged-or-better (14/16, within range;
+misses are base-pipeline nondeterminism, not T2). Adversarial runtime trace on
+the seeded finance corpus confirmed §8 #1 (broaden), #2 (honest-never-worse /
+relevance-widen), #3 (coverage≠correctness / P2), #5 (relax), #6 (reset by domain
+noun), #9/#10 (no-bare-No / entity-miss hedge), #11 (LIST + conversational),
+#12 (row-level date), #13 (suite green).
+
+**Done differently / via existing code:** §6.5(2) stated-vs-stated / amendment
+reconciliation is handled by the existing R1 conflict-resolution path (not
+re-implemented).
+
+**NOT built (the honest gaps):**
+- §8 #4 + #7 — **active stated-vs-computed reconciliation and the aggregate
+  audit envelope are Phase 2 / T3** (they need Q-mode 5b). Q-mode still uses its
+  fixed whitelist, so generous aggregation over arbitrary extracted tables still
+  refuses/lists.
+- **Stage 7 KG route (§6.9)** — unchanged from pre-T2 (Phase 3). RELATIONSHIP
+  queries use the old PPR path; the context-constrained / type-filtered walk and
+  the agentic verify pass are not built.
+- **Quality ceiling (not a pipeline gap):** T2 *uses* the structured layer well
+  but can only narrow on what extraction captured — strong on tables, weak on
+  narrative (~0/13 narrative docs captured key terms), ~47% mention resolution.
+  Where there's no structured signal it correctly degrades to plain RAG.
+
+**Known rough edges (logged, non-blocking):** S5c LIST shows an arbitrary field
+value for a file with multiple doc_root rows (e.g. an xlsx) — the doc-set is
+correct, the displayed value may not be; EXISTENCE-absent on an entity returns
+an empty refusal rather than a friendly hedge; the live trace was finance-only
+(no legal/construction runtime trace).
 
 ---
 

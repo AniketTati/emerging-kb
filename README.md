@@ -115,6 +115,7 @@ are swappable with mock/identity fallbacks so CI runs with no keys.
 - Mixed-format ingest (markdown · email · digital PDF · scanned/OCR PDF · xlsx) to `ready`
 - Four-resolution storage (L1–L4) + per-doc RAPTOR summary trees
 - 6-channel hybrid retrieval → RRF → Cohere rerank → CRAG → Astute generation → faithfulness gate
+- **Structured-first query head (T2)** — resolve the structured predicate first, then scope retrieval to the matching docs (confidence-weighted: hard pre-filter when trusted, else a soft rerank boost that auto-widens), carry the scope across follow-ups (relax / reset), and answer LOOKUP/LIST/existence directly from the structured layer with a source-chunk check — degrading to plain RAG whenever the signal is weak. Spec: [`docs/query_pipeline_plan.md`](docs/query_pipeline_plan.md)
 - **Cite-or-refuse** with per-answer confidence, conflict detection, and a hash-chained audit log
 - Cross-format / cross-doc identity resolution (one entity spanning markdown + PDF + xlsx + scan)
 - Schema auto-promotion (emerging → typed), import/export schema YAML
@@ -130,7 +131,7 @@ build phase, and the honest current limits). See the deep analysis in
 - **Get LLMs off the query hot path.** The query path is synchronous LLM calls (~15s, no token streaming); query embeddings, rerank, and CRAG verdicts aren't cached. Stream generation; cache; sample/await the heavy gates.
 - **Conflict precision.** The detector is great on structured facts (it catches the loan rate-flip across amendments) but **over-fires on prose/metadata** (42k false conflicts in one messy workspace). Gate it to structured, canonicalized facts.
 - **Identity robustness.** Dominant entities resolve correctly, but variants leak at the edges ("Vertex" vs "Vertexind") and the resolver can fail-open. Always compare top-k candidates; retry the embedder; never silently create a duplicate.
-- **Aggregation.** Q-mode (numeric SQL aggregation) is **allow-list-gated** — it sums only a fixed set of tables, so "sum all outstanding loans" over an arbitrary extracted table refuses (it *lists* them correctly).
+- **Aggregation (T3 — next phase).** Q-mode (numeric SQL aggregation) is still **allow-list-gated** — it sums only a fixed set of tables, so "sum all outstanding loans" over an arbitrary extracted table refuses (T2 *lists* them correctly). T3 makes the catalog schema-derived (grain + JSONB casts + active stated-vs-computed reconciliation + audit envelope); the T2 resolver already emits the row-filters/grain it needs. See [`docs/query_pipeline_plan.md`](docs/query_pipeline_plan.md) §6.11.
 - **Real multi-tenancy + ops.** RLS is solid underneath, but the UI is wired to **one workspace** (no switcher/auth). Add workspace switching, per-tenant rate/cost limits, and tracing.
 - **Simplify retrieval.** 13 planner modes, several of which are thin post-filters on the same hybrid core — collapse to a measured few so latency drops and the eval is trustworthy.
 - **Large-corpus storage.** Tune HNSW, consider vector quantization, and partition tables by workspace before 100k+ docs.
