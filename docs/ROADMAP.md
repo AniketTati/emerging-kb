@@ -223,10 +223,13 @@ should narrow within the previously-resolved scope.
 
 ## T3 — Q-mode: schema-derived catalog for generous aggregation
 
-**Status:** proposed — **NEXT UP** (Phase 2; T2 shipped, this is the immediate
-follow-on). The T2 resolver already produces `ResolvedPredicate.row_filters` +
-grain hints + an active-reconcile seam waiting for this. See
-[`query_pipeline_plan.md`](query_pipeline_plan.md) §6.11/§10.1. · **Area:** query / Q-mode · **Impact:** medium-high (fewer aggregation refusals)
+**Status:** ✅ shipped as Phase 2 (`feat/roadmap-t1-t2-t3`, 2026-06-04). Q-mode's
+catalog now derives from the live emerged schema (`dynamic_catalog.py`), and
+every computed aggregate ships a §6.6 audit envelope (N rows + audited SQL +
+sanity verdict) — an all-NULL/zero-row numeric aggregate becomes a typed refusal
+instead of a bare number. The T2 `ResolvedPredicate.row_filters` + grain hints +
+active-reconcile seam are now consumed. See
+[`query_pipeline_plan.md`](query_pipeline_plan.md) §6.11/§10.1. · **Area:** query / Q-mode · **Impact:** medium-high (fewer aggregation refusals; auditable numbers)
 
 ### The problem
 

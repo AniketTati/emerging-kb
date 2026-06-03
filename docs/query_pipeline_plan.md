@@ -1,9 +1,10 @@
 # New Query Pipeline — detailed plan v2 (T2 + T3 + KG-as-route)
 
-**Status:** **Phase 1 (T2) SHIPPED** — 2026-06-03, branch `feat/roadmap-t1-t2-t3`
-(commit `feat(query): T2 structured-first query pipeline`). **Phase 2 (T3 — 5b
-Q-mode internals) and Phase 3 (KG) are pending.** See the §10 implementation
-status for exactly what's built, verified, and outstanding. · **Owner:** query/retrieval
+**Status:** **Phase 1 (T2) + Phase 2 (T3) SHIPPED** — T2 2026-06-03, T3
+2026-06-04, branch `feat/roadmap-t1-t2-t3` (commits `feat(query): T2 structured-
+first query pipeline`, `feat(query): T3 Q-mode generous aggregation (Stage 5b)`).
+**Phase 3 (KG) is pending.** See the §10 implementation status for exactly what's
+built, verified, and outstanding. · **Owner:** query/retrieval
 **v2 note:** this revision folds in two adversarial reviews — a cross-domain
 query war-game (12 trace gaps) and a senior-architect "sounds-right-but-wrong"
 pass (12 design gaps). Every finding is resolved in the body and tracked in the
@@ -571,14 +572,14 @@ is a separate, required check.
 - **Phase 1 — T2** (Stages 0.5–10 minus 5b internals). ✅ **SHIPPED** (2026-06-03).
 - **Phase 2 — T3** (5b internals: schema-derived catalog + grain + value-type
   casts + row-filter compile + group-by canon + active reconcile + self-repair +
-  audit envelope). ⏳ **pending.**
+  audit envelope). ✅ **SHIPPED** (2026-06-04). See §10.1.
 - **Phase 3 — KG, agentic.** 3a query the existing graph on-demand (Stage 7,
   context-constrained). 3b agentic-extraction verify pass (propose→critic→resolve)
   to raise entity/relationship quality before the graph is trusted. 3c measure.
   ⏳ **pending.**
 - **Noted:** faithfulness LLM gate tuning; whether per-doc RAPTOR earns its cost.
 
-### 10.1 Implementation status (2026-06-03)
+### 10.1 Implementation status (T2 2026-06-03; T3 2026-06-04)
 
 **Phase 1 / T2 — shipped on `feat/roadmap-t1-t2-t3`.** New modules:
 `domain/schema_epoch.py`, `domain/structured_schema.py` (§6.1),
@@ -602,11 +603,39 @@ noun), #9/#10 (no-bare-No / entity-miss hedge), #11 (LIST + conversational),
 reconciliation is handled by the existing R1 conflict-resolution path (not
 re-implemented).
 
+**Phase 2 / T3 — shipped on `feat/roadmap-t1-t2-t3`.** New modules:
+`q_planner/dynamic_catalog.py` (per-workspace catalog DERIVED from
+`structured_schema.live_schema()` + a value-castability probe; spelling-variant
+unit_types unioned; §6.11), `q_planner/group_by.py` (group-key canonicalization +
+`GROUPBY_CARDINALITY_CAP`). Changed: `q_planner/validator.py` (`value_type` gate,
+opt-in via `live_catalog=`), `q_planner/compiler.py` (`compile_row_filters`
+row-level WHERE + guarded ISO-date cast + supersedes-dedup `exclude_file_ids`),
+`query/q_payload_gen.py` + `query/planner.py` (feed the catalog to the planner +
+generation-time validate), `query/mode_router.py` (`_route_q_mode` envelope:
+self-repair → canon → reconcile → sanity → gated return), `query/orchestrator.py`
+(thread `predicate`), `query/citations.py` (envelope on the aggregate citation).
+No migration (reuses `audit_queries`).
+
+**T3 verified:** §8 #4 (wrong-grain/all-NULL caught by the sanity check → typed
+refusal, never a bare number), #7 (stated-vs-computed surfaced), #12 (row-level
+date filter compiles into the WHERE — temp-table execution proof). 23 new tests
+(`tests/test_t3_q_mode.py`); full suite zero new failures (38 pre-existing); live
+eval 15/16 (within variance). Live adversarial trace: the silent-`None` and bare
+606M aggregates now ship an audit envelope ("computed from N rows") or a typed
+`q-mode-refusal`. **The §6.6 sanity check (contributing-rows) is the load-bearing
+guard, NOT the value_type gate** — string-stored numerics ("INR 18,400/year")
+can't be pre-classified, so the gate stays conservative and sanity catches the
+all-NULL.
+
+**T3 honest gaps (mechanism built, firing is planner-dependent):** the row-filter
+/ reconciliation / group-by-canon end-to-end firing depends on the T2 planner's
+`q_payload` — live, "last quarter" wasn't emitted as a date_filter (ran all-time)
+and "avg by lender" grouped by `field_name` not a lender column. Active
+reconciliation covers only the single-SUM-over-`extracted_entities`-unit-rows
+case (not `proposed_fields` SUMs); dedup is doc-version-level (not row-overlap).
+The universal win that fires on every aggregate is the audit envelope + sanity.
+
 **NOT built (the honest gaps):**
-- §8 #4 + #7 — **active stated-vs-computed reconciliation and the aggregate
-  audit envelope are Phase 2 / T3** (they need Q-mode 5b). Q-mode still uses its
-  fixed whitelist, so generous aggregation over arbitrary extracted tables still
-  refuses/lists.
 - **Stage 7 KG route (§6.9)** — unchanged from pre-T2 (Phase 3). RELATIONSHIP
   queries use the old PPR path; the context-constrained / type-filtered walk and
   the agentic verify pass are not built.
