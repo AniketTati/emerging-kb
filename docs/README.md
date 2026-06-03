@@ -20,6 +20,7 @@ brings up Docker (db · minio · migrate · api · worker) and restores the comm
 | [`problem_statement.md`](problem_statement.md) | The brief: the challenge, the locked requirements, the 55-doc finance demo, and deliberate descopes. |
 | [`scale_perf_audit.md`](scale_perf_audit.md) | Deep cost/latency/scale analysis (10K → 100M docs) + the enterprise upgrade paths. Forward-looking reference for the roadmap. |
 | [`ROADMAP.md`](ROADMAP.md) | Forward-looking, pick-up-able build tasks. T1 — schema-as-a-view (alias-map convergence, not corpus re-extraction); T2 — structured pre-filter retrieval (narrow doc-ids first, carry scope through follow-ups); T3 — Q-mode schema-derived catalog (generous aggregation). |
+| [`query_pipeline_plan.md`](query_pipeline_plan.md) | **Detailed**, build-ready design for the new query pipeline: structured-first "answer-or-narrow" head, scoped RAG, follow-up scope carry-forward, stated-vs-computed reconciliation, two grounding modes, and KG-as-a-route. Authoritative spec for the T2/T3/KG query-side. |
 
 **Eval working data (kept in place — scripts read/write here at runtime):**
 

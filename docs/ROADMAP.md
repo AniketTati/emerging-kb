@@ -134,6 +134,11 @@ this fallback can't be deleted — only made rare and targeted.)
 
 **Status:** proposed · **Area:** query / retrieval · **Impact:** high (precision + recall on structured questions)
 
+> **Detailed plan:** [`query_pipeline_plan.md`](query_pipeline_plan.md) is the
+> authoritative, build-ready design for the new query pipeline (T2 + T3 +
+> KG-as-a-route). The sketch below is kept for context; where they differ, the
+> detailed plan wins.
+
 ### The problem
 
 Today the structured layer narrows results only as a **post-retrieval filter**:
