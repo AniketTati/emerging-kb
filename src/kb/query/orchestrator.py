@@ -216,6 +216,80 @@ def _refusal_template_for(subtype: str) -> str:
     return _REFUSAL_TEMPLATES.get(subtype, _REFUSAL_TEMPLATES["adversarial_generic"])
 
 
+# ---------------------------------------------------------------------------
+# Stage 0.5 — non-retrieval gate (§0.5). A greeting / thanks / acknowledgement
+# / meta turn should NOT run the resolver, retrieval, or the faithfulness gate
+# (fixes "thanks" → full RAG). Deterministic + precise: it fires only when the
+# WHOLE query is a pleasantry (so "thanks, now what's the total?" still
+# retrieves). If unsure → None (treat as a normal retrieval query — safe).
+# ---------------------------------------------------------------------------
+
+_META_PHRASES = frozenset({
+    "what can you do", "what do you do", "who are you", "what are you",
+    "help", "what can i ask", "what can i ask you", "how do you work",
+    "what are your capabilities", "what can you help with",
+    "what can you help me with",
+})
+_GREETING_RE = re.compile(
+    r"^(hi|hello|hey|yo|hiya|howdy|greetings|good\s+(morning|afternoon|evening))"
+    r"(\s+there)?$", re.IGNORECASE,
+)
+_THANKS_RE = re.compile(
+    r"^(thanks|thank\s+you|thank\s+u|thx|ty|tysm|much\s+appreciated|"
+    r"appreciate\s+it|cheers)(\s+(so\s+much|a\s+lot|very\s+much|mate))?$",
+    re.IGNORECASE,
+)
+_ACK_RE = re.compile(
+    r"^(ok|okay|k|kk|cool|great|nice|awesome|perfect|got\s+it|sounds\s+good|"
+    r"makes\s+sense|understood|sg|sure|alright|right|yep|yeah|fine|"
+    r"good\s+to\s+know|thats?\s+helpful|that\s+helps)$",
+    re.IGNORECASE,
+)
+
+
+def classify_non_retrieval(query: str) -> str | None:
+    """Return 'greeting' | 'thanks' | 'ack' | 'meta' for a non-retrieval turn,
+    else None. Precise (whole-query match) to avoid swallowing real questions."""
+    q = (query or "").strip().rstrip("!.?")
+    if not q:
+        return None
+    ql = q.lower()
+    if ql in _META_PHRASES:
+        return "meta"
+    # Bound length so a long sentence that merely starts with "ok" isn't caught.
+    if len(q) > 60:
+        return None
+    if _GREETING_RE.match(ql):
+        return "greeting"
+    if _THANKS_RE.match(ql):
+        return "thanks"
+    if _ACK_RE.match(ql):
+        return "ack"
+    return None
+
+
+_CONVERSATIONAL_REPLIES = {
+    "greeting": (
+        "Hi! I can answer questions about the documents in this knowledge "
+        "base — ask me about a value, a clause, a total, who's mentioned "
+        "where, or how things connect."
+    ),
+    "thanks": "You're welcome! Happy to help with anything else in your documents.",
+    "ack": "Glad that helps — let me know if there's anything else you'd like to look up.",
+    "meta": (
+        "I answer questions grounded in your uploaded documents. I can look up "
+        "a specific field or value, list the documents (or rows) matching a "
+        "filter, compute totals/averages over the structured data, find where "
+        "an entity is mentioned, trace how entities connect, and summarize. "
+        "Ask in plain language and I'll cite the sources."
+    ),
+}
+
+
+def _conversational_reply(kind: str) -> str:
+    return _CONVERSATIONAL_REPLIES.get(kind, _CONVERSATIONAL_REPLIES["greeting"])
+
+
 def _count_by(items: Any, key_fn: Callable[[Any], str]) -> dict[str, int]:
     """Small helper for the emit() payloads. Returns a {category: count}
     dict — used to summarise hits-by-kind, conflicts-by-rule, etc.
@@ -257,6 +331,7 @@ from kb.query.generate import (
 from kb.query.context_resolver import (
     ContextResolution,
     ContextResolver,
+    looks_like_refinement,
     make_context_resolver,
 )
 from kb.query.intent import IntentClassifier, IntentResult, make_intent_classifier
@@ -266,11 +341,32 @@ from kb.query.planner import Plan, Planner, make_planner
 from kb.query.rerank import Reranker, make_reranker
 from kb.query.rewriter import QueryRewriter, Rewrites, make_query_rewriter
 from kb.query.rrf import DEFAULT_K, Hit, rrf_fuse
+from kb.query import structured_prefilter as prefilter
+from kb.query.structured_prefilter import ResolvedPredicate
+from kb.query.structured_answer import (
+    locator_exists,
+    parse_locator,
+    provisional_answer_mode,
+    revise_answer_mode,
+    try_structured_answer,
+)
 
 
 # Phase 8 overall decision #3 / #4 — top-K after fusion / after rerank.
 _POST_FUSION_TOP_K = 30
 _POST_RERANK_TOP_K = 10
+
+# T2 §5 — confidence-weighted scope + relevance-widen (I1).
+# A HARD-scoped retrieval auto-widens (unions unscoped, re-merges) when it
+# returns too few hits OR its top relevance is weak — so a wrong-but-populated
+# narrow can never hide the answer. Widen only ADDS; it never drops scoped hits.
+_MIN_SCOPED_HITS = 5          # below this (pre-widen) → supplement unscoped
+_RERANK_FLOOR = 0.05          # scoped top score below → relevance-widen (loose:
+                              #   widen is a safe broadening, so over-firing is OK)
+_SMALL_SCOPE_DOCS = 200       # ≤ → exact vector recall is automatic (planner)
+# A SOFT scope boosts in-scope hits multiplicatively (scale-independent across
+# reranker backends) without removing any unscoped hit — "boost, can't hide".
+_SCOPE_SOFT_BOOST_FRAC = 0.15
 
 
 def grounding_gate_refuses(
@@ -446,6 +542,11 @@ class ChatResult(BaseModel):
     intent_confidence: float | None = None
     mode: str | None = None
     plan: dict[str, Any] | None = None
+    # T2 (§S10) — structured-scope surfacing for the Plan Inspector. None when
+    # the turn was unscoped (plain RAG). Carries scoped_doc_count, scope_mode
+    # (hard/soft), scope_decision (clear/relax/intersect/replace/inherit/none),
+    # answer_mode, answered_from_structured, confidence, + a reset hint.
+    scope: dict[str, Any] | None = None
     # B6a — conversation memory.
     session_id: str | None = None
     resolved_query: str | None = None
@@ -765,6 +866,44 @@ class Orchestrator:
             adv_result.session_id = session_id
             return adv_result
 
+        # ---- Stage 0.5 — non-retrieval gate (§0.5) ----
+        # A greeting / thanks / acknowledgement / meta turn answers
+        # conversationally with NO resolver, NO retrieval, NO faithfulness
+        # gate (fixes "thanks" → full RAG). Runs AFTER the adversarial
+        # pre-flight (security first) and is precise enough that a real
+        # question riding on a pleasantry still goes through the pipeline.
+        nr_kind = classify_non_retrieval(query)
+        if nr_kind is not None:
+            await emit("non_retrieval", {"kind": nr_kind})
+            conv_gen = GenerationResult(
+                answer=_conversational_reply(nr_kind),
+                citations=[], refused=False, refusal_reason=None,
+                model_id="orchestrator:conversational",
+            )
+            conv_turn_index = await self._persist_turn(
+                workspace_id=workspace_id,
+                session_id=session_id, original_query=query,
+                resolved_query=None, ctx_resolution=None,
+                generation=conv_gen, query_log_id=query_id,
+                # Leave the carried predicate UNCHANGED — a "thanks" must not
+                # reset the user's prior scope (carry_forward_predicate=None).
+            )
+            await emit("done", {})
+            return ChatResult(
+                query_id=query_id, query=query,
+                rewrites={"original": query},
+                generation=conv_gen, hits=[], crag_score=1.0,
+                latency_ms=int((time.monotonic() - t0) * 1000),
+                faithfulness_verdict="skipped", faithfulness_score=None,
+                faithfulness_regenerations=0, faithfulness_model_id=None,
+                citation_modalities=[],
+                intent="conversational", intent_confidence=1.0,
+                mode="CONVERSATIONAL", plan=None,
+                session_id=session_id, resolved_query=None,
+                context_resolution=None, turn_index=conv_turn_index,
+                conflict_resolutions=[],
+            )
+
         # B6a — context resolution. Skips quietly when no session_id /
         # no prior context.
         resolved_query, ctx_resolution = await self._resolve_context(
@@ -928,12 +1067,76 @@ class Orchestrator:
         except Exception:
             pass
         await emit("retrieving", {})
+        # T2 — resolve the structured predicate from the plan, then retrieve
+        # with confidence-weighted scope (hard pre-filter when high-confidence,
+        # else soft boost) + relevance-widen. Skipped for the @-doc-picker path
+        # (file_ids), which is an explicit user scope handled by post-filter
+        # below. Resolution runs inside the retrieval SAVEPOINT so a resolver
+        # SQL error degrades cleanly to unscoped retrieval (I2).
+        predicate: ResolvedPredicate | None = None
+        scope_decision = "none"
+        scope_mode = "all"
         try:
-            hits = await self._retrieve_and_rerank(
+            # T2 §6.7 — resolve this turn's fresh predicate and combine it with
+            # the carried predicate via the scope state machine. The whole block
+            # runs in its own SAVEPOINT so any failure rolls back to a usable
+            # txn and retrieval proceeds UNSCOPED (I2 — plain RAG reachable).
+            if conn is not None and not file_ids:
+                t2_sp_open = False
+                try:
+                    await conn.execute("SAVEPOINT t2_predicate")
+                    t2_sp_open = True
+                    inherited: ResolvedPredicate | None = None
+                    if session_id:
+                        from kb.domain.chat_memory import read_session
+                        sess = await read_session(conn, session_id=session_id)
+                        if sess and sess.carry_forward_predicate:
+                            inherited = ResolvedPredicate.from_dict(
+                                sess.carry_forward_predicate,
+                            )
+                    schema = await prefilter.live_schema(
+                        conn, workspace_id=workspace_id,
+                    )
+                    fresh = await prefilter.resolve(
+                        conn, workspace_id=workspace_id, plan=plan, schema=schema,
+                    )
+                    refinement = bool(
+                        (ctx_resolution and ctx_resolution.refinement_of_prior)
+                        or looks_like_refinement(effective_query)
+                    )
+                    predicate, scope_decision = await prefilter.scope_state_machine(
+                        conn, workspace_id=workspace_id, query=effective_query,
+                        original_query=query,
+                        inherited=inherited, fresh=fresh, schema=schema,
+                        refinement=refinement, is_aggregate=(plan.mode == "Q"),
+                    )
+                    await conn.execute("RELEASE SAVEPOINT t2_predicate")
+                    if predicate is not None and not predicate.is_all:
+                        await emit("predicate_resolved", {
+                            "scoped_doc_count": predicate.scoped_doc_count,
+                            "confidence": round(predicate.overall_confidence, 3),
+                            "mode": "hard" if predicate.is_hard() else "soft",
+                            "selectivity": round(predicate.selectivity, 3),
+                            "decision": scope_decision,
+                            "dropped_clauses": list(predicate.dropped_clauses),
+                        })
+                    elif scope_decision in ("clear", "intersect_empty"):
+                        await emit("scope_reset", {"decision": scope_decision})
+                except Exception:
+                    predicate = None
+                    scope_decision = "none"
+                    if t2_sp_open:
+                        try:
+                            await conn.execute("ROLLBACK TO SAVEPOINT t2_predicate")
+                            await conn.execute("RELEASE SAVEPOINT t2_predicate")
+                        except Exception:
+                            pass
+            hits, scope_mode = await self._retrieve_with_scope(
                 query=effective_query,
                 rewrites=rewrites,
                 workspace_id=workspace_id,
                 conn=conn,
+                predicate=predicate,
                 emit=emit,
             )
             if retrieve_sp_open:
@@ -1291,17 +1494,97 @@ class Orchestrator:
                     if fm.inferred_doc_type and "inferred_doc_type" not in h.metadata:
                         h.metadata["inferred_doc_type"] = fm.inferred_doc_type
 
+        # ---- T2 §6.4 / §5a / §5c — answer-DIRECT from structured (pre-RAG) ----
+        # Decide the (revised) answer_mode and, for LIST / EXISTENCE / LOOKUP on
+        # a trustworthy predicate, try to answer directly from the structured
+        # layer. A confirmed structured answer (P2 / citation-guarded) ships
+        # even if CRAG would have force-refused — its grounding is the source
+        # chunk, not the RAG top-K. Any miss → None → the normal RAG path.
+        # T2 §6.13 — false-premise / locator-existence gate. If the query asks
+        # about a structural locator (clause/section/exhibit N) that does NOT
+        # appear in the scoped docs (or the corpus when unscoped), redirect
+        # rather than answer about a non-existent locator. Catches the QUESTION
+        # form the assertion-only adversarial pre-filter misses. Fail-open
+        # (locator_exists returns True on any error) so a real query is never
+        # blocked by a false 'absent'.
+        locator_absent = False
+        if conn is not None:
+            try:
+                locator = parse_locator(effective_query)
+                if locator is not None:
+                    scope_for_loc = (
+                        predicate.file_scope
+                        if (predicate is not None and not predicate.is_all) else None
+                    )
+                    exists = await locator_exists(
+                        conn, workspace_id=workspace_id,
+                        scope=scope_for_loc, locator=locator,
+                    )
+                    if not exists:
+                        locator_absent = True
+                        await emit("false_premise_locator", {
+                            "locator": f"{locator[0]} {locator[1]}",
+                        })
+            except Exception:
+                locator_absent = False
+
+        structured = None
+        answer_mode_final: str | None = None
+        if predicate is not None and conn is not None and not locator_absent:
+            try:
+                am_prov = provisional_answer_mode(
+                    plan.mode, intent.label, effective_query,
+                )
+                answer_mode_final, _am_reason = revise_answer_mode(am_prov, predicate)
+                if answer_mode_final in ("LIST", "EXISTENCE", "LOOKUP"):
+                    structured = await try_structured_answer(
+                        conn, workspace_id=workspace_id, query=effective_query,
+                        predicate=predicate, answer_mode=answer_mode_final,
+                    )
+            except Exception:
+                structured = None
+            if structured is not None:
+                await emit("structured_answer", {
+                    "answer_mode": answer_mode_final, "source": structured.source,
+                    "p2_confirmed": structured.p2_confirmed,
+                })
+
         # ---- Generation + faithfulness retry loop ----
         from kb.query.faithfulness import MAX_REGENERATIONS
 
         regenerations = 0
         await emit("generating", {
             "force_refuse": force_refuse, "n_hits_seen": len(hits),
+            "answer_mode": answer_mode_final,
         })
-        generation = await self._generator.generate(
-            effective_query, hits, force_refuse=force_refuse,
-            conflict_context=conflict_context,
-        )
+        if locator_absent:
+            _loc = parse_locator(effective_query)
+            _loc_str = f"{_loc[0].title()} {_loc[1]}" if _loc else "that reference"
+            generation = GenerationResult(
+                answer=(
+                    f"I couldn't find {_loc_str} in "
+                    + ("the documents you've scoped to"
+                       if (predicate is not None and not predicate.is_all)
+                       else "your documents")
+                    + ". It may not exist or be numbered differently — please "
+                    "double-check the reference."
+                ),
+                citations=[], refused=True,
+                refusal_reason="false_premise_locator",
+                model_id="orchestrator:locator_gate",
+            )
+        elif structured is not None:
+            generation = GenerationResult(
+                answer=structured.answer,
+                citations=list(structured.citations),
+                refused=False, refusal_reason=None,
+                model_id=f"orchestrator:structured:{structured.source}",
+            )
+        else:
+            generation = await self._generator.generate(
+                effective_query, hits, force_refuse=force_refuse,
+                conflict_context=conflict_context,
+            )
         await emit("generated", {
             "refused": generation.refused,
             "refusal_reason": generation.refusal_reason,
@@ -1340,7 +1623,17 @@ class Orchestrator:
                 await emit("mode_miss_fallback", {
                     "mode": plan.mode, "restored": len(hits),
                 })
-        faithfulness = await self._assess_faithfulness(generation, hits, conn)
+        if locator_absent:
+            # A deliberate premise-gate redirect (refused=True) — no chunk-text
+            # faithfulness to assess; the retry/grounding gates no-op on refused.
+            faithfulness = FaithfulnessResult(verdict="skipped", score=0.0)
+        elif structured is not None:
+            # A structured answer-direct is grounded by construction (P2 /
+            # citation), so it bypasses the chunk-text faithfulness gate; mark
+            # it pass so the retry loop + grounding gate below no-op.
+            faithfulness = FaithfulnessResult(verdict="pass", score=1.0)
+        else:
+            faithfulness = await self._assess_faithfulness(generation, hits, conn)
         await emit("faithfulness_checked", {
             "verdict": faithfulness.verdict, "score": faithfulness.score,
             "regenerations": regenerations,
@@ -1479,12 +1772,45 @@ class Orchestrator:
         latency_ms = int((time.monotonic() - t0) * 1000)
 
         # B6a — persist the turn + roll the session's carry-forward state.
+        # T2 §6.7 — carry THIS turn's effective predicate to the next turn
+        # (an empty {} resets it, so a fresh/unscoped turn doesn't leave a
+        # stale scope behind for the following one).
+        carry_pred = (
+            predicate.to_dict()
+            if (predicate is not None and not predicate.is_all) else {}
+        )
+        carry_fs = (
+            sorted(predicate.file_scope)
+            if (predicate is not None and predicate.file_scope) else None
+        )
         turn_index = await self._persist_turn(
             workspace_id=workspace_id,
             session_id=session_id, original_query=query,
             resolved_query=resolved_query, ctx_resolution=ctx_resolution,
             generation=generation, query_log_id=query_id,
+            carry_forward_predicate=carry_pred,
+            carry_forward_file_scope=carry_fs,
         )
+
+        # T2 (§S10) — surface the scope decision for the Plan Inspector.
+        scope_payload: dict[str, Any] | None = None
+        if predicate is not None:
+            scoped = (not predicate.is_all)
+            scope_payload = {
+                "scoped_doc_count": predicate.scoped_doc_count,  # -1 == ALL
+                "scope_mode": scope_mode,            # all/hard/hard_widened/soft
+                "scope_decision": scope_decision,    # none/clear/relax/...
+                "answer_mode": answer_mode_final,
+                "answered_from_structured": structured is not None,
+                "confidence": round(predicate.overall_confidence, 3),
+                "selectivity": round(predicate.selectivity, 3),
+                "dropped_clauses": list(predicate.dropped_clauses),
+            }
+            if scoped:
+                scope_payload["hint"] = (
+                    f"Scoped to {predicate.scoped_doc_count} document(s) from "
+                    "your filter — say 'across all documents' to reset."
+                )
 
         return ChatResult(
             query_id=query_id,
@@ -1504,6 +1830,7 @@ class Orchestrator:
             intent_confidence=intent.confidence,
             mode=plan.mode,
             plan=plan.to_dict(),
+            scope=scope_payload,
             session_id=session_id,
             resolved_query=resolved_query,
             context_resolution=(
@@ -2012,6 +2339,11 @@ class Orchestrator:
         ctx_resolution: ContextResolution | None,
         generation: GenerationResult,
         query_log_id: str,
+        # T2 (§6.7 / §7) — the ResolvedPredicate dict to carry forward to the
+        # next turn (None = leave unchanged; {} = explicit reset). The
+        # denormalized file_scope is kept only for cheap surfacing.
+        carry_forward_predicate: dict | None = None,
+        carry_forward_file_scope: list[str] | None = None,
         # `conn` kept for backward compat but no longer used — see
         # docstring. New callers should omit it.
         conn: Any = None,
@@ -2164,6 +2496,23 @@ class Orchestrator:
                     _noop_carry_forward = True  # explicit marker
                     _ = _noop_carry_forward
 
+                    # T2 (§6.7) — carry the ResolvedPredicate to the next turn
+                    # so the scope state machine can relax / intersect / inherit
+                    # it. Best-effort (own savepoint); a failure never drops the
+                    # chat_turn row. None = leave unchanged; {} = explicit reset.
+                    if carry_forward_predicate is not None:
+                        async def _carry_pred() -> None:
+                            from kb.domain.chat_memory import (
+                                update_session_carry_forward,
+                            )
+                            await update_session_carry_forward(
+                                fresh, session_id=session_id,
+                                carry_forward_predicate=carry_forward_predicate,
+                                carry_forward_file_scope=carry_forward_file_scope,
+                            )
+
+                        await best_effort_write("carry_predicate", _carry_pred)
+
                     # Tier-2 summary refresh.
                     async def _tier2() -> None:
                         await self._maybe_refresh_tier2_summary(
@@ -2262,6 +2611,7 @@ class Orchestrator:
         workspace_id: str,
         conn: Any,
         emit: Any = None,
+        file_scope: set[str] | None = None,
     ) -> list[Hit]:
         """Fan out N rewrites × 6 channels → RRF → rerank → top-10.
 
@@ -2302,12 +2652,19 @@ class Orchestrator:
         for rewrite_text, emb, bm25_text in zip(
             rewrite_texts, embeddings, bm25_texts,
         ):
+            # Pass file_scope only when set (T2 §6.8 HARD pre-filter) so an
+            # injected `run_channels` fake with today's signature is unaffected
+            # on the unscoped path.
+            channel_kwargs: dict[str, Any] = {}
+            if file_scope is not None:
+                channel_kwargs["file_scope"] = file_scope
             channel_results = await self._run_channels(
                 conn,
                 workspace_id=workspace_id,
                 query=rewrite_text,
                 query_vec=emb.vector,
                 bm25_query=bm25_text,
+                **channel_kwargs,
             )
             # `channel_results` is dict[str, list[Hit]] — collect per-channel lists.
             for channel_hits in channel_results.values():
@@ -2342,6 +2699,105 @@ class Orchestrator:
                 "n": len(reranked),
             })
         return reranked
+
+    async def _retrieve_with_scope(
+        self,
+        *,
+        query: str,
+        rewrites: Rewrites,
+        workspace_id: str,
+        conn: Any,
+        predicate: "ResolvedPredicate | None",
+        emit: Any = None,
+    ) -> tuple[list[Hit], str]:
+        """T2 §6.8/§6.10 — confidence-weighted retrieval over a ResolvedPredicate.
+
+        Returns (hits, scope_mode) where scope_mode ∈
+        {'all', 'hard', 'hard_widened', 'soft'}:
+          - ALL / no predicate → plain unscoped retrieval (today's behavior).
+          - HARD scope (confidence ≥ SCOPE_CONF_HARD) → channels filtered to the
+            file_scope, then **relevance-widen** (I1): if the scoped pass is too
+            thin (`< MIN_SCOPED_HITS`) or its top reranked relevance is weak
+            (`< RERANK_FLOOR`), UNION an unscoped pass and re-merge by score so a
+            wrong-but-populated narrow can never hide the answer.
+          - SOFT scope (low/med confidence) → retrieve UNSCOPED, then boost
+            in-scope hits in the ranking (boost, never hide).
+        """
+        async def _plain() -> list[Hit]:
+            return await self._retrieve_and_rerank(
+                query=query, rewrites=rewrites, workspace_id=workspace_id,
+                conn=conn, emit=emit,
+            )
+
+        if predicate is None or predicate.is_all or not predicate.file_scope:
+            return await _plain(), "all"
+
+        scope = {str(f) for f in predicate.file_scope}
+
+        if predicate.is_hard():
+            scoped = await self._retrieve_and_rerank(
+                query=query, rewrites=rewrites, workspace_id=workspace_id,
+                conn=conn, emit=emit, file_scope=scope,
+            )
+            top = scoped[0].score if scoped else 0.0
+            widen = (len(scoped) < _MIN_SCOPED_HITS) or (top < _RERANK_FLOOR)
+            if not widen:
+                if emit is not None:
+                    await emit("scope_applied", {
+                        "mode": "hard", "scoped_doc_count": len(scope),
+                        "n_hits": len(scoped),
+                        "confidence": round(predicate.overall_confidence, 3),
+                    })
+                return scoped, "hard"
+            # Relevance-widen — union an unscoped pass (never replaces scoped).
+            unscoped = await _plain()
+            merged = self._union_hits(scoped, unscoped)[:_POST_RERANK_TOP_K]
+            if emit is not None:
+                await emit("scope_widened", {
+                    "reason": "thin" if len(scoped) < _MIN_SCOPED_HITS else "weak_relevance",
+                    "scoped_hits": len(scoped), "merged_hits": len(merged),
+                    "scoped_doc_count": len(scope),
+                })
+            return merged, "hard_widened"
+
+        # SOFT scope — unscoped retrieval, then in-scope boost.
+        unscoped = await _plain()
+        boosted = self._apply_soft_scope_boost(unscoped, scope)
+        if emit is not None:
+            await emit("scope_applied", {
+                "mode": "soft", "scoped_doc_count": len(scope),
+                "confidence": round(predicate.overall_confidence, 3),
+            })
+        return boosted, "soft"
+
+    @staticmethod
+    def _union_hits(primary: list[Hit], secondary: list[Hit]) -> list[Hit]:
+        """Union two reranked hit lists, deduped by (id, kind), sorted by score
+        desc. `primary` (the scoped set) is added first so its hits are always
+        present in the pool (I1: widen UNIONS, never replaces the scoped set).
+        Scores from the same reranker/query are comparable across both passes."""
+        seen: dict[tuple[str, str], Hit] = {}
+        for h in primary:
+            seen[(h.id, h.kind)] = h
+        for h in secondary:
+            seen.setdefault((h.id, h.kind), h)
+        return sorted(seen.values(), key=lambda h: h.score, reverse=True)
+
+    @staticmethod
+    def _apply_soft_scope_boost(hits: list[Hit], scope: set[str]) -> list[Hit]:
+        """Re-order `hits` so in-scope docs are boosted multiplicatively
+        (scale-independent across reranker backends) WITHOUT removing any hit —
+        a low/med-confidence scope is a boost, not a filter (P1). Original
+        scores are preserved; only the ordering changes."""
+        if not scope:
+            return hits
+        factor = 1.0 + _SCOPE_SOFT_BOOST_FRAC
+
+        def _key(h: Hit) -> float:
+            in_scope = (h.metadata or {}).get("file_id") in scope
+            return h.score * (factor if in_scope else 1.0)
+
+        return sorted(hits, key=_key, reverse=True)
 
     @staticmethod
     def _iter_rewrites(rewrites: Rewrites) -> list[str]:

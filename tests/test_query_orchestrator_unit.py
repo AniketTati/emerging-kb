@@ -250,7 +250,7 @@ async def test_orchestrator_calls_crag_after_rerank():
 async def test_orchestrator_force_refuses_generator_when_crag_below_threshold():
     """Decision #8: when CRAG < threshold, generator is force-refused."""
     orch, deps = _make_orchestrator(crag_score=0.2, crag_threshold=0.5)
-    result = await orch.chat("hello", workspace_id="ws1", conn=None)
+    result = await orch.chat("what is the payment cap", workspace_id="ws1", conn=None)
     assert deps["generator"].last_force_refuse is True
     assert result.generation.refused is True
     assert result.generation.refusal_reason == "insufficient_evidence"
@@ -258,7 +258,7 @@ async def test_orchestrator_force_refuses_generator_when_crag_below_threshold():
 
 async def test_orchestrator_does_not_force_refuse_when_crag_above_threshold():
     orch, deps = _make_orchestrator(crag_score=0.7, crag_threshold=0.5)
-    result = await orch.chat("hello", workspace_id="ws1", conn=None)
+    result = await orch.chat("what is the payment cap", workspace_id="ws1", conn=None)
     assert deps["generator"].last_force_refuse is False
     assert result.generation.refused is False
 
@@ -281,11 +281,25 @@ async def test_orchestrator_search_returns_no_generation():
 async def test_orchestrator_chat_returns_chat_result_envelope():
     """Decision #10."""
     orch, _ = _make_orchestrator(crag_score=0.7)
-    result = await orch.chat("hello", workspace_id="ws1", conn=None)
+    result = await orch.chat("what is the payment cap", workspace_id="ws1", conn=None)
     assert isinstance(result, ChatResult)
     assert result.generation.answer.startswith("answered")
     assert len(result.generation.citations) > 0
     assert result.crag_score == pytest.approx(0.7)
+
+
+async def test_orchestrator_chat_s05_conversational_short_circuit():
+    """T2 §0.5 — a 'thanks' turn answers conversationally with NO retrieval /
+    generator / faithfulness (the generator is never invoked)."""
+    orch, deps = _make_orchestrator(crag_score=0.7)
+    result = await orch.chat("thanks!", workspace_id="ws1", conn=None)
+    assert isinstance(result, ChatResult)
+    assert result.mode == "CONVERSATIONAL"
+    assert result.generation.refused is False
+    assert result.hits == []
+    assert result.faithfulness_verdict == "skipped"
+    # The RAG generator was never called (no force_refuse recorded).
+    assert deps["generator"].last_force_refuse is None
 
 
 # ===========================================================================
@@ -296,7 +310,7 @@ async def test_orchestrator_chat_returns_chat_result_envelope():
 async def test_orchestrator_chat_with_empty_corpus_returns_refusal_envelope():
     """Decision #16: all channels return [] → CRAG=0 → generator force-refused."""
     orch, deps = _make_orchestrator(hits_per_query=[], crag_score=0.0)
-    result = await orch.chat("hello", workspace_id="ws1", conn=None)
+    result = await orch.chat("what is the payment cap", workspace_id="ws1", conn=None)
     assert result.generation.refused is True
     # CRAG score 0.0 < 0.5 → force_refuse path → reason="insufficient_evidence"
     assert result.generation.refusal_reason == "insufficient_evidence"

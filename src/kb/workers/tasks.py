@@ -4725,6 +4725,19 @@ async def converge_workspace_fields_impl(
                     summary["renamed_scalar_keys"] += len(rename_map)
         summary["doc_types"] += 1
 
+    # T2 (§6.1 / A10) — if convergence rewrote any canonical key, bump the
+    # workspace schema epoch so the live-schema cache invalidates. Best-effort:
+    # a bump failure never affects the convergence result we already committed.
+    if summary["renamed_scalar_keys"] > 0:
+        from kb.domain.schema_epoch import bump_schema_epoch
+        async with open_connection(db_url) as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    "SELECT set_config('app.workspace_id', %s, true)",
+                    (workspace_id,),
+                )
+                await bump_schema_epoch(conn, workspace_id=workspace_id)
+
     return summary
 
 
@@ -4896,6 +4909,18 @@ async def converge_workspace_columns_impl(
                         )
                         summary["promoted_columns"] += 1
         summary["unit_types"] += 1
+
+    # T2 (§6.1 / A10) — bump the schema epoch if any column key was rewritten,
+    # so the live-schema cache invalidates. Best-effort (see scalar pass).
+    if summary["renamed_column_keys"] > 0:
+        from kb.domain.schema_epoch import bump_schema_epoch
+        async with open_connection(db_url) as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    "SELECT set_config('app.workspace_id', %s, true)",
+                    (workspace_id,),
+                )
+                await bump_schema_epoch(conn, workspace_id=workspace_id)
 
     return summary
 

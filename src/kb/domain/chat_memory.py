@@ -62,6 +62,8 @@ class ChatSession:
     prior_result_set_id: str | None
     older_turn_summary: str
     title: str | None
+    # T2 (§6.7) — the carried ResolvedPredicate (jsonb). Empty {} = no scope.
+    carry_forward_predicate: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -77,6 +79,9 @@ class ChatContext:
     older_turn_summary: str
     # Tier 1 — last K verbatim turns
     last_k_verbatim_turns: tuple[dict, ...] = field(default_factory=tuple)
+    # T2 (§6.7) — the carried ResolvedPredicate dict (the scope state machine
+    # reads this to relax / intersect / inherit a prior scope).
+    carry_forward_predicate: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -87,6 +92,7 @@ class ChatContext:
             "prior_result_set_id": self.prior_result_set_id,
             "older_turn_summary": self.older_turn_summary,
             "last_k_verbatim_turns": list(self.last_k_verbatim_turns),
+            "carry_forward_predicate": self.carry_forward_predicate,
         }
 
 
@@ -98,7 +104,7 @@ class ChatContext:
 _SESSION_COLS = (
     "id::text, workspace_id::text, user_id::text, created_at, last_active_at, "
     "carry_forward_entities, carry_forward_filters, prior_result_set_id::text, "
-    "older_turn_summary, title"
+    "older_turn_summary, title, carry_forward_predicate"
 )
 
 
@@ -117,6 +123,10 @@ def _row_to_session(row: tuple) -> ChatSession:
         prior_result_set_id=str(row[7]) if row[7] else None,
         older_turn_summary=str(row[8] or ""),
         title=row[9],
+        carry_forward_predicate=(
+            row[10] if isinstance(row[10], dict)
+            else (json.loads(row[10]) if (len(row) > 10 and row[10]) else {})
+        ),
     )
 
 
@@ -156,19 +166,36 @@ async def update_session_carry_forward(
     carry_forward_filters: dict | None = None,
     prior_result_set_id: str | None = None,
     older_turn_summary: str | None = None,
+    carry_forward_predicate: dict | None = None,
+    carry_forward_file_scope: list[str] | None = None,
 ) -> bool:
     """Merge-update the carry-forward fields. Any None argument is left
-    untouched. Returns True on hit."""
+    untouched. Returns True on hit.
+
+    T2 (§6.7): `carry_forward_predicate` persists the ResolvedPredicate so the
+    next turn's scope state machine can relax/intersect/inherit it. Pass an
+    empty dict ``{}`` to CLEAR a prior predicate (a reset), since None means
+    "leave unchanged". `carry_forward_file_scope` is a denormalized copy of the
+    predicate's file_scope kept only for cheap surfacing."""
     # COALESCE pattern: SET col = COALESCE(%s, col). For arrays/jsonb
     # the explicit NULL → no-change is cleaner than building dynamic SQL.
+    # The predicate uses a sentinel: None → no-change; {} (encoded as the JSON
+    # string '{}') → reset to empty. So we pass the json text directly (never
+    # NULL) when the caller supplied a dict, and NULL when they didn't.
+    pred_json = (
+        json.dumps(carry_forward_predicate)
+        if carry_forward_predicate is not None else None
+    )
     cur = await conn.execute(
         """
         UPDATE chat_sessions SET
-            carry_forward_entities = COALESCE(%s::uuid[], carry_forward_entities),
-            carry_forward_filters  = COALESCE(%s::jsonb,  carry_forward_filters),
-            prior_result_set_id    = COALESCE(%s::uuid,   prior_result_set_id),
-            older_turn_summary     = COALESCE(%s,         older_turn_summary),
-            last_active_at         = NOW()
+            carry_forward_entities  = COALESCE(%s::uuid[], carry_forward_entities),
+            carry_forward_filters   = COALESCE(%s::jsonb,  carry_forward_filters),
+            prior_result_set_id     = COALESCE(%s::uuid,   prior_result_set_id),
+            older_turn_summary      = COALESCE(%s,         older_turn_summary),
+            carry_forward_predicate = COALESCE(%s::jsonb,  carry_forward_predicate),
+            carry_forward_file_scope = COALESCE(%s::uuid[], carry_forward_file_scope),
+            last_active_at          = NOW()
          WHERE id = %s
         """,
         (
@@ -177,6 +204,8 @@ async def update_session_carry_forward(
              if carry_forward_filters is not None else None),
             prior_result_set_id,
             older_turn_summary,
+            pred_json,
+            carry_forward_file_scope,
             session_id,
         ),
     )
@@ -388,6 +417,7 @@ async def build_chat_context(
         prior_result_set_id=session.prior_result_set_id,
         older_turn_summary=session.older_turn_summary,
         last_k_verbatim_turns=hot_payload,
+        carry_forward_predicate=session.carry_forward_predicate,
     )
 
 

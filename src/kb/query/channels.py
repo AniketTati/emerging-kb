@@ -34,6 +34,11 @@ from kb.query.rrf import Hit
 # Decision #2: top-K per channel before RRF fusion.
 TOP_K_PER_CHANNEL = 20
 
+# T2 §6.8 — when a dense channel is doc-scoped (HARD pre-filter), over-fetch
+# candidates so the (possibly HNSW-served) scan still surfaces enough in-scope
+# rows for the reranker. RRF + rerank trim back down, so a modest bump is safe.
+_SCOPED_OVERFETCH = 60
+
 # Decision #11: snippet truncation for downstream rendering.
 # Bumped 500→1500 (Q6 fix), then 1500→2500 (Q13 fix). Both bumps were
 # motivated by the contextual_prefix + contextual_text envelope: BM25
@@ -134,17 +139,32 @@ def _sanitize_bm25_query(q: str) -> str:
     return cleaned
 
 
+def _scope_param(file_scope: set[str] | None) -> tuple:
+    """T2 (§6.8) — the param tuple for a doc-scope clause (`= ANY(%s::uuid[])`),
+    or empty when unscoped. Used by every channel; the SQL fragment is inlined
+    per channel so the file_id column alias is correct."""
+    if not file_scope:
+        return ()
+    return ([str(x) for x in file_scope],)
+
+
 async def bm25_chunks_channel(
     conn: Any,
     *,
     workspace_id: str,
     query: str,
     limit: int = TOP_K_PER_CHANNEL,
+    file_scope: set[str] | None = None,
 ) -> list[Hit]:
-    """BM25 over contextual_chunks via pg_search `@@@` operator."""
+    """BM25 over contextual_chunks via pg_search `@@@` operator.
+
+    `file_scope` (T2 §6.8) restricts the search to a set of file_ids — a HARD
+    pre-filter. None (default) = today's whole-workspace search."""
     safe_query = _sanitize_bm25_query(query)
     if not safe_query:
         return []
+    sp = _scope_param(file_scope)
+    scope_sql = " AND cc.file_id = ANY(%s::uuid[]) " if sp else ""
     # Filter out chunks belonging to soft-deleted files. Otherwise re-
     # uploads (which dedupe by content_sha and soft-delete the loser)
     # leak ghost chunks into retrieval — citations point at deleted
@@ -157,8 +177,9 @@ async def bm25_chunks_channel(
         "JOIN chunks c ON c.id = cc.chunk_id "
         "JOIN files f ON f.id = c.file_id AND f.lifecycle_state <> 'deleted' "
         "WHERE cc.workspace_id = %s AND cc.contextual_text @@@ %s "
+        + scope_sql +
         "ORDER BY sc DESC LIMIT %s",
-        (workspace_id, safe_query, limit),
+        (workspace_id, safe_query) + sp + (limit,),
     )
     if rows is None:
         return []
@@ -184,25 +205,37 @@ async def bm25_raptor_channel(
     workspace_id: str,
     query: str,
     limit: int = TOP_K_PER_CHANNEL,
+    file_scope: set[str] | None = None,
 ) -> list[Hit]:
-    """BM25 over raptor_nodes.text — covers per_doc + corpus summaries."""
+    """BM25 over raptor_nodes.text — covers per_doc + corpus summaries.
+
+    T2 §6.8: under a doc-scope, EXCLUDE corpus-level nodes (`file_id IS NULL`) —
+    a whole-corpus summary isn't inside a narrowed doc set; corpus nodes serve
+    the unscoped / G-mode path only."""
     safe_query = _sanitize_bm25_query(query)
     if not safe_query:
         return []
-    # Live-files-only filter. raptor_nodes.file_id is nullable for
-    # corpus-level summary rows (no per-file scope) — keep those by
-    # using NOT EXISTS so a null file_id passes through.
+    sp = _scope_param(file_scope)
+    if sp:
+        live_sql = " AND rn.file_id = ANY(%s::uuid[]) "
+    else:
+        # Live-files-only filter. raptor_nodes.file_id is nullable for
+        # corpus-level summary rows (no per-file scope) — keep those by
+        # using NOT EXISTS so a null file_id passes through.
+        live_sql = (
+            "  AND (rn.file_id IS NULL OR NOT EXISTS ("
+            "    SELECT 1 FROM files f "
+            "     WHERE f.id = rn.file_id AND f.lifecycle_state = 'deleted')) "
+        )
     rows = await _run_channel_query(
         conn, "ch_bm25_raptor",
         "SELECT id::text, text, paradedb.score(id) AS sc, "
         "  level, scope, file_id::text "
         "FROM raptor_nodes rn "
         "WHERE workspace_id = %s AND text @@@ %s "
-        "  AND (rn.file_id IS NULL OR NOT EXISTS ("
-        "    SELECT 1 FROM files f "
-        "     WHERE f.id = rn.file_id AND f.lifecycle_state = 'deleted')) "
+        + live_sql +
         "ORDER BY sc DESC LIMIT %s",
-        (workspace_id, safe_query, limit),
+        (workspace_id, safe_query) + sp + (limit,),
     )
     if rows is None:
         return []
@@ -238,13 +271,24 @@ async def dense_chunks_channel(
     workspace_id: str,
     query_vec: list[float],
     limit: int = TOP_K_PER_CHANNEL,
+    file_scope: set[str] | None = None,
 ) -> list[Hit]:
     """HNSW cosine over chunk_embeddings.embedding. Joins back to
     contextual_chunks so Hit.id == contextual_chunks.id (same dedup key as
-    BM25 channel — same chunk surfaced by both → single fused Hit)."""
+    BM25 channel — same chunk surfaced by both → single fused Hit).
+
+    T2 §6.8: under a doc-scope, the `cc.file_id = ANY(scope)` filter is
+    selective enough that Postgres prefers an exact (bitmap/seq) scan + sort
+    over the HNSW index for a small scope, giving ~100% recall of the
+    embedding-nearest in-scope chunks (no SET LOCAL needed — which would be
+    unsafe on the channels' shared connection). Scoped queries also over-fetch
+    so the larger-scope HNSW path still surfaces enough in-scope rows."""
     if not query_vec:
         return []
     vec = _vec_literal(query_vec)
+    sp = _scope_param(file_scope)
+    scope_sql = " AND cc.file_id = ANY(%s::uuid[]) " if sp else ""
+    eff_limit = max(limit, _SCOPED_OVERFETCH) if sp else limit
     rows = await _run_channel_query(
         conn, "ch_dense_chunks",
         "SELECT cc.id::text, cc.contextual_text, "
@@ -254,8 +298,9 @@ async def dense_chunks_channel(
         "JOIN contextual_chunks cc ON cc.id = ce.contextual_chunk_id "
         "JOIN files f ON f.id = cc.file_id AND f.lifecycle_state <> 'deleted' "
         "WHERE ce.workspace_id = %s "
+        + scope_sql +
         "ORDER BY ce.embedding <=> %s::halfvec LIMIT %s",
-        (vec, workspace_id, vec, limit),
+        (vec, workspace_id) + sp + (vec, eff_limit),
     )
     if rows is None:
         return []
@@ -281,11 +326,24 @@ async def dense_raptor_channel(
     workspace_id: str,
     query_vec: list[float],
     limit: int = TOP_K_PER_CHANNEL,
+    file_scope: set[str] | None = None,
 ) -> list[Hit]:
-    """HNSW cosine over raptor_nodes.embedding."""
+    """HNSW cosine over raptor_nodes.embedding.
+
+    T2 §6.8: under a doc-scope, exclude corpus-level (`file_id IS NULL`) nodes."""
     if not query_vec:
         return []
     vec = _vec_literal(query_vec)
+    sp = _scope_param(file_scope)
+    if sp:
+        live_sql = " AND rn.file_id = ANY(%s::uuid[]) "
+    else:
+        live_sql = (
+            "  AND (rn.file_id IS NULL OR NOT EXISTS ("
+            "    SELECT 1 FROM files f "
+            "     WHERE f.id = rn.file_id AND f.lifecycle_state = 'deleted')) "
+        )
+    eff_limit = max(limit, _SCOPED_OVERFETCH) if sp else limit
     rows = await _run_channel_query(
         conn, "ch_dense_raptor",
         "SELECT id::text, text, "
@@ -293,11 +351,9 @@ async def dense_raptor_channel(
         "  level, scope, file_id::text "
         "FROM raptor_nodes rn "
         "WHERE workspace_id = %s "
-        "  AND (rn.file_id IS NULL OR NOT EXISTS ("
-        "    SELECT 1 FROM files f "
-        "     WHERE f.id = rn.file_id AND f.lifecycle_state = 'deleted')) "
+        + live_sql +
         "ORDER BY embedding <=> %s::halfvec LIMIT %s",
-        (vec, workspace_id, vec, limit),
+        (vec, workspace_id) + sp + (vec, eff_limit),
     )
     if rows is None:
         return []
@@ -329,16 +385,20 @@ async def mentions_exact_channel(
     workspace_id: str,
     query: str,
     limit: int = TOP_K_PER_CHANNEL,
+    file_scope: set[str] | None = None,
 ) -> list[Hit]:
     """Case-insensitive substring match on extracted_mentions.mention_text.
 
     Returns Hit.kind='chunk' (the contextual_chunk_id that contains the
     matched mention) so the result dedups against BM25/dense channels at
     RRF time. metadata carries `matched_mention` + `matched_type` for
-    explainability in the citation envelope.
+    explainability in the citation envelope. `file_scope` (T2 §6.8) restricts
+    to a doc set when hard-scoped.
     """
     if not query.strip():
         return []
+    sp = _scope_param(file_scope)
+    scope_sql = " AND em.file_id = ANY(%s::uuid[]) " if sp else ""
     # R2 — same source-position columns as the atomic-unit channel so
     # the citation envelope can highlight the exact mention span
     # inside the chunk. extracted_mentions.source_chunk_id is the
@@ -354,8 +414,9 @@ async def mentions_exact_channel(
         "JOIN files f ON f.id = em.file_id AND f.lifecycle_state <> 'deleted' "
         "WHERE em.workspace_id = %s "
         "AND lower(em.mention_text) LIKE lower(%s) "
+        + scope_sql +
         "LIMIT %s",
-        (workspace_id, f"%{query}%", limit),
+        (workspace_id, f"%{query}%") + sp + (limit,),
     )
     if rows is None:
         return []
@@ -504,6 +565,7 @@ async def sub_entities_rarity_channel(
     workspace_id: str,
     query: str,
     limit: int = TOP_K_PER_CHANNEL,
+    file_scope: set[str] | None = None,
 ) -> list[Hit]:
     """High-rarity sub_entity rows for needle-finding scenarios.
 
@@ -525,6 +587,8 @@ async def sub_entities_rarity_channel(
         unit_filter = "AND ee.unit_type = 'transaction'"
     elif "row" in q_low:
         unit_filter = "AND ee.unit_type = 'row'"
+    sp = _scope_param(file_scope)
+    scope_sql = " AND ee.file_id = ANY(%s::uuid[]) " if sp else ""
     rows = await _run_channel_query(
         conn, "ch_sub_entities_rarity",
         f"SELECT ee.id::text, ee.fields::text, ee.file_id::text, "
@@ -536,8 +600,9 @@ async def sub_entities_rarity_channel(
         f"WHERE ee.workspace_id = %s "
         f"  AND ee.unit_type IS NOT NULL "  # sub_entity rows only
         f"  {unit_filter} "
+        + scope_sql +
         f"ORDER BY rscore DESC NULLS LAST LIMIT %s",
-        (workspace_id, limit),
+        (workspace_id,) + sp + (limit,),
     )
     if rows is None:
         return []
@@ -578,6 +643,7 @@ async def run_all_channels(
     query_vec: list[float],
     limit: int = TOP_K_PER_CHANNEL,
     bm25_query: str | None = None,
+    file_scope: set[str] | None = None,
 ) -> dict[str, list[Hit]]:
     """Run all 6 channels in parallel via asyncio.gather. Returns
     {channel_name: hits}. Failed channels degrade to [] (decision #4 + #12).
@@ -643,11 +709,14 @@ async def run_all_channels(
         text_for_channel = bm25_text if name.startswith("bm25_") else query
         tasks[name] = fn(
             conn, workspace_id=workspace_id,
-            query=text_for_channel, limit=limit,
+            query=text_for_channel, limit=limit, file_scope=file_scope,
         )
     for name, attr in vec_channels.items():
         fn = getattr(_self, attr)
-        tasks[name] = fn(conn, workspace_id=workspace_id, query_vec=query_vec, limit=limit)
+        tasks[name] = fn(
+            conn, workspace_id=workspace_id, query_vec=query_vec,
+            limit=limit, file_scope=file_scope,
+        )
 
     results = await asyncio.gather(*tasks.values(), return_exceptions=True)
     out: dict[str, list[Hit]] = {}

@@ -435,6 +435,11 @@ async def rename_inferred_field(
     r = await cur.fetchone()
     if r is None:
         raise HTTPException(status_code=404, detail="inferred field not found")
+    # T2 (§6.1 / A10) — a display-rename is a schema change for query purposes:
+    # bump the workspace schema epoch so the live-schema cache (which holds the
+    # display→canonical map) invalidates immediately. Best-effort.
+    from kb.domain.schema_epoch import bump_schema_epoch
+    await bump_schema_epoch(conn, workspace_id=workspace_id)
     return InferredFieldOut(
         id=str(r[0]),
         workspace_id=str(r[1]),
