@@ -419,8 +419,12 @@ async def test_chat_with_q_payload_executes_and_persists_audit_row(
     await _seed_files(db_url_superuser, test_workspace, count=4)
 
     class StubPlanner(IdentityPlanner):
-        async def plan(self, query, intent, *, requested_mode=None):
-            base = await super().plan(query, intent, requested_mode=requested_mode)
+        async def plan(self, query, intent, *, requested_mode=None,
+                       conn=None, workspace_id=None):
+            base = await super().plan(
+                query, intent, requested_mode=requested_mode,
+                conn=conn, workspace_id=workspace_id,
+            )
             return Plan(
                 mode="Q",
                 intent="aggregation",
@@ -463,8 +467,12 @@ async def test_chat_with_q_payload_executes_and_persists_audit_row(
     assert len(agg_hits) == 1
     audit_id = agg_hits[0]["metadata"]["audit_query_id"]
     assert agg_hits[0]["metadata"]["row_count"] == 1   # COUNT returns 1 row
-    assert "Aggregate result" in agg_hits[0]["snippet"]
+    assert "Result over" in agg_hits[0]["snippet"]
     assert "n=4" in agg_hits[0]["snippet"]   # 4 live files
+    # T3 §6.6 — the audit envelope ("computed from N rows") + sanity verdict
+    # ride on the aggregate hit (the COUNT of 4 live files passes sanity).
+    assert "contributing row" in agg_hits[0]["snippet"]
+    assert agg_hits[0]["metadata"]["audit_envelope"]["sanity_ok"] is True
 
     # audit_queries row landed.
     async with await psycopg.AsyncConnection.connect(db_url_superuser) as conn:
@@ -487,7 +495,8 @@ async def test_chat_with_bad_q_payload_falls_through_to_refusal(
     from kb.query.planner import IdentityPlanner, Plan
 
     class BadPayloadPlanner(IdentityPlanner):
-        async def plan(self, query, intent, *, requested_mode=None):
+        async def plan(self, query, intent, *, requested_mode=None,
+                       conn=None, workspace_id=None):
             return Plan(
                 mode="Q",
                 intent="aggregation",

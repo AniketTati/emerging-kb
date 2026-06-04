@@ -34,9 +34,14 @@ from kb.q_planner.compiler import _jsonb_extract_sql, compile_row_filters
 from kb.q_planner.dynamic_catalog import _collapse, _from_live_schema
 from kb.q_planner.grammar import Aggregation
 from kb.q_planner.group_by import canonicalize_and_cap
+from datetime import datetime
+
 from kb.query.mode_router import (
     _aggregate_all_null,
     _concept_tokens,
+    _derive_date_row_filter,
+    _heterogeneous_sum_caveat,
+    _multi_unit_type_caveat,
     _reconcile_note,
 )
 
@@ -325,6 +330,126 @@ def test_reconcile_note_surfaces_both_on_material_gap():
 def test_reconcile_note_consistent_within_tolerance():
     note = _reconcile_note(5_200_000.0, "stated_total", 5_200_100.0, 0.01)
     assert "consistent" in note.lower()
+
+
+# ---------------------------------------------------------------------------
+# Heterogeneous-SUM grain guard (#5) + multi-unit-type overlap caveat (#6)
+# ---------------------------------------------------------------------------
+
+
+def test_heterogeneous_sum_caveat_flags_period_variants():
+    """The live '606M' case: SUM over 3 distinct as-of-date fields is flagged."""
+    plan = parse_plan({
+        "from": "proposed_fields",
+        "filters": [{"field": "field_name", "op": "in", "value": [
+            "outstanding_principal_as_of_mar_31_2025",
+            "outstanding_principal_as_of_jan_1_2025",
+            "original_principal",
+        ]}],
+        "aggregations": [{"op": "SUM", "field": "value_numeric", "alias": "t"}],
+    })
+    note = _heterogeneous_sum_caveat(plan)
+    assert note and "points in time" in note
+
+
+def test_heterogeneous_sum_caveat_quiet_on_single_field():
+    plan = parse_plan({
+        "from": "proposed_fields",
+        "filters": [{"field": "field_name", "op": "eq", "value": "total_revenue"}],
+        "aggregations": [{"op": "SUM", "field": "value_numeric", "alias": "t"}],
+    })
+    assert _heterogeneous_sum_caveat(plan) is None
+
+
+def test_multi_unit_type_caveat_flags_distinct_overlapping_types():
+    plan = parse_plan({
+        "from": "extracted_entities",
+        "filters": [{"field": "unit_type", "op": "in",
+                     "value": ["transaction_listing", "major_transaction"]}],
+        "aggregations": [{"op": "SUM", "field": "fields.debit::numeric", "alias": "t"}],
+    })
+    note = _multi_unit_type_caveat(plan)
+    assert note and "double-count" in note
+
+
+def test_multi_unit_type_caveat_quiet_on_spelling_variants():
+    """transaction_listing + transactionlisting collapse to one canonical type
+    → no overlap warning."""
+    plan = parse_plan({
+        "from": "extracted_entities",
+        "filters": [{"field": "unit_type", "op": "in",
+                     "value": ["transaction_listing", "transactionlisting"]}],
+        "aggregations": [{"op": "SUM", "field": "fields.debit::numeric", "alias": "t"}],
+    })
+    assert _multi_unit_type_caveat(plan) is None
+
+
+def test_multi_unit_type_caveat_quiet_on_min_max():
+    """MIN/MAX don't double-count under overlap → no warning."""
+    plan = parse_plan({
+        "from": "extracted_entities",
+        "filters": [{"field": "unit_type", "op": "in",
+                     "value": ["transaction_listing", "major_transaction"]}],
+        "aggregations": [{"op": "MAX", "field": "fields.debit::numeric", "alias": "m"}],
+    })
+    assert _multi_unit_type_caveat(plan) is None
+
+
+# ---------------------------------------------------------------------------
+# Deterministic date-window derivation (#3 / §8 #12 end-to-end)
+# ---------------------------------------------------------------------------
+
+
+def test_derive_date_row_filter_from_query():
+    """'last quarter' → a row-level date window on the unit_type's date key,
+    even though the planner emitted no date_filter."""
+    cat = _catalog([
+        UnitColumnInfo("major_transaction", "debit", "number", 1.0, 30, 2, True,
+                       grain="unit:major_transaction"),
+        UnitColumnInfo("major_transaction", "date", "string", 1.0, 30, 2, False,
+                       grain="unit:major_transaction"),
+    ])
+    plan = parse_plan({
+        "from": "extracted_entities",
+        "filters": [{"field": "unit_type", "op": "in", "value": ["major_transaction"]}],
+        "aggregations": [{"op": "MAX", "field": "fields.debit::numeric", "alias": "hi"}],
+    })
+    d = _derive_date_row_filter(
+        "highest transaction last quarter", plan, cat, now=datetime(2026, 6, 4),
+    )
+    assert d is not None
+    assert d["column"] == "date" and d["op"] == "between"
+    assert d["value"] == ["2026-01-01", "2026-03-31"]  # Q1 2026, calendar-rel
+
+
+def test_derive_date_row_filter_quiet_without_phrase_or_key():
+    cat = _catalog([
+        UnitColumnInfo("major_transaction", "debit", "number", 1.0, 30, 2, True,
+                       grain="unit:major_transaction"),
+        UnitColumnInfo("major_transaction", "date", "string", 1.0, 30, 2, False,
+                       grain="unit:major_transaction"),
+    ])
+    plan = parse_plan({
+        "from": "extracted_entities",
+        "filters": [{"field": "unit_type", "op": "in", "value": ["major_transaction"]}],
+        "aggregations": [{"op": "MAX", "field": "fields.debit::numeric", "alias": "hi"}],
+    })
+    # no date phrase in the query
+    assert _derive_date_row_filter(
+        "highest transaction", plan, cat, now=datetime(2026, 6, 4),
+    ) is None
+    # date phrase but the unit_type has no date key
+    cat_nodate = _catalog([
+        UnitColumnInfo("party", "name", "string", 1.0, 10, 2, False, grain="unit:party"),
+    ])
+    plan2 = parse_plan({
+        "from": "extracted_entities",
+        "filters": [{"field": "unit_type", "op": "eq", "value": "party"}],
+        "aggregations": [{"op": "COUNT", "field": "*", "alias": "n"}],
+    })
+    assert _derive_date_row_filter(
+        "count parties last quarter", plan2, cat_nodate, now=datetime(2026, 6, 4),
+    ) is None
 
 
 # ---------------------------------------------------------------------------

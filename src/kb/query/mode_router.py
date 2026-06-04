@@ -794,6 +794,150 @@ async def _recon_tolerance(conn: Any, workspace_id: str) -> float:
     )
 
 
+# Field-name fragments that signal a point-in-time / period variant — summing
+# across these (mar-31 outstanding + jan-1 outstanding + original) is the live
+# "606M" non-additive trap.
+_PERIOD_SUFFIX_RE = re.compile(
+    r"(_as_of_|_q[1-4]\b|q[1-4]_?fy|_fy_?\d{2,4}|_\d{4}\b|"
+    r"_(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\b|"
+    r"opening|closing|_\d{1,2}_\d{4})",
+    re.I,
+)
+
+
+def _heterogeneous_sum_caveat(parsed: Any) -> str | None:
+    """§6.11 grain guard — a SUM that adds >=2 DISTINCT `field_name`s together is
+    suspicious (you may be adding different as-of dates / metrics of the SAME
+    item). Surface a caveat; never silently change the number (§6.6)."""
+    if not any(
+        (getattr(a, "op", "") or "").upper() == "SUM" for a in parsed.aggregations
+    ):
+        return None
+    field_names: list[str] = []
+    for f in parsed.filters:
+        if f.field == "field_name" and f.op == "in" and isinstance(f.value, list):
+            field_names = [str(v) for v in f.value]
+    distinct = sorted(set(field_names))
+    if len(distinct) < 2:
+        return None
+    period = [n for n in distinct if _PERIOD_SUFFIX_RE.search(n)]
+    listed = ", ".join(distinct[:6]) + (" …" if len(distinct) > 6 else "")
+    if period:
+        return (
+            f"Grain warning: this SUM adds {len(distinct)} DISTINCT fields "
+            f"together ({listed}), several of which look like different points "
+            f"in time / periods. Summing different as-of dates or period-"
+            f"variants of one item is usually NOT meaningful — verify they are "
+            f"additive (e.g. a true multi-period cumulative) before trusting it."
+        )
+    return (
+        f"Grain warning: this SUM adds {len(distinct)} DISTINCT fields together "
+        f"({listed}). Verify they measure the same additive quantity, not "
+        f"different metrics of one item."
+    )
+
+
+def _multi_unit_type_caveat(parsed: Any) -> str | None:
+    """§6.11 dedup guard — an additive aggregate unioning >=2 *semantically
+    distinct* unit_types (collapsing spelling variants) may double-count if one
+    is a highlighted subset of another (e.g. `major_transaction` inside
+    `transaction_listing`). Caveat only — silent row-dedup would risk new
+    wrongness without a reliable natural key."""
+    from kb.q_planner.dynamic_catalog import _collapse
+
+    unit_vals = [
+        str(v)
+        for f in parsed.filters
+        if f.field == "unit_type" and f.op in ("eq", "in")
+        for v in (f.value if isinstance(f.value, list) else [f.value])
+        if v is not None
+    ]
+    canon = sorted({_collapse(u) for u in unit_vals if u})
+    if len(canon) < 2:
+        return None
+    # Only additive aggregates double-count under overlap; MIN/MAX don't.
+    if not any(
+        (getattr(a, "op", "") or "").upper() in ("SUM", "COUNT", "COUNT_DISTINCT")
+        for a in parsed.aggregations
+    ):
+        return None
+    return (
+        f"Overlap warning: this aggregate unions {len(canon)} DISTINCT row "
+        f"types ({', '.join(canon)}). If one is a highlighted subset of another "
+        f"(e.g. 'major transactions' also listed among all transactions), the "
+        f"total may double-count — confirm the row types don't overlap."
+    )
+
+
+# Date phrases lifted from the query when the planner emitted no date_filter —
+# the set `normalize_date_expression` understands.
+_DATE_PHRASE_RE = re.compile(
+    r"\b(today|yesterday|this month|last month|previous month|this year|"
+    r"last year|previous year|ytd|year to date|this quarter|current quarter|"
+    r"last quarter|previous quarter|last \d{1,3} (?:days?|months?|years?)|"
+    r"q[1-4]\s*(?:fy)?\s*'?\d{2,4}|fy\s*'?\d{2,4}|"
+    r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{4}|"
+    r"\d{4}-\d{2}(?:-\d{2})?)\b",
+    re.I,
+)
+# Key names that hold a per-row date.
+_DATE_KEY_RE = re.compile(
+    r"(^|_)(date|dated|day|datetime|timestamp|posting|value_date|txn_date)($|_)",
+    re.I,
+)
+
+
+def _derive_date_row_filter(query: str, parsed: Any, live_catalog: Any, *, now):
+    """§6.11 #12 — when the planner emitted NO date window, lift one from the
+    query and the catalog's date key on the target unit_type, so "highest
+    transaction last quarter" filters at row level instead of running all-time.
+
+    Conservative + fail-open: only fires for an `extracted_entities` plan with a
+    recognizable date phrase AND a real date key on the queried rows. If it
+    over-narrows to zero rows, the §6.6 sanity check refuses honestly ("no rows
+    matched") — which beats a confidently-wrong all-time number. Returns a
+    RowFilter dict or None."""
+    if parsed.from_table != "extracted_entities" or live_catalog is None:
+        return None
+    m = _DATE_PHRASE_RE.search(query or "")
+    if not m:
+        return None
+    try:
+        from kb.query.structured_prefilter import normalize_date_expression
+        rng = normalize_date_expression(m.group(0), now=now)
+    except Exception:  # noqa: BLE001
+        return None
+    if rng is None:
+        return None
+    from kb.q_planner.dynamic_catalog import _collapse
+
+    unit_vals = [
+        str(v)
+        for f in parsed.filters
+        if f.field == "unit_type" and f.op in ("eq", "in")
+        for v in (f.value if isinstance(f.value, list) else [f.value])
+        if v is not None
+    ]
+    candidates: list[str] = []
+    if unit_vals:
+        for ut in unit_vals:
+            candidates.extend(live_catalog.unit_keys.get(_collapse(ut), {}).keys())
+    else:
+        for km in live_catalog.unit_keys.values():
+            candidates.extend(km.keys())
+    if "date" in candidates:
+        date_key = "date"
+    else:
+        date_keys = sorted({k for k in candidates if _DATE_KEY_RE.search(k)})
+        date_key = date_keys[0] if date_keys else None
+    if date_key is None:
+        return None
+    return {
+        "column": date_key, "op": "between", "value": rng.to_list(),
+        "grain": "unit", "kind": "date", "_phrase": m.group(0),
+    }
+
+
 def _aggregate_all_null(group_by: tuple | list, cols: list, rows: list) -> bool:
     """True when EVERY aggregate cell (the columns after the group-by keys) is
     NULL — i.e. rows may have matched but nothing cast to a value. This is the
@@ -964,6 +1108,26 @@ async def _route_q_mode(
     # reconciliation / sanity) — so a computed aggregate is never bare (§6.6).
     agg_notes: list[str] = []
 
+    # T3 §6.11 #12 — if the planner emitted NO date window, derive one from the
+    # query deterministically (the planner is unreliable at this); the §6.6
+    # sanity check backstops an over-narrow to zero rows.
+    if not row_filter_dicts:
+        try:
+            from datetime import datetime
+            _derived = _derive_date_row_filter(
+                query, parsed, live_catalog, now=datetime.now(),
+            )
+            if _derived:
+                row_filter_dicts = [_derived]
+                agg_notes.append(
+                    f"applied a row-level date window for "
+                    f"\"{_derived.get('_phrase')}\" = {_derived['value'][0]}.."
+                    f"{_derived['value'][1]} (the planner emitted none); if no "
+                    f"rows fall in it, there is no data for that period"
+                )
+        except Exception:  # noqa: BLE001
+            pass
+
     # Layers 5-9 + §6.6 self-repair: compile + execute, peeling the ADDITIVE T3
     # layers (row-filters, then dedup) on a SQL *error* — ≤2 retries toward the
     # pre-T3 known-good base query — before a typed refusal. Never trust-or-crash.
@@ -1057,6 +1221,20 @@ async def _route_q_mode(
                 )
                 if recon_note:
                     agg_notes.append(recon_note)
+        except Exception:  # noqa: BLE001
+            pass
+
+    # T3 §6.11 grain/overlap caveats (pure, surfaced — never silently change the
+    # number): a SUM over heterogeneous fields, or an additive aggregate over
+    # overlapping row types, may be non-additive / double-counted.
+    if result.status == "ok" and display_rows:
+        try:
+            for _caveat in (
+                _heterogeneous_sum_caveat(parsed),
+                _multi_unit_type_caveat(parsed),
+            ):
+                if _caveat:
+                    agg_notes.append(_caveat)
         except Exception:  # noqa: BLE001
             pass
 
