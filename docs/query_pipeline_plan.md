@@ -627,13 +627,27 @@ guard, NOT the value_type gate** — string-stored numerics ("INR 18,400/year")
 can't be pre-classified, so the gate stays conservative and sanity catches the
 all-NULL.
 
-**T3 honest gaps (mechanism built, firing is planner-dependent):** the row-filter
-/ reconciliation / group-by-canon end-to-end firing depends on the T2 planner's
-`q_payload` — live, "last quarter" wasn't emitted as a date_filter (ran all-time)
-and "avg by lender" grouped by `field_name` not a lender column. Active
-reconciliation covers only the single-SUM-over-`extracted_entities`-unit-rows
-case (not `proposed_fields` SUMs); dedup is doc-version-level (not row-overlap).
-The universal win that fires on every aggregate is the audit envelope + sanity.
+**T3 follow-ups (hardening, shipped 2026-06-04).** Closed the worst planner-
+dependent gaps without trusting the planner:
+- **Deterministic date window** (`_derive_date_row_filter`): when the planner
+  emits no `date_filter`, Q-mode now lifts a date phrase from the query +
+  the catalog's date key on the target unit_type and applies it at row level
+  ("highest transaction last quarter" no longer silently runs all-time). The
+  §6.6 sanity check backstops an over-narrow to zero rows.
+- **Grain / overlap caveats** (surfaced in the envelope, never silently change
+  the number): a SUM over ≥2 distinct period-variant `field_name`s
+  (`_heterogeneous_sum_caveat` — the live "606M" mar-31 + jan-1 + original trap)
+  and an additive aggregate unioning ≥2 semantically-distinct unit_types
+  (`_multi_unit_type_caveat` — `major_transaction` within `transaction_listing`).
+  Live-confirmed: the 606M sum now ships a "different points in time" warning and
+  the answer reports a coherent as-of-date figure instead.
+
+**Remaining T3 gaps (lower priority):** date interpretation is calendar-relative
+(not data-/fiscal-relative); active *reconciliation* still covers only the
+single-SUM-over-unit-rows case (the caveats cover the `proposed_fields` SUM case
+instead); dedup is doc-version-level + caveat (not silent row-overlap dedup, which
+needs a reliable natural key); "avg by lender"-style grouping is still chosen by
+the planner. The universal guard on every aggregate is the audit envelope + sanity.
 
 **NOT built (the honest gaps):**
 - **Stage 7 KG route (§6.9)** — unchanged from pre-T2 (Phase 3). RELATIONSHIP
