@@ -662,10 +662,15 @@ answer with a §6.9 lower-confidence flag for single-evidence edges. Wired into
 `mode_router`: T-mode does it inline; `_maybe_kg_augment` also fires it for a
 relationship-intent query the planner routed to E/H/etc. (planner routing is
 unreliable — the T3 lesson), with `relax=False` there so it only injects on a
-specific match. Falls back to PPR/RAG when no seed/edge resolves (I2). Verified
-live: "counterparties to Acme" → typed counterparty edges + provenance;
-"signatories for Acme" (E-mode) → signed_by edges; 16 tests
-(`tests/test_kg_relations.py`).
+specific match. Falls back to PPR/RAG when no seed/edge resolves (I2).
+**Negative-existence (§6.3/§6.4):** a yes/no question naming a counterpart
+("does Acme have an account with ICICI") gets a confident YES (counterpart among
+the subject's typed relations) or a coverage-aware SOFT NO ("Acme's account is
+with HDFC, not ICICI") instead of the old "couldn't find info" punt — the typed
+graph can prove a negative that RAG cannot. Verified live: "counterparties to
+Acme" → typed counterparty edges + provenance; "signatories for Acme" (E-mode)
+→ signed_by edges; "does Acme have an account with ICICI" → grounded soft-NO;
+28 tests (`tests/test_kg_relations.py`).
 
 **NOT built (the honest gaps):**
 - **Phase 3b — agentic-extraction verify pass (§10 / §6.9)** — the

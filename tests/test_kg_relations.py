@@ -19,7 +19,10 @@ from kb.query.kg_relations import (
     build_kg_answer,
     canonicalize_predicate,
     detect_relation_intent,
+    existence_verdict,
+    extract_asserted_object,
     format_kg_snippet,
+    is_existence_query,
 )
 
 
@@ -95,6 +98,57 @@ def test_kg_answer_properties_and_snippet():
     assert "Acme" in snippet and "HDFC BANK" in snippet
     assert "has account with" in snippet
     assert "lower-confidence" in snippet  # §6.9 flag surfaced
+
+
+# ---------------------------------------------------------------------------
+# Negative-existence verdict (KG-6)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("q,expected", [
+    ("does Acme have an account with ICICI", True),
+    ("is there a loan with Kotak", True),
+    ("are there any subsidiaries", True),
+    ("the closing balance of the account", False),
+    ("total revenue for 2024", False),
+])
+def test_is_existence_query(q, expected):
+    assert is_existence_query(q) is expected
+
+
+def _acme_account_answer():
+    return KgAnswer(
+        seed_id="acme", seed_name="Acme Corp",
+        edges=(KgEdge("Acme Corp", "has account with", "HDFC BANK", "hdfc",
+                      "ORG", "out", 0.95, 2, ("f1",)),),
+        intent_predicate="has_account_with",
+    )
+
+
+def test_existence_verdict_soft_no_names_actual_counterpart():
+    v = existence_verdict(_acme_account_answer(), {"icici"}, "ICICI Bank")
+    assert v is not None
+    assert "likely NO" in v
+    assert "HDFC BANK" in v and "ICICI Bank" in v  # actual + asserted both shown
+
+
+def test_existence_verdict_yes_when_present():
+    v = existence_verdict(_acme_account_answer(), {"hdfc"}, "HDFC BANK")
+    assert v is not None and v.startswith("Answer: YES")
+
+
+def test_existence_verdict_none_without_asserted():
+    assert existence_verdict(_acme_account_answer(), set(), "x") is None
+
+
+@pytest.mark.parametrize("q,obj", [
+    ("does Acme have an account with ICICI Bank", "ICICI Bank"),
+    ("is there a loan with Kotak Mahindra", "Kotak Mahindra"),
+    ("is NorthWind located in Singapore", "Singapore"),
+    ("how many loans does Acme have", None),  # no trailing prepositional object
+])
+def test_extract_asserted_object(q, obj):
+    assert extract_asserted_object(q) == obj
 
 
 # ---------------------------------------------------------------------------

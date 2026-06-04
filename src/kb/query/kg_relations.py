@@ -150,6 +150,65 @@ class RelationIntent:
     target_types: tuple[str, ...] = ()  # NER types to keep among neighbors
 
 
+_EXISTENCE_RE = re.compile(
+    r"^\s*(does|do|did|is|are|was|were|has|have|had|can|could|will)\b"
+    r"|\bis there\b|\bare there\b|\bany\b",
+    re.I,
+)
+
+
+def is_existence_query(query: str) -> bool:
+    """A yes/no question ('does X have Y', 'is there a Z', 'any … with …')."""
+    return bool(_EXISTENCE_RE.search(query or ""))
+
+
+_ASSERTED_OBJ_RE = re.compile(r"\b(?:with|to|by|from|at|in)\s+(.+?)\s*\??\s*$", re.I)
+
+
+def extract_asserted_object(query: str) -> str | None:
+    """For a yes/no existence question, the asserted counterpart entity — the
+    phrase after the trailing preposition ('account WITH ICICI Bank' → 'ICICI
+    Bank'). Resolved against the subject's neighbors to decide YES/NO. Taking it
+    from the query text (not 'any other resolved seed') avoids naming a
+    same-name variant of the subject as the counterpart."""
+    if not query:
+        return None
+    m = _ASSERTED_OBJ_RE.search(query.strip())
+    if not m:
+        return None
+    obj = re.sub(r"^(a|an|the)\s+", "", m.group(1).strip(" ?."), flags=re.I).strip()
+    return obj or None
+
+
+def existence_verdict(
+    ans: "KgAnswer", asserted_ids: set[str], asserted_name: str,
+) -> str | None:
+    """Render a confident verdict for a yes/no relationship-existence question
+    from the typed graph: the asserted counterpart is PRESENT among the
+    subject's relations → YES; ABSENT while the subject HAS relations of this
+    kind → a SOFT NO naming the actual counterpart(s); neither → None (let the
+    edges speak). Coverage-honest — never a bare/absolute No (§6.3)."""
+    if not asserted_ids:
+        return None
+    present = any(e.neighbor_id in asserted_ids for e in ans.edges)
+    if present:
+        return (
+            f"Answer: YES — the extracted relationships record {ans.seed_name} "
+            f"↔ {asserted_name}."
+        )
+    if ans.edges:
+        actual = ", ".join(dict.fromkeys(
+            (e.object if e.direction == "out" else e.subject) for e in ans.edges
+        ))
+        rel = (ans.intent_predicate or "known").replace("_", " ")
+        return (
+            f"Answer: likely NO — among {ans.seed_name}'s {rel} relationship(s) "
+            f"({actual}), none is {asserted_name}. Based on the extracted "
+            f"relationships; if document coverage is incomplete this could miss one."
+        )
+    return None
+
+
 def detect_relation_intent(query: str) -> RelationIntent:
     """Light, deterministic extractor: which predicate + neighbor type the query
     asks for. Both are FILTERS — when neither resolves we still surface ALL of

@@ -524,7 +524,13 @@ async def _maybe_kg_augment(
     if conn is None:
         return hits
     try:
-        from kb.query.kg_relations import build_kg_answer, detect_relation_intent
+        from kb.query.kg_relations import (
+            build_kg_answer,
+            detect_relation_intent,
+            existence_verdict,
+            extract_asserted_object,
+            is_existence_query,
+        )
 
         intent = detect_relation_intent(query)
         if intent.predicate is None:        # not a relationship question
@@ -544,8 +550,33 @@ async def _maybe_kg_augment(
             relax=False,   # opportunistic: only inject on a SPECIFIC match
         )
         if kg and kg.n_edges:
+            kg_hit = _synthesize_kg_hit(kg)
+            # KG-6 — negative-existence verdict: a yes/no question naming a
+            # second entity (the asserted counterpart) gets a confident YES (the
+            # counterpart is among the subject's typed relations) or a coverage-
+            # aware soft NO ("Acme's account is with HDFC, not ICICI"), so the
+            # generator stops punting "couldn't find info" on a provable negative.
+            if is_existence_query(query):
+                obj_name = extract_asserted_object(query)
+                if obj_name:
+                    obj_ids = {
+                        i for i in await _resolve_names_to_entity_ids(
+                            conn, workspace_id=workspace_id, names=[obj_name])
+                        if i != kg.seed_id
+                    }
+                    verdict = (
+                        existence_verdict(kg, obj_ids, obj_name)
+                        if obj_ids else None
+                    )
+                    if verdict:
+                        md = dict(kg_hit.metadata or {})
+                        md["kg_existence_verdict"] = verdict
+                        kg_hit = Hit(
+                            id=kg_hit.id, kind=kg_hit.kind, score=kg_hit.score,
+                            snippet=verdict + "\n" + kg_hit.snippet, metadata=md,
+                        )
             kept = [h for h in hits if not (h.metadata or {}).get("kg_relation")]
-            return [_synthesize_kg_hit(kg), *kept[:_Q_SOURCE_HITS_CAP]]
+            return [kg_hit, *kept[:_Q_SOURCE_HITS_CAP]]
     except Exception:  # noqa: BLE001
         pass
     return hits
