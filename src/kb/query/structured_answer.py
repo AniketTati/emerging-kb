@@ -315,15 +315,53 @@ def _cite(file_id: str, snippet: str) -> Any:
 # -- builders ---------------------------------------------------------------
 
 
+# Operator → human-readable symbol (the raw enum "gt"/"ge" leaked into answers).
+_OP_LABEL: dict[str, str] = {
+    "gt": ">", "ge": "≥", "lt": "<", "le": "≤", "eq": "=", "ne": "≠",
+    "between": "between", "like": "~", "in": "in",
+}
+
+
+def _human_value(v: Any) -> str:
+    """Comma-group a numeric value (50000000 → '50,000,000'); pass text through."""
+    if isinstance(v, (list, tuple)):
+        return " and ".join(_human_value(x) for x in v)
+    try:
+        n = float(v)
+        return f"{int(n):,}" if n.is_integer() else f"{n:,}"
+    except (TypeError, ValueError):
+        return str(v)
+
+
+def _humanize_token(v: str) -> str:
+    spaced = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", v)            # camelCase → words
+    return re.sub(r"[_\s]+", " ", spaced).strip().lower()
+
+
+def _human_unit(surface: str) -> str:
+    """Collapse a unit clause's spelling-variant surface
+    ('transactionlisting,transaction_listing,…') to ONE clean noun
+    ('transaction listing') — never dump the raw variant list into an answer.
+    Picks the MOST readable variant (most word separators), not just the first."""
+    variants = [v.strip() for v in str(surface).split(",") if v.strip()]
+    if not variants:
+        return str(surface)
+    best = max(variants, key=lambda v: len(_humanize_token(v).split()))
+    return _humanize_token(best) or str(surface)
+
+
 def _predicate_label(predicate: ResolvedPredicate) -> str:
     parts: list[str] = []
     for c in predicate.clauses:
         if c.kind == "field" and c.canonical_key:
-            parts.append(f"{c.canonical_key} {c.op or 'eq'} {c.value}")
+            op = _OP_LABEL.get(c.op or "eq", c.op or "=")
+            parts.append(
+                f"{c.canonical_key.replace('_', ' ')} {op} {_human_value(c.value)}"
+            )
         elif c.kind == "entity" and c.entity_names:
             parts.append(f"mentioning {c.entity_names[0]}")
         elif c.kind in ("doctype", "unit") and c.surface:
-            parts.append(str(c.surface))
+            parts.append(_human_unit(c.surface))
     return "; ".join(parts) or "your filter"
 
 

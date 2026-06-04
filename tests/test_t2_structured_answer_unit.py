@@ -22,6 +22,21 @@ from kb.query.structured_prefilter import Clause, ResolvedPredicate
 pytestmark = pytest.mark.asyncio
 
 
+def test_predicate_label_is_human_readable():
+    """Raw enum operators + unit_type spelling-variant surfaces must NOT leak
+    into a user-facing answer (the "amount gt 50000000; transactionlisting,…"
+    bug). Sync/pure — no DB."""
+    from kb.query.structured_answer import _predicate_label
+    p = ResolvedPredicate(clauses=(
+        Clause(kind="field", canonical_key="amount", op="gt", value=50000000),
+        Clause(kind="unit",
+               surface="transactionlisting,transaction_listing,major_transaction"),
+    ))
+    label = _predicate_label(p)
+    assert label == "amount > 50,000,000; transaction listing"
+    assert "gt" not in label and "transactionlisting" not in label
+
+
 # ---- seed helpers ----------------------------------------------------------
 
 
