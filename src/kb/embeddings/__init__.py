@@ -17,6 +17,7 @@ Both impls satisfy the `Embedder` Protocol.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import math
 import os
@@ -114,6 +115,38 @@ class GeminiEmbedder:
     # know that — chunk transparently here.
     _GEMINI_BATCH_LIMIT = 100
 
+    # Retry budget for transient Gemini errors (429 RESOURCE_EXHAUSTED rate
+    # limits, 503/UNAVAILABLE, deadline). Free-tier keys hit per-minute RPM
+    # limits during a fast eval burst; without backoff a single 429 silently
+    # collapses a query's retrieval to zero hits. Exponential backoff recovers.
+    _MAX_RETRIES = 5
+    _BASE_DELAY_S = 1.0
+    _MAX_DELAY_S = 16.0
+
+    @staticmethod
+    def _is_transient(exc: Exception) -> bool:
+        m = str(exc).lower()
+        return any(s in m for s in (
+            "429", "resource_exhausted", "rate limit", "rate-limit",
+            "503", "unavailable", "deadline", "timeout", "500", "internal",
+        ))
+
+    async def _embed_content_with_retry(self, model: str, chunk: list[str]) -> Any:
+        delay = self._BASE_DELAY_S
+        last_exc: Exception | None = None
+        for attempt in range(self._MAX_RETRIES + 1):
+            try:
+                return await self._client.aio.models.embed_content(
+                    model=model, contents=chunk,
+                )
+            except Exception as exc:  # noqa: BLE001
+                last_exc = exc
+                if attempt >= self._MAX_RETRIES or not self._is_transient(exc):
+                    break
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, self._MAX_DELAY_S)
+        raise EmbeddingError(f"Gemini embed call failed: {last_exc}") from last_exc
+
     async def embed_batch(self, texts: list[str]) -> list[EmbeddingResult]:
         # Re-read env at call time so tests can swap KB_EMBEDDING_MODEL on
         # each call without rebuilding the embedder.
@@ -125,15 +158,9 @@ class GeminiEmbedder:
         all_results: list[EmbeddingResult] = []
         for start in range(0, len(texts), self._GEMINI_BATCH_LIMIT):
             chunk = texts[start:start + self._GEMINI_BATCH_LIMIT]
-            try:
-                response = await self._client.aio.models.embed_content(
-                    model=model,
-                    contents=chunk,
-                )
-            except Exception as exc:
-                raise EmbeddingError(
-                    f"Gemini embed call failed: {exc}"
-                ) from exc
+            # Retry transient 429/503/timeout with exponential backoff so a
+            # rate-limit burst doesn't silently zero out a query's retrieval.
+            response = await self._embed_content_with_retry(model, chunk)
 
             embeddings = getattr(response, "embeddings", None) or []
             if len(embeddings) != len(chunk):

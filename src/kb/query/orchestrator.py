@@ -1717,39 +1717,14 @@ class Orchestrator:
                     "refusal_reason": "faithfulness_gate_refused",
                 })
 
-        # SOTA ambiguity recovery (§6.2) — turn a GROUNDING refusal into a
-        # disambiguation when the query names a structured field that maps to >1
-        # canonical key ("what is the rate" → "did you mean interest_rate /
-        # all-in rate / annual-fixed rate?"). Fires ONLY on grounding refusals
-        # (NOT safety/premise refusals like model_refused / false_premise), so it
-        # never regresses a confident answer or weakens a PII refusal.
-        if (
-            generation.refused
-            and generation.refusal_reason in (
-                "insufficient_evidence", "no_hits", "faithfulness_gate_refused")
-            and conn is not None
-        ):
-            try:
-                from kb.query.structured_answer import (
-                    find_ambiguous_field,
-                    format_disambiguation,
-                )
-                _amb_schema = await prefilter.live_schema(
-                    conn, workspace_id=workspace_id,
-                )
-                _amb = find_ambiguous_field(_amb_schema, effective_query)
-                if _amb:
-                    generation = generation.model_copy(update={
-                        "refused": False,
-                        "refusal_reason": None,
-                        "answer": format_disambiguation(
-                            _amb[0], _amb[1], _amb_schema),
-                    })
-                    await emit("disambiguation_surfaced", {
-                        "field": _amb[0], "n_options": len(_amb[1]),
-                    })
-            except Exception:  # noqa: BLE001
-                pass
+        # NOTE: an ambiguity-aware refusal recovery (surface candidate fields
+        # for a vague "what is the rate") was trialed here but REVERTED — its
+        # `find_ambiguous_field` over-fired on common field-modifier tokens
+        # ("loan" / "usd" / "hdfc" appear inside many field names), turning
+        # refused queries into wrong "which did you mean?" answers and dropping
+        # the eval. Needs a curated field-head allowlist before re-enabling; the
+        # helpers (find_ambiguous_field / format_disambiguation) remain in
+        # structured_answer.py with unit tests for that future work.
 
         # Wave A close-up — sentence-level HHEM exposure (architecture
         # §6 step 8). The HHEM gate already computes per-claim scores;
