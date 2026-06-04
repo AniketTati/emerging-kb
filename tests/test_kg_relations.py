@@ -100,6 +100,19 @@ def test_kg_answer_properties_and_snippet():
     assert "lower-confidence" in snippet  # §6.9 flag surfaced
 
 
+def test_format_kg_snippet_in_direction_is_not_inverted():
+    """An 'in'-direction edge (seed is the object) must still render
+    subject→predicate→object — NOT the inverted "object → predicate → subject"
+    that printed the false "NorthWind UK → has subsidiary → Company"."""
+    # DB edge: Company —has subsidiary→ NorthWind UK; seed = NorthWind UK (object).
+    e = KgEdge("Company", "has subsidiary", "NorthWind UK", "nw", "ORG", "in",
+               0.9, 1, ())
+    ans = KgAnswer(seed_id="nw", seed_name="NorthWind UK", edges=(e,))
+    s = format_kg_snippet(ans)
+    assert "Company → has subsidiary → NorthWind UK" in s
+    assert "NorthWind UK → has subsidiary → Company" not in s
+
+
 # ---------------------------------------------------------------------------
 # Negative-existence verdict (KG-6)
 # ---------------------------------------------------------------------------
@@ -145,6 +158,7 @@ def test_existence_verdict_none_without_asserted():
     ("does Acme have an account with ICICI Bank", "ICICI Bank"),
     ("is there a loan with Kotak Mahindra", "Kotak Mahindra"),
     ("is NorthWind located in Singapore", "Singapore"),
+    ("is NorthWind a subsidiary of Acme", "Acme"),  # 'of' preposition
     ("how many loans does Acme have", None),  # no trailing prepositional object
 ])
 def test_extract_asserted_object(q, obj):

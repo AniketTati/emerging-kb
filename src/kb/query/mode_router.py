@@ -476,7 +476,8 @@ async def _route_t_mode(
     except Exception:  # noqa: BLE001
         kg = None
     if kg and kg.n_edges:
-        return [_synthesize_kg_hit(kg), *out[:_Q_SOURCE_HITS_CAP]]
+        kg_hit = await _kg_hit_with_verdict(conn, workspace_id, query, kg)
+        return [kg_hit, *out[:_Q_SOURCE_HITS_CAP]]
     return out
 
 
@@ -508,6 +509,41 @@ def _synthesize_kg_hit(kg: Any) -> Hit:
     )
 
 
+async def _kg_hit_with_verdict(
+    conn: Any, workspace_id: str, query: str, kg: Any,
+) -> Hit:
+    """Synthesize the KG answer hit and, for a yes/no question naming a
+    counterpart, prepend the §6.3 existence verdict (YES / soft NO). Shared by
+    BOTH the inline T-mode path and the opportunistic augmenter so an existence
+    question is answered the same regardless of how the planner routed it."""
+    kg_hit = _synthesize_kg_hit(kg)
+    try:
+        from kb.query.kg_relations import (
+            existence_verdict,
+            extract_asserted_object,
+            is_existence_query,
+        )
+        if is_existence_query(query):
+            obj_name = extract_asserted_object(query)
+            if obj_name:
+                obj_ids = {
+                    i for i in await _resolve_names_to_entity_ids(
+                        conn, workspace_id=workspace_id, names=[obj_name])
+                    if i != kg.seed_id
+                }
+                verdict = existence_verdict(kg, obj_ids, obj_name) if obj_ids else None
+                if verdict:
+                    md = dict(kg_hit.metadata or {})
+                    md["kg_existence_verdict"] = verdict
+                    kg_hit = Hit(
+                        id=kg_hit.id, kind=kg_hit.kind, score=kg_hit.score,
+                        snippet=verdict + "\n" + kg_hit.snippet, metadata=md,
+                    )
+    except Exception:  # noqa: BLE001
+        pass
+    return kg_hit
+
+
 async def _maybe_kg_augment(
     plan: Plan,
     hits: list[Hit],
@@ -524,13 +560,7 @@ async def _maybe_kg_augment(
     if conn is None:
         return hits
     try:
-        from kb.query.kg_relations import (
-            build_kg_answer,
-            detect_relation_intent,
-            existence_verdict,
-            extract_asserted_object,
-            is_existence_query,
-        )
+        from kb.query.kg_relations import build_kg_answer, detect_relation_intent
 
         intent = detect_relation_intent(query)
         if intent.predicate is None:        # not a relationship question
@@ -550,31 +580,7 @@ async def _maybe_kg_augment(
             relax=False,   # opportunistic: only inject on a SPECIFIC match
         )
         if kg and kg.n_edges:
-            kg_hit = _synthesize_kg_hit(kg)
-            # KG-6 — negative-existence verdict: a yes/no question naming a
-            # second entity (the asserted counterpart) gets a confident YES (the
-            # counterpart is among the subject's typed relations) or a coverage-
-            # aware soft NO ("Acme's account is with HDFC, not ICICI"), so the
-            # generator stops punting "couldn't find info" on a provable negative.
-            if is_existence_query(query):
-                obj_name = extract_asserted_object(query)
-                if obj_name:
-                    obj_ids = {
-                        i for i in await _resolve_names_to_entity_ids(
-                            conn, workspace_id=workspace_id, names=[obj_name])
-                        if i != kg.seed_id
-                    }
-                    verdict = (
-                        existence_verdict(kg, obj_ids, obj_name)
-                        if obj_ids else None
-                    )
-                    if verdict:
-                        md = dict(kg_hit.metadata or {})
-                        md["kg_existence_verdict"] = verdict
-                        kg_hit = Hit(
-                            id=kg_hit.id, kind=kg_hit.kind, score=kg_hit.score,
-                            snippet=verdict + "\n" + kg_hit.snippet, metadata=md,
-                        )
+            kg_hit = await _kg_hit_with_verdict(conn, workspace_id, query, kg)
             kept = [h for h in hits if not (h.metadata or {}).get("kg_relation")]
             return [kg_hit, *kept[:_Q_SOURCE_HITS_CAP]]
     except Exception:  # noqa: BLE001

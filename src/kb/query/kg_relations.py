@@ -162,7 +162,8 @@ def is_existence_query(query: str) -> bool:
     return bool(_EXISTENCE_RE.search(query or ""))
 
 
-_ASSERTED_OBJ_RE = re.compile(r"\b(?:with|to|by|from|at|in)\s+(.+?)\s*\??\s*$", re.I)
+_ASSERTED_OBJ_RE = re.compile(
+    r"\b(?:with|to|by|from|at|in|of|for)\s+(.+?)\s*\??\s*$", re.I)
 
 
 def extract_asserted_object(query: str) -> str | None:
@@ -424,14 +425,13 @@ def format_kg_snippet(ans: KgAnswer) -> str:
         f"(from {ans.n_edges} typed relationship(s)):"
     ]
     for e in ans.edges:
-        arrow = "→" if e.direction == "out" else "←"
-        support = (
-            f"[{e.n_evidence} source{'s' if e.n_evidence != 1 else ''}]"
-        )
-        if e.direction == "out":
-            lines.append(f"  {e.subject} {arrow} {e.predicate} {arrow} {e.object} {support}")
-        else:
-            lines.append(f"  {e.object} → {e.predicate} → {e.subject} {support}")
+        # KgEdge.subject/.object already hold the real DB subject/object (set
+        # per-direction in build_kg_answer), so ALWAYS render subject→pred→object.
+        # The old per-direction branch inverted "in" edges, printing the
+        # nonsensical "NorthWind UK → has subsidiary → Company" for the true
+        # "Company → has subsidiary → NorthWind UK".
+        support = f"[{e.n_evidence} source{'s' if e.n_evidence != 1 else ''}]"
+        lines.append(f"  {e.subject} → {e.predicate} → {e.object} {support}")
     for n in ans.notes:
         lines.append(f"Note: {n}")
     return "\n".join(lines)
