@@ -664,29 +664,52 @@ relationship-intent query the planner routed to E/H/etc. (planner routing is
 unreliable — the T3 lesson), with `relax=False` there so it only injects on a
 specific match. Falls back to PPR/RAG when no seed/edge resolves (I2).
 **Negative-existence (§6.3/§6.4):** a yes/no question naming a counterpart
-("does Acme have an account with ICICI") gets a confident YES (counterpart among
-the subject's typed relations) or a coverage-aware SOFT NO ("Acme's account is
-with HDFC, not ICICI") instead of the old "couldn't find info" punt — the typed
-graph can prove a negative that RAG cannot. Verified live: "counterparties to
-Acme" → typed counterparty edges + provenance; "signatories for Acme" (E-mode)
-→ signed_by edges; "does Acme have an account with ICICI" → grounded soft-NO;
-28 tests (`tests/test_kg_relations.py`).
+("does Acme have an account with ICICI", "is NorthWind a subsidiary of Acme")
+gets a confident YES (counterpart among the subject's typed relations) or a
+coverage-aware SOFT NO ("Acme's account is with HDFC, not ICICI") instead of the
+old "couldn't find info" punt — the typed graph can prove a negative that RAG
+cannot. The verdict (`_kg_hit_with_verdict`) fires in BOTH the inline T-mode path
+AND the E/H augmenter, so routing doesn't change the answer.
+**Correctness fixes (`fc88bdf`):** `format_kg_snippet` now always renders
+subject→predicate→object (the per-direction branch had inverted inbound edges,
+printing the false "NorthWind UK → has subsidiary → Company"); `_predicate_label`
+(S5c/S5a, `d44f241`) humanizes filter answers (operator symbols, comma-grouped
+numbers, one readable unit noun) instead of leaking "amount gt 50000000;
+transactionlisting,…". Verified live: "counterparties to Acme" → typed edges +
+provenance; "is NorthWind a subsidiary of Acme" → grounded coverage-honest NO.
+30 tests (`tests/test_kg_relations.py`).
 
-**NOT built (the honest gaps):**
-- **Phase 3b — agentic-extraction verify pass (§10 / §6.9)** — the
-  propose→critic→resolve loop to raise entity/relationship quality (predicate
-  fragmentation, ~47% mention resolution, single-evidence edges) before the
-  graph is fully trusted. 3a surfaces a lower-confidence flag in the meantime.
-- **Quality ceiling (not a pipeline gap):** T2 *uses* the structured layer well
-  but can only narrow on what extraction captured — strong on tables, weak on
-  narrative (~0/13 narrative docs captured key terms), ~47% mention resolution.
-  Where there's no structured signal it correctly degrades to plain RAG.
+**NOT built (the honest pending list, prioritized):**
+- **Phase 3b — agentic-extraction verify pass (§10 / §6.9)** *(big, ingestion-
+  side)* — propose→critic→resolve to raise entity/relationship quality (predicate
+  fragmentation at the *data* layer — query-time canon is a band-aid; ~47%
+  mention resolution; single-evidence edges). 3a surfaces a lower-confidence flag
+  meanwhile. Then 3c measure.
+- **Query-side follow-ups** *(smaller, concrete):* active reconciliation still
+  covers only single-SUM-over-unit-rows (proposed_fields SUMs get a caveat, not
+  active stated-vs-computed); dedup is doc-version-level + caveat (no row-overlap
+  dedup — needs a natural key); **ambiguous-field disambiguation** ("what is the
+  rate" punts; §6.2 says ask "which rate?"); **multi-hop KG** (1-hop only —
+  "signatories of Acme's bank" 2-hop / context-subgraph unbuilt); date
+  interpretation is calendar- not fiscal/data-relative; a first-class
+  `kg_relation` **citation modality** (currently cites via the evidence file);
+  planner-chosen group-by column ("avg by lender" groups by field_name).
+- **Systemic theme:** the recurring root cause across T2/T3/KG is the planner
+  routing / structuring *inconsistently* — each feature works around it
+  deterministically (date derivation, opportunistic KG augment, verdict in both
+  paths). A durable win is hardening the routing/intent layer.
+- **Quality ceiling (not a pipeline gap):** the head can only narrow/answer on
+  what extraction captured — strong on tables, weak on narrative (~0/13 narrative
+  docs captured key terms). Where there's no structured signal it degrades to RAG.
 
 **Known rough edges (logged, non-blocking):** S5c LIST shows an arbitrary field
 value for a file with multiple doc_root rows (e.g. an xlsx) — the doc-set is
-correct, the displayed value may not be; EXISTENCE-absent on an entity returns
-an empty refusal rather than a friendly hedge; the live trace was finance-only
-(no legal/construction runtime trace).
+correct, the displayed value may not be; the live trace was finance-only (no
+legal/construction runtime trace); **~36 pre-existing suite failures** are
+worker/ingestion/migration/infra (env-dependent: embeddings/contextualization API
+keys, MinIO/migration), unrelated to the query head — worth a cleanup pass.
+*(The EXISTENCE-absent "empty refusal" rough edge is now FIXED by KG negative-
+existence — confident coverage-honest soft-NO.)*
 
 ---
 
