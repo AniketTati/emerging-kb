@@ -101,47 +101,46 @@ async def apply_mode(
     WHERE; other modes ignore it."""
     mode = (plan.mode or "H").upper()
 
-    if mode == "H":
-        return list(hits)
-
+    # Q + T own their full result (Q has its own answer path; T-mode does the
+    # typed-KG traversal inline).
     if mode == "Q":
         return await _route_q_mode(
             plan, hits, conn,
             workspace_id=workspace_id, query=query, predicate=predicate,
         )
-
-    if mode == "K":
-        return await _route_k_mode(plan, hits, conn, workspace_id=workspace_id)
-
     if mode == "T":
         return await _route_t_mode(plan, hits, conn, workspace_id=workspace_id, query=query)
 
-    if mode == "G":
-        return await _route_g_mode(plan, hits, conn, workspace_id=workspace_id)
+    if mode == "H":
+        result = list(hits)
+    elif mode == "K":
+        result = await _route_k_mode(plan, hits, conn, workspace_id=workspace_id)
+    elif mode == "G":
+        result = await _route_g_mode(plan, hits, conn, workspace_id=workspace_id)
+    elif mode == "E":
+        result = await _route_e_mode(plan, hits, conn, workspace_id=workspace_id, query=query)
+    elif mode == "F":
+        result = await _route_f_mode(plan, hits, conn, workspace_id=workspace_id)
+    elif mode == "S":
+        result = await _route_s_mode(plan, hits, conn, workspace_id=workspace_id, query=query)
+    elif mode == "D":
+        result = await _route_d_mode(plan, hits, conn, workspace_id=workspace_id)
+    elif mode == "M":
+        result = await _route_m_mode(plan, hits, conn, workspace_id=workspace_id, query=query)
+    elif mode == "C":
+        result = await _route_c_mode(plan, hits, conn, workspace_id=workspace_id)
+    elif mode == "A":
+        result = await _route_a_mode(plan, hits, conn, workspace_id=workspace_id)
+    else:
+        # Unknown mode (defensive) — pass-through with tag.
+        result = _tag_mode(hits, mode)
 
-    if mode == "E":
-        return await _route_e_mode(plan, hits, conn, workspace_id=workspace_id, query=query)
-
-    if mode == "F":
-        return await _route_f_mode(plan, hits, conn, workspace_id=workspace_id)
-
-    if mode == "S":
-        return await _route_s_mode(plan, hits, conn, workspace_id=workspace_id, query=query)
-
-    if mode == "D":
-        return await _route_d_mode(plan, hits, conn, workspace_id=workspace_id)
-
-    if mode == "M":
-        return await _route_m_mode(plan, hits, conn, workspace_id=workspace_id, query=query)
-
-    if mode == "C":
-        return await _route_c_mode(plan, hits, conn, workspace_id=workspace_id)
-
-    if mode == "A":
-        return await _route_a_mode(plan, hits, conn, workspace_id=workspace_id)
-
-    # Unknown mode (defensive) — pass-through with tag.
-    return _tag_mode(hits, mode)
+    # Phase 3a (§6.9) — opportunistically surface a typed KG answer for a
+    # relationship-intent query the planner did NOT route to T-mode. No-op for
+    # non-relationship queries (cheap predicate gate) and when no edge resolves.
+    return await _maybe_kg_augment(
+        plan, result, conn, workspace_id=workspace_id, query=query,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -457,7 +456,99 @@ async def _route_t_mode(
         ))
     # Re-sort by boosted score, descending.
     out.sort(key=lambda x: x.score, reverse=True)
+
+    # Phase 3a (§6.9) — typed-relationship KG answer. When the graph holds typed
+    # edges for the resolved seed, surface a STRUCTURED, cited answer (with
+    # provenance + a lower-confidence flag) AHEAD of the PPR-boosted RAG hits.
+    # No edges → just return the boosted hits (degrade to RAG, I2).
+    try:
+        from collections import Counter
+
+        from kb.query.kg_relations import (
+            build_kg_answer,
+            detect_relation_intent,
+            format_kg_snippet,
+        )
+        kg = await build_kg_answer(
+            conn, workspace_id=workspace_id, seed_ids=seeds,
+            intent=detect_relation_intent(query),
+        )
+    except Exception:  # noqa: BLE001
+        kg = None
+    if kg and kg.n_edges:
+        return [_synthesize_kg_hit(kg), *out[:_Q_SOURCE_HITS_CAP]]
     return out
+
+
+def _synthesize_kg_hit(kg: Any) -> Hit:
+    """Build the headline KG answer Hit from a `KgAnswer`: the structured typed
+    edges in the snippet, provenance + lower-confidence flag in metadata, and a
+    real evidence file_id so it cites a source doc via the default modality."""
+    from collections import Counter
+
+    from kb.query.kg_relations import format_kg_snippet
+
+    ev_counter = Counter(f for e in kg.edges for f in e.evidence_file_ids)
+    top_file = ev_counter.most_common(1)[0][0] if ev_counter else None
+    return Hit(
+        id=f"kg:{kg.seed_id}",
+        kind="kg_relation",
+        score=2.0,  # headline, above the boosted RAG hits
+        snippet=format_kg_snippet(kg),
+        metadata={
+            "mode_applied": "T",
+            "kg_relation": True,
+            "file_id": top_file,
+            "kg_seed": kg.seed_name,
+            "kg_n_edges": kg.n_edges,
+            "kg_n_single_evidence": kg.n_single_evidence,
+            "kg_provenance_file_ids": kg.file_ids,
+            "kg_notes": list(kg.notes),
+        },
+    )
+
+
+async def _maybe_kg_augment(
+    plan: Plan,
+    hits: list[Hit],
+    conn: Any,
+    *,
+    workspace_id: str,
+    query: str,
+) -> list[Hit]:
+    """Surface a typed-relationship KG answer for a relationship-intent query
+    even when the planner did NOT route to T-mode (it routes "where is X
+    located" → E, "subsidiaries of Y" → H, etc. inconsistently). Cheap-gated on
+    a detected relation predicate so only relationship questions pay the graph
+    lookup; degrades to the original hits when no seed / edge resolves (I2)."""
+    if conn is None:
+        return hits
+    try:
+        from kb.query.kg_relations import build_kg_answer, detect_relation_intent
+
+        intent = detect_relation_intent(query)
+        if intent.predicate is None:        # not a relationship question
+            return hits
+        if any((h.metadata or {}).get("kg_relation") for h in hits):
+            return hits                      # a mode handler already added it
+        raw = list(plan.seed_entities)
+        seeds = (
+            await _resolve_names_to_entity_ids(
+                conn, workspace_id=workspace_id, names=raw)
+            if raw else
+            await _resolve_seed_entities(
+                conn, workspace_id=workspace_id, query=query)
+        )
+        kg = await build_kg_answer(
+            conn, workspace_id=workspace_id, seed_ids=seeds, intent=intent,
+            relax=False,   # opportunistic: only inject on a SPECIFIC match
+        )
+        if kg and kg.n_edges:
+            kept = [h for h in hits if not (h.metadata or {}).get("kg_relation")]
+            return [_synthesize_kg_hit(kg), *kept[:_Q_SOURCE_HITS_CAP]]
+    except Exception:  # noqa: BLE001
+        pass
+    return hits
 
 
 # ---------------------------------------------------------------------------

@@ -3,7 +3,8 @@
 **Status:** **Phase 1 (T2) + Phase 2 (T3) SHIPPED** — T2 2026-06-03, T3
 2026-06-04, branch `feat/roadmap-t1-t2-t3` (commits `feat(query): T2 structured-
 first query pipeline`, `feat(query): T3 Q-mode generous aggregation (Stage 5b)`).
-**Phase 3 (KG) is pending.** See the §10 implementation status for exactly what's
+**Phase 3a (KG query path) SHIPPED 2026-06-04; Phase 3b (agentic extraction
+verify) is pending.** See the §10 implementation status for exactly what's
 built, verified, and outstanding. · **Owner:** query/retrieval
 **v2 note:** this revision folds in two adversarial reviews — a cross-domain
 query war-game (12 trace gaps) and a senior-architect "sounds-right-but-wrong"
@@ -574,9 +575,10 @@ is a separate, required check.
   casts + row-filter compile + group-by canon + active reconcile + self-repair +
   audit envelope). ✅ **SHIPPED** (2026-06-04). See §10.1.
 - **Phase 3 — KG, agentic.** 3a query the existing graph on-demand (Stage 7,
-  context-constrained). 3b agentic-extraction verify pass (propose→critic→resolve)
-  to raise entity/relationship quality before the graph is trusted. 3c measure.
-  ⏳ **pending.**
+  context-constrained). ✅ **SHIPPED** (2026-06-04) — typed-relationship query
+  path (`query/kg_relations.py`); see §10.1. 3b agentic-extraction verify pass
+  (propose→critic→resolve) to raise entity/relationship quality before the graph
+  is trusted. 3c measure. ⏳ **3b/3c pending.**
 - **Noted:** faithfulness LLM gate tuning; whether per-doc RAPTOR earns its cost.
 
 ### 10.1 Implementation status (T2 2026-06-03; T3 2026-06-04)
@@ -649,10 +651,27 @@ instead); dedup is doc-version-level + caveat (not silent row-overlap dedup, whi
 needs a reliable natural key); "avg by lender"-style grouping is still chosen by
 the planner. The universal guard on every aggregate is the audit envelope + sanity.
 
+**Phase 3a / KG query path — shipped on `feat/roadmap-t1-t2-t3` (2026-06-04).**
+New module `query/kg_relations.py`: realizes §6.9's *"filter by type / edge role,
+not raw proximity"* directly over the typed `relationships` layer (subject
+—predicate→ object, with `relationship_evidence` provenance) the query head had
+never touched — T-mode only PageRank-boosted RAG hits. Resolve seed → 1-hop
+typed traversal → filter by canonicalized predicate (so "located in" / "is
+located in" / "is in" all match) + neighbor entity type → STRUCTURED, CITED
+answer with a §6.9 lower-confidence flag for single-evidence edges. Wired into
+`mode_router`: T-mode does it inline; `_maybe_kg_augment` also fires it for a
+relationship-intent query the planner routed to E/H/etc. (planner routing is
+unreliable — the T3 lesson), with `relax=False` there so it only injects on a
+specific match. Falls back to PPR/RAG when no seed/edge resolves (I2). Verified
+live: "counterparties to Acme" → typed counterparty edges + provenance;
+"signatories for Acme" (E-mode) → signed_by edges; 16 tests
+(`tests/test_kg_relations.py`).
+
 **NOT built (the honest gaps):**
-- **Stage 7 KG route (§6.9)** — unchanged from pre-T2 (Phase 3). RELATIONSHIP
-  queries use the old PPR path; the context-constrained / type-filtered walk and
-  the agentic verify pass are not built.
+- **Phase 3b — agentic-extraction verify pass (§10 / §6.9)** — the
+  propose→critic→resolve loop to raise entity/relationship quality (predicate
+  fragmentation, ~47% mention resolution, single-evidence edges) before the
+  graph is fully trusted. 3a surfaces a lower-confidence flag in the meantime.
 - **Quality ceiling (not a pipeline gap):** T2 *uses* the structured layer well
   but can only narrow on what extraction captured — strong on tables, weak on
   narrative (~0/13 narrative docs captured key terms), ~47% mention resolution.
