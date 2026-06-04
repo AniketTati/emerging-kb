@@ -37,6 +37,38 @@ def test_predicate_label_is_human_readable():
     assert "gt" not in label and "transactionlisting" not in label
 
 
+def test_find_ambiguous_field_disambiguation():
+    """§6.2 / SOTA ambiguity: a vague field word that maps to >1 canonical key
+    surfaces the options; a specific phrase that resolves to one key does not."""
+    from kb.domain.structured_schema import FieldInfo, LiveSchema
+    from kb.query.structured_answer import (
+        find_ambiguous_field,
+        format_disambiguation,
+    )
+    fields = (
+        FieldInfo("loan", "interest_rate", "number", None, 1.0, 5, 5, True),
+        FieldInfo("loan", "interest_rate_all_in", "number", None, 1.0, 5, 5, True),
+        FieldInfo("loan", "forward_rate", "number", None, 1.0, 5, 5, True),
+        FieldInfo("loan", "account_number", "string", None, 1.0, 5, 5, False),
+    )
+    sch = LiveSchema(
+        workspace_id="ws", epoch=1, doc_types=("loan",), doc_counts={"loan": 5},
+        fields=fields, unit_types=(), unit_columns=(),
+    )
+    # "rate" → 3 keys → ambiguous → surfaced.
+    amb = find_ambiguous_field(sch, "what is the rate")
+    assert amb is not None and amb[0] == "rate" and len(amb[1]) == 3
+    # "interest rate" resolves to exactly one key (tier-2 normalized match
+    # short-circuits before the token-subset tier) → NOT ambiguous.
+    assert find_ambiguous_field(sch, "what is the interest rate") is None
+    # "account number" → 1 key → specific.
+    assert find_ambiguous_field(sch, "what is the account number") is None
+    # The disambiguation surfaces the candidate fields.
+    msg = format_disambiguation(amb[0], amb[1], sch)
+    assert "could refer to 3 different fields" in msg
+    assert "interest rate" in msg and "forward rate" in msg
+
+
 # ---- seed helpers ----------------------------------------------------------
 
 

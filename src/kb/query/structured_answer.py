@@ -350,6 +350,63 @@ def _human_unit(surface: str) -> str:
     return _humanize_token(best) or str(surface)
 
 
+# Tokens dropped when scanning a query for an ambiguous field reference.
+_AMBIG_STOP: frozenset[str] = frozenset({
+    "what", "which", "whats", "the", "is", "are", "was", "were", "of", "for",
+    "show", "list", "all", "me", "my", "give", "and", "with", "value", "tell",
+    "about", "how", "much", "many", "does", "did", "have", "has", "any", "this",
+    "that", "their", "its", "a", "an", "in", "on", "to", "by",
+})
+
+
+def find_ambiguous_field(schema: Any, query: str) -> tuple[str, list[str]] | None:
+    """The longest field phrase the query recognizes; return (phrase, keys) when
+    that phrase maps to >1 canonical key (genuinely ambiguous — "rate" → 3 rate
+    fields), and None when the longest recognized phrase is specific ("interest
+    rate" → 1) or nothing matches. Deterministic; drives §6.2 disambiguation."""
+    toks = [
+        t for t in re.split(r"[^a-z0-9]+", (query or "").lower())
+        if len(t) >= 3 and t not in _AMBIG_STOP
+    ]
+    if not toks:
+        return None
+    # Candidate phrases, LONGEST first — the most specific recognized phrase wins.
+    cands: list[str] = []
+    for n in (3, 2, 1):
+        for i in range(len(toks) - n + 1):
+            cands.append(" ".join(toks[i:i + n]))
+    for phrase in cands:
+        try:
+            keys = sorted({i.canonical_key for i in schema.find_field(phrase)})
+        except Exception:  # noqa: BLE001
+            keys = []
+        if keys:
+            # Decide on the LONGEST recognized phrase (specificity wins).
+            return (phrase, keys) if len(keys) > 1 else None
+    return None
+
+
+def format_disambiguation(phrase: str, keys: list[str], schema: Any) -> str:
+    """Surface the candidate fields for an ambiguous reference — the SOTA
+    "present the valid options" response for ambiguity, instead of a punt."""
+    opts: list[str] = []
+    for k in keys[:8]:
+        try:
+            dts = sorted({f.doc_type for f in schema.fields if f.canonical_key == k})
+        except Exception:  # noqa: BLE001
+            dts = []
+        label = k.replace("_", " ")
+        ctx = f" (in {', '.join(dts[:3])})" if dts else ""
+        opts.append(f"- **{label}**{ctx}")
+    more = "" if len(keys) <= 8 else f"\n- …and {len(keys) - 8} more"
+    return (
+        f'Your question about "{phrase}" could refer to {len(keys)} different '
+        f"fields in these documents:\n" + "\n".join(opts) + more
+        + f"\n\nWhich did you mean? Ask more specifically — e.g. "
+        f'"{keys[0].replace("_", " ")}".'
+    )
+
+
 def _predicate_label(predicate: ResolvedPredicate) -> str:
     parts: list[str] = []
     for c in predicate.clauses:
